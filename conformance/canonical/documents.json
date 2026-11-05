@@ -22,6 +22,26 @@
    "output": "{\"epoch_ns\":946684800000000000}"
   },
   {
+   "name": "integer-beyond-u64-is-a-double",
+   "input": "[18446744073709551617]",
+   "output": "[18446744073709552000]"
+  },
+  {
+   "name": "integer-below-i64-is-a-double",
+   "input": "[-9223372036854775809]",
+   "output": "[-9223372036854776000]"
+  },
+  {
+   "name": "integer-beyond-u64-in-exponent-range",
+   "input": "[100000000000000000000000]",
+   "output": "[1e+23]"
+  },
+  {
+   "name": "underflow-is-zero",
+   "input": "[1e-400]",
+   "output": "[0]"
+  },
+  {
    "name": "random-0",
    "input": "null",
    "output": "null"
@@ -2091,6 +2111,51 @@
   {
    "name": "byte-order-mark",
    "input_hex": "efbbbf7b7d",
+   "error": "invalid_json"
+  },
+  {
+   "name": "nan",
+   "input": "[NaN]",
+   "error": "invalid_json"
+  },
+  {
+   "name": "infinity",
+   "input": "[Infinity]",
+   "error": "invalid_json"
+  },
+  {
+   "name": "negative-infinity",
+   "input": "[-Infinity]",
+   "error": "invalid_json"
+  },
+  {
+   "name": "trailing-comma-in-array",
+   "input": "[1,]",
+   "error": "invalid_json"
+  },
+  {
+   "name": "trailing-comma-in-object",
+   "input": "{\"a\":1,}",
+   "error": "invalid_json"
+  },
+  {
+   "name": "leading-zero",
+   "input": "[01]",
+   "error": "invalid_json"
+  },
+  {
+   "name": "raw-control-character-in-string",
+   "input_hex": "220122",
+   "error": "invalid_json"
+  },
+  {
+   "name": "two-documents",
+   "input": "{} {}",
+   "error": "invalid_json"
+  },
+  {
+   "name": "lone-surrogate-in-key",
+   "input": "{\"\\ud800\":1}",
    "error": "invalid_json"
   }
  ]

@@ -1,4 +1,4 @@
-# Vendor B: SAT-2, JSON lines over TCP 7002 (docs/SPEC.md).
+# Vendor B: SAT-2, JSON lines over TCP 7002 (morpheus-c2 docs/SPEC.md).
 #
 # One JSON object per line, one channel per object:
 #   {"sat":"PX-7","ch":"PWR.BUS.V","v":28410,"t":"2026-10-30T12:00:30.250Z"}

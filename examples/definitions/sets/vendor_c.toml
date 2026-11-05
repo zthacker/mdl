@@ -1,4 +1,4 @@
-# Vendor C: UAV-1, MAVLink v2 over UDP 7003 (docs/SPEC.md, MAVLink common.xml).
+# Vendor C: UAV-1, MAVLink v2 over UDP 7003 (morpheus-c2 docs/SPEC.md, MAVLink common.xml).
 #
 # The link's [mavlink2] stack checks the CRC, zero-extends truncated payloads
 # to full length, and provides `msgid`, `sysid`, `compid` and `seq` as
