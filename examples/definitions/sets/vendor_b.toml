@@ -1,0 +1,104 @@
+# Vendor B: SAT-2, JSON lines over TCP 7002 (docs/SPEC.md).
+#
+# One JSON object per line, one channel per object:
+#   {"sat":"PX-7","ch":"PWR.BUS.V","v":28410,"t":"2026-10-30T12:00:30.250Z"}
+#
+# The link has no envelope to strip (ingest already split the lines), so each
+# packet is one channel, identified by its "ch" value. Channels this file
+# doesn't define (such as the sim's DBG.SPARE) go to the DLQ in decom.
+
+[set]
+name     = "vendor_b"
+encoding = "json"
+time     = { kind = "iso8601", path = "/t" }
+alias    = { path = "/sat" }
+
+[aliases]
+"PX-7" = "SAT-2"
+
+[[packet]]
+name     = "PWR_BUS_V"
+identify = { "/ch" = "PWR.BUS.V" }
+
+[[packet.field]]
+name       = "v"
+path       = "/v"
+type       = "int"
+conversion = { linear = { scale = 0.001 } }   # mV
+unit       = "V"
+canonical  = "eps.bus_voltage"
+
+[[packet]]
+name     = "PWR_BATT_I"
+identify = { "/ch" = "PWR.BATT.I" }
+
+[[packet.field]]
+name       = "v"
+path       = "/v"
+type       = "int"
+conversion = { linear = { scale = 0.001 } }   # mA, + charging
+unit       = "A"
+canonical  = "eps.batt_current"
+
+[[packet]]
+name     = "PWR_SOLAR_I"
+identify = { "/ch" = "PWR.SOLAR.I" }
+
+[[packet.field]]
+name       = "v"
+path       = "/v"
+type       = "int"
+conversion = { linear = { scale = 0.001 } }   # mA
+unit       = "A"
+canonical  = "eps.solar_current"
+
+[[packet]]
+name     = "THM_BATT_T"
+identify = { "/ch" = "THM.BATT.T" }
+
+[[packet.field]]
+name       = "v"
+path       = "/v"
+type       = "int"
+conversion = { linear = { scale = 0.1 } }     # 0.1 degC
+unit       = "degC"
+canonical  = "eps.batt_temp"
+
+# The vendor already sends the canonical state names, so no conversion.
+[[packet]]
+name     = "SYS_MODE"
+identify = { "/ch" = "SYS.MODE" }
+
+[[packet.field]]
+name      = "v"
+path      = "/v"
+type      = "string"
+canonical = "eps.mode"
+
+# From the onboard GPS: already ECEF, in metres.
+[[packet]]
+name     = "NAV_POS_ECEF"
+identify = { "/ch" = "NAV.POS.ECEF" }
+
+[[packet.field]]
+name = "x"
+path = "/v/0"
+type = "float"
+unit = "m"
+
+[[packet.field]]
+name = "y"
+path = "/v/1"
+type = "float"
+unit = "m"
+
+[[packet.field]]
+name = "z"
+path = "/v/2"
+type = "float"
+unit = "m"
+
+[[packet.composite]]
+canonical = "nav.pos_ecef"
+frame     = "ECEF"
+fields    = ["x", "y", "z"]

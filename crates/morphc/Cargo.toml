@@ -1,0 +1,18 @@
+[package]
+name = "morphc"
+description = "The MDL compiler: build, check and inspect MDL definitions"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+mdl.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

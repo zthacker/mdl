@@ -1,0 +1,192 @@
+# Vendor A: SAT-1, CCSDS space packets over UDP 7001 (docs/SPEC.md).
+#
+# The link's [ccsds] stack strips the 6-byte primary header and provides
+# `apid` and `seq` as metadata. Offsets here are bits from the start of the
+# data field it hands over, which begins with an 8-byte mission-defined
+# secondary header: CUC time (4 + 2 bytes), then the spacecraft id.
+#
+#   bits  0-47  CUC time       bits 48-63  spacecraft id     bits 64-  packet data
+
+[set]
+name     = "vendor_a"
+encoding = "binary"
+endian   = "big"
+time     = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = "2000-01-01T00:00:00Z" }
+alias    = { offset_bits = 48, size_bits = 16 }
+
+[aliases]
+"101" = "SAT-1"
+
+# ---- EPS housekeeping, APID 0x064, 1 Hz ----------------------------------------
+
+[[packet]]
+name         = "EPS_HK"
+identify     = { apid = 0x064 }
+length_bytes = 15
+
+[[packet.field]]
+name        = "bus_voltage_counts"
+offset_bits = 64
+size_bits   = 16
+type        = "uint"
+conversion  = { linear = { scale = 0.01 } }                    # 10 mV counts
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[packet.field]]
+name        = "batt_current_raw"
+offset_bits = 80
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.001 } }                   # mA, + charging
+unit        = "A"
+canonical   = "eps.batt_current"
+
+[[packet.field]]
+name        = "batt_temp_counts"
+offset_bits = 96
+size_bits   = 16
+type        = "uint"
+conversion  = { linear = { scale = 0.1, offset = -273.15 } }   # 0.1 K counts
+unit        = "degC"
+canonical   = "eps.batt_temp"
+
+[[packet.field]]
+name        = "mode"
+offset_bits = 118                                              # byte 14, low 2 bits
+size_bits   = 2
+type        = "uint"
+conversion  = { states = { 0 = "SAFE", 1 = "NOMINAL", 2 = "PAYLOAD" } }
+canonical   = "eps.mode"
+
+# ---- ADCS, APID 0x065, 1 Hz ----------------------------------------------------
+
+[[packet]]
+name         = "ADCS"
+identify     = { apid = 0x065 }
+length_bytes = 22
+
+[[packet.field]]
+name        = "q_w"
+offset_bits = 64
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 3.051850947599719e-5 } }    # 1/32767
+
+[[packet.field]]
+name        = "q_x"
+offset_bits = 80
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 3.051850947599719e-5 } }
+
+[[packet.field]]
+name        = "q_y"
+offset_bits = 96
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 3.051850947599719e-5 } }
+
+[[packet.field]]
+name        = "q_z"
+offset_bits = 112
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 3.051850947599719e-5 } }
+
+[[packet.field]]
+name        = "rate_x"
+offset_bits = 128
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }                    # 0.01 deg/s
+unit        = "deg/s"
+
+[[packet.field]]
+name        = "rate_y"
+offset_bits = 144
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }
+unit        = "deg/s"
+
+[[packet.field]]
+name        = "rate_z"
+offset_bits = 160
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }
+unit        = "deg/s"
+
+[[packet.composite]]
+canonical = "adcs.attitude"
+frame     = "ECI_J2000"
+fields    = ["q_w", "q_x", "q_y", "q_z"]
+
+[[packet.composite]]
+canonical = "adcs.rate"
+frame     = "BODY"
+fields    = ["rate_x", "rate_y", "rate_z"]
+
+# ---- NAV, APID 0x066, 1 Hz: onboard state in ECI J2000 -------------------------
+
+[[packet]]
+name         = "NAV"
+identify     = { apid = 0x066 }
+length_bytes = 32
+
+[[packet.field]]
+name        = "pos_x"
+offset_bits = 64
+size_bits   = 32
+type        = "int"
+unit        = "m"
+
+[[packet.field]]
+name        = "pos_y"
+offset_bits = 96
+size_bits   = 32
+type        = "int"
+unit        = "m"
+
+[[packet.field]]
+name        = "pos_z"
+offset_bits = 128
+size_bits   = 32
+type        = "int"
+unit        = "m"
+
+[[packet.field]]
+name        = "vel_x"
+offset_bits = 160
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 0.001 } }                   # mm/s
+unit        = "m/s"
+
+[[packet.field]]
+name        = "vel_y"
+offset_bits = 192
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 0.001 } }
+unit        = "m/s"
+
+[[packet.field]]
+name        = "vel_z"
+offset_bits = 224
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 0.001 } }
+unit        = "m/s"
+
+# Reported in ECI J2000; normalize converts to the catalog's ECEF (M6).
+[[packet.composite]]
+canonical = "nav.pos_ecef"
+frame     = "ECI_J2000"
+fields    = ["pos_x", "pos_y", "pos_z"]
+
+[[packet.composite]]
+canonical = "nav.vel_ecef"
+frame     = "ECI_J2000"
+fields    = ["vel_x", "vel_y", "vel_z"]

@@ -1,0 +1,25 @@
+[package]
+name = "mdl"
+description = "MDL, the Morpheus Definition Language: describe, validate and decode telemetry from any source into a canonical model"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# The library stays small: no CLI, async runtime, database or messaging crates.
+[dependencies]
+chrono.workspace = true
+ryu-js.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

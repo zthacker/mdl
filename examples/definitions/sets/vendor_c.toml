@@ -1,0 +1,278 @@
+# Vendor C: UAV-1, MAVLink v2 over UDP 7003 (docs/SPEC.md, MAVLink common.xml).
+#
+# The link's [mavlink2] stack checks the CRC, zero-extends truncated payloads
+# to full length, and provides `msgid`, `sysid`, `compid` and `seq` as
+# metadata. Offsets are bits into the payload, whose fields MAVLink orders
+# largest type first. Timestamps are milliseconds since boot, turned into
+# absolute time with SYSTEM_TIME, which carries both clocks.
+
+[set]
+name     = "vendor_c"
+encoding = "binary"
+endian   = "little"
+time     = { kind = "boot_ms", correlate = { packet = "SYSTEM_TIME", unix_us = "time_unix_usec", boot_ms = "time_boot_ms" } }
+alias    = { metadata = "sysid" }
+
+[aliases]
+"1" = "UAV-1"
+
+# ---- HEARTBEAT (msgid 0), 1 Hz -------------------------------------------------
+
+[[packet]]
+name         = "HEARTBEAT"
+identify     = { msgid = 0 }
+length_bytes = 9
+
+[[packet.field]]
+name        = "custom_mode"
+offset_bits = 0
+size_bits   = 32
+type        = "uint"
+
+[[packet.field]]
+name        = "type"
+offset_bits = 32
+size_bits   = 8
+type        = "uint"
+
+[[packet.field]]
+name        = "autopilot"
+offset_bits = 40
+size_bits   = 8
+type        = "uint"
+
+[[packet.field]]
+name        = "base_mode"
+offset_bits = 48
+size_bits   = 8
+type        = "uint"
+
+[[packet.field]]
+name        = "system_status"
+offset_bits = 56
+size_bits   = 8
+type        = "uint"
+conversion  = { states = { 0 = "UNINIT", 1 = "BOOT", 2 = "CALIBRATING", 3 = "STANDBY", 4 = "ACTIVE", 5 = "CRITICAL", 6 = "EMERGENCY", 7 = "POWEROFF", 8 = "FLIGHT_TERMINATION" } }
+canonical   = "sys.state"
+
+[[packet.field]]
+name        = "mavlink_version"
+offset_bits = 64
+size_bits   = 8
+type        = "uint"
+
+# ---- SYS_STATUS (msgid 1), 1 Hz -----------------------------------------------
+# 31 bytes of base fields, then 12 bytes of extensions (zero-filled if absent).
+
+[[packet]]
+name         = "SYS_STATUS"
+identify     = { msgid = 1 }
+length_bytes = 43
+
+[[packet.field]]
+name        = "load"
+offset_bits = 96
+size_bits   = 16
+type        = "uint"
+
+[[packet.field]]
+name        = "voltage_battery"
+offset_bits = 112
+size_bits   = 16
+type        = "uint"
+conversion  = { linear = { scale = 0.001 } }   # mV
+unit        = "V"
+canonical   = "eps.bus_voltage"
+invalid     = [65535]                          # UINT16_MAX: not sent
+
+[[packet.field]]
+name        = "current_battery"
+offset_bits = 128
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }    # cA, + discharging
+unit        = "A"
+canonical   = "eps.batt_current"
+invalid     = [-1]                             # -1: not measured
+
+[[packet.field]]
+name        = "battery_remaining"
+offset_bits = 240
+size_bits   = 8
+type        = "int"
+unit        = "%"
+canonical   = "eps.batt_remaining"
+invalid     = [-1]                             # -1: not estimated
+
+# ---- SYSTEM_TIME (msgid 2), 1 Hz: the time correlation packet ------------------
+
+[[packet]]
+name         = "SYSTEM_TIME"
+identify     = { msgid = 2 }
+length_bytes = 12
+time_field   = "time_boot_ms"
+
+[[packet.field]]
+name        = "time_unix_usec"
+offset_bits = 0
+size_bits   = 64
+type        = "uint"
+
+[[packet.field]]
+name        = "time_boot_ms"
+offset_bits = 64
+size_bits   = 32
+type        = "uint"
+
+# ---- ATTITUDE (msgid 30), 10 Hz ------------------------------------------------
+
+[[packet]]
+name         = "ATTITUDE"
+identify     = { msgid = 30 }
+length_bytes = 28
+time_field   = "time_boot_ms"
+
+[[packet.field]]
+name        = "time_boot_ms"
+offset_bits = 0
+size_bits   = 32
+type        = "uint"
+
+[[packet.field]]
+name        = "roll"
+offset_bits = 32
+size_bits   = 32
+type        = "float"
+conversion  = { linear = { scale = 57.29577951308232 } }   # rad to deg
+unit        = "deg"
+canonical   = "att.roll"
+
+[[packet.field]]
+name        = "pitch"
+offset_bits = 64
+size_bits   = 32
+type        = "float"
+conversion  = { linear = { scale = 57.29577951308232 } }
+unit        = "deg"
+canonical   = "att.pitch"
+
+[[packet.field]]
+name        = "yaw"
+offset_bits = 96
+size_bits   = 32
+type        = "float"
+conversion  = { linear = { scale = 57.29577951308232 } }
+unit        = "deg"
+canonical   = "att.yaw"
+
+[[packet.field]]
+name        = "rollspeed"
+offset_bits = 128
+size_bits   = 32
+type        = "float"
+
+[[packet.field]]
+name        = "pitchspeed"
+offset_bits = 160
+size_bits   = 32
+type        = "float"
+
+[[packet.field]]
+name        = "yawspeed"
+offset_bits = 192
+size_bits   = 32
+type        = "float"
+
+# ---- GLOBAL_POSITION_INT (msgid 33), 5 Hz --------------------------------------
+
+[[packet]]
+name         = "GLOBAL_POSITION_INT"
+identify     = { msgid = 33 }
+length_bytes = 28
+time_field   = "time_boot_ms"
+
+[[packet.field]]
+name        = "time_boot_ms"
+offset_bits = 0
+size_bits   = 32
+type        = "uint"
+
+[[packet.field]]
+name        = "lat"
+offset_bits = 32
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 1e-7 } }    # 1e-7 deg
+unit        = "deg"
+canonical   = "nav.lat"
+
+[[packet.field]]
+name        = "lon"
+offset_bits = 64
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 1e-7 } }
+unit        = "deg"
+canonical   = "nav.lon"
+
+[[packet.field]]
+name        = "alt"
+offset_bits = 96
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 0.001 } }   # mm above MSL
+unit        = "m"
+canonical   = "nav.alt_msl"
+
+[[packet.field]]
+name        = "relative_alt"
+offset_bits = 128
+size_bits   = 32
+type        = "int"
+conversion  = { linear = { scale = 0.001 } }   # mm above home
+unit        = "m"
+
+[[packet.field]]
+name        = "vx"
+offset_bits = 160
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }    # cm/s, north
+unit        = "m/s"
+
+[[packet.field]]
+name        = "vy"
+offset_bits = 176
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }    # cm/s, east
+unit        = "m/s"
+
+[[packet.field]]
+name        = "vz"
+offset_bits = 192
+size_bits   = 16
+type        = "int"
+conversion  = { linear = { scale = 0.01 } }    # cm/s, down
+unit        = "m/s"
+
+[[packet.field]]
+name        = "hdg"
+offset_bits = 208
+size_bits   = 16
+type        = "uint"
+conversion  = { linear = { scale = 0.01 } }    # cdeg
+unit        = "deg"
+invalid     = [65535]                          # UINT16_MAX: unknown
+
+# Geodetic (lat, lon in deg; alt in m) and NED velocity; normalize converts
+# both to ECEF (M6). MSL is treated as ellipsoid height (see design doc).
+[[packet.composite]]
+canonical = "nav.pos_ecef"
+frame     = "GEODETIC"
+fields    = ["lat", "lon", "alt"]
+
+[[packet.composite]]
+canonical = "nav.vel_ecef"
+frame     = "NED"
+fields    = ["vx", "vy", "vz"]
