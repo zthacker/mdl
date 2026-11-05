@@ -1,0 +1,29 @@
+[workspace]
+resolver = "3"
+members = ["crates/mdl", "crates/morphc"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.88"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/zthacker/mdl"
+# Not on crates.io yet: `mdl` and `morphc` are taken there, so names are TBD.
+publish = false
+
+[workspace.dependencies]
+mdl = { path = "crates/mdl" }
+
+anyhow = "1.0.104"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive"] }
+proptest = "1.12.0"
+ryu-js = "1.0.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
+sha2 = "0.11.1"
+thiserror = "2.0.21"
+toml = "1.1.8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
