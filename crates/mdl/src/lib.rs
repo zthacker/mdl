@@ -7,11 +7,22 @@
 //!  more frontends, later)  ───────┘                          └──► interpret (bits, conversions)
 //! ```
 
-pub mod bits;
+// Shared by v1 and v2.
 pub mod canonical;
 pub mod diagnostics;
+
+pub mod v2;
+
+// v1, removed at the end of Phase 1 (see the `v1` feature in Cargo.toml).
+#[cfg(feature = "v1")]
+pub mod bits;
+#[cfg(feature = "v1")]
 pub mod frontend;
+#[cfg(feature = "v1")]
 pub mod interpret;
+#[cfg(feature = "v1")]
 pub mod ir;
+#[cfg(feature = "v1")]
 pub mod plan;
+#[cfg(feature = "v1")]
 pub mod validate;

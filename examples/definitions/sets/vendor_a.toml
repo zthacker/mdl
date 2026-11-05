@@ -1,4 +1,4 @@
-# Vendor A: SAT-1, CCSDS space packets over UDP 7001 (docs/SPEC.md).
+# Vendor A: SAT-1, CCSDS space packets over UDP 7001 (morpheus-c2 docs/SPEC.md).
 #
 # The link's [ccsds] stack strips the 6-byte primary header and provides
 # `apid` and `seq` as metadata. Offsets here are bits from the start of the

@@ -1,0 +1,376 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+      "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "nav.pos_ecef": {
+        "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
+      },
+      "eps.old_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "deprecated": "use eps.bus_voltage"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "vendor_x",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "bits",
+        "offset_bits": 48,
+        "size_bits": 16
+      },
+      "version": {
+        "kind": "metadata",
+        "name": "fmt"
+      }
+    },
+    {
+      "name": "vendor_j",
+      "encoding": "json",
+      "alias": {
+        "kind": "path",
+        "pointer": "/sat"
+      }
+    },
+    {
+      "name": "legacy",
+      "encoding": "binary",
+      "byte_order": "little",
+      "alias": {
+        "kind": "fixed",
+        "value": "box-1"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "vendor_x_v2",
+      "family": "vendor_x",
+      "version": 2,
+      "time": {
+        "kind": "cuc",
+        "offset_bits": 0,
+        "coarse_bytes": 4,
+        "fine_bytes": 2,
+        "epoch": "2000-01-01T00:00:00Z"
+      },
+      "types": {
+        "vec3_i32": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "x",
+              "type": "int",
+              "size_bits": 32,
+              "unit": "m"
+            },
+            {
+              "kind": "field",
+              "name": "y",
+              "type": "int",
+              "size_bits": 32,
+              "unit": "m"
+            },
+            {
+              "kind": "field",
+              "name": "z",
+              "type": "int",
+              "size_bits": 32,
+              "unit": "m"
+            }
+          ]
+        }
+      },
+      "packets": [
+        {
+          "name": "HK",
+          "identify": {
+            "apid": 100
+          },
+          "length": {
+            "kind": "at_least",
+            "bytes": 12
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "bus_counts",
+              "type": "uint",
+              "offset_bits": 64,
+              "size_bits": 16,
+              "conversion": {
+                "kind": "linear",
+                "scale": 0.01,
+                "offset": 0.0
+              },
+              "unit": "V",
+              "canonical": "eps.bus_voltage",
+              "invalid": [
+                65535,
+                "18446744073709551615"
+              ]
+            },
+            {
+              "kind": "padding",
+              "size_bits": 6,
+              "when": {
+                "kind": "compare",
+                "field": "bus_counts",
+                "op": "ne",
+                "value": 0
+              }
+            },
+            {
+              "kind": "field",
+              "name": "mode",
+              "type": "uint",
+              "size_bits": 2,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 0,
+                    "name": "SAFE"
+                  },
+                  {
+                    "raw": 1,
+                    "name": "NOMINAL"
+                  }
+                ]
+              },
+              "canonical": "eps.mode"
+            },
+            {
+              "kind": "field",
+              "name": "flags",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "field",
+              "name": "n",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "array",
+              "name": "samples",
+              "count": {
+                "kind": "field",
+                "field": "n"
+              },
+              "element": {
+                "kind": "scalar",
+                "type": "int",
+                "size_bits": 16,
+                "conversion": {
+                  "kind": "poly",
+                  "coefficients": [
+                    0.0,
+                    0.001
+                  ]
+                },
+                "unit": "V"
+              },
+              "canonical": "eps.bus_voltage",
+              "sample_interval_ms": 100.0
+            },
+            {
+              "kind": "struct",
+              "name": "pos",
+              "struct": "vec3_i32",
+              "when": {
+                "kind": "compare",
+                "field": "flags",
+                "op": "mask_any",
+                "value": 1
+              }
+            },
+            {
+              "kind": "field",
+              "name": "label_len",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "field",
+              "name": "label",
+              "type": "string",
+              "length": {
+                "kind": "field",
+                "field": "label_len"
+              },
+              "text": "ascii",
+              "when": {
+                "kind": "all",
+                "conditions": [
+                  {
+                    "kind": "in",
+                    "field": "flags",
+                    "values": [
+                      2,
+                      3
+                    ]
+                  },
+                  {
+                    "kind": "not",
+                    "condition": {
+                      "kind": "compare",
+                      "field": "n",
+                      "op": "eq",
+                      "value": 0
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "array",
+              "name": "blobs",
+              "count": {
+                "kind": "remaining"
+              },
+              "element": {
+                "kind": "scalar",
+                "type": "bytes",
+                "length": {
+                  "kind": "terminator",
+                  "byte": 0
+                }
+              }
+            }
+          ],
+          "composites": [
+            {
+              "canonical": "nav.pos_ecef",
+              "frame": "ECI_J2000",
+              "members": [
+                "pos.x",
+                "pos.y",
+                "pos.z"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_j_v1",
+      "family": "vendor_j",
+      "time": {
+        "kind": "iso8601",
+        "pointer": "/t"
+      },
+      "types": {
+        "cell": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "volts",
+              "type": "float",
+              "pointer": "/v",
+              "unit": "V"
+            },
+            {
+              "kind": "field",
+              "name": "ok",
+              "type": "bool",
+              "pointer": "/ok"
+            }
+          ]
+        }
+      },
+      "packets": [
+        {
+          "name": "BUS",
+          "identify": {
+            "/ch": "PWR.BUS.V"
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "v",
+              "type": "int",
+              "pointer": "/v",
+              "conversion": {
+                "kind": "linear",
+                "scale": 0.001,
+                "offset": 0.0
+              },
+              "unit": "V",
+              "canonical": "eps.bus_voltage"
+            },
+            {
+              "kind": "array",
+              "name": "cells",
+              "pointer": "/cells",
+              "element": {
+                "kind": "struct",
+                "name": "cell"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "legacy_v1",
+      "family": "legacy",
+      "time": {
+        "kind": "boot",
+        "unit": "ms",
+        "correlate": {
+          "packet": "TIME",
+          "unix_field": "unix_us",
+          "unix_unit": "us",
+          "boot_field": "boot_ms"
+        }
+      },
+      "packets": [
+        {
+          "name": "TIME",
+          "length": {
+            "kind": "exact",
+            "bytes": 12
+          },
+          "time_field": "boot_ms",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "unix_us",
+              "type": "uint",
+              "size_bits": 64
+            },
+            {
+              "kind": "field",
+              "name": "boot_ms",
+              "type": "uint",
+              "size_bits": 32
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -124,6 +124,12 @@ const documents = [
   },
   { name: "whitespace-and-nesting", input: ' { "b" : [ 1 , { "d" : 2.50 , "c" : -0 } ] , "a" : "" } ' },
   { name: "integer-above-2^53-that-is-its-own-canonical-text", input: '{"epoch_ns":946684800000000000}' },
+  // Integer literals outside the 64-bit range are doubles (spec rule 7).
+  // Python and Elixir decode them as exact big integers by default.
+  { name: "integer-beyond-u64-is-a-double", input: "[18446744073709551617]" },
+  { name: "integer-below-i64-is-a-double", input: "[-9223372036854775809]" },
+  { name: "integer-beyond-u64-in-exponent-range", input: "[100000000000000000000000]" },
+  { name: "underflow-is-zero", input: "[1e-400]" },
 ];
 for (const d of documents) d.output = canonicalize(JSON.parse(d.input));
 for (let i = 0; i < 400; i++) {
@@ -154,6 +160,17 @@ const rejected = [
   { name: "overlong-utf8", input_hex: "5b22c0af225d", error: "invalid_json" },
   { name: "raw-surrogate-bytes", input_hex: "22eda08022", error: "invalid_json" },
   { name: "byte-order-mark", input_hex: "efbbbf7b7d", error: "invalid_json" },
+  // Not JSON at all, though some parsers accept them (Python's json.loads
+  // takes NaN and Infinity by default).
+  { name: "nan", input: "[NaN]", error: "invalid_json" },
+  { name: "infinity", input: "[Infinity]", error: "invalid_json" },
+  { name: "negative-infinity", input: "[-Infinity]", error: "invalid_json" },
+  { name: "trailing-comma-in-array", input: "[1,]", error: "invalid_json" },
+  { name: "trailing-comma-in-object", input: '{"a":1,}', error: "invalid_json" },
+  { name: "leading-zero", input: "[01]", error: "invalid_json" },
+  { name: "raw-control-character-in-string", input_hex: "220122", error: "invalid_json" },
+  { name: "two-documents", input: "{} {}", error: "invalid_json" },
+  { name: "lone-surrogate-in-key", input: '{"' + backslash + 'ud800":1}', error: "invalid_json" },
 ];
 
 const header = (what) =>

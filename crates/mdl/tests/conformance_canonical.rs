@@ -65,12 +65,14 @@ fn input_bytes(case: &Value) -> Vec<u8> {
 fn mdl_input_rules_reject_what_they_should() {
     let file = fixture("documents.json");
     let rejected = file["rejected"].as_array().unwrap();
-    assert!(rejected.len() >= 14);
+    assert!(rejected.len() >= 23);
     for case in rejected {
         let name = case["name"].as_str().unwrap();
-        let result = parse_strict(&input_bytes(case)).and_then(|v| to_canonical_string(&v));
+        // The input rules are parse_strict's job alone: a reader that
+        // parses and then types values must already have been refused.
+        let result = parse_strict(&input_bytes(case));
         let kind = match result {
-            Ok(text) => panic!("{name}: expected an error, got {text}"),
+            Ok(value) => panic!("{name}: expected an error, parsed {value}"),
             Err(CanonicalError::DuplicateKey { .. }) => "duplicate_key",
             Err(CanonicalError::InexactInteger { .. }) => "inexact_integer",
             Err(CanonicalError::InvalidJson { .. }) => "invalid_json",

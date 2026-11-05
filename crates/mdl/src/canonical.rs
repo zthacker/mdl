@@ -30,7 +30,7 @@
 //!
 //! IR v2 validation is stricter still for numbers the IR means as integers
 //! (identify values, sentinels, states): they must be within ±(2^53 − 1),
-//! with wider values written as strings (`docs/design/ir-v2.md`, §2).
+//! with wider values written as strings (see `v2::ir::Scalar`).
 
 use std::collections::BTreeSet;
 use std::fmt::{self, Write};
@@ -68,8 +68,10 @@ pub enum CanonicalError {
 
 /// Parse an artifact's bytes, refusing input that has no single canonical
 /// form: invalid UTF-8, unpaired surrogates, numbers too large for a double,
-/// a leading byte order mark, or an object with a duplicate key (at any
-/// depth). serde_json on its own silently keeps the last of two duplicates.
+/// a leading byte order mark, an object with a duplicate key (at any depth),
+/// or an integer that isn't its own canonical text. These are input rules
+/// 1 to 7 of `spec/canonical-json.md`. serde_json on its own silently keeps
+/// the last of two duplicates.
 ///
 /// Two passes: [`NoDuplicates`] only checks keys, then serde_json builds
 /// the value. Building the value ourselves would be one pass, but it would
@@ -92,9 +94,20 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
             _ => CanonicalError::InvalidJson { detail },
         }
     })?;
-    serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
+    let value = serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
         detail: err.to_string(),
-    })
+    })?;
+    // Rule 7 (integers must be their own canonical text) and rule 5
+    // (numbers must be finite doubles). Under default features serde_json
+    // already refuses `1e400`; with `arbitrary_precision` it doesn't, and
+    // this check catches it.
+    check_numbers(&value, &mut String::new()).map_err(|err| match err {
+        CanonicalError::OutOfRange { .. } => CanonicalError::InvalidJson {
+            detail: err.to_string(),
+        },
+        other => other,
+    })?;
+    Ok(value)
 }
 
 /// Walks a document and fails on the first duplicate object key. Builds
@@ -213,8 +226,13 @@ fn write_object(
 }
 
 fn write_number(out: &mut String, number: &Number, path: &str) -> Result<(), CanonicalError> {
-    // Integers: canonical only if their nearest double is written with
-    // exactly their digits.
+    out.push_str(&canonical_number(number, path)?);
+    Ok(())
+}
+
+/// A number's canonical text, or why it has none. Integers are canonical
+/// only if their nearest double is written with exactly their digits.
+fn canonical_number(number: &Number, path: &str) -> Result<String, CanonicalError> {
     let integer = match (number.as_u64(), number.as_i64()) {
         (Some(n), _) => Some((n.to_string(), n as f64)),
         (None, Some(n)) => Some((n.to_string(), n as f64)),
@@ -223,26 +241,39 @@ fn write_number(out: &mut String, number: &Number, path: &str) -> Result<(), Can
     match integer {
         Some((digits, double)) => {
             let canonical = format_double(double);
-            if canonical != digits {
-                return Err(CanonicalError::InexactInteger {
+            if canonical == digits {
+                Ok(digits)
+            } else {
+                Err(CanonicalError::InexactInteger {
                     path: display_path(path),
                     value: digits,
                     canonical,
-                });
+                })
             }
-            out.push_str(&digits);
         }
         None => match number.as_f64() {
-            Some(n) if n.is_finite() => out.push_str(&format_double(n)),
-            _ => {
-                return Err(CanonicalError::OutOfRange {
-                    path: display_path(path),
-                    value: number.to_string(),
-                });
-            }
+            Some(n) if n.is_finite() => Ok(format_double(n)),
+            _ => Err(CanonicalError::OutOfRange {
+                path: display_path(path),
+                value: number.to_string(),
+            }),
         },
     }
-    Ok(())
+}
+
+/// Apply the number rules to every number in `value`. `parse_strict` uses
+/// this so a reader never builds typed values from input the spec rejects.
+fn check_numbers(value: &Value, path: &mut String) -> Result<(), CanonicalError> {
+    match value {
+        Value::Number(number) => canonical_number(number, path).map(|_| ()),
+        Value::Array(items) => items.iter().enumerate().try_for_each(|(index, item)| {
+            with_segment(path, &index.to_string(), |path| check_numbers(item, path))
+        }),
+        Value::Object(members) => members
+            .iter()
+            .try_for_each(|(key, item)| with_segment(path, key, |path| check_numbers(item, path))),
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
+    }
 }
 
 /// ECMAScript `Number.prototype.toString` for a finite double. serde_json
@@ -496,9 +527,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_strict_enforces_the_integer_rule_itself() {
+        // A reader that parses and then types values must be refused here,
+        // not only when it later canonicalizes.
+        for text in [
+            "[9007199254740993]",
+            "18446744073709551615",
+            "-9223372036854775808",
+        ] {
+            let error = parse_strict(text.as_bytes()).unwrap_err();
+            assert!(
+                matches!(error, CanonicalError::InexactInteger { .. }),
+                "{text}: {error}"
+            );
+        }
+    }
+
+    #[test]
     fn parse_strict_builds_the_same_values_as_serde_json() {
-        let text =
-            r#"{"n":[0,-0,1.5,18446744073709551615,-9223372036854775808],"s":"x","b":[true,null]}"#;
+        let text = r#"{"n":[0,-0,1.5,9007199254740991,946684800000000000,-1e300],"s":"x","b":[true,null]}"#;
         let ours = parse_strict(text.as_bytes()).unwrap();
         let theirs: Value = serde_json::from_str(text).unwrap();
         assert_eq!(ours, theirs);

@@ -1,3 +1,5 @@
+#![cfg(feature = "v1")]
+
 //! The IR's JSON is the contract with frontends in any language. This
 //! fixture is written by hand, the way a Python or Go frontend would write
 //! it, and no TOML is involved. If a change to the IR breaks it, outside
