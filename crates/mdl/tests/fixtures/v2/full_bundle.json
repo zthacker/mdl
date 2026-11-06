@@ -494,6 +494,7 @@
               },
               "argument": "mode"
             },
+            { "kind": "field", "name": "unit", "type": "uint", "size_bits": 8, "target": true },
             { "kind": "checksum", "name": "parity", "algorithm": { "kind": "xor" } },
             { "kind": "checksum", "name": "sum", "algorithm": { "kind": "sum", "width": 16 } }
           ]

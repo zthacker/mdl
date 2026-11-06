@@ -48,13 +48,18 @@ checked. Phases are ordered by dependency: each builds on the previous one.
 Commands come before the frontends, so each importer brings in telemetry
 and commands in one pass.
 
-- [ ] Canonical commands and arguments in the catalog (types, units, ranges,
+- [x] Canonical commands and arguments in the catalog (types, units, ranges,
       states)
-- [ ] Command layouts in sets: argument bindings, constants, computed
-      lengths, payload checksums (CRC-16/32 variants, sum, xor)
+- [x] Command layouts in sets: argument bindings, constants, computed
+      lengths, payload checksums (CRC-8 to CRC-64, sum, xor, the ECSS ISO
+      checksum)
+- [ ] The target's native id as a field source, for links that carry it
+      in the payload
 - [ ] Inverse conversions (linear, states, monotonic tables; explicit inverse
       for polynomials)
 - [ ] Encoder; `encode → decode` round-trip property tests
+- [ ] Command decoding: a command packet identified by its constants and
+      metadata, its arguments decoded (simulators, command history)
 - [ ] `spec/encoding.md`: the normative encoding rules
 
 ## Phase 3: what importers need from the IR

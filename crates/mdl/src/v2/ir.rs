@@ -1207,6 +1207,12 @@ pub struct Field {
     /// invert exactly).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse: Option<Conversion>,
+    /// Command packets: `Some(true)` writes the native id of the asset the
+    /// command is sent to, for links that carry it in the payload
+    /// (MAVLink's `target_system`). `Some(false)` spells out the default,
+    /// which validation rejects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<bool>,
 }
 
 impl Field {
@@ -1228,6 +1234,7 @@ impl Field {
             value: None,
             argument: None,
             inverse: None,
+            target: None,
         }
     }
 }
