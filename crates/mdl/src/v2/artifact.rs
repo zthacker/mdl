@@ -61,10 +61,10 @@ pub enum BuildError {
     /// Validation rules out every cause of this; seeing it is a bug.
     #[error("artifact {name} can't be written as JSON: {detail}")]
     Serialize { name: String, detail: String },
-    #[error("artifact {name} has no canonical form: {source}")]
+    #[error("artifact {name} has no canonical form: {problem}")]
     Canonical {
         name: String,
-        source: CanonicalError,
+        problem: CanonicalError,
     },
     /// The new catalog breaks the previous one, so sets validated against
     /// the previous one can't keep their identity.
@@ -93,6 +93,18 @@ pub enum AssembleError {
     },
     #[error("two {what} artifacts are named {name}")]
     Duplicate { what: &'static str, name: String },
+    /// Two sets of one family with one version, which no message could
+    /// choose between (artifacts from more than one build).
+    #[error(
+        "sets {first} and {second} of family {family} both have version {version}; a family's \
+         versions are unique"
+    )]
+    DuplicateVersion {
+        family: String,
+        version: String,
+        first: String,
+        second: String,
+    },
     /// A set pins an older catalog the given one can't replace, so these
     /// aren't the artifacts of one build history.
     #[error(
@@ -372,9 +384,9 @@ fn write(name: &str, artifact: Artifact) -> Result<Written, BuildError> {
         detail: err.to_string(),
     })?;
     let canonical =
-        canonical::to_canonical_string(&value).map_err(|source| BuildError::Canonical {
+        canonical::to_canonical_string(&value).map_err(|problem| BuildError::Canonical {
             name: name.to_string(),
-            source,
+            problem,
         })?;
     Ok(Written {
         digest: Digest::of_canonical(&canonical),

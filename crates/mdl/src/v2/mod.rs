@@ -8,8 +8,11 @@
 
 pub mod artifact;
 pub mod bindings;
+pub(crate) mod bits;
 pub mod diagnostics;
 pub mod ir;
+pub mod message;
 pub mod read;
+pub mod route;
 pub mod time;
 pub mod validate;
