@@ -52,6 +52,7 @@
 //!   number; bool and string fields take their JSON type. Nothing at a
 //!   present field's pointer is an error.
 
+mod clock;
 mod extract;
 mod identify;
 mod meaning;
@@ -72,6 +73,7 @@ use extract::{BinaryWalker, FieldNames, JsonWalker, Segment, Tables};
 use identify::Index;
 use meaning::{CompiledComposite, sample_value, visit};
 
+pub use clock::{Correlator, EventTime};
 pub use meaning::{Engineering, Quality, Sample, SampleValue};
 
 /// A decoded message.
@@ -81,6 +83,8 @@ pub struct Decoded<'a> {
     /// Who sent it and which set decoded it.
     pub route: Route<'a>,
     pub packet: &'a Packet,
+    /// When the values were taken, by the set's time source.
+    pub event_time: EventTime,
     /// Every entry, raw.
     pub record: Record<'a>,
     /// The canonical values: mapped fields and array elements in record
@@ -174,6 +178,9 @@ pub enum Value<'a> {
     Bytes(Vec<u8>),
     Array(Vec<Value<'a>>),
     Record(Record<'a>),
+    /// No reading: a `null` element of a JSON array, which keeps its
+    /// position.
+    Null,
 }
 
 /// Why a message can't be decoded.
@@ -191,6 +198,8 @@ pub enum DecodeError {
         given: usize,
         exact: bool,
     },
+    #[error("packet {packet}: its event time can't be read: {reason}")]
+    Time { packet: String, reason: String },
     /// An entry couldn't be decoded. `path` names it the way records do,
     /// like `cells[2].volts`; it's empty for the packet itself.
     #[error("{}", entry_failure(packet, path, problem))]
@@ -208,6 +217,7 @@ impl DecodeError {
             DecodeError::Route(err) => err.code(),
             DecodeError::NoPacket { .. } => "no_packet",
             DecodeError::TooShort { .. } => "too_short",
+            DecodeError::Time { .. } => "invalid_time",
             DecodeError::Entry { problem, .. } => problem.code(),
         }
     }
@@ -288,10 +298,19 @@ impl FamilySets {
         let program = &loaded.program;
         let (index, packet, record) =
             program.decode(&loaded.set, &self.family().name, message, &readable)?;
+        let json = readable.json(&self.family().name)?;
+        let event_time =
+            clock::event_time(&loaded.set, packet, &record, &readable, json).map_err(|reason| {
+                DecodeError::Time {
+                    packet: packet.name.clone(),
+                    reason,
+                }
+            })?;
         let samples = program.samples(index, packet, &loaded.set, &loaded.catalog, &record)?;
         Ok(Decoded {
             route,
             packet,
+            event_time,
             record,
             samples,
         })

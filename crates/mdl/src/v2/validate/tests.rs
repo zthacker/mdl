@@ -1954,3 +1954,36 @@ fn optional_is_for_self_describing_entries_and_spelled_true() {
         },
     );
 }
+
+#[test]
+fn clock_fields_are_unconditional_uints() {
+    fn time_packet(v: &mut Value) -> &mut Value {
+        &mut v["sets"][2]["packets"][0]
+    }
+    // boot_ms is both the packet's time_field and the correlation's
+    // boot_field: two references, each needing a uint.
+    assert_eq!(
+        problems(|v| time_packet(v)["entries"][1]["type"] = json!("int")),
+        vec![
+            (
+                Code::ReferenceType,
+                "/sets/2/packets/0/time_field".to_string()
+            ),
+            (
+                Code::ReferenceType,
+                "/sets/2/time/correlate/boot_field".to_string()
+            ),
+        ]
+    );
+    assert_one(
+        Code::ReferenceType,
+        "/sets/2/time/correlate/unix_field",
+        |v| {
+            time_packet(v)["entries"][0]["when"] =
+                json!({ "kind": "compare", "field": "boot_ms", "op": "gt", "value": 0 });
+            // The condition reads a later field; move boot_ms first.
+            let entries = time_packet(v)["entries"].as_array_mut().unwrap();
+            entries.swap(0, 1);
+        },
+    );
+}

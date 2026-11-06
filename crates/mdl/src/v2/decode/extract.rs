@@ -432,6 +432,8 @@ impl<'a> JsonWalker<'a> {
         for (index, item) in items.iter().enumerate() {
             self.path.push(Segment::Index(index as u64));
             decoded.push(match &array.element {
+                // No reading at this position; later elements keep theirs.
+                _ if item.is_null() => Value::Null,
                 Element::Scalar(scalar) => json_scalar(scalar.ty, item)?,
                 Element::Struct { name } => {
                     let (entries, names) = self.tables.struct_type(name)?;

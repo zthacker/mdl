@@ -22,6 +22,17 @@ fn bundle() -> Json {
         .unwrap()
         .push(json!({ "kind": "field", "name": "temp", "type": "float",
                       "pointer": "/temp", "optional": true }));
+    // The legacy boot clock reads all ones until it's synced.
+    value["sets"][2]["packets"][0]["entries"][1]["invalid"] = json!([4294967295_u32]);
+    // And, when it has them, bus current at 100 Hz.
+    value["sets"][1]["packets"][0]["entries"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({ "kind": "array", "name": "currents", "pointer": "/i", "optional": true,
+                      "element": { "kind": "scalar", "type": "float", "unit": "A" },
+                      "canonical": "eps.bus_current", "sample_interval_ms": 10.0 }),
+        );
     let field =
         |name: &str| json!({ "kind": "field", "name": name, "type": "uint", "size_bits": 8 });
     value["families"].as_array_mut().unwrap().push(json!({
@@ -215,6 +226,7 @@ fn show(value: &Value<'_>) -> String {
                 .collect();
             format!("{{{}}}", entries.join(", "))
         }
+        Value::Null => "null".to_string(),
     }
 }
 
@@ -365,7 +377,8 @@ fn a_json_packet_decodes_by_pointer() {
         ])
     );
     // 28000.0 is the integer 28000.
-    let text = r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 28000.0, "cells": []}"#;
+    let text = r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z",
+                   "v": 28000.0, "cells": []}"#;
     assert_eq!(decode_json(text).unwrap()[0], ("v".into(), "28000".into()));
 }
 
@@ -705,7 +718,8 @@ fn engineering_values_are_there_for_every_field() {
 fn an_optional_json_member_may_be_missing_or_null() {
     let decode = |extra: &str| {
         decode_json(&format!(
-            r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 1, "cells": []{extra}}}"#
+            r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z", "v": 1,
+                 "cells": []{extra}}}"#
         ))
     };
     let names = |decoded: Vec<(String, String)>| -> Vec<String> {
@@ -727,12 +741,206 @@ fn an_optional_json_member_may_be_missing_or_null() {
 fn a_json_value_maps_through_its_conversion() {
     let artifacts = artifacts();
     let sets = family_sets(&artifacts, "vendor_j");
-    let text = br#"{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 28000, "cells": []}"#;
+    let text = br#"{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z",
+                    "v": 28000, "cells": []}"#;
     let decoded = sets
         .decode(&Message::new(Payload::Json(text), now()), &registry())
         .unwrap();
     assert_eq!(
         decoded.samples.iter().map(sample_text).collect::<Vec<_>>(),
         triples(&[("eps.bus_voltage", "F64(28.0) at v", "good")])
+    );
+}
+
+fn instant(text: &str) -> Timestamp {
+    text.parse().unwrap()
+}
+
+#[test]
+fn a_cuc_time_code_is_seconds_and_a_binary_fraction_from_its_epoch() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_x");
+    let hk = Hk {
+        flags: 0,
+        samples: &[],
+        pos: None,
+        label: b"",
+        blobs: &[],
+    }
+    .bytes();
+    let time_of = |coarse: u32, fine: u16| {
+        let mut payload = hk.clone();
+        payload[0..4].copy_from_slice(&coarse.to_be_bytes());
+        payload[4..6].copy_from_slice(&fine.to_be_bytes());
+        let message = Message::new(Payload::Binary(&payload), now()).with_metadata(HK_METADATA);
+        sets.decode(&message, &registry()).unwrap().event_time
+    };
+    assert_eq!(
+        time_of(0, 0),
+        EventTime::At(instant("2000-01-01T00:00:00Z"))
+    );
+    assert_eq!(
+        time_of(86_400, 0x8000),
+        EventTime::At(instant("2000-01-02T00:00:00.5Z"))
+    );
+    // 1/65536 of a second is 15258.789... ns, truncated.
+    assert_eq!(
+        time_of(0, 1),
+        EventTime::At(instant("2000-01-01T00:00:00.000015258Z"))
+    );
+}
+
+#[test]
+fn an_iso8601_time_is_any_rfc3339_instant_in_the_payload() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_j");
+    let decode = |t: &str| {
+        let text = format!(r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", {t} "v": 1, "cells": []}}"#);
+        sets.decode(
+            &Message::new(Payload::Json(text.as_bytes()), now()),
+            &registry(),
+        )
+        .map(|decoded| decoded.event_time)
+    };
+    assert_eq!(
+        decode(r#""t": "2026-06-01T14:00:00.25+02:00","#),
+        Ok(EventTime::At(instant("2026-06-01T12:00:00.25Z")))
+    );
+    assert_eq!(code(decode("")), "invalid_time");
+    let err = decode(r#""t": "noon","#).unwrap_err();
+    assert_eq!(err.code(), "invalid_time");
+    assert!(
+        err.to_string()
+            .starts_with("packet BUS: its event time can't be read: "),
+        "{err}"
+    );
+}
+
+fn time_packet(unix_us: u64, boot_ms: u32) -> Vec<u8> {
+    let mut payload = unix_us.to_le_bytes().to_vec();
+    payload.extend_from_slice(&boot_ms.to_le_bytes());
+    payload
+}
+
+#[test]
+fn boot_time_comes_back_raw_and_a_correlator_makes_it_absolute() {
+    let artifacts = artifacts();
+    let legacy = family_sets(&artifacts, "legacy");
+    let registry = registry();
+    let mut correlator = Correlator::new();
+
+    // 2023-11-14T22:13:20Z, at 1.234 s after boot.
+    let correlation = time_packet(1_700_000_000_000_000, 1234);
+    let later = time_packet(u64::MAX, 2234);
+    let decode = |payload: &[u8]| {
+        legacy
+            .decode(&Message::new(Payload::Binary(payload), now()), &registry)
+            .unwrap()
+    };
+    let first = decode(&correlation);
+    let second = decode(&later);
+    assert_eq!(
+        second.event_time,
+        EventTime::SinceBoot {
+            value: 2234,
+            unit: crate::v2::ir::TimeUnit::Ms
+        }
+    );
+    // Nothing is known before the asset's first correlation.
+    assert_eq!(correlator.absolute(&second), None);
+    assert!(correlator.observe(&first));
+    assert_eq!(
+        correlator.absolute(&first),
+        Some(instant("2023-11-14T22:13:20Z"))
+    );
+    assert_eq!(
+        correlator.absolute(&second),
+        Some(instant("2023-11-14T22:13:21Z"))
+    );
+    // A correlation whose absolute clock reads "no reading" teaches nothing.
+    assert!(!correlator.observe(&second));
+    // Nor does one whose boot clock does.
+    let unsynced = decode(&time_packet(1_700_000_000_000_000, u32::MAX));
+    assert!(!correlator.observe(&unsynced));
+    // What it learned is the boot instant, which a restarted consumer can
+    // restore.
+    let booted = correlator.boot_time("legacy", "BOX-1");
+    assert_eq!(booted, Some(instant("2023-11-14T22:13:18.766Z")));
+    let mut restarted = Correlator::new();
+    restarted.set_boot_time("legacy", "BOX-1", instant("2023-11-14T22:13:18.766Z"));
+    assert_eq!(
+        restarted.absolute(&second),
+        Some(instant("2023-11-14T22:13:21Z"))
+    );
+
+    // Absolute event times pass through.
+    let vendor_x = family_sets(&artifacts, "vendor_x");
+    let hk = Hk {
+        flags: 0,
+        samples: &[],
+        pos: None,
+        label: b"",
+        blobs: &[],
+    }
+    .bytes();
+    let message = Message::new(Payload::Binary(&hk), now()).with_metadata(HK_METADATA);
+    let decoded = vendor_x.decode(&message, &registry).unwrap();
+    assert!(!correlator.observe(&decoded));
+    assert_eq!(
+        correlator.absolute(&decoded),
+        Some(instant("2000-01-01T00:00:00Z"))
+    );
+}
+
+#[test]
+fn a_null_in_a_json_array_is_no_reading_at_that_position() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_j");
+    let text = br#"{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z", "v": 1000,
+                    "cells": [{"v": 3.7, "ok": true}, null], "i": [1.5, null, 2.5]}"#;
+    let decoded = sets
+        .decode(&Message::new(Payload::Json(text), now()), &registry())
+        .unwrap();
+    let record = shown(&decoded.record);
+    assert_eq!(
+        record[1],
+        ("cells".into(), "[{volts: 3.7, ok: true}, null]".into())
+    );
+    assert_eq!(record[2], ("currents".into(), "[1.5, null, 2.5]".into()));
+    assert_eq!(
+        decoded.samples.iter().map(sample_text).collect::<Vec<_>>(),
+        triples(&[
+            ("eps.bus_voltage", "F64(1.0) at v", "good"),
+            ("eps.bus_current", "F64(1.5) at currents[0] +0ns", "good"),
+            (
+                "eps.bus_current",
+                "F64(2.5) at currents[2] +20000000ns",
+                "good"
+            ),
+        ])
+    );
+    assert_eq!(decoded.engineering("currents[1]"), None);
+}
+
+#[test]
+fn json_payloads_nest_at_most_127_deep() {
+    use crate::canonical::parse_without_duplicates;
+    let arrays = |depth: usize| format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+    let objects = |depth: usize| format!("{}1{}", r#"{"a":"#.repeat(depth), "}".repeat(depth));
+    for make in [&arrays as &dyn Fn(usize) -> String, &objects] {
+        assert!(parse_without_duplicates(make(127).as_bytes()).is_ok());
+        assert!(parse_without_duplicates(make(128).as_bytes()).is_err());
+    }
+}
+
+#[test]
+fn json_numbers_beyond_a_double_are_refused() {
+    use crate::canonical::parse_without_duplicates;
+    for text in [r#"{"x": 1e400}"#, r#"{"x": -1e400}"#, r#"[1, [2, 1e999]]"#] {
+        let err = parse_without_duplicates(text.as_bytes()).unwrap_err();
+        assert_eq!(err.code(), "invalid_json", "{text}");
+    }
+    assert!(
+        parse_without_duplicates(br#"[18446744073709551615, -9223372036854775808, 1e308]"#).is_ok()
     );
 }

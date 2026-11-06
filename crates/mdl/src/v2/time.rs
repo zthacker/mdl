@@ -83,16 +83,53 @@ impl Timestamp {
     pub fn nanos(self) -> u32 {
         self.nanos
     }
+
+    /// Any RFC 3339 instant, the way payloads write them: any UTC offset,
+    /// `T`, `t` or a space between date and time, `Z` or `z`, and any
+    /// number of fraction digits (truncated to nanoseconds). A leap second
+    /// (`23:59:60`) reads as the last nanosecond of the second before it,
+    /// as Unix time has no leap seconds. MDL's own documents use the one
+    /// spelling [`FromStr`] reads; this is for data MDL doesn't control.
+    ///
+    /// ```
+    /// use mdl::v2::time::Timestamp;
+    ///
+    /// let t = Timestamp::from_rfc3339("2026-06-01T14:00:00.25+02:00").unwrap();
+    /// assert_eq!(t.to_string(), "2026-06-01T12:00:00.25Z");
+    /// ```
+    pub fn from_rfc3339(text: &str) -> Result<Timestamp, TimestampError> {
+        let error = || TimestampError {
+            text: text.to_string(),
+            expected: "an RFC 3339 instant with a UTC offset, between years 0001 and 9999",
+        };
+        let parsed = chrono::DateTime::parse_from_rfc3339(text).map_err(|_| error())?;
+        let utc = parsed.to_utc();
+        let nanos = utc.timestamp_subsec_nanos().min(NANOS_PER_SECOND - 1);
+        Timestamp::new(utc.timestamp(), nanos).ok_or_else(error)
+    }
+
+    /// Nanoseconds since the Unix epoch, wide enough for any sum of a
+    /// timestamp and an offset; `None` outside years 0001 to 9999.
+    pub(crate) fn from_unix_nanos_wide(nanos: i128) -> Option<Timestamp> {
+        let per_second = i128::from(NANOS_PER_SECOND);
+        let seconds = i64::try_from(nanos.div_euclid(per_second)).ok()?;
+        let nanos = u32::try_from(nanos.rem_euclid(per_second)).ok()?;
+        Timestamp::new(seconds, nanos)
+    }
+
+    /// Nanoseconds since the Unix epoch.
+    pub(crate) fn unix_nanos_wide(self) -> i128 {
+        i128::from(self.seconds) * i128::from(NANOS_PER_SECOND) + i128::from(self.nanos)
+    }
 }
 
-/// Text that isn't MDL's spelling of an instant.
+/// Text that isn't an instant in the form asked for.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error(
-    "{text:?} isn't an instant written YYYY-MM-DDTHH:MM:SS[.fraction]Z (UTC, no trailing zeros)"
-)]
+#[error("{text:?} isn't {expected}")]
 #[non_exhaustive]
 pub struct TimestampError {
     pub text: String,
+    expected: &'static str,
 }
 
 impl FromStr for Timestamp {
@@ -101,6 +138,8 @@ impl FromStr for Timestamp {
     fn from_str(text: &str) -> Result<Timestamp, TimestampError> {
         parse(text).ok_or_else(|| TimestampError {
             text: text.to_string(),
+            expected: "an instant written YYYY-MM-DDTHH:MM:SS[.fraction]Z (UTC, no trailing \
+                       zeros)",
         })
     }
 }
