@@ -72,6 +72,42 @@ pub enum Code {
     IdentifyValue,
     /// A list that means a set, not written in sorted order.
     NotSorted,
+    /// Two entries that read the same bits, or an entry placed where an
+    /// earlier variable-size entry may reach.
+    Overlap,
+    /// An entry or time code that runs past the packet's exact length, or a
+    /// locator a packet is too short for.
+    OutOfBounds,
+    /// A size or length that doesn't fit the entry's type.
+    FieldSize,
+    /// Bits that the byte order or type can't read where they are.
+    Alignment,
+    /// A reference to an entry decoded later.
+    ForwardReference,
+    /// A reference to an entry of the wrong kind: a count from a signed
+    /// field, a condition on a float, a length from a conditional field.
+    ReferenceType,
+    /// A conversion the field's type can't take.
+    ConversionType,
+    /// A sentinel or state value the field can never hold.
+    ValueRange,
+    /// A field or array that can't produce what its canonical param holds.
+    CanonicalType,
+    /// A unit that differs from the canonical param's.
+    UnitMismatch,
+    /// A source frame consumers can't convert to the param's frame.
+    FrameMismatch,
+    /// A composite with the wrong members for its param.
+    CompositeShape,
+    /// A newer catalog without a param the older one had.
+    RemovedParam,
+    /// A newer catalog that changes what a param means.
+    ChangedParam,
+    /// An entry after one that reads to the end of its container, or a
+    /// read-to-the-end inside a struct type (which has no end of its own).
+    ReadsToEnd,
+    /// Two entries of one packet mapping to the same canonical param.
+    DuplicateMapping,
 }
 
 impl Code {
@@ -110,6 +146,22 @@ impl Code {
             Code::IntegerAsString => "integer_as_string",
             Code::IdentifyValue => "identify_value",
             Code::NotSorted => "not_sorted",
+            Code::Overlap => "overlap",
+            Code::OutOfBounds => "out_of_bounds",
+            Code::FieldSize => "field_size",
+            Code::Alignment => "alignment",
+            Code::ForwardReference => "forward_reference",
+            Code::ReferenceType => "reference_type",
+            Code::ConversionType => "conversion_type",
+            Code::ValueRange => "value_range",
+            Code::CanonicalType => "canonical_type",
+            Code::UnitMismatch => "unit_mismatch",
+            Code::FrameMismatch => "frame_mismatch",
+            Code::CompositeShape => "composite_shape",
+            Code::RemovedParam => "removed_param",
+            Code::ChangedParam => "changed_param",
+            Code::ReadsToEnd => "reads_to_end",
+            Code::DuplicateMapping => "duplicate_mapping",
         }
     }
 }

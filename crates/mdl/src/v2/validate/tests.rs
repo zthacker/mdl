@@ -139,6 +139,7 @@ fn set_names_and_versions() {
         let mut copy = v["sets"][1].clone();
         copy["family"] = json!("legacy");
         copy.as_object_mut().unwrap().remove("time");
+        copy.as_object_mut().unwrap().remove("types");
         copy["packets"][0]
             .as_object_mut()
             .unwrap()
@@ -309,9 +310,17 @@ fn entry_rules() {
     assert_one(Code::DuplicateName, "/sets/0/packets/0/entries/2", |v| {
         hk(v)["entries"][2]["name"] = json!("bus_counts");
     });
-    assert_one(Code::InvalidName, "/sets/0/packets/0/entries/0/name", |v| {
-        hk(v)["entries"][0]["name"] = json!("bus.counts");
+    assert_one(Code::InvalidName, "/sets/0/packets/0/entries/2/name", |v| {
+        hk(v)["entries"][2]["name"] = json!("mo.de");
     });
+    // Renaming a field breaks the length that names it, and only that.
+    assert_eq!(
+        problems(|v| hk(v)["entries"][7]["name"] = json!("label_size")),
+        vec![(
+            Code::UnknownEntry,
+            "/sets/0/packets/0/entries/8/length/field".to_string()
+        )]
+    );
     assert_one(Code::Empty, "/sets/0/types/vec3_i32/entries", |v| {
         set_x(v)["types"]["vec3_i32"]["entries"] = json!([]);
     });
@@ -641,7 +650,7 @@ fn nesting_is_limited_and_checked_without_recursion() {
         chain(v, MAX_NESTING + 1)
     });
     // Far past any recursion limit, on a test thread's small stack.
-    assert_one(Code::NestingDepth, "/sets/0/types/t0", |v| chain(v, 50_000));
+    assert_one(Code::NestingDepth, "/sets/0/types/t0", |v| chain(v, 20_000));
 
     let mut condition = json!({ "kind": "compare", "field": "flags", "op": "eq", "value": 1 });
     for _ in 0..MAX_NESTING {
@@ -692,7 +701,14 @@ fn huge_fixed_sizes_dont_overflow_offsets() {
             { "kind": "field", "name": "after", "type": "uint", "size_bits": 8 }
         ]
     })]));
-    assert_eq!(found, vec![]);
+    // The 4294967295-bit integer is caught; nothing overflows on the way.
+    assert_eq!(
+        found,
+        vec![(
+            Code::FieldSize,
+            "/sets/0/packets/0/entries/1/element/size_bits".to_string()
+        )]
+    );
 }
 
 #[test]
@@ -824,4 +840,1084 @@ fn diagnostics_at_one_path_are_ordered_by_code() {
             (Code::SetVersion, "/sets/0/version".to_string()),
         ]
     );
+}
+
+// ---- Part 2: layout and canonical mapping ----
+
+/// vendor_x_v2 (binary, big-endian) with one packet of these entries.
+fn layout(entries: Value) -> impl FnOnce(&mut Value) {
+    with_packets(vec![
+        json!({ "name": "P", "identify": { "apid": 1 }, "entries": entries }),
+    ])
+}
+
+/// The same, with the packet's length set.
+fn layout_with_length(entries: Value, length: Value) -> impl FnOnce(&mut Value) {
+    with_packets(vec![
+        json!({ "name": "P", "identify": { "apid": 1 }, "length": length, "entries": entries }),
+    ])
+}
+
+fn uint(name: &str, bits: u32) -> Value {
+    json!({ "kind": "field", "name": name, "type": "uint", "size_bits": bits })
+}
+
+fn at(mut entry: Value, offset: u32) -> Value {
+    entry["offset_bits"] = json!(offset);
+    entry
+}
+
+fn when(mut entry: Value, condition: Value) -> Value {
+    entry["when"] = condition;
+    entry
+}
+
+fn on(field: &str, op: &str, value: Value) -> Value {
+    json!({ "kind": "compare", "field": field, "op": op, "value": value })
+}
+
+fn one(entries: Value) -> Vec<(Code, String)> {
+    problems(layout(entries))
+}
+
+fn entry(index: usize, rest: &str) -> String {
+    format!("/sets/0/packets/0/entries/{index}{rest}")
+}
+
+#[test]
+fn positions_overlaps_and_bounds() {
+    // Two unconditional fields reading the same bits.
+    assert_eq!(
+        one(json!([at(uint("a", 16), 0), at(uint("b", 8), 8)])),
+        vec![(Code::Overlap, entry(1, ""))]
+    );
+    // A conditional alternative reading of the same bits is allowed.
+    assert_eq!(
+        one(json!([
+            uint("flag", 8),
+            at(uint("a", 16), 8),
+            when(at(uint("b", 8), 8), on("flag", "eq", json!(1)))
+        ])),
+        vec![]
+    );
+    // An explicit offset after a variable-size entry can't be proven clear.
+    assert_eq!(
+        one(json!([
+            uint("n", 8),
+            { "kind": "field", "name": "s", "type": "string",
+              "length": { "kind": "field", "field": "n" } },
+            at(uint("late", 8), 8)
+        ])),
+        vec![(Code::Overlap, entry(2, ""))]
+    );
+    // Nothing comes after an entry that reads to the end.
+    assert_eq!(
+        one(json!([
+            { "kind": "field", "name": "rest", "type": "bytes", "length": { "kind": "remaining" } },
+            uint("x", 8)
+        ])),
+        vec![(Code::ReadsToEnd, entry(1, ""))]
+    );
+    // An exact length bounds every entry. (8 bytes also holds the family's
+    // alias at bits 48 to 63.)
+    assert_eq!(
+        problems(layout_with_length(
+            json!([uint("a", 8), at(uint("b", 16), 56)]),
+            json!({ "kind": "exact", "bytes": 8 })
+        )),
+        vec![(Code::OutOfBounds, entry(1, ""))]
+    );
+    // The family's alias (bits 48 to 63) must fit every exact-length packet.
+    assert_eq!(
+        problems(layout_with_length(
+            json!([uint("a", 8)]),
+            json!({ "kind": "exact", "bytes": 4 })
+        )),
+        vec![(Code::OutOfBounds, "/sets/0/packets/0/length".to_string())]
+    );
+}
+
+#[test]
+fn sizes_suit_types() {
+    let field = |ty: &str, extra: Value| {
+        let mut f = json!({ "kind": "field", "name": "f", "type": ty });
+        for (k, v) in extra.as_object().unwrap() {
+            f[k] = v.clone();
+        }
+        one(json!([f]))
+    };
+    for (ty, extra, key) in [
+        ("uint", json!({ "size_bits": 0 }), "/size_bits"),
+        ("int", json!({ "size_bits": 65 }), "/size_bits"),
+        ("float", json!({ "size_bits": 16 }), "/size_bits"),
+        ("bool", json!({ "size_bits": 2 }), "/size_bits"),
+        ("uint", json!({}), "/size_bits"),
+        ("string", json!({}), "/length"),
+        (
+            "string",
+            json!({ "size_bits": 8, "length": { "kind": "fixed", "bytes": 1 } }),
+            "/size_bits",
+        ),
+        (
+            "uint",
+            json!({ "size_bits": 8, "length": { "kind": "fixed", "bytes": 1 } }),
+            "/length",
+        ),
+        ("uint", json!({ "size_bits": 8, "text": "ascii" }), "/text"),
+    ] {
+        assert_eq!(
+            field(ty, extra.clone()),
+            vec![(Code::FieldSize, entry(0, key))],
+            "{ty} {extra}"
+        );
+    }
+    assert_eq!(
+        one(json!([{ "kind": "padding", "size_bits": 0 }])),
+        vec![(Code::FieldSize, entry(0, "/size_bits"))]
+    );
+    assert_eq!(
+        one(
+            json!([{ "kind": "field", "name": "f", "type": "uint", "size_bits": 8, "pointer": "/f" }])
+        ),
+        vec![(Code::WrongEncoding, entry(0, "/pointer"))]
+    );
+}
+
+#[test]
+fn array_rules() {
+    let element = |e: Value, count: Value| {
+        one(json!([uint("n", 8), { "kind": "array", "name": "a", "count": count, "element": e }]))
+    };
+    assert_eq!(
+        one(json!([{ "kind": "array", "name": "a",
+                     "element": { "kind": "scalar", "type": "uint", "size_bits": 8 } }])),
+        vec![(Code::WrongEncoding, entry(0, "/count"))]
+    );
+    assert_eq!(
+        element(
+            json!({ "kind": "scalar", "type": "bytes", "length": { "kind": "fixed", "bytes": 0 } }),
+            json!({ "kind": "remaining" })
+        ),
+        vec![(Code::FieldSize, entry(1, "/count"))]
+    );
+    assert_eq!(
+        element(
+            json!({ "kind": "scalar", "type": "string", "length": { "kind": "field", "field": "n" } }),
+            json!({ "kind": "fixed", "count": 2 })
+        ),
+        vec![(Code::ReferenceType, entry(1, "/element/length"))]
+    );
+    assert_eq!(
+        element(
+            json!({ "kind": "scalar", "type": "bytes", "length": { "kind": "remaining" } }),
+            json!({ "kind": "fixed", "count": 2 })
+        ),
+        vec![(Code::ReadsToEnd, entry(1, "/element/length"))]
+    );
+}
+
+#[test]
+fn little_endian_alignment() {
+    // legacy_v1 is little-endian; replace its packet's entries.
+    let legacy = |entries: Value| {
+        problems(move |v| {
+            v["sets"][2]["packets"][0]["entries"] = entries;
+            v["sets"][2]["packets"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("length");
+            v["sets"][2].as_object_mut().unwrap().remove("time");
+            v["sets"][2]["packets"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("time_field");
+        })
+    };
+    let path = |i: usize| format!("/sets/2/packets/0/entries/{i}");
+    assert_eq!(
+        legacy(json!([uint("a", 12)])),
+        vec![(Code::Alignment, format!("{}/size_bits", path(0)))]
+    );
+    assert_eq!(
+        legacy(json!([uint("pad", 4), uint("a", 16)])),
+        vec![(Code::Alignment, path(1))]
+    );
+    assert_eq!(
+        legacy(json!([uint("pad", 6), uint("a", 3)])),
+        vec![(Code::Alignment, path(1))]
+    );
+    assert_eq!(legacy(json!([uint("pad", 5), uint("a", 3)])), vec![]);
+    // Strings start on a byte in either byte order.
+    assert_eq!(
+        one(json!([uint("pad", 4),
+                   { "kind": "field", "name": "s", "type": "string",
+                     "length": { "kind": "fixed", "bytes": 2 } }])),
+        vec![(Code::Alignment, entry(1, ""))]
+    );
+    // A CUC time code starts on a byte.
+    assert_one(Code::Alignment, "/sets/0/time/offset_bits", |v| {
+        set_x(v)["time"]["offset_bits"] = json!(4);
+    });
+}
+
+#[test]
+fn references_point_backwards_at_suitable_fields() {
+    let counted = |count_field: &str, entries_before: Value| {
+        let mut entries = entries_before.as_array().unwrap().clone();
+        entries.push(json!({ "kind": "array", "name": "a",
+            "count": { "kind": "field", "field": count_field },
+            "element": { "kind": "scalar", "type": "uint", "size_bits": 8 } }));
+        entries.push(uint("later", 8));
+        one(Value::Array(entries))
+    };
+    let count = |i: usize| entry(i, "/count/field");
+    assert_eq!(
+        counted("later", json!([])),
+        vec![(Code::ForwardReference, count(0))]
+    );
+    assert_eq!(
+        counted("nope", json!([])),
+        vec![(Code::UnknownEntry, count(0))]
+    );
+    assert_eq!(
+        counted(
+            "n",
+            json!([{ "kind": "field", "name": "n", "type": "int", "size_bits": 8 }])
+        ),
+        vec![(Code::ReferenceType, count(1))]
+    );
+    assert_eq!(
+        counted(
+            "n",
+            json!([
+                uint("flag", 8),
+                when(uint("n", 8), on("flag", "eq", json!(1)))
+            ])
+        ),
+        vec![(Code::ReferenceType, count(2))]
+    );
+
+    let guarded = |condition: Value, before: Value| {
+        let mut entries = before.as_array().unwrap().clone();
+        entries.push(when(uint("x", 8), condition));
+        entries.push(uint("later", 8));
+        one(Value::Array(entries))
+    };
+    let field_ref = |i: usize| entry(i, "/when/field");
+    assert_eq!(
+        guarded(on("later", "eq", json!(1)), json!([])),
+        vec![(Code::ForwardReference, field_ref(0))]
+    );
+    let float = json!([{ "kind": "field", "name": "f", "type": "float", "size_bits": 32 }]);
+    assert_eq!(
+        guarded(on("f", "eq", json!(1)), float),
+        vec![(Code::ReferenceType, entry(1, "/when/op"))]
+    );
+    let int = json!([{ "kind": "field", "name": "i", "type": "int", "size_bits": 8 }]);
+    assert_eq!(
+        guarded(on("i", "mask_any", json!(1)), int),
+        vec![(Code::ReferenceType, entry(1, "/when/op"))]
+    );
+    let flag = json!([{ "kind": "field", "name": "b", "type": "bool", "size_bits": 1 }]);
+    assert_eq!(
+        guarded(on("b", "gt", json!(0)), flag),
+        vec![(Code::ReferenceType, entry(1, "/when/op"))]
+    );
+    let text = json!([{ "kind": "field", "name": "s", "type": "string",
+                        "length": { "kind": "fixed", "bytes": 2 } }]);
+    assert_eq!(
+        guarded(on("s", "eq", json!(1)), text),
+        vec![(Code::ReferenceType, entry(1, "/when/value"))]
+    );
+    assert_eq!(
+        guarded(
+            on("c", "eq", json!(1)),
+            json!([
+                uint("flag", 8),
+                when(uint("c", 8), on("flag", "eq", json!(1)))
+            ])
+        ),
+        vec![(Code::ReferenceType, entry(2, "/when/field"))]
+    );
+}
+
+#[test]
+fn conversions_and_sentinels_suit_the_field() {
+    let field = |f: Value| one(json!([f]));
+    let text = json!({ "kind": "field", "name": "s", "type": "string",
+        "length": { "kind": "fixed", "bytes": 2 } });
+    let mut linear_text = text.clone();
+    linear_text["conversion"] = json!({ "kind": "linear", "scale": 1.0, "offset": 0.0 });
+    assert_eq!(
+        field(linear_text),
+        vec![(Code::ConversionType, entry(0, "/conversion"))]
+    );
+    assert_eq!(
+        field(
+            json!({ "kind": "field", "name": "f", "type": "float", "size_bits": 32,
+            "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "A" }] } })
+        ),
+        vec![(Code::ConversionType, entry(0, "/conversion"))]
+    );
+    assert_eq!(
+        field(
+            json!({ "kind": "field", "name": "m", "type": "uint", "size_bits": 2,
+            "conversion": { "kind": "states", "states": [{ "raw": 4, "name": "A" }] } })
+        ),
+        vec![(Code::ValueRange, entry(0, "/conversion/states/0"))]
+    );
+    let mut sentinel = uint("v", 16);
+    sentinel["invalid"] = json!([70000]);
+    assert_eq!(
+        field(sentinel),
+        vec![(Code::ValueRange, entry(0, "/invalid/0"))]
+    );
+    // Floats take integer sentinels like -9999, compared by value.
+    assert_eq!(
+        field(
+            json!({ "kind": "field", "name": "f", "type": "float", "size_bits": 32,
+                      "invalid": [-9999] })
+        ),
+        vec![]
+    );
+    assert_eq!(
+        field(
+            json!({ "kind": "field", "name": "f", "type": "float", "size_bits": 32,
+                      "invalid": ["NaN"] })
+        ),
+        vec![(Code::ValueRange, entry(0, "/invalid/0"))]
+    );
+    let mut text_sentinel = text.clone();
+    text_sentinel["invalid"] = json!(["NA"]);
+    assert_eq!(field(text_sentinel), vec![]);
+    let mut bad_text_sentinel = text;
+    bad_text_sentinel["invalid"] = json!([5]);
+    assert_eq!(
+        field(bad_text_sentinel),
+        vec![(Code::ValueRange, entry(0, "/invalid/0"))]
+    );
+}
+
+#[test]
+fn self_describing_layout_rules() {
+    fn bus(v: &mut Value) -> &mut Value {
+        &mut v["sets"][1]["packets"][0]["entries"][0]
+    }
+    let path = |rest: &str| format!("/sets/1/packets/0/entries/0{rest}");
+    assert_one(Code::WrongEncoding, &path("/offset_bits"), |v| {
+        bus(v)["offset_bits"] = json!(0);
+    });
+    assert_one(Code::WrongEncoding, &path("/pointer"), |v| {
+        bus(v).as_object_mut().unwrap().remove("pointer");
+    });
+    assert_one(Code::WrongEncoding, "/sets/1/packets/0/entries/2", |v| {
+        v["sets"][1]["packets"][0]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "kind": "padding", "size_bits": 8 }));
+    });
+    assert_one(
+        Code::WrongEncoding,
+        "/sets/1/packets/0/entries/1/count",
+        |v| {
+            v["sets"][1]["packets"][0]["entries"][1]["count"] =
+                json!({ "kind": "fixed", "count": 2 });
+        },
+    );
+}
+
+#[test]
+fn canonical_mapping_matches_the_catalog() {
+    let mapped = |f: Value| one(json!([f]));
+    let canonical = entry(0, "/canonical");
+    let text = json!({ "kind": "field", "name": "s", "type": "string",
+        "length": { "kind": "fixed", "bytes": 2 }, "canonical": "eps.bus_voltage", "unit": "V" });
+    assert_eq!(mapped(text), vec![(Code::CanonicalType, canonical.clone())]);
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "m", "type": "uint", "size_bits": 2,
+            "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "SAFE" }] },
+            "canonical": "eps.bus_voltage", "unit": "V" })
+        ),
+        vec![(Code::CanonicalType, canonical.clone())]
+    );
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "v", "type": "float", "size_bits": 32,
+            "canonical": "nav.pos_ecef", "unit": "m" })
+        ),
+        vec![(Code::CanonicalType, canonical.clone())]
+    );
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "v", "type": "uint", "size_bits": 16,
+            "canonical": "eps.bus_voltage", "unit": "mV" })
+        ),
+        vec![(Code::UnitMismatch, entry(0, "/unit"))]
+    );
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "v", "type": "uint", "size_bits": 16,
+            "canonical": "eps.bus_voltage" })
+        ),
+        vec![(Code::UnitMismatch, entry(0, "/unit"))]
+    );
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "m", "type": "uint", "size_bits": 2,
+            "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "SCIENCE" }] },
+            "canonical": "eps.mode" })
+        ),
+        vec![(Code::CanonicalType, entry(0, "/conversion/states/0"))]
+    );
+    // i64 from a 64-bit uint could overflow.
+    let wide = layout(json!([{ "kind": "field", "name": "c", "type": "uint",
+        "size_bits": 64, "canonical": "a.count" }]));
+    assert_eq!(
+        problems(move |v| {
+            v["catalog"]["params"]["a.count"] = json!({ "type": "i64" });
+            wide(v);
+        }),
+        vec![(Code::CanonicalType, canonical)]
+    );
+}
+
+#[test]
+fn composites_resolve_and_convert() {
+    let composite = |c: Value| problems(|v| hk(v)["composites"][0] = c);
+    let path = |rest: &str| format!("/sets/0/packets/0/composites/0{rest}");
+    let base = |frame: &str, members: Value| json!({ "canonical": "nav.pos_ecef", "frame": frame, "members": members });
+    assert_eq!(
+        composite(base("ECI_J2000", json!(["pos.x", "pos.y"]))),
+        vec![(Code::CompositeShape, path("/members"))]
+    );
+    assert_eq!(
+        composite(json!({ "canonical": "eps.bus_voltage", "frame": "ECEF",
+            "members": ["pos.x", "pos.y", "pos.z"] })),
+        vec![(Code::CompositeShape, path("/canonical"))]
+    );
+    assert_eq!(
+        composite(base("BODY", json!(["pos.x", "pos.y", "pos.z"]))),
+        vec![(Code::FrameMismatch, path("/frame"))]
+    );
+    assert_eq!(
+        composite(base("ECI_J2000", json!(["pos.x", "pos.y", "pos.w"]))),
+        vec![(Code::UnknownEntry, path("/members/2"))]
+    );
+    assert_eq!(
+        composite(base("ECI_J2000", json!(["pos.x", "pos.x", "pos.z"]))),
+        vec![(Code::DuplicateValue, path("/members/1"))]
+    );
+    assert_eq!(
+        composite(base("ECI_J2000", json!(["pos.x", "pos.y", "label"]))),
+        vec![(Code::CanonicalType, path("/members/2"))]
+    );
+    // Geodetic: latitude and longitude in degrees, then altitude in meters.
+    assert_eq!(
+        composite(base("GEODETIC", json!(["pos.x", "pos.y", "pos.z"]))),
+        vec![
+            (Code::UnitMismatch, path("/members/0")),
+            (Code::UnitMismatch, path("/members/1")),
+        ]
+    );
+    let geodetic = problems(|v| {
+        set_x(v)["types"]["lla"] = json!({ "entries": [
+            { "kind": "field", "name": "lat", "type": "int", "size_bits": 32, "unit": "deg" },
+            { "kind": "field", "name": "lon", "type": "int", "size_bits": 32, "unit": "deg" },
+            { "kind": "field", "name": "alt", "type": "int", "size_bits": 32, "unit": "m" }
+        ] });
+        hk(v)["entries"][6]["struct"] = json!("lla");
+        hk(v)["composites"][0] = json!({ "canonical": "nav.pos_ecef", "frame": "GEODETIC",
+            "members": ["pos.lat", "pos.lon", "pos.alt"] });
+    });
+    assert_eq!(geodetic, vec![]);
+    // Members index into fixed-size arrays only.
+    let indexed = problems(|v| {
+        hk(v)["entries"][5]["count"] = json!({ "kind": "fixed", "count": 3 });
+        hk(v)["entries"][5]["element"]["unit"] = json!("m");
+        hk(v)["entries"][5]["element"]
+            .as_object_mut()
+            .unwrap()
+            .remove("conversion");
+        hk(v)["entries"][5]
+            .as_object_mut()
+            .unwrap()
+            .remove("canonical");
+        hk(v)["entries"][5]
+            .as_object_mut()
+            .unwrap()
+            .remove("sample_interval_ms");
+        hk(v)["composites"][0] = json!({ "canonical": "nav.pos_ecef", "frame": "ECEF",
+            "members": ["samples[0]", "samples[1]", "samples[2]"] });
+    });
+    assert_eq!(indexed, vec![]);
+    assert_eq!(
+        composite(base(
+            "ECEF",
+            json!(["samples[0]", "samples[1]", "samples[2]"])
+        )),
+        vec![
+            (Code::UnknownEntry, path("/members/0")),
+            (Code::UnknownEntry, path("/members/1")),
+            (Code::UnknownEntry, path("/members/2")),
+        ]
+    );
+}
+
+// ---- Part 2, review round 1 ----
+
+fn string_from(name: &str, length_field: &str) -> Value {
+    json!({ "kind": "field", "name": name, "type": "string",
+            "length": { "kind": "field", "field": length_field } })
+}
+
+#[test]
+fn overlap_detection_doesnt_depend_on_listing_order() {
+    // An explicit entry listed before a variable one it can collide with.
+    assert_eq!(
+        one(json!([
+            at(uint("y", 8), 8),
+            at(uint("len", 8), 0),
+            string_from("s", "len")
+        ])),
+        vec![(Code::Overlap, entry(2, ""))]
+    );
+    // The variable entry is itself explicit.
+    assert_eq!(
+        one(json!([
+            at(uint("y", 8), 16),
+            at(uint("len", 8), 0),
+            at(string_from("s", "len"), 8)
+        ])),
+        vec![(Code::Overlap, entry(2, ""))]
+    );
+    // A sequential entry shifted by an optional one.
+    assert_eq!(
+        one(json!([
+            at(uint("y", 8), 24),
+            at(uint("flag", 8), 0),
+            when(uint("opt", 16), on("flag", "eq", json!(1))),
+            uint("x", 8)
+        ])),
+        vec![(Code::Overlap, entry(3, ""))]
+    );
+    // Out of order but disjoint: fine.
+    assert_eq!(
+        one(json!([at(uint("b", 8), 8), at(uint("a", 8), 0)])),
+        vec![]
+    );
+}
+
+#[test]
+fn conditional_overlap_is_only_for_alternatives() {
+    let base = |second: Value| {
+        one(json!([
+            at(uint("flag", 8), 0),
+            at(uint("y", 16), 16),
+            second
+        ]))
+    };
+    // Half over an unconditional entry: a mistake.
+    assert_eq!(
+        base(when(at(uint("x", 16), 8), on("flag", "eq", json!(1)))),
+        vec![(Code::Overlap, entry(2, ""))]
+    );
+    // A detail reading inside an unconditional entry: allowed.
+    assert_eq!(
+        base(when(at(uint("hi", 8), 16), on("flag", "eq", json!(1)))),
+        vec![]
+    );
+    // Two alternatives at one place: allowed.
+    assert_eq!(
+        one(json!([
+            at(uint("flag", 8), 0),
+            when(at(uint("a", 16), 8), on("flag", "eq", json!(1))),
+            when(at(uint("b", 8), 16), on("flag", "eq", json!(2)))
+        ])),
+        vec![]
+    );
+}
+
+#[test]
+fn exact_length_bounds_every_possible_end() {
+    assert_eq!(
+        problems(layout_with_length(
+            json!([
+                uint("x0", 64),
+                uint("flag", 8),
+                when(uint("opt", 16), on("flag", "eq", json!(1))),
+                uint("x", 16)
+            ]),
+            json!({ "kind": "exact", "bytes": 12 })
+        )),
+        vec![(Code::OutOfBounds, entry(3, ""))]
+    );
+    // The same layout fits an at_least length.
+    assert_eq!(
+        problems(layout_with_length(
+            json!([
+                uint("x0", 64),
+                uint("flag", 8),
+                when(uint("opt", 16), on("flag", "eq", json!(1))),
+                uint("x", 16)
+            ]),
+            json!({ "kind": "at_least", "bytes": 12 })
+        )),
+        vec![]
+    );
+}
+
+#[test]
+fn alignment_holds_for_every_possible_start() {
+    let legacy = |types: Value, entries: Value| {
+        problems(move |v| {
+            v["sets"][2]["types"] = types;
+            v["sets"][2]["packets"][0]["entries"] = entries;
+            let packet = v["sets"][2]["packets"][0].as_object_mut().unwrap();
+            packet.remove("length");
+            packet.remove("time_field");
+            v["sets"][2].as_object_mut().unwrap().remove("time");
+        })
+    };
+    let path = |i: usize| format!("/sets/2/packets/0/entries/{i}");
+    // A struct holding a little-endian u16, placed at bit 4.
+    assert_eq!(
+        legacy(
+            json!({ "t": { "entries": [uint("a", 16)] } }),
+            json!([uint("n", 4), { "kind": "struct", "name": "s", "struct": "t" }])
+        ),
+        vec![(Code::Alignment, path(1))]
+    );
+    // Three-bit little-endian elements: element 2 straddles a byte.
+    assert_eq!(
+        legacy(
+            json!({}),
+            json!([{ "kind": "array", "name": "a", "count": { "kind": "fixed", "count": 3 },
+                     "element": { "kind": "scalar", "type": "uint", "size_bits": 3 } }])
+        ),
+        vec![(Code::Alignment, path(0))]
+    );
+    // A u16 that starts at bit 4 or 7 depending on an optional entry.
+    assert_eq!(
+        legacy(
+            json!({}),
+            json!([
+                uint("flag", 4),
+                when(uint("opt", 3), on("flag", "eq", json!(1))),
+                uint("x", 16)
+            ])
+        ),
+        vec![(Code::Alignment, path(2))]
+    );
+    // A big-endian struct holding a string, at bit 4.
+    assert_eq!(
+        problems(|v| {
+            set_x(v)["types"]["text"] = json!({ "entries": [
+                { "kind": "field", "name": "s", "type": "string",
+                  "length": { "kind": "fixed", "bytes": 2 } }] });
+            layout(json!([uint("n", 4), { "kind": "struct", "name": "s", "struct": "text" }]))(v);
+        }),
+        vec![(Code::Alignment, entry(1, ""))]
+    );
+}
+
+#[test]
+fn struct_types_dont_read_to_the_end() {
+    assert_one(Code::ReadsToEnd, "/sets/0/types/blob/entries/1", |v| {
+        set_x(v)["types"]["blob"] = json!({ "entries": [
+            uint("len", 8),
+            { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "remaining" } }
+        ] });
+    });
+}
+
+#[test]
+fn reported_errors_dont_echo_onto_later_entries() {
+    // Each mistake makes a size unknown; later explicit entries stay quiet.
+    let followed = |broken: Value| one(json!([broken, at(uint("later", 8), 64)]));
+    assert_eq!(
+        followed(json!({ "kind": "struct", "name": "s", "struct": "nope" })),
+        vec![(Code::UnknownType, entry(0, "/struct"))]
+    );
+    assert_eq!(
+        followed(uint("wide", 65)),
+        vec![(Code::FieldSize, entry(0, "/size_bits"))]
+    );
+    // A misspelled member is reported even when the param is wrong too.
+    assert_eq!(
+        problems(|v| {
+            hk(v)["composites"][0] = json!({ "canonical": "eps.mode", "frame": "ECEF",
+                "members": ["pos.x", "pos.yy", "pos.z"] });
+        }),
+        vec![
+            (
+                Code::CompositeShape,
+                "/sets/0/packets/0/composites/0/canonical".to_string()
+            ),
+            (
+                Code::UnknownEntry,
+                "/sets/0/packets/0/composites/0/members/1".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn condition_values_fit_the_field() {
+    for (condition, path) in [
+        (on("n", "eq", json!(300)), "/when/value"),
+        (
+            json!({ "kind": "in", "field": "n", "values": [1, 999] }),
+            "/when/values/1",
+        ),
+    ] {
+        assert_eq!(
+            one(json!([uint("n", 8), when(uint("x", 8), condition)])),
+            vec![(Code::ValueRange, entry(1, path))]
+        );
+    }
+    let flag = json!({ "kind": "field", "name": "b", "type": "bool", "size_bits": 1 });
+    assert_eq!(
+        one(json!([
+            flag,
+            uint("pad", 7),
+            when(uint("x", 8), on("b", "eq", json!(5)))
+        ])),
+        vec![(Code::ValueRange, entry(2, "/when/value"))]
+    );
+}
+
+#[test]
+fn lengths_and_counts_can_be_adjusted() {
+    // CCSDS-style "octets minus one".
+    let adjusted = json!({ "kind": "field", "name": "data", "type": "bytes",
+        "length": { "kind": "field", "field": "len", "add": 1 } });
+    assert_eq!(one(json!([uint("len", 8), adjusted])), vec![]);
+    let with = |length: Value| {
+        one(json!([uint("len", 8),
+                   { "kind": "field", "name": "data", "type": "bytes", "length": length }]))
+    };
+    assert_eq!(
+        with(json!({ "kind": "field", "field": "len", "multiply": 0 })),
+        vec![(Code::FieldSize, entry(1, "/length/multiply"))]
+    );
+    assert_eq!(
+        with(json!({ "kind": "field", "field": "len", "multiply": 1 })),
+        vec![(Code::ExplicitDefault, entry(1, "/length/multiply"))]
+    );
+    assert_eq!(
+        with(json!({ "kind": "field", "field": "len", "add": 0 })),
+        vec![(Code::ExplicitDefault, entry(1, "/length/add"))]
+    );
+}
+
+#[test]
+fn mapping_rules_for_real_telemetry() {
+    let mapped = |f: Value, param: Value| {
+        problems(move |v| {
+            v["catalog"]["params"]["a.p"] = param;
+            layout(json!([f]))(v);
+        })
+    };
+    // A byte-wide flag maps to a bool param.
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "f", "type": "uint", "size_bits": 8,
+                       "canonical": "a.p" }),
+            json!({ "type": "bool" })
+        ),
+        vec![]
+    );
+    // Geodetic reaches ECI_J2000 through ECEF.
+    assert_eq!(
+        problems(|v| {
+            v["catalog"]["params"]["nav.pos_eci"] =
+                json!({ "type": "vec3", "unit": "m", "frame": "ECI_J2000" });
+            set_x(v)["types"]["lla"] = json!({ "entries": [
+                { "kind": "field", "name": "lat", "type": "int", "size_bits": 32, "unit": "deg" },
+                { "kind": "field", "name": "lon", "type": "int", "size_bits": 32, "unit": "deg" },
+                { "kind": "field", "name": "alt", "type": "int", "size_bits": 32, "unit": "m" }
+            ] });
+            hk(v)["entries"][6]["struct"] = json!("lla");
+            hk(v)["composites"][0] = json!({ "canonical": "nav.pos_eci", "frame": "GEODETIC",
+                "members": ["pos.lat", "pos.lon", "pos.alt"] });
+        }),
+        vec![]
+    );
+    // Two fields of one packet on one param.
+    assert_eq!(
+        problems(layout(json!([
+            { "kind": "field", "name": "a", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" },
+            { "kind": "field", "name": "b", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" }
+        ]))),
+        vec![(Code::DuplicateMapping, entry(1, "/canonical"))]
+    );
+    // One spelling for member indexes.
+    assert_eq!(
+        problems(|v| {
+            hk(v)["entries"][5]["count"] = json!({ "kind": "fixed", "count": 3 });
+            hk(v)["composites"][0] = json!({ "canonical": "nav.pos_ecef", "frame": "ECEF",
+                "members": ["samples[0]", "samples[00]", "samples[+1]"] });
+        })
+        .into_iter()
+        .filter(|(code, _)| *code == Code::UnknownEntry)
+        .collect::<Vec<_>>(),
+        vec![
+            (
+                Code::UnknownEntry,
+                "/sets/0/packets/0/composites/0/members/1".to_string()
+            ),
+            (
+                Code::UnknownEntry,
+                "/sets/0/packets/0/composites/0/members/2".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn little_endian_offsets_near_the_limit_dont_overflow() {
+    let found = problems(|v| {
+        v["sets"][2]["packets"][0]["entries"] = json!([
+            { "kind": "array", "name": "a", "count": { "kind": "fixed", "count": 2147483648_u32 },
+              "element": { "kind": "scalar", "type": "bytes",
+                           "length": { "kind": "fixed", "bytes": 1073741823_u32 } } },
+            { "kind": "padding", "size_bits": 4294967294_u32 },
+            { "kind": "padding", "size_bits": 4294967294_u32 },
+            { "kind": "padding", "size_bits": 4294967294_u32 },
+            { "kind": "padding", "size_bits": 4294967294_u32 },
+            uint("x", 16)
+        ]);
+        let packet = v["sets"][2]["packets"][0].as_object_mut().unwrap();
+        packet.remove("length");
+        packet.remove("time_field");
+        v["sets"][2].as_object_mut().unwrap().remove("time");
+    });
+    assert!(
+        found.iter().all(|(code, _)| *code == Code::Alignment),
+        "{found:?}"
+    );
+}
+
+// ---- Part 2, review round 2 ----
+
+fn flags_array(count: u32, bits: u32, ty: &str) -> Value {
+    json!({ "kind": "array", "name": "flags", "count": { "kind": "fixed", "count": count },
+            "element": { "kind": "scalar", "type": ty, "size_bits": bits } })
+}
+
+#[test]
+fn whole_byte_arrays_of_sub_byte_elements_keep_alignment() {
+    // Eight one-bit flags then a string: the string starts on a byte.
+    assert_eq!(
+        one(json!([flags_array(8, 1, "bool"),
+                   { "kind": "field", "name": "s", "type": "string",
+                     "length": { "kind": "fixed", "bytes": 2 } }])),
+        vec![]
+    );
+    let legacy = |entries: Value| {
+        problems(move |v| {
+            v["sets"][2]["packets"][0]["entries"] = entries;
+            let packet = v["sets"][2]["packets"][0].as_object_mut().unwrap();
+            packet.remove("length");
+            packet.remove("time_field");
+            v["sets"][2].as_object_mut().unwrap().remove("time");
+        })
+    };
+    // Four 2-bit little-endian elements, then a little-endian u16.
+    assert_eq!(
+        legacy(json!([flags_array(4, 2, "uint"), uint("x", 16)])),
+        vec![]
+    );
+    // Two 3-bit little-endian elements both fit inside byte 0.
+    assert_eq!(legacy(json!([flags_array(2, 3, "uint")])), vec![]);
+}
+
+#[test]
+fn struct_types_with_explicit_offsets_keep_alignment() {
+    assert_eq!(
+        problems(|v| {
+            set_x(v)["types"]["rec"] = json!({ "entries": [
+                at(uint("a", 8), 0),
+                at(uint("n", 8), 8),
+                at(string_from("s", "n"), 16)
+            ] });
+            layout(json!([{ "kind": "struct", "name": "r", "struct": "rec" },
+                          { "kind": "field", "name": "t", "type": "string",
+                            "length": { "kind": "fixed", "bytes": 2 } }]))(v);
+        }),
+        vec![]
+    );
+}
+
+#[test]
+fn containment_only_excuses_overlap_when_it_is_certain() {
+    // c sits at bits 8..24 or 16..32; at the first placement it half
+    // covers w at bits 20..28.
+    assert_eq!(
+        one(json!([
+            at(uint("flag", 8), 0),
+            when(uint("opt", 8), on("flag", "eq", json!(1))),
+            when(uint("c", 16), on("flag", "eq", json!(2))),
+            at(uint("w", 8), 20)
+        ])),
+        vec![(Code::Overlap, entry(3, ""))]
+    );
+}
+
+#[test]
+fn an_error_doesnt_hide_an_earlier_overlap() {
+    assert_eq!(
+        one(json!([
+            at(uint("a", 16), 0),
+            at(uint("b", 8), 8),
+            uint("c", 65)
+        ])),
+        vec![
+            (Code::Overlap, entry(1, "")),
+            (Code::FieldSize, entry(2, "/size_bits")),
+        ]
+    );
+}
+
+#[test]
+fn exact_length_flags_entries_without_a_bound() {
+    assert_eq!(
+        problems(layout_with_length(
+            json!([uint("x0", 64),
+                   { "kind": "field", "name": "t", "type": "string",
+                     "length": { "kind": "terminator", "byte": 0 } },
+                   uint("x", 32)]),
+            json!({ "kind": "exact", "bytes": 12 })
+        )),
+        vec![(Code::OutOfBounds, entry(1, ""))],
+        "x is unbounded only because t is, so only t is reported"
+    );
+    // A second entry with its own unbounded size is its own problem.
+    assert_eq!(
+        problems(layout_with_length(
+            json!([uint("x0", 64),
+                   { "kind": "field", "name": "t", "type": "string",
+                     "length": { "kind": "terminator", "byte": 0 } },
+                   { "kind": "field", "name": "u", "type": "string",
+                     "length": { "kind": "terminator", "byte": 0 } }]),
+            json!({ "kind": "exact", "bytes": 12 })
+        )),
+        vec![
+            (Code::OutOfBounds, entry(1, "")),
+            (Code::OutOfBounds, entry(2, ""))
+        ]
+    );
+    // Reading to the end is bounded by the payload: fine.
+    assert_eq!(
+        problems(layout_with_length(
+            json!([uint("x0", 64),
+                   { "kind": "field", "name": "rest", "type": "bytes",
+                     "length": { "kind": "remaining" } }]),
+            json!({ "kind": "exact", "bytes": 12 })
+        )),
+        vec![]
+    );
+}
+
+#[test]
+fn duplicate_mappings_count_fields_inside_structs() {
+    let found = problems(|v| {
+        set_x(v)["types"]["batt"] = json!({ "entries": [
+            { "kind": "field", "name": "volts", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" }] });
+        layout(
+            json!([{ "kind": "struct", "name": "batt1", "struct": "batt" },
+                      { "kind": "struct", "name": "batt2", "struct": "batt" }]),
+        )(v);
+    });
+    assert_eq!(found, vec![(Code::DuplicateMapping, entry(1, ""))]);
+    // Arrays of structs carry an index per sample, so they don't count.
+    let indexed = problems(|v| {
+        set_x(v)["types"]["batt"] = json!({ "entries": [
+            { "kind": "field", "name": "volts", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" }] });
+        layout(
+            json!([{ "kind": "array", "name": "batts", "count": { "kind": "fixed", "count": 2 },
+                        "element": { "kind": "struct", "name": "batt" } }]),
+        )(v);
+    });
+    assert_eq!(indexed, vec![]);
+}
+
+#[test]
+fn duplicate_mappings_in_a_type_and_its_packet_are_separate_problems() {
+    let found = problems(|v| {
+        set_x(v)["types"]["batt"] = json!({ "entries": [
+            { "kind": "field", "name": "a", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" },
+            { "kind": "field", "name": "b", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" }] });
+        layout(json!([
+            { "kind": "field", "name": "volts", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" },
+            { "kind": "struct", "name": "batt1", "struct": "batt" }]))(v);
+    });
+    assert_eq!(
+        found,
+        vec![
+            (Code::DuplicateMapping, entry(1, "")),
+            (
+                Code::DuplicateMapping,
+                "/sets/0/types/batt/entries/1/canonical".to_string()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn a_duplicate_inside_a_struct_type_is_described_as_one() {
+    let mut value = fixture();
+    set_x(&mut value)["types"]["batt"] = json!({ "entries": [
+        { "kind": "field", "name": "a", "type": "uint", "size_bits": 16, "unit": "V",
+          "canonical": "eps.bus_voltage" },
+        { "kind": "field", "name": "b", "type": "uint", "size_bits": 16, "unit": "V",
+          "canonical": "eps.bus_voltage" }] });
+    let diagnostics = validate(bundle(value)).unwrap_err();
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].contains("of this struct type"),
+        "{}",
+        messages[0]
+    );
+}
+
+#[test]
+fn duplicate_mappings_are_counted_once_per_type() {
+    use super::MAX_NESTING;
+    // Each type holds two of the one below it: 2^31 paths down to t0's
+    // field, which a walk into every struct entry would follow one by one.
+    let found = problems(|v| {
+        let types = &mut set_x(v)["types"];
+        types["t0"] = json!({ "entries": [
+            { "kind": "field", "name": "volts", "type": "uint", "size_bits": 16, "unit": "V",
+              "canonical": "eps.bus_voltage" }] });
+        for i in 1..MAX_NESTING {
+            let below = format!("t{}", i - 1);
+            types[format!("t{i}")] = json!({ "entries": [
+                { "kind": "struct", "name": "a", "struct": below },
+                { "kind": "struct", "name": "b", "struct": below }] });
+        }
+        let top = format!("t{}", MAX_NESTING - 1);
+        layout(json!([{ "kind": "struct", "name": "top", "struct": top }]))(v);
+    });
+    // Document order puts t10..t19 between t1 and t2.
+    let mut expected: Vec<(Code, String)> = (1..MAX_NESTING)
+        .map(|i| {
+            (
+                Code::DuplicateMapping,
+                format!("/sets/0/types/t{i}/entries/1"),
+            )
+        })
+        .collect();
+    expected.sort();
+    assert_eq!(found, expected);
 }

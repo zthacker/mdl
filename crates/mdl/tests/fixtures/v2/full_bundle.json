@@ -2,6 +2,11 @@
   "mdl_version": "2.0",
   "catalog": {
     "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
       "eps.bus_voltage": {
         "type": "f64",
         "unit": "V",
@@ -18,15 +23,15 @@
           "NOMINAL"
         ]
       },
-      "nav.pos_ecef": {
-        "type": "vec3",
-        "unit": "m",
-        "frame": "ECEF"
-      },
       "eps.old_voltage": {
         "type": "f64",
         "unit": "V",
         "deprecated": "use eps.bus_voltage"
+      },
+      "nav.pos_ecef": {
+        "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
       }
     }
   },
@@ -131,19 +136,12 @@
               "unit": "V",
               "canonical": "eps.bus_voltage",
               "invalid": [
-                65535,
-                "18446744073709551615"
+                65535
               ]
             },
             {
               "kind": "padding",
-              "size_bits": 6,
-              "when": {
-                "kind": "compare",
-                "field": "bus_counts",
-                "op": "ne",
-                "value": 0
-              }
+              "size_bits": 6
             },
             {
               "kind": "field",
@@ -195,9 +193,9 @@
                     0.001
                   ]
                 },
-                "unit": "V"
+                "unit": "A"
               },
-              "canonical": "eps.bus_voltage",
+              "canonical": "eps.bus_current",
               "sample_interval_ms": 100.0
             },
             {
@@ -364,7 +362,10 @@
               "kind": "field",
               "name": "unix_us",
               "type": "uint",
-              "size_bits": 64
+              "size_bits": 64,
+              "invalid": [
+                "18446744073709551615"
+              ]
             },
             {
               "kind": "field",

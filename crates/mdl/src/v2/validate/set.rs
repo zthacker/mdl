@@ -4,7 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::MAX_NESTING;
-use super::layout::static_offsets;
+use super::layout::{Layout, exact_type_sizes, static_offsets};
+use super::mapping;
 use super::rules::{
     check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
     integer_value, is_identifier, is_strict_instant, is_token,
@@ -63,8 +64,108 @@ pub(super) fn check_all(
             catalog: &bundle.catalog,
             types: &set.types,
         };
-        check_types(set, &scope, &place, report);
-        check_packets(set, family, &scope, &place, report);
+        let heights = check_types(set, &scope, &place, report);
+        let type_sizes = exact_type_sizes(&set.types, &heights);
+        check_packets(set, family, &scope, &type_sizes, &place, report);
+        if let Some(family) = family {
+            check_layout(set, family, &bundle.catalog, &heights, &place, report);
+        }
+    }
+}
+
+/// Layout and canonical mapping, which need the family's encoding.
+fn check_layout(
+    set: &Set,
+    family: &Family,
+    catalog: &Catalog,
+    heights: &BTreeMap<&str, usize>,
+    place: &Place,
+    report: &mut Report,
+) {
+    let mut layout = Layout {
+        binary: family.encoding == Encoding::Binary,
+        byte_order: family.byte_order,
+        types: BTreeMap::new(),
+    };
+    // A type's size is known before anything that uses it is checked.
+    let mut order: Vec<(&String, &StructType)> = set.types.iter().collect();
+    order.sort_by_key(|(name, _)| heights.get(name.as_str()).copied().unwrap_or(0));
+    for (name, struct_type) in order {
+        let type_place = place.map_item("types", name, "type");
+        let shape = layout.check_container(&struct_type.entries, None, true, &type_place, report);
+        mapping::check_entries(&struct_type.entries, catalog, &type_place, report);
+        if let Some(shape) = shape {
+            layout.types.insert(name, shape);
+        }
+    }
+    let type_mappings = mapping::type_mappings(&set.types, heights, catalog, place, report);
+    for (index, packet) in set.packets.iter().enumerate() {
+        let packet_place = place.item("packets", index, "packet", &packet.name);
+        layout.check_container(
+            &packet.entries,
+            packet.length.as_ref(),
+            false,
+            &packet_place,
+            report,
+        );
+        mapping::check_entries(&packet.entries, catalog, &packet_place, report);
+        mapping::check_composites(packet, &set.types, catalog, &packet_place, report);
+        mapping::check_duplicate_mappings(packet, &type_mappings, catalog, &packet_place, report);
+        check_fixed_regions(set, family, packet, &packet_place, report);
+    }
+}
+
+/// Bits read from every packet regardless of layout (the family's
+/// locators, a CUC time code) must fit a packet of exact length.
+fn check_fixed_regions(
+    set: &Set,
+    family: &Family,
+    packet: &Packet,
+    place: &Place,
+    report: &mut Report,
+) {
+    let Some(crate::v2::ir::Length::Exact { bytes }) = &packet.length else {
+        return;
+    };
+    let length_bits = u64::from(*bytes) * 8;
+    let mut regions: Vec<(&str, u64, u64)> = Vec::new();
+    for (what, locator) in [
+        ("alias", Some(&family.alias)),
+        ("version", family.version.as_ref()),
+    ] {
+        if let Some(Locator::Bits {
+            offset_bits,
+            size_bits,
+        }) = locator
+        {
+            regions.push((what, u64::from(*offset_bits), u64::from(*size_bits)));
+        }
+    }
+    if let Some(Time::Cuc {
+        offset_bits,
+        coarse_bytes,
+        fine_bytes,
+        ..
+    }) = &set.time
+    {
+        regions.push((
+            "CUC time code",
+            u64::from(*offset_bits),
+            (u64::from(*coarse_bytes) + u64::from(*fine_bytes)) * 8,
+        ));
+    }
+    for (what, offset, size) in regions {
+        if offset + size > length_bits {
+            report.error(
+                Code::OutOfBounds,
+                &place.key("length"),
+                format!(
+                    "packet {} is {bytes} bytes, too short for the {what} at bits {offset} to {}",
+                    packet.name,
+                    offset + size - 1
+                ),
+            );
+        }
     }
 }
 
@@ -194,6 +295,15 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                     "CUC time is in binary payloads; self-describing families use iso8601",
                 );
             }
+            if let Time::Cuc { offset_bits, .. } = time
+                && offset_bits % 8 != 0
+            {
+                report.error(
+                    Code::Alignment,
+                    &place.key("offset_bits"),
+                    format!("a CUC time code starts on a byte boundary, not at bit {offset_bits}"),
+                );
+            }
             if !(1..=4).contains(coarse_bytes) || *fine_bytes > 3 {
                 report.error(
                     Code::CucSize,
@@ -278,7 +388,12 @@ fn top_level_field<'a>(packet: &'a Packet, name: &str) -> Option<(usize, &'a Fie
         })
 }
 
-fn check_types(set: &Set, scope: &Scope, place: &Place, report: &mut Report) {
+fn check_types<'a>(
+    set: &'a Set,
+    scope: &Scope,
+    place: &Place,
+    report: &mut Report,
+) -> BTreeMap<&'a str, usize> {
     for (name, struct_type) in &set.types {
         let type_place = place.map_item("types", name, "type");
         if !is_identifier(name) {
@@ -297,13 +412,14 @@ fn check_types(set: &Set, scope: &Scope, place: &Place, report: &mut Report) {
         }
         check_entries(&struct_type.entries, scope, &type_place, report);
     }
-    check_type_graph(&set.types, place, report);
+    check_type_graph(&set.types, place, report)
 }
 
 fn check_packets(
     set: &Set,
     family: Option<&Family>,
     scope: &Scope,
+    type_sizes: &BTreeMap<&str, u64>,
     place: &Place,
     report: &mut Report,
 ) {
@@ -360,6 +476,7 @@ fn check_packets(
             index,
             packet,
             family,
+            type_sizes,
             &packet_place,
             report,
         ));
@@ -418,10 +535,11 @@ fn resolve_identify(
     packet_index: usize,
     packet: &Packet,
     family: Option<&Family>,
+    type_sizes: &BTreeMap<&str, u64>,
     place: &Place,
     report: &mut Report,
 ) -> Identity {
-    let offsets = static_offsets(&packet.entries);
+    let offsets = static_offsets(&packet.entries, type_sizes);
     let mut identity = Identity {
         keys: BTreeMap::new(),
         unplaced: Vec::new(),
@@ -927,7 +1045,11 @@ fn check_condition(condition: &Condition, place: &Place, depth: usize, report: &
 /// `MAX_NESTING` deep, so decoding depth is bounded by a fixed limit every
 /// implementation shares. The walk is iterative: a type graph is a flat map
 /// in JSON, so its depth isn't bounded by the parser's nesting limit.
-fn check_type_graph(types: &BTreeMap<String, StructType>, place: &Place, report: &mut Report) {
+fn check_type_graph<'a>(
+    types: &'a BTreeMap<String, StructType>,
+    place: &Place,
+    report: &mut Report,
+) -> BTreeMap<&'a str, usize> {
     let uses: BTreeMap<&str, BTreeSet<&str>> = types
         .iter()
         .map(|(name, struct_type)| (name.as_str(), used_types(&struct_type.entries)))
@@ -992,6 +1114,7 @@ fn check_type_graph(types: &BTreeMap<String, StructType>, place: &Place, report:
             format!("struct type {name} nests {deepest} levels deep; the limit is {MAX_NESTING}"),
         );
     }
+    height
 }
 
 fn used_types(entries: &[Entry]) -> BTreeSet<&str> {

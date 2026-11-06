@@ -73,7 +73,7 @@ pub enum CanonicalError {
 /// 1 to 7 of `spec/canonical-json.md`. serde_json on its own silently keeps
 /// the last of two duplicates.
 ///
-/// Two passes: [`NoDuplicates`] only checks keys, then serde_json builds
+/// Two passes: `NoDuplicates` only checks keys, then serde_json builds
 /// the value. Building the value ourselves would be one pass, but it would
 /// break if serde_json's `arbitrary_precision` feature were enabled anywhere
 /// in a downstream build (features unify), because that feature smuggles

@@ -21,21 +21,25 @@ checked. Phases are ordered by dependency: each builds on the previous one.
 - [x] Strict reader (`v2::read`): canonical checks, version check before
       the shape, typed reading from the canonical form, errors with JSON
       paths, digests
-- [ ] Artifacts: catalog, family, set; content-addressed by the SHA-256 of
+- [x] Artifacts: catalog, family, set; content-addressed by the SHA-256 of
       their canonical JSON; a set records the hashes it was validated
       against; each artifact records the lowest IR version its features
       need (so moving the compiler to 2.1 doesn't change unchanged
       artifacts' identities)
-- [ ] Families: encoding, byte order, alias and version locators
-- [ ] Layout: absolute and sequential entries, arrays (fixed, counted,
+- [x] Families: encoding, byte order, alias and version locators, declared
+      metadata
+- [x] Layout: absolute and sequential entries, arrays (fixed, counted,
       remaining), reusable struct types, conditional entries, padding,
       variable-length strings and bytes
-- [ ] Validation for all of the above; integers within ±(2^53 − 1); RFC 3339
-      epochs
-- [ ] Catalog compatibility check between versions (additions and
+- [x] Validation for all of the above, with stable diagnostic codes and JSON
+      Pointer paths; integers within ±(2^53 − 1); one spelling per instant;
+      packet identification where the most specific packet wins
+- [x] Catalog compatibility check between versions (additions and
       deprecations only)
 - [ ] Bindings file format, `Resolver` trait, file-backed resolver, set
-      selection (version locator, else binding effective at ground time)
+      selection (version locator, else binding effective at ground time);
+      the sets loaded for one family are checked together (unique versions),
+      since stored artifacts can come from more than one build
 - [ ] Decoder: compiled in-memory program, identification index, record
       tree output, canonical values (composites, array samples), quality
 - [ ] TOML frontend v2; examples updated, including mixed versions on one link

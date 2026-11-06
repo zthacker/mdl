@@ -10,6 +10,7 @@ check:
     # v2 must build and lint without v1 (see the `v1` feature).
     cargo clippy -p mdl --all-targets --no-default-features -- -D warnings
     cargo test --workspace
+    RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
 
 # Format all code
 fmt:

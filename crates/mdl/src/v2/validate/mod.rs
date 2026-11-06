@@ -5,11 +5,16 @@
 //! stable [`Code`](crate::v2::diagnostics::Code). The only way to get a
 //! [`Validated`] bundle is to pass.
 //!
-//! Checks so far: names and references, families and their declared
-//! metadata, set versions, time sources, identification, nesting depth,
-//! and numeric ranges. Layout (positions, overlaps, sizes, condition and
-//! length references) and canonical mapping (types, units, frames) arrive
-//! in the second half of step 1b.
+//! Checks: names and references, families and their declared metadata,
+//! set versions, time sources, identification, nesting depth, numeric
+//! ranges, layout (positions, sizes for each type, alignment, overlaps,
+//! exact lengths, references to earlier entries) and canonical mapping
+//! (types, units, enum states, composites and frames).
+//!
+//! Validation reports every problem but not their echoes: a mistake that
+//! another check depends on (an unknown family, an undefined struct type,
+//! an enum param without states) is reported once, and the checks that
+//! depend on it stay quiet.
 //!
 //! # Identification
 //!
@@ -36,6 +41,7 @@
 mod catalog;
 mod family;
 mod layout;
+mod mapping;
 mod rules;
 mod set;
 
