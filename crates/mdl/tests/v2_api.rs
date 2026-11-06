@@ -7,7 +7,7 @@
 
 use mdl::v2::ir::{
     ArrayEntry, ByteLength, CompareOp, Condition, Conversion, Count, Element, Entry, Field, Length,
-    Locator, Padding, ScalarElement, ScalarType, State, Time, TimeUnit,
+    Locator, Padding, ScalarElement, ScalarType, State, Time, TimeScale, TimeUnit,
 };
 
 #[test]
@@ -32,7 +32,7 @@ fn every_variant_is_built_with_its_constructor() {
     assert_ne!(Conversion::linear(1.0, 0.0), Conversion::poly(vec![1.0]));
     assert_ne!(
         Time::iso8601("/t"),
-        Time::cuc(0, 4, 2, "2000-01-01T00:00:00Z")
+        Time::cuc(0, 4, 2, "2000-01-01T00:00:00Z", TimeScale::Utc)
     );
     let _ = TimeUnit::Ms;
 }

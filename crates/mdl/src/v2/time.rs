@@ -53,6 +53,16 @@ impl Timestamp {
         nanos: 0,
     };
 
+    /// Until this instant (2027-07-01T00:00:00Z) the leap-second table of
+    /// `spec/decoding.md` §8.1 is known to be right: it's the next date a
+    /// leap second could be inserted after the IERS Bulletin C the table
+    /// follows. Event times on `tai`, `gps` or `tt` from then on use the
+    /// table's last offset, and may differ by a second from a newer table.
+    pub const LEAP_SECONDS_VALID_UNTIL: Timestamp = Timestamp {
+        seconds: leap::VALID_UNTIL,
+        nanos: 0,
+    };
+
     /// `None` if `nanos` isn't below one second or the instant is outside
     /// [`MIN`](Timestamp::MIN)..=[`MAX`](Timestamp::MAX).
     pub fn new(seconds: i64, nanos: u32) -> Option<Timestamp> {
@@ -214,6 +224,8 @@ impl fmt::Display for Timestamp {
         f.write_str("Z")
     }
 }
+
+pub(crate) mod leap;
 
 #[cfg(test)]
 mod tests;

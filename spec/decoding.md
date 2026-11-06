@@ -409,14 +409,31 @@ Implementations SHOULD compute these on request, not while decoding.
 
 ## 8. Event time
 
-A set's `time` gives each message's event time:
+A set's `time` gives each message's event time, a UTC instant (or, for
+`boot`, a time since boot):
 
 - **none:** ground time only.
 - **`cuc`:** a CCSDS unsegmented time code at `offset_bits`:
   `coarse_bytes` of whole seconds, then `fine_bytes` of binary fraction,
   both big-endian (as CCSDS defines them, whatever the family's byte
-  order), counted from `epoch`. The fraction is truncated to whole
-  nanoseconds: `floor(fine * 10^9 / 2^(8 * fine_bytes))`.
+  order), counted from `epoch` on its `scale`. The fraction is truncated
+  to whole nanoseconds: `floor(fine * 10^9 / 2^(8 * fine_bytes))`.
+- **`elapsed`:** the packet's `time_field`, a count of `unit`s (`s`,
+  `ms`, `us`, `ns`) since `epoch` on its `scale`. An integer count is
+  exact; a float count is multiplied by the unit in nanoseconds in
+  binary64 and rounded down to whole nanoseconds. Unix time is seconds
+  since `1970-01-01T00:00:00Z` on the `utc` scale. A packet without a
+  `time_field` has ground time only.
+- **`gps`:** GPS time: the week in the packet's field named by the source's
+  `week_field`, and the time of week, in `unit`s, in its `time_field`
+  (converted as for `elapsed`), from `1980-01-06T00:00:00` on the `gps`
+  scale. With `week_bits`, the week field's value is taken modulo
+  2^`week_bits` and the full week is the one congruent to it nearest the
+  message's ground time: with `G` the ground time's week (its GPS label,
+  §8.1, less the epoch, divided by 604,800 s and rounded down), the week
+  is `w + c × 2^week_bits`, where `c` is `floor((G − w + 2^(week_bits − 1))
+  / 2^week_bits)` and not below 0. A packet without a `time_field` has
+  ground time only.
 - **`iso8601`:** the string at `pointer`, which MUST be an RFC 3339
   instant: any UTC offset from −23:59 to +23:59, `T`, `t` or a space
   between date and time, `Z` or `z`, and any number of fraction digits
@@ -430,26 +447,83 @@ A set's `time` gives each message's event time:
   the time source's unit, returned as it is; a packet without a
   `time_field` has ground time only.
 
-A `time_field`, and a correlation's `unix_field` and `boot_field`, are
-top-level fields that are unconditional, not optional, and `uint`;
-validation refuses anything else (`reference_type`).
-
-**Time scale.** Event times, like Unix time, have no leap seconds, and a
-CUC code's seconds are added to its epoch as such. A mission clock that
-counts TAI seconds (for example, since 1958) therefore comes out ahead of
-UTC by the leap seconds since its epoch: 37 seconds for any instant since
-2017. A time scale setting may come in a later version.
+A `time_field` and a GPS week field are top-level fields that are
+unconditional and not optional; validation refuses anything else
+(`reference_type`). By source, a `time_field` is a `uint` (`boot`); a
+`uint`, `int` or `float` (`elapsed`); a `uint` or `float` (`gps`); a GPS
+week field and a correlation's `clock_field` and `boot_field` are `uint`.
+Every packet with a `time_field` in a `gps` set has the week field.
 
 An event time that can't be read (bits past the end, no string at the
-pointer, text that isn't an RFC 3339 instant, an instant outside years
-0001 to 9999) is [`invalid_time`].
+pointer, text that isn't an RFC 3339 instant, a count that isn't a
+number, an instant outside years 0001 to 9999) is [`invalid_time`].
 
-### 8.1 Correlation
+### 8.1 Time scales and leap seconds
+
+A `cuc` or `elapsed` source, and a correlation (§8.2), states its `scale`:
+`utc`, `tai`, `gps` or `tt` (`gps` time is always on the `gps` scale).
+The epoch's date and time are read on that scale, whatever the `Z` its
+RFC 3339 form ends with: `1958-01-01T00:00:00Z` on `tai` is 1958-01-01
+00:00:00 TAI. The count is added to it, giving a *label*: nanoseconds
+since 1970-01-01T00:00:00 on the scale, every day counted as 86,400
+seconds.
+
+- **`utc`:** the label is the Unix time of the instant. Like Unix time it
+  has no leap seconds; a clock that counts them is on another scale.
+- **`tai`:** International Atomic Time, which counts every second and so
+  runs ahead of UTC by the leap seconds. With `A` the TAI − UTC in effect,
+  the instant is the label less `A`. TAI − UTC is the offset of the last
+  table entry whose UTC start is at or before the instant, which as a TAI
+  label is the last entry whose start plus its offset is at or before the
+  label. A label at or after an entry's start plus the previous entry's
+  offset (the first entry's previous offset is its own, so no leap second
+  precedes it) but before its start plus its own offset falls inside that
+  entry's leap second (`23:59:60` UTC), and is the instant before the
+  entry starts: `23:59:59.999999999`. An entry whose offset falls (a
+  negative leap second) has no such interval.
+- **`gps`:** GPS time, 19 seconds behind TAI: the label plus 19 s,
+  converted as `tai`.
+- **`tt`:** Terrestrial Time, 32.184 seconds ahead of TAI: the label less
+  32.184 s, converted as `tai`.
+
+Before the table's first entry, its offset (10 s) applies; after its last,
+the last. Implementations MUST use this table, which follows IERS
+Bulletin C 72 (July 2026): no leap second at the end of 2026, and 37 s
+from 2017 on. It is known to be right until **2027-07-01T00:00:00Z**, the
+next date a leap second could be inserted; event times on `tai`, `gps` or
+`tt` from then on use its last offset, and may differ by a second from a
+newer table. A new IERS bulletin is a new version of this table.
+
+| From (UTC) | TAI − UTC | From (UTC) | TAI − UTC |
+| --- | --- | --- | --- |
+| 1972-01-01 | 10 s | 1985-07-01 | 23 s |
+| 1972-07-01 | 11 s | 1988-01-01 | 24 s |
+| 1973-01-01 | 12 s | 1990-01-01 | 25 s |
+| 1974-01-01 | 13 s | 1991-01-01 | 26 s |
+| 1975-01-01 | 14 s | 1992-07-01 | 27 s |
+| 1976-01-01 | 15 s | 1993-07-01 | 28 s |
+| 1977-01-01 | 16 s | 1994-07-01 | 29 s |
+| 1978-01-01 | 17 s | 1996-01-01 | 30 s |
+| 1979-01-01 | 18 s | 1997-07-01 | 31 s |
+| 1980-01-01 | 19 s | 1999-01-01 | 32 s |
+| 1981-07-01 | 20 s | 2006-01-01 | 33 s |
+| 1982-07-01 | 21 s | 2009-01-01 | 34 s |
+| 1983-07-01 | 22 s | 2012-07-01 | 35 s |
+| | | 2015-07-01 | 36 s |
+| | | 2017-01-01 | 37 s |
+
+Going the other way, for `gps` week resolution (§8), a UTC instant's
+label on a scale is the instant plus the TAI − UTC in effect at it (less
+19 s for `gps`, plus 32.184 s for `tt`).
+
+### 8.2 Correlation
 
 Turning boot time into an instant takes state across messages, which a
 decoder doesn't keep. A consumer that does (MDL offers one) keeps, per
 family and asset, the instant the asset booted, from the latest
-`correlate` packet: its `unix_field` (in `unix_unit`) minus its
+`correlate` packet: the instant its `clock_field` gives, a count of
+`clock_unit`s since the correlation's `epoch` on its `scale` (converted as
+§8.1; Unix time is `1970-01-01T00:00:00Z` on `utc`), minus its
 `boot_field` (in the time source's unit), both read at one moment. If
 either clock's quality (§7.3) isn't `good`, the packet teaches nothing. A
 boot time's instant is the boot instant plus the boot time. Messages

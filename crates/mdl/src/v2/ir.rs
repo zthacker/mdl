@@ -909,8 +909,9 @@ pub enum Time {
         offset_bits: u32,
         coarse_bytes: u8,
         fine_bytes: u8,
-        /// RFC 3339, e.g. `"2000-01-01T00:00:00Z"`.
+        /// RFC 3339, e.g. `"1958-01-01T00:00:00Z"`, read on `scale`.
         epoch: String,
+        scale: TimeScale,
     },
     /// An ISO 8601 / RFC 3339 string in a self-describing payload.
     #[non_exhaustive]
@@ -923,6 +924,44 @@ pub enum Time {
         unit: TimeUnit,
         correlate: Correlate,
     },
+    /// A count of `unit`s since `epoch`, on `scale`, in each packet's
+    /// `time_field` (an integer, or a float with a fraction). Unix time is
+    /// seconds since 1970-01-01T00:00:00Z on the utc scale. A packet
+    /// without a `time_field` carries ground time only.
+    #[non_exhaustive]
+    Elapsed {
+        unit: TimeUnit,
+        /// RFC 3339, read on `scale`.
+        epoch: String,
+        scale: TimeScale,
+    },
+    /// GPS time: the week in each timed packet's `week_field`, and the time
+    /// of week, in `unit`s, in its `time_field`, from 1980-01-06T00:00:00 on
+    /// the gps scale. A week of `week_bits` bits (10 in older receivers)
+    /// rolls over; the full week is the one nearest the message's ground
+    /// time.
+    #[non_exhaustive]
+    Gps {
+        unit: TimeUnit,
+        week_field: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        week_bits: Option<u8>,
+    },
+}
+
+/// How a time source counts seconds. `utc` counts every day as 86,400
+/// seconds, as Unix time does (leap seconds aren't counted); `tai` counts
+/// every second; `gps` is TAI 19 s behind and `tt` (Terrestrial Time)
+/// 32.184 s ahead. Converting the others to UTC uses the leap-second table
+/// in `spec/decoding.md` §8.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TimeScale {
+    Utc,
+    Tai,
+    Gps,
+    Tt,
 }
 
 impl Time {
@@ -931,12 +970,30 @@ impl Time {
         coarse_bytes: u8,
         fine_bytes: u8,
         epoch: impl Into<String>,
+        scale: TimeScale,
     ) -> Self {
         Time::Cuc {
             offset_bits,
             coarse_bytes,
             fine_bytes,
             epoch: epoch.into(),
+            scale,
+        }
+    }
+
+    pub fn elapsed(unit: TimeUnit, epoch: impl Into<String>, scale: TimeScale) -> Self {
+        Time::Elapsed {
+            unit,
+            epoch: epoch.into(),
+            scale,
+        }
+    }
+
+    pub fn gps(unit: TimeUnit, week_field: impl Into<String>) -> Self {
+        Time::Gps {
+            unit,
+            week_field: week_field.into(),
+            week_bits: None,
         }
     }
 
@@ -967,26 +1024,41 @@ pub enum TimeUnit {
 #[non_exhaustive]
 pub struct Correlate {
     pub packet: String,
-    /// The entry holding absolute time since the Unix epoch.
-    pub unix_field: String,
-    pub unix_unit: TimeUnit,
+    /// The entry holding absolute time: a count of `clock_unit`s since
+    /// `epoch` on `scale`, as an `elapsed` time source reads it.
+    pub clock_field: String,
+    pub clock_unit: TimeUnit,
+    /// RFC 3339, read on `scale`; Unix time is `1970-01-01T00:00:00Z` on
+    /// `utc`.
+    pub epoch: String,
+    pub scale: TimeScale,
     /// The entry holding time since boot, in the set's boot unit.
     pub boot_field: String,
 }
 
 impl Correlate {
+    /// A correlation whose absolute clock is Unix time in `clock_unit`s.
     pub fn new(
         packet: impl Into<String>,
-        unix_field: impl Into<String>,
-        unix_unit: TimeUnit,
+        clock_field: impl Into<String>,
+        clock_unit: TimeUnit,
         boot_field: impl Into<String>,
     ) -> Self {
         Correlate {
             packet: packet.into(),
-            unix_field: unix_field.into(),
-            unix_unit,
+            clock_field: clock_field.into(),
+            clock_unit,
+            epoch: "1970-01-01T00:00:00Z".to_string(),
+            scale: TimeScale::Utc,
             boot_field: boot_field.into(),
         }
+    }
+
+    /// The absolute clock's epoch and scale.
+    pub fn with_epoch(mut self, epoch: impl Into<String>, scale: TimeScale) -> Self {
+        self.epoch = epoch.into();
+        self.scale = scale;
+        self
     }
 }
 
@@ -1047,7 +1119,9 @@ pub struct Packet {
     /// Binary payloads: how long the payload must be.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<Length>,
-    /// `boot` time: the entry holding time since boot.
+    /// `boot`, `elapsed` and `gps` time: the entry holding the packet's
+    /// clock (time since boot, the count since the epoch, the time of
+    /// week).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_field: Option<String>,
     /// May be empty: a packet whose arrival is the information (a

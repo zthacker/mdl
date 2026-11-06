@@ -6,9 +6,16 @@ use serde_json::Value as Json;
 
 use super::{Decoded, Quality, Record, Value};
 use crate::v2::bits::read_bits;
-use crate::v2::ir::{ByteOrder, Correlate, Packet, Set, Time, TimeUnit};
+use crate::v2::ir::{ByteOrder, Correlate, Packet, Set, Time, TimeScale, TimeUnit};
 use crate::v2::route::Readable;
-use crate::v2::time::Timestamp;
+use crate::v2::time::{Timestamp, leap};
+
+const NANOS: i128 = 1_000_000_000;
+
+/// 1980-01-06T00:00:00 on the gps scale, as a label (nanoseconds).
+const GPS_EPOCH: i128 = 315_964_800 * NANOS;
+
+const WEEK: i128 = 604_800 * NANOS;
 
 /// When a message's values were taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +41,7 @@ pub(super) fn event_time(
     record: &Record<'_>,
     readable: &Readable<'_>,
     json: Option<&Json>,
+    ground_time: Timestamp,
 ) -> Result<EventTime, String> {
     match &set.time {
         None => Ok(EventTime::Ground),
@@ -42,21 +50,38 @@ pub(super) fn event_time(
             coarse_bytes,
             fine_bytes,
             epoch,
+            scale,
         }) => {
             let Readable::Binary { bytes, .. } = readable else {
                 return Err("a CUC time code needs a binary payload".to_string());
             };
-            let epoch = epoch
-                .parse::<Timestamp>()
-                .map_err(|err| format!("the CUC epoch: {err}"))?;
-            cuc(
-                bytes,
-                u64::from(*offset_bits),
-                *coarse_bytes,
-                *fine_bytes,
-                epoch,
-            )
-            .map(EventTime::At)
+            let since = cuc(bytes, u64::from(*offset_bits), *coarse_bytes, *fine_bytes)?;
+            instant(*scale, epoch_label(epoch)? + since)
+        }
+        Some(Time::Elapsed { unit, epoch, scale }) => {
+            let Some(field) = &packet.time_field else {
+                return Ok(EventTime::Ground);
+            };
+            let since = count_nanos(record.get(field), *unit, field)?;
+            instant(*scale, epoch_label(epoch)? + since)
+        }
+        Some(Time::Gps {
+            unit,
+            week_field,
+            week_bits,
+        }) => {
+            let Some(field) = &packet.time_field else {
+                return Ok(EventTime::Ground);
+            };
+            let Some(Value::Uint(week)) = record.get(week_field) else {
+                return Err(format!("week field {week_field} has no unsigned value"));
+            };
+            let week = match week_bits {
+                Some(bits) => full_week(i128::from(*week), *bits, ground_time),
+                None => i128::from(*week),
+            };
+            let of_week = count_nanos(record.get(field), *unit, field)?;
+            instant(TimeScale::Gps, GPS_EPOCH + week * WEEK + of_week)
         }
         Some(Time::Iso8601 { pointer }) => {
             let text = json
@@ -80,17 +105,59 @@ pub(super) fn event_time(
     }
 }
 
-/// A CCSDS unsegmented time code: whole seconds in `coarse_bytes`, then a
-/// binary fraction of a second in `fine_bytes`, big-endian as CCSDS
-/// defines it, counted from `epoch`. The fraction is truncated to whole
+/// A label on `scale` as an event time.
+fn instant(scale: TimeScale, label: i128) -> Result<EventTime, String> {
+    Timestamp::from_unix_nanos_wide(leap::to_utc(scale, label))
+        .map(EventTime::At)
+        .ok_or_else(|| "the time is outside the years 0001 to 9999".to_string())
+}
+
+/// An epoch as a label on its scale: its date and time counted in 86,400 s
+/// days from 1970-01-01T00:00:00.
+fn epoch_label(epoch: &str) -> Result<i128, String> {
+    epoch
+        .parse::<Timestamp>()
+        .map(Timestamp::unix_nanos_wide)
+        .map_err(|err| format!("the epoch: {err}"))
+}
+
+/// A clock field's count of `unit`s as nanoseconds: an integer exactly, a
+/// float multiplied by the unit in binary64 and rounded down to whole
 /// nanoseconds.
-fn cuc(
-    payload: &[u8],
-    offset_bits: u64,
-    coarse_bytes: u8,
-    fine_bytes: u8,
-    epoch: Timestamp,
-) -> Result<Timestamp, String> {
+fn count_nanos(value: Option<&Value<'_>>, unit: TimeUnit, field: &str) -> Result<i128, String> {
+    match value {
+        Some(Value::Uint(n)) => Ok(i128::from(*n) * unit_nanos(unit)),
+        Some(Value::Int(n)) => Ok(i128::from(*n) * unit_nanos(unit)),
+        Some(Value::Float(x)) => {
+            // At most 1e9, so the unit converts exactly.
+            let nanos = (x * unit_nanos(unit) as f64).floor();
+            if nanos.is_finite() && nanos.abs() < 1.7e38 {
+                Ok(nanos as i128)
+            } else {
+                Err(format!("time field {field} holds {x}, which isn't a time"))
+            }
+        }
+        _ => Err(format!("time field {field} has no numeric value")),
+    }
+}
+
+/// The full GPS week of a `bits`-bit week count: of the weeks congruent to
+/// it modulo 2^bits, the one nearest the ground time's GPS week (half a
+/// cycle away rounds to the later), and not before week 0.
+fn full_week(week: i128, bits: u8, ground_time: Timestamp) -> i128 {
+    let cycle = 1_i128 << bits.clamp(1, 32);
+    let week = week.rem_euclid(cycle);
+    let ground = leap::from_utc(TimeScale::Gps, ground_time.unix_nanos_wide());
+    let ground_week = (ground - GPS_EPOCH).div_euclid(WEEK);
+    let cycles = (ground_week - week + cycle / 2).div_euclid(cycle);
+    week + cycles.max(0) * cycle
+}
+
+/// A CCSDS unsegmented time code, in nanoseconds since its epoch: whole
+/// seconds in `coarse_bytes`, then a binary fraction of a second in
+/// `fine_bytes`, big-endian as CCSDS defines it. The fraction is truncated
+/// to whole nanoseconds.
+fn cuc(payload: &[u8], offset_bits: u64, coarse_bytes: u8, fine_bytes: u8) -> Result<i128, String> {
     let coarse_bits = u32::from(coarse_bytes) * 8;
     let fine_bits = u32::from(fine_bytes) * 8;
     let too_short = || "the payload is too short for its CUC time code".to_string();
@@ -108,10 +175,8 @@ fn cuc(
         .map_err(|_| too_short())?
     };
     // At most 24 fine bits, so this fits easily.
-    let fine_nanos = (i128::from(fine) * 1_000_000_000) >> fine_bits;
-    let nanos = epoch.unix_nanos_wide() + i128::from(coarse) * 1_000_000_000 + fine_nanos;
-    Timestamp::from_unix_nanos_wide(nanos)
-        .ok_or_else(|| "the CUC time is past year 9999".to_string())
+    let fine_nanos = (i128::from(fine) * NANOS) >> fine_bits;
+    Ok(i128::from(coarse) * NANOS + fine_nanos)
 }
 
 fn unit_nanos(unit: TimeUnit) -> i128 {
@@ -159,11 +224,14 @@ impl Correlator {
         if decoded.packet.name != correlate.packet {
             return false;
         }
-        let Some((unix, boot)) = clocks(decoded, correlate) else {
+        let Some((clock, boot)) = clocks(decoded, correlate) else {
             return false;
         };
-        let booted = i128::from(unix) * unit_nanos(correlate.unix_unit)
-            - i128::from(boot) * unit_nanos(*unit);
+        let Ok(epoch) = epoch_label(&correlate.epoch) else {
+            return false;
+        };
+        let label = epoch + i128::from(clock) * unit_nanos(correlate.clock_unit);
+        let booted = leap::to_utc(correlate.scale, label) - i128::from(boot) * unit_nanos(*unit);
         let Some(booted) = Timestamp::from_unix_nanos_wide(booted) else {
             return false;
         };
@@ -216,7 +284,7 @@ fn clocks(decoded: &Decoded<'_>, correlate: &Correlate) -> Option<(u64, u64)> {
         }
     };
     Some((
-        reading(&correlate.unix_field)?,
+        reading(&correlate.clock_field)?,
         reading(&correlate.boot_field)?,
     ))
 }

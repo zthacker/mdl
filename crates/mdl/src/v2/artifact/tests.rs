@@ -28,7 +28,13 @@ fn a_bundle_becomes_one_artifact_per_catalog_family_and_set() {
     );
     assert_eq!(
         artifacts.sets.keys().collect::<Vec<_>>(),
-        ["legacy_v1", "vendor_j_v1", "vendor_x_v2"]
+        [
+            "legacy_v1",
+            "legacy_v2",
+            "vendor_j_v1",
+            "vendor_j_v2",
+            "vendor_x_v2"
+        ]
     );
     let set = &artifacts.sets["vendor_x_v2"];
     let Artifact::Set {

@@ -1115,3 +1115,146 @@ fn tables_and_splines_give_engineering_values_and_flag_raw_values_outside_them()
     assert_eq!(flow.quality, Quality::OutOfCalibration);
     assert_eq!(flow.quality.as_str(), "out_of_calibration");
 }
+
+/// Bindings that send vendor_j's PX-9 and legacy's box-1 to the newer
+/// sets, from well before any message.
+fn timed_registry() -> Bindings {
+    Bindings::from_toml(
+        r#"
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-9"
+asset = "SAT-57"
+set = "vendor_j_v2"
+effective_from = "2000-01-01T00:00:00Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-1"
+asset = "BOX-1"
+set = "legacy_v2"
+effective_from = "2000-01-01T00:00:00Z"
+"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn an_elapsed_time_counts_units_since_its_epoch_on_its_scale() {
+    let decode = |sets: &FamilySets, text: &str| {
+        let message = Message::new(Payload::Json(text.as_bytes()), now());
+        sets.decode(&message, &timed_registry())
+            .map(|decoded| decoded.event_time)
+    };
+    // Unix milliseconds.
+    let sets = family_sets(&artifacts(), "vendor_j");
+    assert_eq!(
+        decode(&sets, r#"{"sat": "PX-9", "t_ms": 1780315200250}"#),
+        Ok(EventTime::At(instant("2026-06-01T12:00:00.25Z")))
+    );
+    // Float seconds on the tai scale from 2000: TAI was 32 s ahead of UTC
+    // then.
+    let mut bundle = bundle();
+    bundle["sets"][3]["time"] = json!({ "kind": "elapsed", "unit": "s",
+        "epoch": "2000-01-01T00:00:00Z", "scale": "tai" });
+    bundle["sets"][3]["packets"][0]["entries"][0]["type"] = json!("float");
+    let sets = family_sets(&artifacts_of(&bundle), "vendor_j");
+    assert_eq!(
+        decode(&sets, r#"{"sat": "PX-9", "t_ms": 1.5}"#),
+        Ok(EventTime::At(instant("1999-12-31T23:59:29.5Z")))
+    );
+    assert_eq!(
+        code(decode(&sets, r#"{"sat": "PX-9", "t_ms": 1e300}"#)),
+        "invalid_time"
+    );
+}
+
+#[test]
+fn a_gps_time_is_a_week_and_time_of_week_and_a_short_week_is_resolved_by_ground_time() {
+    let sets = family_sets(&artifacts(), "legacy");
+    let decode = |week: u16, tow_ms: u32, ground: &str| {
+        let mut payload = week.to_le_bytes().to_vec();
+        payload.extend_from_slice(&tow_ms.to_le_bytes());
+        let message = Message::new(Payload::Binary(&payload), ground.parse().unwrap());
+        sets.decode(&message, &timed_registry())
+            .map(|decoded| decoded.event_time)
+    };
+    // Week 2421, 373 in 10 bits; 129,618 s into it is 12:00:18 GPS, which
+    // is 12:00:00 UTC (GPS is 18 s ahead since 2017).
+    assert_eq!(
+        decode(373, 129_618_000, "2026-06-01T12:00:05Z"),
+        Ok(EventTime::At(instant("2026-06-01T12:00:00Z")))
+    );
+    // Received in 2006, the same count is a cycle earlier: week 1397, when
+    // GPS was 14 s ahead.
+    assert_eq!(
+        decode(373, 129_618_000, "2006-10-20T00:00:00Z"),
+        Ok(EventTime::At(instant("2006-10-16T12:00:04Z")))
+    );
+    // Only the low 10 bits of the week count.
+    assert_eq!(
+        decode(373 + 1024, 129_618_000, "2026-06-01T12:00:05Z"),
+        Ok(EventTime::At(instant("2026-06-01T12:00:00Z")))
+    );
+}
+
+#[test]
+fn a_tai_time_code_is_turned_into_utc_through_the_leap_seconds() {
+    // The CCSDS epoch: 1958-01-01 on the tai scale.
+    let mut bundle = bundle();
+    bundle["sets"][0]["time"]["epoch"] = json!("1958-01-01T00:00:00Z");
+    bundle["sets"][0]["time"]["scale"] = json!("tai");
+    let sets = family_sets(&artifacts_of(&bundle), "vendor_x");
+    let hk = Hk {
+        flags: 0,
+        samples: &[],
+        pos: None,
+        label: b"",
+        blobs: &[],
+    }
+    .bytes();
+    let time_of = |coarse: u32| {
+        let mut payload = hk.clone();
+        payload[0..4].copy_from_slice(&coarse.to_be_bytes());
+        payload[4..6].copy_from_slice(&[0, 0]);
+        let message = Message::new(Payload::Binary(&payload), now()).with_metadata(HK_METADATA);
+        sets.decode(&message, &registry()).unwrap().event_time
+    };
+    // 2026-06-01T12:00:37 TAI is 12:00:00 UTC.
+    assert_eq!(
+        time_of(2_159_006_437),
+        EventTime::At(instant("2026-06-01T12:00:00Z"))
+    );
+    // TAI 2017-01-01T00:00:36 is the leap second 2016-12-31T23:59:60 UTC,
+    // held to the instant before it ends.
+    assert_eq!(
+        time_of(1_861_920_036),
+        EventTime::At(instant("2016-12-31T23:59:59.999999999Z"))
+    );
+}
+
+#[test]
+fn a_correlation_reads_its_absolute_clock_on_its_epoch_and_scale() {
+    // The TIME packet's clock counts GPS microseconds since 1980.
+    let mut bundle = bundle();
+    let correlate = &mut bundle["sets"][2]["time"]["correlate"];
+    correlate["epoch"] = json!("1980-01-06T00:00:00Z");
+    correlate["scale"] = json!("gps");
+    let artifacts = artifacts_of(&bundle);
+    let legacy = family_sets(&artifacts, "legacy");
+    // 2023-11-14T22:13:20Z is 1,700,000,000 Unix seconds; GPS is 18 s
+    // ahead, from an epoch 315,964,800 s later.
+    let gps_us = (1_700_000_000 + 18 - 315_964_800) * 1_000_000;
+    let payload = time_packet(gps_us, 1234);
+    let decoded = legacy
+        .decode(&Message::new(Payload::Binary(&payload), now()), &registry())
+        .unwrap();
+    let mut correlator = Correlator::new();
+    assert!(correlator.observe(&decoded));
+    assert_eq!(
+        correlator.absolute(&decoded),
+        Some(instant("2023-11-14T22:13:20Z"))
+    );
+}
