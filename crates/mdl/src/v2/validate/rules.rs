@@ -45,7 +45,7 @@ pub(super) fn is_canonical_name(name: &str) -> bool {
 
 /// The integer a scalar holds: a JSON number, or a decimal string (how
 /// integers beyond ±(2^53 - 1) are written). `None` for other strings.
-pub(super) fn integer_value(scalar: &Scalar) -> Option<i128> {
+pub(crate) fn integer_value(scalar: &Scalar) -> Option<i128> {
     match scalar {
         Scalar::Int(n) => Some(i128::from(*n)),
         Scalar::Str(text) => integer_text(text),

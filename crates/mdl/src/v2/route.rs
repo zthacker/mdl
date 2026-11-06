@@ -57,6 +57,7 @@ use crate::canonical::{CanonicalError, MAX_SAFE_INTEGER, parse_without_duplicate
 use crate::v2::artifact::{AssembleError, assemble};
 use crate::v2::bindings::{Binding, NativeId, Resolver};
 use crate::v2::bits::{BitsError, read_bits};
+use crate::v2::decode::Program;
 use crate::v2::ir::{
     Artifact, Bundle, ByteOrder, Catalog, Digest, Encoding, Family, Locator, Scalar, Set,
 };
@@ -74,10 +75,13 @@ pub struct FamilySets {
     by_version: BTreeMap<VersionKey, String>,
 }
 
+/// A set ready to decode: its definition, its digest and what decoding
+/// precomputes from it.
 #[derive(Debug, Clone)]
-struct LoadedSet {
-    set: Set,
-    def_version: Digest,
+pub(super) struct LoadedSet {
+    pub(super) set: Set,
+    pub(super) def_version: Digest,
+    pub(super) program: Program,
 }
 
 /// How a family's payloads are read.
@@ -247,6 +251,7 @@ impl FamilySets {
                 LoadedSet {
                     set: set_body.clone(),
                     def_version: set.digest.clone(),
+                    program: Program::compile(set_body, body),
                 },
             );
         }
@@ -268,24 +273,37 @@ impl FamilySets {
         message: &Message<'_>,
         resolver: &R,
     ) -> Result<Route<'_>, RouteError> {
-        let family = &self.family.name;
-        let readable = match (self.kind, message.payload) {
-            (Kind::Binary(order), Payload::Binary(bytes)) => Readable::Binary { bytes, order },
-            (Kind::Json, Payload::Json(bytes)) => Readable::Json {
+        let readable = self.readable(message)?;
+        self.route_parts(message, &readable, resolver)
+            .map(|(route, _)| route)
+    }
+
+    /// The payload, checked against the family's encoding.
+    pub(super) fn readable<'m>(&self, message: &Message<'m>) -> Result<Readable<'m>, RouteError> {
+        match (self.kind, message.payload) {
+            (Kind::Binary(order), Payload::Binary(bytes)) => Ok(Readable::Binary { bytes, order }),
+            (Kind::Json, Payload::Json(bytes)) => Ok(Readable::Json {
                 bytes,
                 parsed: OnceCell::new(),
-            },
-            (kind, payload) => {
-                return Err(RouteError::WrongEncoding {
-                    family: family.clone(),
-                    expected: kind.encoding(),
-                    given: payload.encoding(),
-                });
-            }
-        };
+            }),
+            (kind, payload) => Err(RouteError::WrongEncoding {
+                family: self.family.name.clone(),
+                expected: kind.encoding(),
+                given: payload.encoding(),
+            }),
+        }
+    }
 
+    /// The route and the set it chose.
+    pub(super) fn route_parts<R: Resolver + ?Sized>(
+        &self,
+        message: &Message<'_>,
+        readable: &Readable<'_>,
+        resolver: &R,
+    ) -> Result<(Route<'_>, &LoadedSet), RouteError> {
+        let family = &self.family.name;
         let native_id = self
-            .read(&self.family.alias, "alias", &readable, message)?
+            .read(&self.family.alias, "alias", readable, message)?
             .native_id();
         let Some(binding) = resolver.resolve(family, &native_id, message.ground_time) else {
             return Err(RouteError::UnknownAsset {
@@ -304,7 +322,7 @@ impl FamilySets {
                 });
             }
             (Some(locator), None) => {
-                let read = self.read(locator, "version", &readable, message)?;
+                let read = self.read(locator, "version", readable, message)?;
                 let key = read.version_key(is_exact(locator));
                 match self.by_version.get(&key) {
                     Some(name) => name,
@@ -331,12 +349,13 @@ impl FamilySets {
                 set: set_name.clone(),
             });
         };
-        Ok(Route {
+        let route = Route {
             native_id,
             binding,
             set: &loaded.set,
             def_version: &loaded.def_version,
-        })
+        };
+        Ok((route, loaded))
     }
 
     fn read(
@@ -363,14 +382,12 @@ impl FamilySets {
             ) => read_bits(bytes, u64::from(*offset_bits), *size_bits, *order)
                 .map(Located::Uint)
                 .map_err(|err| unreadable(bits_problem(err))),
-            (Locator::Path { pointer }, Readable::Json { bytes, parsed }) => {
-                let document = parsed
-                    .get_or_init(|| parse_without_duplicates(bytes))
-                    .as_ref()
-                    .map_err(|problem| RouteError::InvalidJson {
-                        family: self.family.name.clone(),
-                        problem: problem.clone(),
-                    })?;
+            (Locator::Path { pointer }, Readable::Json { .. }) => {
+                let Some(document) = readable.json(&self.family.name)? else {
+                    return Err(unreadable(
+                        "a JSON Pointer into a binary payload".to_string(),
+                    ));
+                };
                 let value = document
                     .pointer(pointer)
                     .ok_or_else(|| unreadable(format!("nothing at {pointer}")))?;
@@ -388,9 +405,9 @@ impl FamilySets {
     }
 }
 
-/// A payload checked against its family's encoding, parsed only if a
-/// locator needs it.
-enum Readable<'m> {
+/// A payload checked against its family's encoding. JSON is parsed on
+/// first use, once, whether routing or decoding uses it first.
+pub(super) enum Readable<'m> {
     Binary {
         bytes: &'m [u8],
         order: ByteOrder,
@@ -399,6 +416,23 @@ enum Readable<'m> {
         bytes: &'m [u8],
         parsed: OnceCell<Result<Value, CanonicalError>>,
     },
+}
+
+impl Readable<'_> {
+    /// The parsed JSON document; `None` for a binary payload.
+    pub(super) fn json(&self, family: &str) -> Result<Option<&Value>, RouteError> {
+        let Readable::Json { bytes, parsed } = self else {
+            return Ok(None);
+        };
+        parsed
+            .get_or_init(|| parse_without_duplicates(bytes))
+            .as_ref()
+            .map(Some)
+            .map_err(|problem| RouteError::InvalidJson {
+                family: family.to_string(),
+                problem: problem.clone(),
+            })
+    }
 }
 
 /// What a locator read, before it's compared.
@@ -488,26 +522,40 @@ fn read_metadata(message: &Message<'_>, name: &str) -> Result<Located, String> {
 fn read_json(value: &Value) -> Result<Located, String> {
     match value {
         Value::String(text) => Ok(Located::Text(text.clone())),
-        Value::Number(n) => {
-            if let Some(n) = n.as_u64() {
+        Value::Number(number) => {
+            let integer = json_integer(number);
+            if let Some(n) = integer.and_then(|n| u64::try_from(n).ok()) {
                 return Ok(Located::Uint(n));
             }
-            if let Some(n) = n.as_i64() {
-                return Ok(Located::Int(n));
-            }
-            match n.as_f64() {
-                // Within ±(2^53 - 1) every integer is a double, so the cast
-                // is exact.
-                Some(x) if x.fract() == 0.0 && x.abs() <= MAX_SAFE_INTEGER as f64 => {
-                    Ok(Located::Int(x as i64))
-                }
-                _ => Err(format!("{n} isn't an integer that can be read exactly")),
+            match integer.and_then(|n| i64::try_from(n).ok()) {
+                Some(n) => Ok(Located::Int(n)),
+                None => Err(format!(
+                    "{number} isn't an integer that can be read exactly"
+                )),
             }
         }
         Value::Null => Err("found null, not an integer or a string".to_string()),
         Value::Bool(_) => Err("found a boolean, not an integer or a string".to_string()),
         Value::Array(_) => Err("found an array, not an integer or a string".to_string()),
         Value::Object(_) => Err("found an object, not an integer or a string".to_string()),
+    }
+}
+
+/// The integer a JSON number holds exactly: an integer literal within 64
+/// bits, or a double with no fraction within ±(2^53 - 1), so `42`, `42.0`
+/// and `4.2e1` are all 42.
+pub(super) fn json_integer(number: &serde_json::Number) -> Option<i128> {
+    if let Some(n) = number.as_u64() {
+        return Some(i128::from(n));
+    }
+    if let Some(n) = number.as_i64() {
+        return Some(i128::from(n));
+    }
+    match number.as_f64() {
+        // Within ±(2^53 - 1) every integer is a double, so the cast is
+        // exact.
+        Some(x) if x.fract() == 0.0 && x.abs() <= MAX_SAFE_INTEGER as f64 => Some(x as i128),
+        _ => None,
     }
 }
 

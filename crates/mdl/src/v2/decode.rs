@@ -1,0 +1,512 @@
+//! Decoding: a message into the values its packet defines.
+//!
+//! [`FamilySets::decode`] routes a message (see [`crate::v2::route`]),
+//! identifies its packet within the chosen set, and extracts every entry
+//! into a [`Record`] of raw values: numbers as read, before any
+//! conversion, and text and bytes as they are. A message decodes
+//! completely or not at all: any failure is a [`DecodeError`], with the
+//! path of the entry that failed. A JSON payload is parsed once, whether
+//! routing or decoding needs it first.
+//!
+//! # Identification
+//!
+//! Packets are grouped by the keys they read, and groups are tried from
+//! most keys to fewest; the first packet whose keys all match is the
+//! message's. Validation guarantees that packets matching one message have
+//! strictly nested keys, so this finds the most specific one. A key that
+//! can't be read (missing metadata, a payload too short, nothing at a
+//! pointer) doesn't match, so a more specific packet that can't be read
+//! falls back to a less specific one. A group's keys are read in order,
+//! metadata and pointers first, and the group is skipped as soon as no
+//! packet in it has the values read so far. A field key without a static
+//! position is read by decoding its packet up to that field: a failure
+//! before it means no match, and a failure after it doesn't affect
+//! identification (decoding the packet then reports it).
+//!
+//! # Rules
+//!
+//! - **Positions.** An entry with `offset_bits` starts there, relative to
+//!   its container; one without starts where the previous entry ended. An
+//!   absent conditional entry ends where it starts. A struct's size is the
+//!   furthest end of its present entries.
+//! - **References.** Conditions, counts and lengths use the raw values of
+//!   earlier, unconditional fields of the same container. A count or
+//!   length from a field is `raw * multiply + add`; a negative result is
+//!   an error.
+//! - **Lengths.** A packet with an exact length decodes only that many
+//!   bytes, so a longer payload is accepted (layouts may grow at the end),
+//!   and a shorter one is an error, as is one shorter than an `at_least`
+//!   length. Entries that read to the end read to the packet's end.
+//! - **Safety.** A count is checked against the bits left in the packet
+//!   before anything is allocated, and every array element takes at least
+//!   one bit, so a payload can't ask for more values than it has bits.
+//!   Strings and bytes are checked against the bits left before they're
+//!   copied. Nesting depth is bounded by the definition. A record can
+//!   still be large: a `Value` takes 32 bytes, so a payload of one-bit
+//!   values decodes to about 256 times its own size.
+//! - **Text** is strict: UTF-8 must be valid, ASCII must be below 0x80,
+//!   and Latin-1 maps each byte to the code point of the same value. A
+//!   fixed length keeps every byte, padding included.
+//! - **JSON values.** A uint or int field takes a number whose value is an
+//!   exact integer in range (`42.0` is 42); a float field takes any
+//!   number; bool and string fields take their JSON type. Nothing at a
+//!   present field's pointer is an error.
+
+mod extract;
+mod identify;
+
+use std::collections::BTreeMap;
+
+use serde_json::Value as Json;
+use thiserror::Error;
+
+use crate::v2::bindings::Resolver;
+use crate::v2::bits::{read_bits, sign_extend};
+use crate::v2::ir::{Entry, Family, Length, Packet, Scalar, Set};
+use crate::v2::message::{Message, MetaValue};
+use crate::v2::route::{FamilySets, Readable, Route, RouteError, json_integer};
+use crate::v2::validate::{KeyId, KeyValue, by_value, decoding_facts, exact};
+
+use extract::{BinaryWalker, FieldNames, JsonWalker, Segment, Tables};
+use identify::Index;
+
+/// A decoded message.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Decoded<'a> {
+    /// Who sent it and which set decoded it.
+    pub route: Route<'a>,
+    pub packet: &'a Packet,
+    pub record: Record<'a>,
+}
+
+/// The decoded entries of a packet or struct, in definition order. Absent
+/// conditional entries and padding aren't listed.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Record<'a> {
+    /// Each value with its entry's index in the container and its name,
+    /// in index order.
+    entries: Vec<(usize, &'a str, Value<'a>)>,
+}
+
+impl<'a> Record<'a> {
+    pub fn get(&self, name: &str) -> Option<&Value<'a>> {
+        self.entries
+            .iter()
+            .find(|(_, entry, _)| *entry == name)
+            .map(|(_, _, value)| value)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&'a str, &Value<'a>)> {
+        self.entries.iter().map(|(_, name, value)| (*name, value))
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn push(&mut self, index: usize, name: &'a str, value: Value<'a>) {
+        self.entries.push((index, name, value));
+    }
+
+    /// The value of the container's entry at `index`, if it's present.
+    fn at_entry(&self, index: usize) -> Option<&Value<'a>> {
+        self.entries
+            .binary_search_by_key(&index, |(entry, _, _)| *entry)
+            .ok()
+            .map(|position| &self.entries[position].2)
+    }
+}
+
+/// One decoded value, raw: before any conversion.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum Value<'a> {
+    Uint(u64),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+    Bytes(Vec<u8>),
+    Array(Vec<Value<'a>>),
+    Record(Record<'a>),
+}
+
+/// Why a message can't be decoded.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum DecodeError {
+    #[error(transparent)]
+    Route(#[from] RouteError),
+    #[error("no packet of set {set} (family {family}) matches the message")]
+    NoPacket { family: String, set: String },
+    #[error("{}", too_short(packet, *needed, *given, *exact))]
+    TooShort {
+        packet: String,
+        needed: u32,
+        given: usize,
+        exact: bool,
+    },
+    /// An entry couldn't be decoded. `path` names it the way records do,
+    /// like `cells[2].volts`; it's empty for the packet itself.
+    #[error("{}", entry_failure(packet, path, problem))]
+    Entry {
+        packet: String,
+        path: String,
+        problem: Problem,
+    },
+}
+
+impl DecodeError {
+    /// A stable code for the error, for counting and dead-letter queues.
+    pub fn code(&self) -> &'static str {
+        match self {
+            DecodeError::Route(err) => err.code(),
+            DecodeError::NoPacket { .. } => "no_packet",
+            DecodeError::TooShort { .. } => "too_short",
+            DecodeError::Entry { problem, .. } => problem.code(),
+        }
+    }
+}
+
+fn too_short(packet: &str, needed: u32, given: usize, exact: bool) -> String {
+    let least = if exact { "" } else { " at least" };
+    format!("packet {packet} is{least} {needed} bytes, but the payload has {given}")
+}
+
+fn entry_failure(packet: &str, path: &str, problem: &Problem) -> String {
+    if path.is_empty() {
+        format!("packet {packet}: {problem}")
+    } else {
+        format!("packet {packet}, {path}: {problem}")
+    }
+}
+
+/// What went wrong with one entry.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum Problem {
+    #[error("it needs the packet's bits up to {needed_bits}, but the packet has {available_bits}")]
+    PastEnd {
+        needed_bits: u64,
+        available_bits: u64,
+    },
+    #[error("no {byte:#04x} byte ends it before the packet ends")]
+    NoTerminator { byte: u8 },
+    #[error("its bytes aren't valid {encoding}")]
+    InvalidText { encoding: &'static str },
+    #[error("an array element took no bits; every element takes at least one")]
+    EmptyElement,
+    #[error("a length or count taken from a field is {value}")]
+    BadLength { value: i128 },
+    #[error("nothing at {pointer}")]
+    Missing { pointer: String },
+    #[error("expected {expected}, found {found}")]
+    WrongType {
+        expected: &'static str,
+        found: &'static str,
+    },
+    #[error("{value} doesn't fit {expected}")]
+    OutOfRange {
+        value: String,
+        expected: &'static str,
+    },
+    /// Only for a definition that didn't pass validation.
+    #[error("the definition can't be decoded: {0}")]
+    Layout(&'static str),
+}
+
+impl Problem {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Problem::PastEnd { .. } => "past_end",
+            Problem::NoTerminator { .. } => "no_terminator",
+            Problem::InvalidText { .. } => "invalid_text",
+            Problem::EmptyElement => "empty_element",
+            Problem::BadLength { .. } => "bad_length",
+            Problem::Missing { .. } => "missing_value",
+            Problem::WrongType { .. } => "wrong_type",
+            Problem::OutOfRange { .. } => "out_of_range",
+            Problem::Layout(_) => "invalid_layout",
+        }
+    }
+}
+
+impl FamilySets {
+    /// Route `message`, identify its packet and decode it.
+    pub fn decode<R: Resolver + ?Sized>(
+        &self,
+        message: &Message<'_>,
+        resolver: &R,
+    ) -> Result<Decoded<'_>, DecodeError> {
+        let readable = self.readable(message)?;
+        let (route, loaded) = self.route_parts(message, &readable, resolver)?;
+        let (packet, record) =
+            loaded
+                .program
+                .decode(&loaded.set, &self.family().name, message, &readable)?;
+        Ok(Decoded {
+            route,
+            packet,
+            record,
+        })
+    }
+}
+
+/// What decoding precomputes for a set.
+#[derive(Debug, Clone)]
+pub(crate) struct Program {
+    index: Index,
+    /// The exact size of each struct type that has one.
+    type_sizes: BTreeMap<String, u64>,
+    /// Field names of each packet, by packet index, and of each type.
+    packet_names: Vec<FieldNames>,
+    type_names: BTreeMap<String, FieldNames>,
+}
+
+impl Program {
+    /// For a validated set and its family.
+    pub(crate) fn compile(set: &Set, family: &Family) -> Program {
+        let (identities, type_sizes) = decoding_facts(set, family);
+        Program {
+            index: Index::new(identities),
+            type_sizes: type_sizes
+                .into_iter()
+                .map(|(name, size)| (name.to_string(), size))
+                .collect(),
+            packet_names: set
+                .packets
+                .iter()
+                .map(|packet| field_names(&packet.entries))
+                .collect(),
+            type_names: set
+                .types
+                .iter()
+                .map(|(name, struct_type)| (name.clone(), field_names(&struct_type.entries)))
+                .collect(),
+        }
+    }
+
+    fn tables<'a>(&'a self, set: &'a Set) -> Tables<'a> {
+        Tables {
+            types: &set.types,
+            type_sizes: &self.type_sizes,
+            type_names: &self.type_names,
+        }
+    }
+
+    fn decode<'a>(
+        &'a self,
+        set: &'a Set,
+        family: &str,
+        message: &Message<'_>,
+        readable: &Readable<'_>,
+    ) -> Result<(&'a Packet, Record<'a>), DecodeError> {
+        let json = readable.json(family)?;
+        let mut evaluate = |key: &KeyId| -> Option<KeyValue> {
+            match key {
+                KeyId::Metadata(name) => metadata_key(message, name),
+                KeyId::Pointer(pointer) => {
+                    json.and_then(|doc| doc.pointer(pointer)).and_then(json_key)
+                }
+                KeyId::Bits {
+                    offset,
+                    size,
+                    signed,
+                } => bits_key(readable, *offset, *size, *signed),
+                KeyId::Unplaced { packet, name } => self.unplaced_key(set, *packet, name, readable),
+            }
+        };
+        let found = self.index.find(&mut evaluate);
+        let found = found.and_then(|index| Some((index, set.packets.get(index)?)));
+        let Some((index, packet)) = found else {
+            return Err(DecodeError::NoPacket {
+                family: family.to_string(),
+                set: set.name.clone(),
+            });
+        };
+        let record = self.extract(set, index, packet, readable, json)?;
+        Ok((packet, record))
+    }
+
+    /// A field key without a static position: the packet decoded up to
+    /// that field. Only binary packets have field keys.
+    fn unplaced_key(
+        &self,
+        set: &Set,
+        index: usize,
+        name: &str,
+        readable: &Readable<'_>,
+    ) -> Option<KeyValue> {
+        let Readable::Binary { bytes, order } = readable else {
+            return None;
+        };
+        let packet = set.packets.get(index)?;
+        let names = self.packet_names.get(index)?;
+        // The key is read whether or not the payload is long enough for
+        // the whole packet; a length is checked once the packet is chosen.
+        let bytes = match packet.length {
+            Some(Length::Exact { bytes: exact }) => {
+                let exact = usize::try_from(exact).unwrap_or(usize::MAX);
+                &bytes[..bytes.len().min(exact)]
+            }
+            _ => bytes,
+        };
+        let mut walker = BinaryWalker::new(self.tables(set), bytes, *order);
+        let (record, _) = walker.entries(&packet.entries, names, 0, Some(name)).ok()?;
+        record_key(record.get(name)?)
+    }
+
+    fn extract<'a>(
+        &'a self,
+        set: &'a Set,
+        index: usize,
+        packet: &'a Packet,
+        readable: &Readable<'_>,
+        json: Option<&Json>,
+    ) -> Result<Record<'a>, DecodeError> {
+        let Some(names) = self.packet_names.get(index) else {
+            return Err(entry_error(
+                packet,
+                &[],
+                Problem::Layout("a packet not compiled"),
+            ));
+        };
+        match (readable, json) {
+            (Readable::Binary { bytes, order }, _) => {
+                let bytes = within_length(packet, bytes)?;
+                let mut walker = BinaryWalker::new(self.tables(set), bytes, *order);
+                let result = walker.entries(&packet.entries, names, 0, None);
+                result
+                    .map(|(record, _)| record)
+                    .map_err(|problem| entry_error(packet, walker.path(), problem))
+            }
+            (Readable::Json { .. }, Some(document)) => {
+                let mut walker = JsonWalker::new(self.tables(set));
+                let result = walker.entries(&packet.entries, names, document);
+                result.map_err(|problem| entry_error(packet, walker.path(), problem))
+            }
+            (Readable::Json { .. }, None) => Err(entry_error(
+                packet,
+                &[],
+                Problem::Layout("a JSON payload that wasn't parsed"),
+            )),
+        }
+    }
+}
+
+/// Each field of a container by name, with its entry index.
+fn field_names(entries: &[Entry]) -> FieldNames {
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| match entry {
+            Entry::Field(field) => Some((field.name.clone(), index)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The packet's bytes: the payload, cut to an exact length.
+fn within_length<'p>(packet: &Packet, payload: &'p [u8]) -> Result<&'p [u8], DecodeError> {
+    let (needed, exact) = match packet.length {
+        Some(Length::Exact { bytes }) => (bytes, true),
+        Some(Length::AtLeast { bytes }) => (bytes, false),
+        None => return Ok(payload),
+    };
+    let too_short = || DecodeError::TooShort {
+        packet: packet.name.clone(),
+        needed,
+        given: payload.len(),
+        exact,
+    };
+    let needed_len = usize::try_from(needed).map_err(|_| too_short())?;
+    if payload.len() < needed_len {
+        return Err(too_short());
+    }
+    Ok(if exact {
+        &payload[..needed_len]
+    } else {
+        payload
+    })
+}
+
+fn entry_error(packet: &Packet, path: &[Segment<'_>], problem: Problem) -> DecodeError {
+    let mut text = String::new();
+    for segment in path {
+        match segment {
+            Segment::Name(name) => {
+                if !text.is_empty() {
+                    text.push('.');
+                }
+                text.push_str(name);
+            }
+            Segment::Index(index) => {
+                text.push('[');
+                text.push_str(&index.to_string());
+                text.push(']');
+            }
+        }
+    }
+    DecodeError::Entry {
+        packet: packet.name.clone(),
+        path: text,
+        problem,
+    }
+}
+
+/// A metadata identify key: integers by value, as validation compares them.
+fn metadata_key(message: &Message<'_>, name: &str) -> Option<KeyValue> {
+    let mut values = message
+        .metadata
+        .iter()
+        .filter(|(key, _)| *key == name)
+        .map(|(_, value)| value);
+    let value = values.next()?;
+    if values.next().is_some() {
+        return None;
+    }
+    Some(match value {
+        MetaValue::Uint(n) => KeyValue::Int(i128::from(*n)),
+        MetaValue::Int(n) => KeyValue::Int(i128::from(*n)),
+        MetaValue::Text(text) => by_value(&Scalar::Str((*text).to_string())),
+    })
+}
+
+/// A JSON Pointer identify key: the JSON value exactly.
+fn json_key(value: &Json) -> Option<KeyValue> {
+    match value {
+        Json::String(text) => Some(exact(&Scalar::Str(text.clone()))),
+        Json::Number(number) => json_integer(number).map(KeyValue::Int),
+        _ => None,
+    }
+}
+
+fn bits_key(readable: &Readable<'_>, offset: u64, size: u32, signed: bool) -> Option<KeyValue> {
+    let Readable::Binary { bytes, order } = readable else {
+        return None;
+    };
+    let raw = read_bits(bytes, offset, size, *order).ok()?;
+    Some(KeyValue::Int(if signed {
+        i128::from(sign_extend(raw, size))
+    } else {
+        i128::from(raw)
+    }))
+}
+
+/// A field key read from a decoded record.
+fn record_key(value: &Value<'_>) -> Option<KeyValue> {
+    match value {
+        Value::Uint(n) => Some(KeyValue::Int(i128::from(*n))),
+        Value::Int(n) => Some(KeyValue::Int(i128::from(*n))),
+        Value::Bool(b) => Some(KeyValue::Int(i128::from(*b))),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests;

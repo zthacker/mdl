@@ -174,19 +174,19 @@ fn check_fixed_regions(
 /// decimal string compares by value (`"2"` is `2`); a JSON Pointer reads a
 /// JSON value, where the string `"2"` and the number `2` differ.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum KeyValue {
+pub(crate) enum KeyValue {
     Int(i128),
     Str(String),
 }
 
-fn by_value(scalar: &Scalar) -> KeyValue {
+pub(crate) fn by_value(scalar: &Scalar) -> KeyValue {
     match integer_value(scalar) {
         Some(n) => KeyValue::Int(n),
         None => exact(scalar),
     }
 }
 
-fn exact(scalar: &Scalar) -> KeyValue {
+pub(crate) fn exact(scalar: &Scalar) -> KeyValue {
     match scalar {
         Scalar::Int(n) => KeyValue::Int(i128::from(*n)),
         Scalar::Str(text) => KeyValue::Str(text.clone()),
@@ -506,7 +506,7 @@ fn check_packets(
 /// What an identify key reads, so keys in different packets can be compared
 /// by what they read rather than by name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum KeyId {
+pub(crate) enum KeyId {
     Metadata(String),
     Pointer(String),
     /// A field at a known position (byte order is the family's, shared).
@@ -520,6 +520,38 @@ enum KeyId {
         packet: usize,
         name: String,
     },
+}
+
+/// The identify keys of each packet of a set, resolved exactly as
+/// validation resolves them, so the decoder identifies packets the way the
+/// ambiguity check assumed. Also the exact size of each struct type that
+/// has one. Only meaningful for a validated set and its family.
+pub(crate) fn decoding_facts<'a>(
+    set: &'a Set,
+    family: &Family,
+) -> (Vec<BTreeMap<KeyId, KeyValue>>, BTreeMap<&'a str, u64>) {
+    // A validated set reports nothing here.
+    let mut scratch = Report::default();
+    let place = Place::root("");
+    let heights = check_type_graph(&set.types, &place, &mut scratch);
+    let type_sizes = exact_type_sizes(&set.types, &heights);
+    let identities = set
+        .packets
+        .iter()
+        .enumerate()
+        .map(|(index, packet)| {
+            resolve_identify(
+                index,
+                packet,
+                Some(family),
+                &type_sizes,
+                &place,
+                &mut scratch,
+            )
+            .keys
+        })
+        .collect();
+    (identities, type_sizes)
 }
 
 struct Identity {
