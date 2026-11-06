@@ -32,6 +32,7 @@
 //! (identify values, sentinels, states): they must be within ±(2^53 − 1),
 //! with wider values written as strings (see `v2::ir::Scalar`).
 
+use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fmt::{self, Write};
 
@@ -97,19 +98,7 @@ impl CanonicalError {
 /// Nesting is capped at serde_json's default depth of 128 in both passes,
 /// so hostile input can't exhaust the stack.
 pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
-    serde_json::from_slice::<NoDuplicates>(bytes).map_err(|err| {
-        let detail = err.to_string();
-        // The checker's only error is a duplicate key, and serde_json files
-        // errors raised by visitors under `Category::Data`. Everything else
-        // (syntax, UTF-8, surrogates, number range, depth) is `Syntax`/`Eof`.
-        match err.classify() {
-            Category::Data => CanonicalError::DuplicateKey { detail },
-            _ => CanonicalError::InvalidJson { detail },
-        }
-    })?;
-    let value = serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
-        detail: err.to_string(),
-    })?;
+    let value = parse_without_duplicates(bytes)?;
     // Rule 7 (integers must be their own canonical text) and rule 5
     // (numbers must be finite doubles). Under default features serde_json
     // already refuses `1e400`; with `arbitrary_precision` it doesn't, and
@@ -121,6 +110,27 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
         other => other,
     })?;
     Ok(value)
+}
+
+/// Parse JSON that isn't an artifact (a message payload, say): valid
+/// UTF-8 JSON with no duplicate object keys at any depth, so a JSON Pointer
+/// finds one value whichever parser reads it. Numbers are read as
+/// serde_json reads them: integers that fit 64 bits exactly, anything else
+/// as a double. Nesting is capped at serde_json's depth of 128.
+pub fn parse_without_duplicates(bytes: &[u8]) -> Result<Value, CanonicalError> {
+    serde_json::from_slice::<NoDuplicates>(bytes).map_err(|err| {
+        let detail = err.to_string();
+        // The checker's only error is a duplicate key, and serde_json files
+        // errors raised by visitors under `Category::Data`. Everything else
+        // (syntax, UTF-8, surrogates, number range, depth) is `Syntax`/`Eof`.
+        match err.classify() {
+            Category::Data => CanonicalError::DuplicateKey { detail },
+            _ => CanonicalError::InvalidJson { detail },
+        }
+    })?;
+    serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
+        detail: err.to_string(),
+    })
 }
 
 /// Walks a document and fails on the first duplicate object key. Builds
@@ -172,8 +182,11 @@ impl<'de> Visitor<'de> for NoDuplicatesVisitor {
     }
 
     fn visit_map<A: MapAccess<'de>>(self, mut access: A) -> Result<NoDuplicates, A::Error> {
-        let mut keys = BTreeSet::new();
-        while let Some(key) = access.next_key::<String>()? {
+        // Keys borrow from the input unless they contain escapes, so most
+        // keys are checked without being copied; a set keeps each check
+        // O(log n), however many keys a hostile object has.
+        let mut keys: BTreeSet<Cow<'de, str>> = BTreeSet::new();
+        while let Some(Key(key)) = access.next_key::<Key<'de>>()? {
             if keys.contains(&key) {
                 return Err(de::Error::custom(format!(
                     "{key:?} appears twice in one object"
@@ -183,6 +196,37 @@ impl<'de> Visitor<'de> for NoDuplicatesVisitor {
             keys.insert(key);
         }
         Ok(NoDuplicates)
+    }
+}
+
+/// An object key, borrowed from the input when it has no escapes.
+struct Key<'de>(Cow<'de, str>);
+
+impl<'de> Deserialize<'de> for Key<'de> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_str(KeyVisitor)
+    }
+}
+
+struct KeyVisitor;
+
+impl<'de> Visitor<'de> for KeyVisitor {
+    type Value = Key<'de>;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("an object key")
+    }
+
+    fn visit_borrowed_str<E>(self, key: &'de str) -> Result<Key<'de>, E> {
+        Ok(Key(Cow::Borrowed(key)))
+    }
+
+    fn visit_str<E>(self, key: &str) -> Result<Key<'de>, E> {
+        Ok(Key(Cow::Owned(key.to_string())))
+    }
+
+    fn visit_string<E>(self, key: String) -> Result<Key<'de>, E> {
+        Ok(Key(Cow::Owned(key)))
     }
 }
 

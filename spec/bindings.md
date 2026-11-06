@@ -121,7 +121,10 @@ used with. Tools SHOULD check, against a validated build:
 
 Decoders don't need these checks to be correct: an id no row binds
 resolves to no asset, and a set the decoder doesn't have is an error when
-a message needs it.
+a message needs it. But a binding that fails them stops that asset's
+messages from decoding (a set named for a family with a version locator
+is refused, not ignored), so tools SHOULD run them before bindings are
+deployed, in CI and when a decoder loads new bindings.
 
 ## 7. Diagnostics
 

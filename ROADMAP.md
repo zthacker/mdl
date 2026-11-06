@@ -36,7 +36,7 @@ checked. Phases are ordered by dependency: each builds on the previous one.
       packet identification where the most specific packet wins
 - [x] Catalog compatibility check between versions (additions and
       deprecations only)
-- [ ] Bindings file format, `Resolver` trait, file-backed resolver, set
+- [x] Bindings file format, `Resolver` trait, file-backed resolver, set
       selection (version locator, else binding effective at ground time);
       the sets loaded for one family are checked together (unique versions),
       since stored artifacts can come from more than one build
