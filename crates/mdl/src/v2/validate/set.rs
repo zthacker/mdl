@@ -12,11 +12,12 @@ use super::rules::{
     integer_value, is_identifier, is_token,
 };
 use crate::v2::checksum;
+use crate::v2::convert::spline_is_finite;
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
     ArrayEntry, Bundle, Catalog, Checksum, ChecksumEntry, Condition, Conversion, Element, Encoding,
-    Entry, Family, Field, Locator, Packet, Scalar, ScalarElement, ScalarType, Set, StructType,
-    TextEncoding, Time,
+    Entry, Family, Field, Interpolation, Locator, Packet, Point, Scalar, ScalarElement, ScalarType,
+    Set, StructType, TextEncoding, Time,
 };
 use crate::v2::time::Timestamp;
 
@@ -1181,6 +1182,35 @@ fn check_conversion(conversion: &Conversion, place: &Place, report: &mut Report)
                 );
             }
         }
+        Conversion::Table {
+            points,
+            interpolation,
+            extrapolate,
+        } => {
+            check_points(points, place, report);
+            if *interpolation == Some(Interpolation::Linear) {
+                report.error(
+                    Code::ExplicitDefault,
+                    &place.key("interpolation"),
+                    "linear is the default interpolation; omit it",
+                );
+            }
+            check_extrapolate(*extrapolate, place, report);
+        }
+        Conversion::Spline {
+            points,
+            extrapolate,
+        } => {
+            if check_points(points, place, report) && !spline_is_finite(points) {
+                report.error(
+                    Code::NonFinite,
+                    &place.key("points"),
+                    "a spline through these points has an infinite slope or curvature; space the \
+                     points further apart",
+                );
+            }
+            check_extrapolate(*extrapolate, place, report);
+        }
         Conversion::States { states } => {
             if states.is_empty() {
                 report.error(
@@ -1203,6 +1233,60 @@ fn check_conversion(conversion: &Conversion, place: &Place, report: &mut Report)
                 }
             }
         }
+    }
+}
+
+/// A table's or spline's points: at least two, finite, in strictly
+/// increasing raw order, so each raw value falls in one segment, with
+/// finite differences between neighbours. Whether they are.
+fn check_points(points: &[Point], place: &Place, report: &mut Report) -> bool {
+    let mut good = points.len() >= 2;
+    if points.len() < 2 {
+        report.error(
+            Code::Empty,
+            &place.key("points"),
+            "a table or spline has at least two points",
+        );
+    }
+    for (index, point) in points.iter().enumerate() {
+        let point_place = place.at("points", index);
+        check_finite(point.raw, "raw", &point_place.key("raw"), report);
+        check_finite(point.value, "value", &point_place.key("value"), report);
+        good &= point.raw.is_finite() && point.value.is_finite();
+    }
+    for (index, pair) in points.windows(2).enumerate() {
+        let gaps_finite =
+            (pair[1].raw - pair[0].raw).is_finite() && (pair[1].value - pair[0].value).is_finite();
+        if good && !gaps_finite {
+            good = false;
+            report.error(
+                Code::NonFinite,
+                &place.at("points", index + 1),
+                "the difference from the point before is too large for a double",
+            );
+        }
+        if pair[1].raw <= pair[0].raw {
+            good = false;
+            report.error(
+                Code::NotSorted,
+                &place.at("points", index + 1).key("raw"),
+                format!(
+                    "points go in strictly increasing raw order, and {} doesn't come after {}",
+                    pair[1].raw, pair[0].raw
+                ),
+            );
+        }
+    }
+    good
+}
+
+fn check_extrapolate(extrapolate: Option<bool>, place: &Place, report: &mut Report) {
+    if extrapolate == Some(false) {
+        report.error(
+            Code::ExplicitDefault,
+            &place.key("extrapolate"),
+            "false is the default for extrapolate; omit it",
+        );
     }
 }
 

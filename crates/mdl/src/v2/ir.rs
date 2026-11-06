@@ -1708,8 +1708,8 @@ pub enum CompareOp {
     MaskAll,
 }
 
-/// Raw value to engineering value. `coefficients` and `states` are required
-/// and non-empty.
+/// Raw value to engineering value. `coefficients`, `states` and `points`
+/// are required and non-empty (a table or spline has at least two points).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
@@ -1731,6 +1731,55 @@ pub enum Conversion {
     /// Integer to state name.
     #[non_exhaustive]
     States { states: Vec<State> },
+    /// Through points, in increasing raw order: straight lines between
+    /// them, or with `step` interpolation each point's value until the
+    /// next. A raw value outside the points has no engineering value unless
+    /// `extrapolate` is true, which extends the end segments (holds the end
+    /// values, for steps).
+    #[non_exhaustive]
+    Table {
+        points: Vec<Point>,
+        /// Defaults to `linear`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interpolation: Option<Interpolation>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extrapolate: Option<bool>,
+    },
+    /// The natural cubic spline through points, in increasing raw order.
+    /// Outside them, as for a table: no value unless `extrapolate`, which
+    /// continues the spline's end slopes in straight lines.
+    #[non_exhaustive]
+    Spline {
+        points: Vec<Point>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extrapolate: Option<bool>,
+    },
+}
+
+/// A raw value and the engineering value it stands for.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Point {
+    #[serde(serialize_with = "finite::one")]
+    pub raw: f64,
+    #[serde(serialize_with = "finite::one")]
+    pub value: f64,
+}
+
+impl Point {
+    pub fn new(raw: f64, value: f64) -> Self {
+        Point { raw, value }
+    }
+}
+
+/// How a table goes from one point to the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Interpolation {
+    Linear,
+    Step,
 }
 
 impl Conversion {
@@ -1744,6 +1793,21 @@ impl Conversion {
 
     pub fn states(states: Vec<State>) -> Self {
         Conversion::States { states }
+    }
+
+    pub fn table(points: Vec<Point>, interpolation: Interpolation) -> Self {
+        Conversion::Table {
+            points,
+            interpolation: (interpolation != Interpolation::Linear).then_some(interpolation),
+            extrapolate: None,
+        }
+    }
+
+    pub fn spline(points: Vec<Point>) -> Self {
+        Conversion::Spline {
+            points,
+            extrapolate: None,
+        }
     }
 }
 

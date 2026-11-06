@@ -17,7 +17,8 @@ use thiserror::Error;
 
 use crate::canonical::format_double;
 use crate::v2::bindings::NativeId;
-use crate::v2::decode::{Record, Value, convert};
+use crate::v2::convert::inverse;
+use crate::v2::decode::{Record, Value};
 use crate::v2::ir::{
     Argument, ArgumentRange, ByteLength, Command, CommandPacket, Conversion, Digest, Entry, Field,
     FromField, Literal, ParamType, Scalar, ScalarType, Set,
@@ -258,6 +259,9 @@ pub enum ArgumentProblem {
         low: String,
         high: String,
     },
+    /// Decoding: a raw value outside its field's table or spline.
+    #[error("raw value {raw} is outside its field's calibration")]
+    OutsideCalibration { raw: String },
     #[error("the set doesn't encode it, so it can only be its default, {default}")]
     NotDefault { default: String },
 }
@@ -273,9 +277,9 @@ impl ArgumentProblem {
             ArgumentProblem::UnknownState { .. } | ArgumentProblem::NoState { .. } => {
                 "unknown_state"
             }
-            ArgumentProblem::OutOfRange { .. } | ArgumentProblem::RawOutOfRange { .. } => {
-                "out_of_range"
-            }
+            ArgumentProblem::OutOfRange { .. }
+            | ArgumentProblem::RawOutOfRange { .. }
+            | ArgumentProblem::OutsideCalibration { .. } => "out_of_range",
             ArgumentProblem::NotDefault { .. } => "not_default",
         }
     }
@@ -784,7 +788,7 @@ fn from_argument(
     binary: bool,
 ) -> Result<Value<'static>, FieldProblem> {
     let cannot = FieldProblem::Layout("an argument this field can't encode");
-    let converted = |x: f64| inverse(field, x).ok_or(cannot.clone());
+    let converted = |x: f64| inverse(field, x).number().ok_or(cannot.clone());
     match (field.ty, value) {
         (ScalarType::Uint | ScalarType::Int, Checked::Integer(n)) if field.conversion.is_none() => {
             integer_raw(field, *n, binary)
@@ -821,18 +825,6 @@ fn from_argument(
     }
 }
 
-/// An f64 argument through the inverse of its field's conversion: as it is
-/// with none, `(x - offset) / scale` for a linear one, the explicit inverse
-/// for a polynomial one. `None` for a field that can't encode a number.
-fn inverse(field: &Field, x: f64) -> Option<f64> {
-    match (&field.conversion, &field.inverse) {
-        (None, _) => Some(x),
-        (Some(Conversion::Linear { scale, offset }), None) => Some((x - offset) / scale),
-        (Some(Conversion::Poly { .. }), Some(inverse)) => convert(inverse, x),
-        _ => None,
-    }
-}
-
 /// The raw value an f64 argument of `x` becomes in `field` before it's
 /// checked against the field: through the inverse conversion, then
 /// rounded as §3.1 rounds it (to an integer, ties away from zero, for an
@@ -840,7 +832,7 @@ fn inverse(field: &Field, x: f64) -> Option<f64> {
 /// Infinite where the arithmetic overflows; `None` for a field that can't
 /// encode a number.
 pub(crate) fn raw_unchecked(field: &Field, x: f64, binary: bool) -> Option<f64> {
-    let raw = inverse(field, x)?;
+    let raw = inverse(field, x).number()?;
     Some(match field.ty {
         ScalarType::Uint | ScalarType::Int => raw.round(),
         ScalarType::Float if binary && field.size_bits == Some(32) => f64::from(raw as f32),

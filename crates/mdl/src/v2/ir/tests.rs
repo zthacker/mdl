@@ -215,6 +215,9 @@ fn unknown_fields_are_rejected_everywhere() {
         json!({ "kind": "linear", "scale": 1.0, "offset": 0.0, "unit": "V" }),
         json!({ "kind": "poly", "coefficients": [1.0], "x": 1 }),
         json!({ "kind": "states", "states": [], "x": 1 }),
+        json!({ "kind": "table", "points": [], "order": 1 }),
+        json!({ "kind": "spline", "points": [], "interpolation": "step" }),
+        json!({ "kind": "table", "points": [{ "raw": 0, "value": 1, "x": 1 }] }),
     ] {
         check("conversion", rejects::<Conversion>(conversion));
     }

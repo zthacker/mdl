@@ -1082,3 +1082,36 @@ fn damage_a_static_checksum_covers_is_reported_as_a_bad_checksum() {
     damaged[2] = 0xFF;
     assert_eq!(code(identified(&damaged)), "bad_checksum");
 }
+
+#[test]
+fn tables_and_splines_give_engineering_values_and_flag_raw_values_outside_them() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_j");
+    let engineering = |heater: f64, flow: f64| {
+        let text = format!(
+            r#"{{"ch": "THM", "sat": "PX-9", "t": "2026-06-01T00:00:00Z", "heater": {heater}, "flow": {flow}}}"#
+        );
+        let message = Message::new(Payload::Json(text.as_bytes()), now());
+        let decoded = sets.decode(&message, &registry()).unwrap();
+        assert_eq!(decoded.packet.name, "THERMAL");
+        (
+            decoded.engineering("heater").unwrap(),
+            decoded.engineering("flow").unwrap(),
+        )
+    };
+    // The step table holds -40 from raw 0 until raw 100; it extrapolates,
+    // so past raw 300 it holds 60.
+    let (heater, flow) = engineering(50.0, 0.5);
+    assert_eq!(heater.value, SampleValue::F64(-40.0));
+    assert_eq!(heater.quality, Quality::Good);
+    // The spline through (0, 0), (1, 1), (2, 0) at 0.5.
+    assert_eq!(flow.value, SampleValue::F64(0.6875));
+    let (heater, _) = engineering(400.0, 1.0);
+    assert_eq!(heater.value, SampleValue::F64(60.0));
+    // The spline doesn't extrapolate: a raw value past its points keeps
+    // the raw value, flagged.
+    let (_, flow) = engineering(0.0, 2.5);
+    assert_eq!(flow.value, SampleValue::F64(2.5));
+    assert_eq!(flow.quality, Quality::OutOfCalibration);
+    assert_eq!(flow.quality.as_str(), "out_of_calibration");
+}

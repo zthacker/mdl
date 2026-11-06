@@ -1325,14 +1325,21 @@ fn check_values(
     if let Some(conversion) = conversion {
         let conversion_place = place.key("conversion");
         match conversion {
-            Conversion::Linear { .. } | Conversion::Poly { .. } if !numeric => report.error(
-                Code::ConversionType,
-                &conversion_place,
-                format!(
-                    "linear and poly conversions need a number, not a {} field",
-                    type_name(ty)
-                ),
-            ),
+            Conversion::Linear { .. }
+            | Conversion::Poly { .. }
+            | Conversion::Table { .. }
+            | Conversion::Spline { .. }
+                if !numeric =>
+            {
+                report.error(
+                    Code::ConversionType,
+                    &conversion_place,
+                    format!(
+                        "linear, poly, table and spline conversions need a number, not a {} field",
+                        type_name(ty)
+                    ),
+                )
+            }
             Conversion::States { .. } if !integer => report.error(
                 Code::ConversionType,
                 &conversion_place,

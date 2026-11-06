@@ -4,8 +4,9 @@
 
 use thiserror::Error;
 
-use super::{DecodeError, Problem, Record, Value, convert};
+use super::{DecodeError, Problem, Record, Value};
 use crate::v2::bindings::NativeId;
+use crate::v2::convert::{Converted, convert};
 use std::cmp::Ordering;
 
 use crate::v2::encode::{
@@ -236,12 +237,17 @@ fn argument_value(
                 .ok_or_else(|| ArgumentProblem::NoState { raw: n.to_string() })?;
             ArgumentValue::Text(state.name.clone())
         }
-        (Some(conversion @ (Conversion::Linear { .. } | Conversion::Poly { .. })), _) => {
-            let x = number(raw).ok_or_else(wrong)?;
-            ArgumentValue::Float(convert(conversion, x).ok_or_else(wrong)?)
-        }
         (None, _) => unconverted(argument.ty, raw)?,
-        _ => return Err(wrong()),
+        (Some(conversion), _) => {
+            let x = number(raw).ok_or_else(wrong)?;
+            match convert(conversion, x) {
+                Converted::Number(value) => ArgumentValue::Float(value),
+                Converted::Outside => {
+                    return Err(ArgumentProblem::OutsideCalibration { raw: show(raw) });
+                }
+                Converted::NotNumeric => return Err(wrong()),
+            }
+        }
     };
     if argument.ty != ParamType::F64 {
         allowed(argument, &value)?;

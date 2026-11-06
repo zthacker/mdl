@@ -294,15 +294,56 @@ in `cells[2].volts`.
 
 - `linear`: `raw * scale + offset`;
 - `poly`: `c0 + c1·x + c2·x² + …`, evaluated by Horner's rule;
-- `states`: the state whose `raw` equals the raw integer.
+- `states`: the state whose `raw` equals the raw integer;
+- `table`: through its points (below);
+- `spline`: the natural cubic spline through its points (below).
 
-An integer becomes the nearest binary64 value before a linear or
-polynomial conversion.
+An integer becomes the nearest binary64 value before any conversion but
+`states`.
+
+**Tables and splines.** Their points `(r₀, v₀) … (rₙ, vₙ)` are in strictly
+increasing raw order; validation guarantees at least two. A raw value `x`:
+
+- equal to a point's raw value is that point's value, exactly;
+- otherwise between `r₀` and `rₙ`, falls in the segment from point `i` to
+  point `i + 1` where `rᵢ < x < rᵢ₊₁`;
+- otherwise, below `r₀` or above `rₙ`, is outside the points. Without
+  `extrapolate: true` it has no engineering value (quality
+  `out_of_calibration`, §7.3). With it, the first or last segment's formula
+  continues past its end, as below.
+
+NaN is never outside: it goes through as NaN (quality `non_finite`).
+
+A `table` with `linear` interpolation (the default) gives, in segment `i`
+(and extrapolated, in the first or last segment),
+`vᵢ + ((x − rᵢ) × (vᵢ₊₁ − vᵢ)) / (rᵢ₊₁ − rᵢ)`. With `step` interpolation it
+gives `vᵢ`, the value of the last point below `x`; extrapolated, the
+value of the nearest end point.
+
+A `spline` gives the natural cubic spline: second derivatives `M₀ = Mₙ =
+0` at the ends, and inside, with `hᵢ = rᵢ₊₁ − rᵢ` and `sᵢ = (vᵢ₊₁ −
+vᵢ) / hᵢ`, the solution of `hᵢ₋₁Mᵢ₋₁ + 2(hᵢ₋₁ + hᵢ)Mᵢ + hᵢMᵢ₊₁ = 6(sᵢ −
+sᵢ₋₁)` by this sweep, with `c₀ = d₀ = 0`:
+
+- for `i` from 1 to `n − 1`: `p = 2 × (hᵢ₋₁ + hᵢ) − hᵢ₋₁ × cᵢ₋₁`,
+  `cᵢ = hᵢ / p`, `dᵢ = (6 × (sᵢ − sᵢ₋₁) − hᵢ₋₁ × dᵢ₋₁) / p`;
+- then `Mₙ₋₁ = dₙ₋₁`, and for `i` from `n − 2` down to 1: `Mᵢ = dᵢ − cᵢ ×
+  Mᵢ₊₁`.
+
+In segment `i`, with `L = rᵢ₊₁ − x` and `R = x − rᵢ`, the value is
+`(Mᵢ × L × L × L + Mᵢ₊₁ × R × R × R) / (6 × hᵢ) + ((vᵢ − Mᵢ × hᵢ × hᵢ / 6) ×
+L) / hᵢ + ((vᵢ₊₁ − Mᵢ₊₁ × hᵢ × hᵢ / 6) × R) / hᵢ`. Extrapolated, the
+spline goes on straight at its end slopes: below `r₀`, `v₀ + (x − r₀) ×
+(s₀ − h₀ × M₁ / 6)`; above `rₙ`, `vₙ + (x − rₙ) × (sₙ₋₁ + hₙ₋₁ × Mₙ₋₁ /
+6)`. With two points, `M₀ = M₁ = 0` and the segment formula above gives a
+straight line; it is still that formula, not the table's.
 
 **Arithmetic.** Conversions use IEEE 754 binary64 arithmetic, each
 operation rounded to nearest, ties to even, on its own and in the order
 written: a linear conversion multiplies, then adds; Horner's rule
-multiplies, then adds, coefficient by coefficient from the highest. An
+multiplies, then adds, coefficient by coefficient from the highest;
+tables and splines evaluate their formulas left to right, parentheses
+first. An
 implementation MUST NOT fuse a multiply and an add into one operation,
 reorder operations, or replace a division with a multiplication by a
 reciprocal; any of these changes the last bit of some results.
@@ -336,6 +377,7 @@ is `{param, value, path, index, time_offset, quality}`:
   | --- | --- |
   | `good` | |
   | `unknown_state` | no state matches the raw integer, or a string isn't one of the param's states |
+  | `out_of_calibration` | the raw value is outside a table's or spline's points, and it doesn't extrapolate |
   | `out_of_range` | the param's type can't hold the raw value (a JSON integer past an i64 param) |
   | `non_finite` | NaN or an infinity, read or produced by a conversion |
   | `invalid` | a sentinel (§7.2) |
@@ -343,8 +385,8 @@ is `{param, value, path, index, time_offset, quality}`:
   The first that applies, from the bottom up, is the quality. Any quality
   added later takes its place in this order.
 - `value` is the param's value when the quality is `good`, and the raw
-  value otherwise. By param type: `f64`, the number through its linear or
-  polynomial conversion; `i64` and `u64`, the integer; `bool`, a bool, or
+  value otherwise. By param type: `f64`, the number through its
+  conversion; `i64` and `u64`, the integer; `bool`, a bool, or
   an integer that isn't 0; `str` and `bytes`, as read; `enum`, the state
   name from a `states` conversion, or a string field's text.
 

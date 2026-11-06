@@ -1,6 +1,7 @@
 //! Meaning: raw values through their conversions, into engineering values
 //! and canonical samples.
 
+use crate::v2::convert::{Converted, convert};
 use std::collections::BTreeMap;
 
 use super::{Problem, Record, Value};
@@ -69,6 +70,9 @@ pub enum Quality {
     /// An integer that matches none of its states, or a string that isn't
     /// one of the param's states.
     UnknownState,
+    /// A raw value outside a table's or spline's points, which it doesn't
+    /// extrapolate.
+    OutOfCalibration,
     /// A raw value the param's type can't hold (a JSON integer past an
     /// i64 param's range).
     OutOfRange,
@@ -83,6 +87,7 @@ impl Quality {
         match self {
             Quality::Good => "good",
             Quality::UnknownState => "unknown_state",
+            Quality::OutOfCalibration => "out_of_calibration",
             Quality::OutOfRange => "out_of_range",
             Quality::NonFinite => "non_finite",
             Quality::Invalid => "invalid",
@@ -244,10 +249,13 @@ pub(super) fn engineering(meaning: ScalarMeaning<'_>, value: &Value<'_>) -> Opti
         },
         Some(conversion) => {
             let x = number(value)?;
-            let converted = convert(conversion, x)?;
-            match numeric_quality(x, converted) {
-                Quality::Good => (SampleValue::F64(converted), Quality::Good),
-                quality => (raw, quality),
+            match convert(conversion, x) {
+                Converted::Number(converted) => match numeric_quality(x, converted) {
+                    Quality::Good => (SampleValue::F64(converted), Quality::Good),
+                    quality => (raw, quality),
+                },
+                Converted::Outside => (raw, outside_quality(x)),
+                Converted::NotNumeric => return None,
             }
         }
     };
@@ -269,8 +277,10 @@ pub(super) fn sample_value(
     match param.ty {
         ParamType::F64 => {
             let x = number(value).ok_or(mismatch.clone())?;
-            let converted = match meaning.conversion {
-                Some(conversion) => convert(conversion, x).ok_or(mismatch)?,
+            let converted = match meaning.conversion.map(|c| convert(c, x)) {
+                Some(Converted::Number(converted)) => converted,
+                Some(Converted::Outside) => return Ok((raw, outside_quality(x))),
+                Some(Converted::NotNumeric) => return Err(mismatch),
                 None => x,
             };
             match numeric_quality(x, converted) {
@@ -349,21 +359,6 @@ fn integer(value: &Value<'_>) -> Option<i128> {
     }
 }
 
-/// Linear and polynomial conversions; `None` for states.
-pub(crate) fn convert(conversion: &Conversion, x: f64) -> Option<f64> {
-    match conversion {
-        Conversion::Linear { scale, offset } => Some(x * scale + offset),
-        // Horner's rule: c0 + x(c1 + x(c2 + ...)).
-        Conversion::Poly { coefficients } => Some(
-            coefficients
-                .iter()
-                .rev()
-                .fold(0.0, |sum, coefficient| sum * x + coefficient),
-        ),
-        Conversion::States { .. } => None,
-    }
-}
-
 /// Does `value` match one of `invalid`? Integers compare by value, a float
 /// with an integer sentinel by numeric value, and strings exactly.
 fn is_sentinel(invalid: &[Scalar], value: &Value<'_>) -> bool {
@@ -374,6 +369,16 @@ fn is_sentinel(invalid: &[Scalar], value: &Value<'_>) -> bool {
         Value::Float(x) => integer_value(sentinel).is_some_and(|n| *x == n as f64),
         _ => integer_value(sentinel).is_some_and(|n| integer(value) == Some(n)),
     })
+}
+
+/// The quality of a raw value outside its table's or spline's points:
+/// out of calibration, unless it isn't finite, which ranks above.
+fn outside_quality(raw: f64) -> Quality {
+    if raw.is_finite() {
+        Quality::OutOfCalibration
+    } else {
+        Quality::NonFinite
+    }
 }
 
 /// `NonFinite` if the raw or converted number is NaN or infinite.
@@ -548,15 +553,18 @@ impl CompiledComposite {
             };
             let raw =
                 number(value).ok_or(Problem::Layout("a composite member that isn't a number"))?;
-            let converted = match meaning.conversion {
-                Some(conversion) => convert(conversion, raw)
-                    .ok_or(Problem::Layout("a composite member with states"))?,
-                None => raw,
+            let (converted, member_quality) = match meaning.conversion.map(|c| convert(c, raw)) {
+                Some(Converted::Number(converted)) => (converted, numeric_quality(raw, converted)),
+                Some(Converted::Outside) => (raw, outside_quality(raw)),
+                Some(Converted::NotNumeric) => {
+                    return Err(Problem::Layout("a composite member with states"));
+                }
+                None => (raw, numeric_quality(raw, raw)),
             };
             let member_quality = if is_sentinel(meaning.invalid, value) {
                 Quality::Invalid
             } else {
-                numeric_quality(raw, converted)
+                member_quality
             };
             quality = quality.max(member_quality);
             values.push((raw, converted));

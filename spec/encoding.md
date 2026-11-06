@@ -84,8 +84,15 @@ An argument becomes its field's raw value:
 - **unconverted:** as it is (a bool into an integer field is 0 or 1; an
   enum into a string field is the state's name);
 - **`linear`:** `(value − offset) / scale`;
-- **`poly`:** the field's `inverse` conversion applied to the value;
-- **`states`:** the raw value listed for the state's name.
+- **`states`:** the raw value listed for the state's name;
+- **`table`** with `linear` interpolation whose values only rise or only
+  fall: the table read backwards, from value to raw: its points with raw
+  and value swapped (and reversed, if the values fall), as a linear table
+  (`decoding.md` §7.1), extrapolating if the table does;
+- **any other conversion** (`poly`, `spline`, a `step` table, a table whose
+  values rise and fall): the field's `inverse`, a `linear`, `poly` or
+  `table` conversion from value to raw, applied to the value. The first
+  kinds invert exactly and take no `inverse`; these need one.
 
 Arithmetic follows `decoding.md` §7.1: binary64, each operation rounded
 on its own in the order written, no fused multiply-add, no reciprocal. A
@@ -93,13 +100,18 @@ linear inverse subtracts, then divides; it does not multiply by `1 /
 scale`. So 0.15 at scale 0.1 is 1.4999999999999998, and an inverse
 `[-0.1, 10]` at 0.36 is 3.4999999999999996.
 
-Validation guarantees that an argument encoded through a polynomial has a
-range with both ends and that the field's `inverse` only rises or only
-falls over it: its values at the 4097 points `min + (k × (max − min)) /
-4096`, for k from 0 to 4096, never both increase and decrease from one
-point to the next. It also guarantees that the range's ends, through a
-linear conversion or a polynomial's inverse and rounded as below, fit an
-integer field, so every value in range does.
+Validation guarantees that an argument encoded through anything but a
+`linear` or `states` conversion has a range with both ends; that both ends
+go through the inverse (inside an inverse table's points, unless it
+extrapolates); that the raw values they become, rounded as below, lie
+inside the field's table's or spline's points, unless it extrapolates;
+and that an explicit `inverse` only rises or only falls over the range:
+that its values never both increase and decrease from one input to the
+next, the inputs being, for a `table`, `min`, the raw value of every point
+strictly between `min` and `max`, and `max` (which checks it exactly), and
+for a `poly`, the 4097 points `min + (k × (max − min)) / 4096`, for k from
+0 to 4096. A `linear` inverse always qualifies. It also guarantees that the range's ends, through the inverse and
+rounded as below, fit an integer field, so every value in range does.
 
 A result for an integer field is rounded to the nearest integer, ties away
 from zero (0.25 s at 0.1 s per count is raw 3; the two results above are
@@ -240,8 +252,9 @@ Each argument the packet encodes is its field's raw value:
 
 - through a `states` conversion, the name of the state listing the raw
   value [`unknown_state`];
-- through a `linear` or `poly` conversion, as `decoding.md` §7.1
-  converts it;
+- through any other conversion, as `decoding.md` §7.1 converts it; a raw
+  value outside a table's or spline's points that doesn't extrapolate is
+  [`out_of_range`];
 - unconverted, as it is: an integer as the nearest double for an `f64`
   argument, 0 or 1 as false or true for a `bool` argument
   [`out_of_range`].
@@ -263,7 +276,8 @@ this order:
 So 3600.06 s at 0.1 s per count encodes to raw 36001, which converts to
 3600.1 s and decodes as 3600.06 s when the range ends there. With an
 inverse that only rises or only falls over the range (linear ones always
-do; validation checks polynomial ones, §3.1), a raw value the encoder
+do, as do tables read backwards; validation checks every explicit
+inverse, §3.1), a raw value the encoder
 writes for an in-range value is never refused, whether or not the inverse
 undoes the conversion exactly.
 
