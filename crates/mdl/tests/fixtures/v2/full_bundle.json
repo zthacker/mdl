@@ -104,7 +104,8 @@
         "offset_bits": 0,
         "coarse_bytes": 4,
         "fine_bytes": 2,
-        "epoch": "2000-01-01T00:00:00Z"
+        "epoch": "2000-01-01T00:00:00Z",
+        "scale": "utc"
       },
       "types": {
         "vec3_i32": {
@@ -482,8 +483,10 @@
         "unit": "ms",
         "correlate": {
           "packet": "TIME",
-          "unix_field": "unix_us",
-          "unix_unit": "us",
+          "clock_field": "unix_us",
+          "clock_unit": "us",
+          "epoch": "1970-01-01T00:00:00Z",
+          "scale": "utc",
           "boot_field": "boot_ms"
         }
       },
@@ -540,6 +543,34 @@
             },
             { "kind": "checksum", "name": "parity", "algorithm": { "kind": "xor" } },
             { "kind": "checksum", "name": "sum", "algorithm": { "kind": "sum", "width": 16 } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_j_v2",
+      "family": "vendor_j",
+      "time": { "kind": "elapsed", "unit": "ms", "epoch": "1970-01-01T00:00:00Z", "scale": "utc" },
+      "packets": [
+        {
+          "name": "PING",
+          "time_field": "t_ms",
+          "entries": [{ "kind": "field", "name": "t_ms", "type": "uint", "pointer": "/t_ms" }]
+        }
+      ]
+    },
+    {
+      "name": "legacy_v2",
+      "family": "legacy",
+      "time": { "kind": "gps", "unit": "ms", "week_field": "week", "week_bits": 10 },
+      "packets": [
+        {
+          "name": "NAV",
+          "length": { "kind": "exact", "bytes": 6 },
+          "time_field": "tow",
+          "entries": [
+            { "kind": "field", "name": "week", "type": "uint", "size_bits": 16 },
+            { "kind": "field", "name": "tow", "type": "uint", "size_bits": 32 }
           ]
         }
       ]

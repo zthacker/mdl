@@ -66,7 +66,8 @@ and commands in one pass.
 
 - [x] Calibrations: lookup tables (linear or step, with extrapolation
       policy), natural cubic splines
-- [ ] Time: Unix (s/ms/µs/ns), GPS week + seconds
+- [x] Time: Unix (s/ms/µs/ns) and any epoch, GPS week + seconds, time
+      scales (utc, tai, gps) with the leap-second table
 - [ ] Units: UCUM subset with dimensional analysis; a field in a different
       but compatible unit is converted automatically (mV → V, degC → K)
 

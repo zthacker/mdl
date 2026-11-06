@@ -147,17 +147,23 @@ fn unknown_fields_are_rejected_everywhere() {
     );
     for time in [
         json!({ "kind": "cuc", "offset_bits": 0, "coarse_bytes": 4, "fine_bytes": 2,
-                "epoch": "2000-01-01T00:00:00Z", "leap": true }),
+                "epoch": "2000-01-01T00:00:00Z", "scale": "tai", "leap": true }),
+        json!({ "kind": "elapsed", "unit": "s", "epoch": "1970-01-01T00:00:00Z",
+                "scale": "utc", "x": 1 }),
+        json!({ "kind": "gps", "unit": "ms", "week_field": "w", "rollover": 1024 }),
         json!({ "kind": "iso8601", "pointer": "/t", "x": 1 }),
         json!({ "kind": "boot", "unit": "ms", "x": 1, "correlate":
-                { "packet": "p", "unix_field": "u", "unix_unit": "us", "boot_field": "b" } }),
+                { "packet": "p", "clock_field": "u", "clock_unit": "us",
+                  "epoch": "1970-01-01T00:00:00Z", "scale": "utc", "boot_field": "b" } }),
     ] {
         check("time", rejects::<Time>(time));
     }
     check(
         "correlate",
-        rejects::<Correlate>(json!({ "packet": "p", "unix_field": "u", "unix_unit": "us",
-            "boot_field": "b", "x": 1 })),
+        rejects::<Correlate>(
+            json!({ "packet": "p", "clock_field": "u", "clock_unit": "us",
+            "epoch": "1970-01-01T00:00:00Z", "scale": "utc", "boot_field": "b", "x": 1 }),
+        ),
     );
     check(
         "packet",

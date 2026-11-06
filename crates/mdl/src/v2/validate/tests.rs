@@ -43,7 +43,7 @@ fn hk(v: &mut Value) -> &mut Value {
 #[test]
 fn the_full_fixture_is_valid() {
     let validated = validate(bundle(fixture())).unwrap();
-    assert_eq!(validated.bundle().sets.len(), 3);
+    assert_eq!(validated.bundle().sets.len(), 5);
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn set_names_and_versions() {
     assert_one(Code::UnknownFamily, "/sets/0/family", |v| {
         set_x(v)["family"] = json!("vendor_q");
     });
-    assert_one(Code::DuplicateName, "/sets/3", |v| {
+    assert_one(Code::DuplicateName, "/sets/5", |v| {
         let mut copy = v["sets"][1].clone();
         copy["family"] = json!("legacy");
         copy.as_object_mut().unwrap().remove("time");
@@ -158,7 +158,7 @@ fn set_names_and_versions() {
     assert_one(Code::SetVersion, "/sets/1/version", |v| {
         v["sets"][1]["version"] = json!(1);
     });
-    assert_one(Code::SetVersion, "/sets/3/version", |v| {
+    assert_one(Code::SetVersion, "/sets/5/version", |v| {
         let mut copy = v["sets"][0].clone();
         copy["name"] = json!("vendor_x_v2_copy");
         v["sets"].as_array_mut().unwrap().push(copy);
@@ -169,10 +169,42 @@ fn set_names_and_versions() {
 }
 
 #[test]
+fn elapsed_and_gps_time_rules() {
+    // sets/3 is vendor_j_v2 (elapsed), sets/4 legacy_v2 (gps).
+    assert_one(Code::InvalidEpoch, "/sets/3/time/epoch", |v| {
+        v["sets"][3]["time"]["epoch"] = json!("1970-01-01");
+    });
+    assert_one(Code::BitSize, "/sets/4/time/week_bits", |v| {
+        v["sets"][4]["time"]["week_bits"] = json!(0);
+    });
+    assert_one(Code::ReferenceType, "/sets/3/packets/0/time_field", |v| {
+        v["sets"][3]["packets"][0]["entries"][0]["type"] = json!("bool");
+    });
+    assert_one(Code::ReferenceType, "/sets/4/packets/0/time_field", |v| {
+        v["sets"][4]["packets"][0]["entries"][0]["type"] = json!("int");
+    });
+    assert_one(Code::UnknownEntry, "/sets/4/packets/0/time_field", |v| {
+        v["sets"][4]["time"]["week_field"] = json!("gps_week");
+    });
+    // An iso8601 time reads no time_field.
+    assert_one(Code::TimeField, "/sets/1/packets/0/time_field", |v| {
+        v["sets"][1]["packets"][0]["time_field"] = json!("v");
+    });
+    // Time-of-week may be a float, a count since the epoch an int.
+    assert_eq!(
+        problems(|v| {
+            v["sets"][3]["packets"][0]["entries"][0]["type"] = json!("int");
+            v["sets"][4]["packets"][0]["entries"][1]["type"] = json!("float");
+        }),
+        vec![]
+    );
+}
+
+#[test]
 fn time_rules() {
     assert_one(Code::WrongEncoding, "/sets/1/time", |v| {
         v["sets"][1]["time"] = json!({ "kind": "cuc", "offset_bits": 0, "coarse_bytes": 4,
-            "fine_bytes": 0, "epoch": "2000-01-01T00:00:00Z" });
+            "fine_bytes": 0, "epoch": "2000-01-01T00:00:00Z", "scale": "utc" });
     });
     assert_one(Code::CucSize, "/sets/0/time", |v| {
         set_x(v)["time"]["coarse_bytes"] = json!(5);
@@ -575,8 +607,8 @@ fn set_versions_are_compared_by_value_and_fit_their_locator() {
             v["sets"].as_array_mut().unwrap().push(copy);
         }),
         vec![
-            (Code::IntegerAsString, "/sets/3/version".to_string()),
-            (Code::SetVersion, "/sets/3/version".to_string()),
+            (Code::IntegerAsString, "/sets/5/version".to_string()),
+            (Code::SetVersion, "/sets/5/version".to_string()),
         ]
     );
     let bits = |v: &mut Value, version: Value| {
@@ -609,7 +641,7 @@ fn epochs_have_one_spelling() {
 #[test]
 fn correlation_needs_two_fields() {
     assert_one(Code::CorrelateFields, "/sets/2/time/correlate", |v| {
-        v["sets"][2]["time"]["correlate"]["unix_field"] = json!("boot_ms");
+        v["sets"][2]["time"]["correlate"]["clock_field"] = json!("boot_ms");
     });
 }
 
@@ -809,6 +841,7 @@ fn values_compare_as_their_key_reads_them() {
     let found = problems(|v| {
         v["families"][1]["version"] = json!({ "kind": "path", "pointer": "/fmt" });
         v["sets"][1]["version"] = json!(2);
+        v["sets"][3]["version"] = json!(3);
         let mut v1 = v["sets"][1].clone();
         v1["name"] = json!("vendor_j_v2s");
         v1["version"] = json!("2");
@@ -1979,7 +2012,7 @@ fn clock_fields_are_unconditional_uints() {
     );
     assert_one(
         Code::ReferenceType,
-        "/sets/2/time/correlate/unix_field",
+        "/sets/2/time/correlate/clock_field",
         |v| {
             time_packet(v)["entries"][0]["when"] =
                 json!({ "kind": "compare", "field": "boot_ms", "op": "gt", "value": 0 });

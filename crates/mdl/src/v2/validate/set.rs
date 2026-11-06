@@ -351,14 +351,17 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                     ),
                 );
             }
-            if epoch.parse::<Timestamp>().is_err() {
+            check_epoch(epoch, &place.key("epoch"), report);
+        }
+        Time::Elapsed { epoch, .. } => check_epoch(epoch, &place.key("epoch"), report),
+        Time::Gps { week_bits, .. } => {
+            if let Some(bits) = week_bits
+                && !(1..=32).contains(bits)
+            {
                 report.error(
-                    Code::InvalidEpoch,
-                    &place.key("epoch"),
-                    format!(
-                        "epoch {epoch:?} is not an instant like \"2000-01-01T00:00:00Z\" \
-                         (YYYY-MM-DDTHH:MM:SS, optional fraction without trailing zeros, then Z)"
-                    ),
+                    Code::BitSize,
+                    &place.key("week_bits"),
+                    format!("a rolling-over week count has 1 to 32 bits, not {bits}"),
                 );
             }
         }
@@ -374,12 +377,13 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
         }
         Time::Boot { correlate, .. } => {
             let correlate_place = place.key("correlate");
-            if correlate.unix_field == correlate.boot_field {
+            check_epoch(&correlate.epoch, &correlate_place.key("epoch"), report);
+            if correlate.clock_field == correlate.boot_field {
                 report.error(
                     Code::CorrelateFields,
                     &correlate_place,
                     format!(
-                        "unix_field and boot_field both name {}; the correlation packet carries \
+                        "clock_field and boot_field both name {}; the correlation packet carries \
                          two clocks in two fields",
                         correlate.boot_field
                     ),
@@ -396,12 +400,18 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                 ),
                 Some(packet) => {
                     for (key, field) in [
-                        ("unix_field", &correlate.unix_field),
+                        ("clock_field", &correlate.clock_field),
                         ("boot_field", &correlate.boot_field),
                     ] {
                         let field_place = correlate_place.key(key);
                         match top_level_field(packet, field) {
-                            Some((_, field)) => check_clock_field(field, key, &field_place, report),
+                            Some((_, field)) => check_clock_field(
+                                field,
+                                key,
+                                &[ScalarType::Uint],
+                                &field_place,
+                                report,
+                            ),
                             None => report.error(
                                 Code::UnknownEntry,
                                 &field_place,
@@ -415,11 +425,41 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
     }
 }
 
-/// A clock (a packet's `time_field`, a correlation's two clocks) is read
-/// from every message it's in, so it's an unsigned integer that's always
-/// there.
-fn check_clock_field(field: &Field, what: &str, place: &Place, report: &mut Report) {
-    let problem = if field.ty != ScalarType::Uint {
+fn check_epoch(epoch: &str, place: &Place, report: &mut Report) {
+    if epoch.parse::<Timestamp>().is_err() {
+        report.error(
+            Code::InvalidEpoch,
+            place,
+            format!(
+                "epoch {epoch:?} is not an instant like \"2000-01-01T00:00:00Z\" \
+                 (YYYY-MM-DDTHH:MM:SS, optional fraction without trailing zeros, then Z)"
+            ),
+        );
+    }
+}
+
+/// The field types a packet's `time_field` may have, by time source:
+/// `None` when the source reads no `time_field`.
+fn clock_types(time: Option<&Time>) -> Option<&'static [ScalarType]> {
+    match time? {
+        Time::Boot { .. } => Some(&[ScalarType::Uint]),
+        Time::Elapsed { .. } => Some(&[ScalarType::Uint, ScalarType::Int, ScalarType::Float]),
+        Time::Gps { .. } => Some(&[ScalarType::Uint, ScalarType::Float]),
+        Time::Cuc { .. } | Time::Iso8601 { .. } => None,
+    }
+}
+
+/// A clock (a packet's `time_field`, a GPS week, a correlation's two
+/// clocks) is read from every message it's in, so it's a number of one of
+/// `types` that's always there.
+fn check_clock_field(
+    field: &Field,
+    what: &str,
+    types: &[ScalarType],
+    place: &Place,
+    report: &mut Report,
+) {
+    let problem = if !types.contains(&field.ty) {
         Some(format!("a {} field", type_name(field.ty)))
     } else if field.when.is_some() {
         Some("conditional".to_string())
@@ -429,13 +469,15 @@ fn check_clock_field(field: &Field, what: &str, place: &Place, report: &mut Repo
         None
     };
     if let Some(problem) = problem {
+        let names: Vec<&str> = types.iter().map(|ty| type_name(*ty)).collect();
         report.error(
             Code::ReferenceType,
             place,
             format!(
-                "{what} {} is read from every message, so it's an unconditional uint field, not \
+                "{what} {} is read from every message, so it's an unconditional {} field, not \
                  {problem}",
-                field.name
+                field.name,
+                names.join(" or ")
             ),
         );
     }
@@ -495,7 +537,7 @@ fn check_packets(
     report: &mut Report,
 ) {
     let encoding = family.map(|f| f.encoding);
-    let boot = matches!(set.time, Some(Time::Boot { .. }));
+    let clock_types = clock_types(set.time.as_ref());
     let mut names: BTreeMap<&str, usize> = BTreeMap::new();
     let mut identities = Vec::with_capacity(set.packets.len());
     for (index, packet) in set.packets.iter().enumerate() {
@@ -522,21 +564,42 @@ fn check_packets(
 
         if let Some(time_field) = &packet.time_field {
             let field_place = packet_place.key("time_field");
-            if !boot {
-                report.error(
+            match clock_types {
+                None => report.error(
                     Code::TimeField,
                     &field_place,
-                    "time_field only applies when the set's time is boot-relative",
-                );
-            } else {
-                match top_level_field(packet, time_field) {
+                    "time_field only applies when the set's time is boot, elapsed or gps",
+                ),
+                Some(types) => match top_level_field(packet, time_field) {
                     Some((_, field)) => {
-                        check_clock_field(field, "time_field", &field_place, report)
+                        check_clock_field(field, "time_field", types, &field_place, report)
                     }
                     None => report.error(
                         Code::UnknownEntry,
                         &field_place,
                         format!("packet {} has no top-level field {time_field}", packet.name),
+                    ),
+                },
+            }
+            // A GPS time also needs the week, in a field of the same name in
+            // every timed packet.
+            if let Some(Time::Gps { week_field, .. }) = &set.time {
+                match top_level_field(packet, week_field) {
+                    Some((_, field)) => check_clock_field(
+                        field,
+                        "week field",
+                        &[ScalarType::Uint],
+                        &field_place,
+                        report,
+                    ),
+                    None => report.error(
+                        Code::UnknownEntry,
+                        &field_place,
+                        format!(
+                            "packet {} has a time_field, so it needs the GPS week field \
+                             {week_field} at its top level",
+                            packet.name
+                        ),
                     ),
                 }
             }

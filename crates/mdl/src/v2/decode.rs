@@ -311,13 +311,18 @@ impl FamilySets {
         let (index, packet, record) =
             program.decode(&loaded.set, &self.family().name, message, &readable)?;
         let json = readable.json(&self.family().name)?;
-        let event_time =
-            clock::event_time(&loaded.set, packet, &record, &readable, json).map_err(|reason| {
-                DecodeError::Time {
-                    packet: packet.name.clone(),
-                    reason,
-                }
-            })?;
+        let event_time = clock::event_time(
+            &loaded.set,
+            packet,
+            &record,
+            &readable,
+            json,
+            message.ground_time,
+        )
+        .map_err(|reason| DecodeError::Time {
+            packet: packet.name.clone(),
+            reason,
+        })?;
         let samples = program.samples(index, packet, &loaded.set, &loaded.catalog, &record)?;
         Ok(Decoded {
             route,
