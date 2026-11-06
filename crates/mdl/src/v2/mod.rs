@@ -10,6 +10,7 @@ pub mod artifact;
 pub mod bindings;
 pub(crate) mod bits;
 pub mod checksum;
+pub(crate) mod convert;
 pub mod decode;
 pub mod diagnostics;
 pub mod encode;

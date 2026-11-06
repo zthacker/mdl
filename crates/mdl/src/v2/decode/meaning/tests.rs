@@ -1,16 +1,6 @@
 use super::*;
 
 #[test]
-fn polynomials_use_every_coefficient_in_order() {
-    let poly = Conversion::Poly {
-        coefficients: vec![1.0, 2.0, 3.0],
-    };
-    // 1 + 2x + 3x^2 at x = 2.
-    assert_eq!(convert(&poly, 2.0), Some(17.0));
-    assert_eq!(convert(&Conversion::linear(0.5, -1.0), 4.0), Some(1.0));
-}
-
-#[test]
 fn sentinels_compare_by_value() {
     let invalid = [
         Scalar::Int(-9999),

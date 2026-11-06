@@ -10,8 +10,9 @@ use super::rules::{
     check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
 };
 use super::set::{KeyId, KeyValue, by_value, exact};
-use crate::v2::decode::convert;
+use crate::v2::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::v2::diagnostics::{Code, Place, Report};
+use crate::v2::encode::raw_unchecked;
 use crate::v2::ir::{
     Argument, ByteLength, Catalog, CommandPacket, Conversion, Encoding, Entry, Family, Field,
     ParamType, Scalar, ScalarType, Set,
@@ -364,21 +365,29 @@ fn check_entries(
                 None => target = Some(index),
             }
         }
-        if field.inverse.is_some() && !matches!(field.conversion, Some(Conversion::Poly { .. })) {
+        let needs_inverse = field
+            .conversion
+            .as_ref()
+            .is_some_and(|c| !inverts_exactly(c));
+        if field.inverse.is_some() && !needs_inverse {
             report.error(
                 Code::ConversionType,
                 &field_place.key("inverse"),
-                "an inverse is for a polynomial conversion; linear and states conversions invert \
-                 exactly",
+                "an inverse is for a conversion that doesn't invert exactly (a polynomial, a \
+                 spline, a step table, a table whose values rise and fall); this field's does, or \
+                 it has none",
             );
         }
         if let Some(inverse) = &field.inverse
-            && !matches!(inverse, Conversion::Linear { .. } | Conversion::Poly { .. })
+            && !matches!(
+                inverse,
+                Conversion::Linear { .. } | Conversion::Poly { .. } | Conversion::Table { .. }
+            )
         {
             report.error(
                 Code::ConversionType,
                 &field_place.key("inverse"),
-                "an inverse is a linear or polynomial conversion, engineering value to raw",
+                "an inverse is a linear, polynomial or table conversion, engineering value to raw",
             );
         }
         let (Some(name), Some(arguments)) = (&field.argument, arguments) else {
@@ -648,7 +657,6 @@ fn integer_range(field: &Field) -> Option<(i128, i128)> {
 /// field's conversion, in the field's unit.
 fn check_argument_field(field: &Field, argument: &Argument, place: &Place, report: &mut Report) {
     let states = matches!(field.conversion, Some(Conversion::States { .. }));
-    let poly = matches!(field.conversion, Some(Conversion::Poly { .. }));
     let plain = field.conversion.is_none();
     let numeric = matches!(
         field.ty,
@@ -687,19 +695,23 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
         );
         return;
     }
-    if poly && field.inverse.is_none() {
+    if let Some(conversion) = &field.conversion
+        && !inverts_exactly(conversion)
+        && field.inverse.is_none()
+    {
         report.error(
             Code::ConversionType,
             &place.key("conversion"),
-            "a polynomial conversion on an argument needs an inverse (engineering value to raw)",
+            format!(
+                "{} doesn't invert exactly, so a field that encodes an argument through it needs \
+                 an inverse (engineering value to raw)",
+                conversion_name(conversion)
+            ),
         );
     }
-    // An inverse that rises and falls says nothing about coverage at its
-    // ends, so coverage waits until it's monotonic.
-    let monotonic = match (poly, &field.inverse) {
-        (true, Some(inverse)) => check_poly_inverse(field, inverse, argument, place, report),
-        _ => true,
-    };
+    // Coverage is checked at the range's ends, which bound the raw values
+    // only once the inverse is known to be monotonic over the range.
+    let monotonic = check_inverse(field, argument, place, report);
     if let Some(Conversion::Linear { scale, .. }) = field.conversion
         && scale == 0.0
     {
@@ -775,16 +787,39 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
 /// argument's range (and the ends), as `spec/encoding.md` §3.1 says.
 const INVERSE_SAMPLES: u32 = 4096;
 
-/// A polynomial inverse is checked over a bounded range, and only rises or
-/// only falls across it, so a raw value tells back the values it came from
-/// (decoding relies on it). Whether it was found to.
-fn check_poly_inverse(
-    field: &Field,
-    inverse: &Conversion,
-    argument: &Argument,
-    place: &Place,
-    report: &mut Report,
-) -> bool {
+fn conversion_name(conversion: &Conversion) -> &'static str {
+    match conversion {
+        Conversion::Linear { .. } => "a linear conversion",
+        Conversion::Poly { .. } => "a polynomial",
+        Conversion::States { .. } => "a states conversion",
+        Conversion::Spline { .. } => "a spline",
+        Conversion::Table {
+            interpolation: Some(crate::v2::ir::Interpolation::Step),
+            ..
+        } => "a step table",
+        Conversion::Table { .. } => "a table whose values rise and fall",
+    }
+}
+
+/// Through a conversion other than linear or states, an argument needs a
+/// range with both ends to check its inverse over: the inverse must reach
+/// both ends (inside a table's or spline's points, unless it extrapolates),
+/// and an explicit inverse must only rise or only fall across the range,
+/// which decoding relies on. Whether coverage can then be checked at the
+/// ends.
+fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut Report) -> bool {
+    let Some(conversion) = &field.conversion else {
+        return true;
+    };
+    if matches!(
+        conversion,
+        Conversion::Linear { .. } | Conversion::States { .. }
+    ) {
+        return true;
+    }
+    if !inverts_exactly(conversion) && field.inverse.is_none() {
+        return false;
+    }
     let range = argument.range.unwrap_or_default();
     let (Some(min), Some(max)) = (range.min, range.max) else {
         // A range with no ends is reported on the catalog.
@@ -798,24 +833,124 @@ fn check_poly_inverse(
             Code::ValueRange,
             &place.key("argument"),
             format!(
-                "argument {} is encoded through a polynomial, so it needs a range with both ends \
-                 to check the inverse over",
-                argument.name
+                "argument {} is encoded through {}, so it needs a range with both ends to check \
+                 the conversion over",
+                argument.name,
+                conversion_name(conversion)
             ),
         );
         return false;
     };
-    let Some(mut previous) = convert(inverse, min) else {
+    for end in [min, max] {
+        if inverse(field, end) == Converted::Outside {
+            report.error(
+                Code::ValueRange,
+                &place.key("argument"),
+                format!(
+                    "argument {}'s range reaches {end}, past the points field {} encodes it \
+                     through; keep the range inside them, or let the conversion extrapolate",
+                    argument.name, field.name
+                ),
+            );
+            return false;
+        }
+    }
+    // A table that inverts exactly is monotonic by construction.
+    if let Some(explicit) = &field.inverse
+        && !monotonic_over(explicit, min, max, field, argument, place, report)
+    {
         return false;
+    }
+    // The raw values the ends encode to, rounded as the encoder rounds
+    // them, lie inside the conversion's points when it doesn't extrapolate,
+    // so decoding can read them back; the inverse being monotonic,
+    // everything between does too.
+    if let Some((first, last)) = calibrated_span(conversion) {
+        // A field has a size only in a binary payload.
+        let binary = field.size_bits.is_some();
+        for end in [min, max] {
+            let Some(raw) = raw_unchecked(field, end, binary) else {
+                return false;
+            };
+            if !(first <= raw && raw <= last) {
+                report.error(
+                    Code::ValueRange,
+                    &place.key("argument"),
+                    format!(
+                        "argument {}'s range end {end} encodes to raw {raw}, outside field {}'s \
+                         points ({first} to {last}), so decoding couldn't read it back; narrow \
+                         the range, widen the points, or let the conversion extrapolate",
+                        argument.name, field.name
+                    ),
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// The raw values a table's or spline's points span, when it doesn't
+/// extrapolate past them.
+fn calibrated_span(conversion: &Conversion) -> Option<(f64, f64)> {
+    let (Conversion::Table {
+        points,
+        extrapolate,
+        ..
+    }
+    | Conversion::Spline {
+        points,
+        extrapolate,
+    }) = conversion
+    else {
+        return None;
     };
+    if *extrapolate == Some(true) {
+        return None;
+    }
+    Some((points.first()?.raw, points.last()?.raw))
+}
+
+/// An explicit inverse only rises or only falls over `min` to `max`. A
+/// linear one always does. A table, being straight or flat between its
+/// points, is checked exactly: its value at `min`, at every point strictly
+/// inside, and at `max`. A polynomial is checked at the 4097 points the
+/// spec names.
+fn monotonic_over(
+    explicit: &Conversion,
+    min: f64,
+    max: f64,
+    field: &Field,
+    argument: &Argument,
+    place: &Place,
+    report: &mut Report,
+) -> bool {
+    let inputs: Vec<f64> = match explicit {
+        Conversion::Linear { .. } => return true,
+        Conversion::Table { points, .. } => std::iter::once(min)
+            .chain(
+                points
+                    .iter()
+                    .map(|point| point.raw)
+                    .filter(|raw| min < *raw && *raw < max),
+            )
+            .chain(std::iter::once(max))
+            .collect(),
+        _ => (0..=INVERSE_SAMPLES)
+            .map(|k| min + f64::from(k) * (max - min) / f64::from(INVERSE_SAMPLES))
+            .collect(),
+    };
+    let mut previous: Option<f64> = None;
     let (mut rising, mut falling) = (false, false);
-    for k in 1..=INVERSE_SAMPLES {
-        let x = min + f64::from(k) * (max - min) / f64::from(INVERSE_SAMPLES);
-        let Some(y) = convert(inverse, x) else {
+    for x in inputs {
+        let Some(y) = convert(explicit, x).number() else {
             return false;
         };
-        rising |= y > previous;
-        falling |= y < previous;
+        if let Some(previous) = previous {
+            rising |= y > previous;
+            falling |= y < previous;
+        }
+        previous = Some(y);
         if rising && falling {
             report.error(
                 Code::ConversionType,
@@ -829,17 +964,15 @@ fn check_poly_inverse(
             );
             return false;
         }
-        previous = y;
     }
     true
 }
 
 /// Every value the catalog lets a caller give, through the field's
-/// conversion, fits the field: checked for integer fields with a size,
-/// unconverted, through a linear conversion, or through a polynomial's
-/// inverse (at the range's ends, which bound it: `check_poly_inverse`
-/// requires it to be monotonic). An argument without a range promises every
-/// value of its type.
+/// conversion, fits the field: checked for integer fields with a size, at
+/// the range's ends through the encoder's inverse (which bound every value
+/// in range: `check_inverse` makes sure the inverse is monotonic). An
+/// argument without a range promises every value of its type.
 fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mut Report) {
     let Some((field_low, field_high)) =
         integer_range(field).filter(|_| field.ty != ScalarType::Bool)
@@ -855,22 +988,18 @@ fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mu
     let range = argument.range.unwrap_or_default();
     let low = range.min.unwrap_or(type_low);
     let high = range.max.unwrap_or(type_high);
-    let (raw_low, raw_high) = match field.conversion {
+    let (raw_low, raw_high) = match &field.conversion {
         None => (low, high),
-        Some(Conversion::Linear { scale, offset }) if scale != 0.0 => {
-            let ends = ((low - offset) / scale, (high - offset) / scale);
-            (ends.0.min(ends.1), ends.0.max(ends.1))
-        }
-        Some(Conversion::Poly { .. }) => {
-            let (Some(inverse), Some(_), Some(_)) = (&field.inverse, range.min, range.max) else {
-                return;
-            };
-            let (Some(a), Some(b)) = (convert(inverse, low), convert(inverse, high)) else {
+        // Reported on its own: no inverse.
+        Some(Conversion::Linear { scale, .. }) if *scale == 0.0 => return,
+        Some(Conversion::States { .. }) => return,
+        Some(_) => {
+            let (Some(a), Some(b)) = (inverse(field, low).number(), inverse(field, high).number())
+            else {
                 return;
             };
             (a.min(b), a.max(b))
         }
-        _ => return,
     };
     // The encoder rounds to the nearest integer, ties away from zero. Then
     // compare exactly: u64::MAX as f64 is 2^64, so comparing doubles would
@@ -906,7 +1035,7 @@ fn type_label(ty: ParamType) -> &'static str {
 
 fn requirement(ty: ParamType) -> &'static str {
     match ty {
-        ParamType::F64 => "an f64: a number field, raw or through linear or poly",
+        ParamType::F64 => "an f64: a number field, raw or through a numeric conversion",
         ParamType::I64 => "an i64: an int or uint field, unconverted",
         ParamType::U64 => "a u64: a uint field, unconverted",
         ParamType::Bool => "a bool: a bool or integer field, unconverted",

@@ -141,6 +141,7 @@ fn set_names_and_versions() {
         copy.as_object_mut().unwrap().remove("time");
         copy.as_object_mut().unwrap().remove("types");
         copy.as_object_mut().unwrap().remove("commands");
+        copy["packets"].as_array_mut().unwrap().truncate(1);
         copy["packets"][0]
             .as_object_mut()
             .unwrap()
@@ -2589,6 +2590,217 @@ fn a_polynomial_inverse_is_checked_over_its_arguments_range() {
             json!({ "kind": "poly", "coefficients": [0.7, 10] });
         command(v, "eps.set_mode")["arguments"][1]["range"]["max"] = json!(6553.5);
     });
+}
+
+fn thermal(v: &mut Value) -> &mut Value {
+    &mut v["sets"][1]["packets"][1]
+}
+
+#[test]
+fn tables_and_splines_have_sorted_finite_points() {
+    let heater = "/sets/1/packets/1/entries/0/conversion";
+    assert_one(Code::Empty, &format!("{heater}/points"), |v| {
+        thermal(v)["entries"][0]["conversion"]["points"] = json!([{ "raw": 0, "value": 1 }]);
+    });
+    assert_one(Code::NotSorted, &format!("{heater}/points/2/raw"), |v| {
+        thermal(v)["entries"][0]["conversion"]["points"][2]["raw"] = json!(100);
+    });
+    assert_one(
+        Code::ExplicitDefault,
+        &format!("{heater}/interpolation"),
+        |v| {
+            thermal(v)["entries"][0]["conversion"]["interpolation"] = json!("linear");
+        },
+    );
+    assert_one(
+        Code::ExplicitDefault,
+        &format!("{heater}/extrapolate"),
+        |v| {
+            thermal(v)["entries"][0]["conversion"]["extrapolate"] = json!(false);
+        },
+    );
+    assert_one(Code::ConversionType, heater, |v| {
+        thermal(v)["entries"][0]["type"] = json!("string");
+    });
+    assert_one(
+        Code::NotSorted,
+        "/sets/1/packets/1/entries/1/conversion/points/1/raw",
+        |v| {
+            thermal(v)["entries"][1]["conversion"]["points"][1]["raw"] = json!(0);
+        },
+    );
+}
+
+#[test]
+fn an_argument_goes_through_a_table_or_spline_by_an_exact_or_explicit_inverse() {
+    let delay = "/sets/0/commands/1/entries/2";
+    let points = |pairs: &[(f64, f64)]| {
+        Value::Array(
+            pairs
+                .iter()
+                .map(|(raw, value)| json!({ "raw": raw, "value": value }))
+                .collect(),
+        )
+    };
+    // A linear table whose values only rise reads backwards exactly.
+    let table = |v: &mut Value, pairs: &[(f64, f64)]| {
+        let field = &mut set_mode_packet(v)["entries"][2];
+        field["conversion"] = json!({ "kind": "table", "points": points(pairs) });
+        field.as_object_mut().unwrap().remove("inverse");
+    };
+    let rising = [(0.0, 0.0), (36000.0, 3600.0)];
+    assert_eq!(problems(|v| table(v, &rising)), vec![]);
+    assert_one(Code::ConversionType, &format!("{delay}/inverse"), |v| {
+        table(v, &rising);
+        set_mode_packet(v)["entries"][2]["inverse"] =
+            json!({ "kind": "poly", "coefficients": [0, 10] });
+    });
+    // The range must stay inside the points (or the table extrapolate).
+    assert_one(Code::ValueRange, &format!("{delay}/argument"), |v| {
+        table(v, &[(0.0, 0.0), (10000.0, 1000.0)]);
+    });
+    assert_eq!(
+        problems(|v| {
+            table(v, &[(0.0, 0.0), (10000.0, 1000.0)]);
+            set_mode_packet(v)["entries"][2]["conversion"]["extrapolate"] = json!(true);
+        }),
+        vec![]
+    );
+    // A step table doesn't read backwards: it needs an inverse.
+    assert_one(Code::ConversionType, &format!("{delay}/conversion"), |v| {
+        table(v, &rising);
+        set_mode_packet(v)["entries"][2]["conversion"]["interpolation"] = json!("step");
+    });
+    // A spline with an explicit inverse table, which must only rise or
+    // only fall over the range.
+    let spline = |v: &mut Value, inverse: &[(f64, f64)]| {
+        let field = &mut set_mode_packet(v)["entries"][2];
+        field["conversion"] = json!({ "kind": "spline",
+            "points": points(&[(0.0, 0.0), (18000.0, 2000.0), (36000.0, 3600.0)]) });
+        field["inverse"] = json!({ "kind": "table", "points": points(inverse) });
+    };
+    assert_eq!(
+        problems(|v| spline(v, &[(0.0, 0.0), (2000.0, 18000.0), (3600.0, 36000.0)])),
+        vec![]
+    );
+    assert_one(Code::ConversionType, &format!("{delay}/inverse"), |v| {
+        spline(v, &[(0.0, 0.0), (2000.0, 30000.0), (3600.0, 20000.0)]);
+    });
+    assert_one(Code::ConversionType, &format!("{delay}/inverse"), |v| {
+        spline(v, &[(0.0, 0.0), (3600.0, 36000.0)]);
+        set_mode_packet(v)["entries"][2]["inverse"] =
+            json!({ "kind": "states", "states": [{ "raw": 0, "name": "SAFE" }] });
+    });
+}
+
+#[test]
+fn the_raw_values_a_range_encodes_to_lie_inside_the_points() {
+    // Each would write a raw value just outside the points at a range end,
+    // which decoding couldn't read back.
+    let argument = "/sets/0/commands/1/entries/2/argument";
+    let delay = |v: &mut Value, field: Value, max: f64| {
+        set_mode_packet(v)["entries"][2] = field;
+        command(v, "eps.set_mode")["arguments"][1]["range"]["max"] = json!(max);
+    };
+    let points = |pairs: &[(f64, f64)]| {
+        Value::Array(
+            pairs
+                .iter()
+                .map(|(raw, value)| json!({ "raw": raw, "value": value }))
+                .collect(),
+        )
+    };
+    // An approximate inverse: 0 s is raw -5, below the spline's first point.
+    assert_one(Code::ValueRange, argument, |v| {
+        let field = json!({ "kind": "field", "name": "delay", "type": "int", "size_bits": 16,
+            "unit": "s", "argument": "delay_s",
+            "conversion": { "kind": "spline",
+                "points": points(&[(0.0, 0.0), (50.0, 5.0), (100.0, 10.0)]) },
+            "inverse": { "kind": "linear", "scale": 10.5, "offset": -5.0 } });
+        delay(v, field, 10.0);
+    });
+    // Rounding: 100 s is raw 100.5, written 101, past the last point.
+    assert_one(Code::ValueRange, argument, |v| {
+        let field = json!({ "kind": "field", "name": "delay", "type": "uint", "size_bits": 16,
+            "unit": "s", "argument": "delay_s",
+            "conversion": { "kind": "table",
+                "points": points(&[(0.5, 0.0), (100.5, 100.0)]) } });
+        delay(v, field, 100.0);
+    });
+    // Binary32: 0 s is raw 0.7, written as 0.699999988, below 0.7.
+    assert_one(Code::ValueRange, argument, |v| {
+        let field = json!({ "kind": "field", "name": "delay", "type": "float", "size_bits": 32,
+            "unit": "s", "argument": "delay_s",
+            "conversion": { "kind": "table",
+                "points": points(&[(0.7, 0.0), (2.0, 10.0)]) } });
+        delay(v, field, 10.0);
+    });
+    // Extrapolating, the raw values may go past the points.
+    assert_eq!(
+        problems(|v| {
+            let field = json!({ "kind": "field", "name": "delay", "type": "float",
+                "size_bits": 32, "unit": "s", "argument": "delay_s",
+                "conversion": { "kind": "table", "extrapolate": true,
+                    "points": points(&[(0.7, 0.0), (2.0, 10.0)]) } });
+            delay(v, field, 10.0);
+        }),
+        vec![]
+    );
+}
+
+#[test]
+fn an_inverse_table_is_checked_at_every_point_not_by_sampling() {
+    // 150 is a typo for 99.992, between two of a polynomial's samples
+    // (9.99756 and 10): a table is checked at its points, so it's caught.
+    let points = |pairs: &[(f64, f64)]| {
+        Value::Array(
+            pairs
+                .iter()
+                .map(|(raw, value)| json!({ "raw": raw, "value": value }))
+                .collect(),
+        )
+    };
+    let pump = |v: &mut Value, inverse: &[(f64, f64)]| {
+        set_mode_packet(v)["entries"][2] = json!({ "kind": "field", "name": "delay",
+            "type": "uint", "size_bits": 8, "unit": "s", "argument": "delay_s",
+            "conversion": { "kind": "spline",
+                "points": points(&[(0.0, 0.0), (100.0, 10.0), (200.0, 20.0)]) },
+            "inverse": { "kind": "table", "points": points(inverse) } });
+        command(v, "eps.set_mode")["arguments"][1]["range"]["max"] = json!(10);
+    };
+    let typo = [
+        (0.0, 0.0),
+        (9.9991, 99.991),
+        (9.9992, 150.0),
+        (9.9993, 99.993),
+        (10.0, 100.0),
+    ];
+    assert_one(
+        Code::ConversionType,
+        "/sets/0/commands/1/entries/2/inverse",
+        |v| pump(v, &typo),
+    );
+    let fixed = [
+        (0.0, 0.0),
+        (9.9991, 99.991),
+        (9.9992, 99.992),
+        (9.9993, 99.993),
+        (10.0, 100.0),
+    ];
+    assert_eq!(problems(|v| pump(v, &fixed)), vec![]);
+}
+
+#[test]
+fn a_spline_with_an_infinite_slope_is_refused() {
+    assert_one(
+        Code::NonFinite,
+        "/sets/1/packets/1/entries/1/conversion/points",
+        |v| {
+            thermal(v)["entries"][1]["conversion"]["points"] = json!([
+                { "raw": 0, "value": 0 }, { "raw": 1e-300, "value": 1e9 }, { "raw": 2, "value": 0 }
+            ]);
+        },
+    );
 }
 
 #[test]

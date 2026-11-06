@@ -78,7 +78,6 @@ use crate::v2::validate::{
 pub use command::{CommandDecodeError, DecodedCommand};
 use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Tables};
 use identify::Index;
-pub(crate) use meaning::convert;
 use meaning::{CompiledComposite, sample_value, visit};
 
 pub use clock::{Correlator, EventTime};

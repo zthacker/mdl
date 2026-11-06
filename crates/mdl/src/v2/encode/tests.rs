@@ -279,9 +279,18 @@ fn errors_name_the_command_and_what_went_wrong() {
 /// empty value read to the end after a gap (lab_v4); a length stored as
 /// (n + 2) / 2 (lab_v5); two commands told apart by a text tag (lab_v6);
 /// conversions whose inverse doesn't undo them exactly, and a negative
-/// scale (lab_v7). Family `web`: a JSON command with no fields.
+/// scale (lab_v7); a linear table read backwards (lab_v8); a spline with an
+/// inverse table (lab_v9). Family `web`: a JSON command with no fields.
 fn lab() -> Json {
     let bytes = |name: &str| json!({ "arguments": [{ "name": name, "type": "bytes" }] });
+    let points = |pairs: &[(f64, f64)]| {
+        Json::Array(
+            pairs
+                .iter()
+                .map(|(raw, value)| json!({ "raw": raw, "value": value }))
+                .collect(),
+        )
+    };
     let tag = |text: &str| {
         json!({ "kind": "field", "name": "tag", "type": "string", "text": "ascii",
                 "length": { "kind": "fixed", "bytes": 4 }, "value": text })
@@ -303,6 +312,12 @@ fn lab() -> Json {
             "lab.blob": bytes("data"),
             "lab.load": bytes("data"),
             "lab.pong": {},
+            "lab.heat": { "arguments": [
+                { "name": "temp", "type": "f64", "range": { "min": -40, "max": 60 } }
+            ] },
+            "lab.pump": { "arguments": [
+                { "name": "rate", "type": "f64", "range": { "min": 0, "max": 12 } }
+            ] },
             "lab.drift": { "arguments": [
                 { "name": "temp", "type": "f64", "range": { "min": -100, "max": 100 } },
                 { "name": "delay", "type": "f64", "range": { "min": 0, "max": 3600.06 } },
@@ -379,6 +394,24 @@ fn lab() -> Json {
                       "conversion": { "kind": "poly", "coefficients": [0, 2] },
                       "inverse": { "kind": "poly", "coefficients": [0.001, 0.5] },
                       "argument": "gain" }
+                ]
+            }] },
+            { "name": "lab_v8", "family": "lab", "commands": [{
+                "name": "HEAT", "canonical": "lab.heat", "entries": [
+                    { "kind": "field", "name": "temp", "type": "uint", "size_bits": 16,
+                      "conversion": { "kind": "table", "points": points(&[
+                          (0.0, -40.0), (1000.0, 0.0), (3000.0, 60.0)]) },
+                      "argument": "temp" }
+                ]
+            }] },
+            { "name": "lab_v9", "family": "lab", "commands": [{
+                "name": "PUMP", "canonical": "lab.pump", "entries": [
+                    { "kind": "field", "name": "rate", "type": "uint", "size_bits": 8,
+                      "conversion": { "kind": "spline", "points": points(&[
+                          (0.0, 0.0), (100.0, 4.0), (200.0, 10.0), (255.0, 12.0)]) },
+                      "inverse": { "kind": "table", "points": points(&[
+                          (0.0, 0.0), (4.0, 100.0), (10.0, 200.0), (12.0, 255.0)]) },
+                      "argument": "rate" }
                 ]
             }] },
             { "name": "web_v1", "family": "web", "commands": [
@@ -961,6 +994,33 @@ fn what_the_encoder_writes_decodes_even_when_the_inverse_isnt_exact() {
     );
 }
 
+#[test]
+fn an_argument_goes_through_a_table_and_comes_back() {
+    let sets = sets_of(&lab(), "lab");
+    let heat = |temp: f64| {
+        sets.encode(&CommandRequest::new("lab_v8", "lab.heat").with_argument("temp", temp))
+            .unwrap()
+    };
+    // -20 is halfway from raw 0 (-40) to raw 1000 (0): raw 500.
+    let encoded = heat(-20.0);
+    assert_eq!(encoded.payload, 500_u16.to_be_bytes());
+    let decoded = sets
+        .decode_command("lab_v8", &binary(&encoded.payload))
+        .unwrap();
+    assert_eq!(decoded.arguments[0].1, ArgumentValue::Float(-20.0));
+    assert_eq!(heat(60.0).payload, 3000_u16.to_be_bytes());
+    // Raw 3001 is past the table, which doesn't extrapolate.
+    assert_eq!(
+        decode_code(sets.decode_command("lab_v8", &binary(&3001_u16.to_be_bytes()))),
+        "out_of_range"
+    );
+    // A spline goes back through its inverse table: 7 is raw 150.
+    let encoded = sets
+        .encode(&CommandRequest::new("lab_v9", "lab.pump").with_argument("rate", 7.0))
+        .unwrap();
+    assert_eq!(encoded.payload, [150]);
+}
+
 /// Each command of the fixture and the lab, by bundle, family and set, and
 /// whether its decoded arguments re-encode to the same payload (every
 /// converted field's inverse undoes its conversion).
@@ -980,6 +1040,8 @@ fn command_cases() -> Vec<(Json, &'static str, &'static str, &'static str, bool)
         ("lab_v6", "lab.ping", true),
         ("lab_v6", "lab.pong", true),
         ("lab_v7", "lab.drift", false),
+        ("lab_v8", "lab.heat", true),
+        ("lab_v9", "lab.pump", false),
     ] {
         cases.push((lab(), "lab", set, command, exact));
     }
@@ -1307,7 +1369,7 @@ fn every_command_round_trips_through_its_payload() {
 proptest! {
     #[test]
     fn any_payload_decodes_or_is_refused_without_panicking(
-        case in 0_usize..13,
+        case in 0_usize..15,
         bytes in proptest::collection::vec(any::<u8>(), 0..48),
         framed_with_apid in any::<bool>(),
         mode in prop_oneof![Just(json!("SAFE")), Just(json!("NOMINAL")), Just(json!("X")), Just(json!(1))],

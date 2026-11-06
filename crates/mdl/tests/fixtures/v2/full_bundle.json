@@ -417,6 +417,42 @@
               }
             }
           ]
+        },
+        {
+          "name": "THERMAL",
+          "identify": { "/ch": "THM" },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "heater",
+              "type": "uint",
+              "pointer": "/heater",
+              "conversion": {
+                "kind": "table",
+                "points": [
+                  { "raw": 0, "value": -40 },
+                  { "raw": 100, "value": 0 },
+                  { "raw": 300, "value": 60 }
+                ],
+                "interpolation": "step",
+                "extrapolate": true
+              }
+            },
+            {
+              "kind": "field",
+              "name": "flow",
+              "type": "float",
+              "pointer": "/flow",
+              "conversion": {
+                "kind": "spline",
+                "points": [
+                  { "raw": 0, "value": 0 },
+                  { "raw": 1, "value": 1 },
+                  { "raw": 2, "value": 0 }
+                ]
+              }
+            }
+          ]
         }
       ],
       "commands": [

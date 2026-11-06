@@ -55,7 +55,7 @@ and commands in one pass.
       checksum)
 - [x] The target's native id as a field source, for links that carry it
       in the payload
-- [ ] Inverse conversions (linear, states, monotonic tables; explicit inverse
+- [x] Inverse conversions (linear, states, monotonic tables; explicit inverse
       for polynomials)
 - [x] Encoder; `encode → decode` round-trip property tests
 - [x] Command decoding: a command packet identified by its constants and
@@ -64,7 +64,7 @@ and commands in one pass.
 
 ## Phase 3: what importers need from the IR
 
-- [ ] Calibrations: lookup tables (linear or step, with extrapolation
+- [x] Calibrations: lookup tables (linear or step, with extrapolation
       policy), natural cubic splines
 - [ ] Time: Unix (s/ms/µs/ns), GPS week + seconds
 - [ ] Units: UCUM subset with dimensional analysis; a field in a different
@@ -115,6 +115,8 @@ silent drop.
       routing plus decoding end to end; throughput per core and allocations
       per message
 - [ ] A baseline, then budgets, then tuning against them
+- [ ] Compiled conversions: per-field data worked out once per set (a
+      spline's curvature, unit factors) instead of per value
 - [ ] Benchmark regressions checked in CI
 
 ## Phase 8: interoperability
