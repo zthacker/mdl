@@ -72,6 +72,7 @@ use crate::v2::validate::{KeyId, KeyValue, by_value, decoding_facts, exact, stat
 
 use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Tables};
 use identify::Index;
+pub(crate) use meaning::convert;
 use meaning::{CompiledComposite, sample_value, visit};
 
 pub use clock::{Correlator, EventTime};
@@ -154,7 +155,7 @@ impl<'a> Record<'a> {
         self.entries.is_empty()
     }
 
-    fn push(&mut self, index: usize, name: &'a str, value: Value<'a>) {
+    pub(crate) fn push(&mut self, index: usize, name: &'a str, value: Value<'a>) {
         self.entries.push((index, name, value));
     }
 

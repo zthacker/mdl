@@ -299,6 +299,15 @@ in `cells[2].volts`.
 An integer becomes the nearest binary64 value before a linear or
 polynomial conversion.
 
+**Arithmetic.** Conversions use IEEE 754 binary64 arithmetic, each
+operation rounded to nearest, ties to even, on its own and in the order
+written: a linear conversion multiplies, then adds; Horner's rule
+multiplies, then adds, coefficient by coefficient from the highest. An
+implementation MUST NOT fuse a multiply and an add into one operation,
+reorder operations, or replace a division with a multiplication by a
+reciprocal; any of these changes the last bit of some results.
+`encoding.md` relies on the same rule.
+
 ### 7.2 Sentinels
 
 A raw value that matches one of its entry's `invalid` values means "no

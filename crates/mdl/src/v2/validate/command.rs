@@ -6,7 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::layout::static_offsets;
 use super::mapping::check_unit;
-use super::rules::{check_integer_spelling, check_scalar, integer_value, is_identifier};
+use super::rules::{
+    check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
+};
 use super::set::{KeyId, KeyValue, by_value, exact};
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
@@ -380,6 +382,7 @@ fn check_entries(
         }
         check_argument_field(field, argument, &field_place, report);
     }
+    check_pointers(packet, place, report);
     // A set may leave out an argument with a default (an older layout, from
     // before the argument was added); the encoder then accepts only the
     // default for it.
@@ -394,6 +397,53 @@ fn check_entries(
                 ),
             );
         }
+    }
+}
+
+/// Each field of a JSON command packet is written at its own place inside
+/// the payload's object: no pointer is empty (the whole document), and none
+/// equals another or leads into it (`/a` and `/a/b`).
+fn check_pointers(packet: &CommandPacket, place: &Place, report: &mut Report) {
+    let mut written: Vec<(Vec<String>, &str)> = Vec::new();
+    for (index, entry) in packet.entries.iter().enumerate() {
+        let Entry::Field(field) = entry else {
+            continue;
+        };
+        let Some(tokens) = field.pointer.as_deref().and_then(pointer_tokens) else {
+            continue;
+        };
+        if tokens.is_empty() {
+            report.error(
+                Code::CommandShape,
+                &place
+                    .item("entries", index, "field", &field.name)
+                    .key("pointer"),
+                format!(
+                    "a command payload is a JSON object, so field {} is written under a key, not \
+                     at the empty pointer",
+                    field.name
+                ),
+            );
+            continue;
+        }
+        if let Some((_, other)) = written
+            .iter()
+            .find(|(earlier, _)| earlier.starts_with(&tokens) || tokens.starts_with(earlier))
+        {
+            report.error(
+                Code::Overlap,
+                &place
+                    .item("entries", index, "field", &field.name)
+                    .key("pointer"),
+                format!(
+                    "{} and {other} would be written to the same place: one pointer equals or \
+                     leads into the other",
+                    field.name
+                ),
+            );
+            continue;
+        }
+        written.push((tokens, &field.name));
     }
 }
 
@@ -675,9 +725,13 @@ fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mu
         }
         _ => return,
     };
-    // The encoder rounds to the nearest integer, ties away from zero.
-    let (raw_low, raw_high) = (raw_low.round(), raw_high.round());
-    if raw_low >= field_low as f64 && raw_high <= field_high as f64 {
+    // The encoder rounds to the nearest integer, ties away from zero. Then
+    // compare exactly: u64::MAX as f64 is 2^64, so comparing doubles would
+    // let raw 2^64 through. An infinite end saturates past every field.
+    let exact = |raw: f64| raw.is_finite().then(|| raw.round() as i128);
+    let fits = exact(raw_low).is_some_and(|low| low >= field_low)
+        && exact(raw_high).is_some_and(|high| high <= field_high);
+    if fits {
         return;
     }
     let promise = match (range.min, range.max) {

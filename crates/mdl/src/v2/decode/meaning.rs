@@ -350,7 +350,7 @@ fn integer(value: &Value<'_>) -> Option<i128> {
 }
 
 /// Linear and polynomial conversions; `None` for states.
-fn convert(conversion: &Conversion, x: f64) -> Option<f64> {
+pub(crate) fn convert(conversion: &Conversion, x: f64) -> Option<f64> {
     match conversion {
         Conversion::Linear { scale, offset } => Some(x * scale + offset),
         // Horner's rule: c0 + x(c1 + x(c2 + ...)).

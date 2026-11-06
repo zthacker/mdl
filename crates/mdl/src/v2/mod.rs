@@ -12,6 +12,7 @@ pub(crate) mod bits;
 pub mod checksum;
 pub mod decode;
 pub mod diagnostics;
+pub mod encode;
 pub mod ir;
 pub mod message;
 pub mod read;

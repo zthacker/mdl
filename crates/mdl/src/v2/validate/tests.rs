@@ -2468,6 +2468,44 @@ fn a_sets_command_packets_can_be_told_apart() {
 }
 
 #[test]
+fn each_field_of_a_json_command_is_written_at_its_own_place() {
+    let push = |v: &mut Value, pointer: &str| {
+        v["sets"][1]["commands"][0]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "kind": "field", "name": "extra", "type": "string",
+                          "pointer": pointer, "value": "x" }));
+    };
+    let at = "/sets/1/commands/0/entries/3/pointer";
+    assert_one(Code::Overlap, at, |v| push(v, "/args"));
+    assert_one(Code::Overlap, at, |v| push(v, "/op/more"));
+    assert_one(Code::Overlap, at, |v| push(v, "/op"));
+    // Tokens compare unescaped: "/a~1b" is the key "a/b", not a path.
+    assert_eq!(problems(|v| push(v, "/args~1mode")), vec![]);
+    assert_eq!(problems(|v| push(v, "/opx")), vec![]);
+    // The payload is an object, so no field is the whole document.
+    assert_one(Code::CommandShape, at, |v| push(v, ""));
+}
+
+#[test]
+fn coverage_compares_raw_values_exactly_at_the_top_of_64_bits() {
+    // u64::MAX as a double is 2^64, so a double comparison would let raw
+    // 2^64 through.
+    assert_one(
+        Code::ValueRange,
+        "/sets/0/commands/1/entries/2/argument",
+        |v| {
+            command(v, "eps.set_mode")["arguments"][1]["range"]["max"] = json!(1);
+            set_mode_packet(v)["entries"][2] = json!({
+                "kind": "field", "name": "delay", "type": "uint", "size_bits": 64, "unit": "s",
+                "conversion": { "kind": "linear", "scale": 5.421_010_862_427_522e-20, "offset": 0.0 },
+                "argument": "delay_s"
+            });
+        },
+    );
+}
+
+#[test]
 fn command_identities_are_constants_a_decoder_reads_directly() {
     use super::command::command_identities;
     use super::{KeyId, KeyValue};

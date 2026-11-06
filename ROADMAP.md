@@ -53,14 +53,14 @@ and commands in one pass.
 - [x] Command layouts in sets: argument bindings, constants, computed
       lengths, payload checksums (CRC-8 to CRC-64, sum, xor, the ECSS ISO
       checksum)
-- [ ] The target's native id as a field source, for links that carry it
+- [x] The target's native id as a field source, for links that carry it
       in the payload
 - [ ] Inverse conversions (linear, states, monotonic tables; explicit inverse
       for polynomials)
 - [ ] Encoder; `encode → decode` round-trip property tests
 - [ ] Command decoding: a command packet identified by its constants and
       metadata, its arguments decoded (simulators, command history)
-- [ ] `spec/encoding.md`: the normative encoding rules
+- [x] `spec/encoding.md`: the normative encoding rules
 
 ## Phase 3: what importers need from the IR
 

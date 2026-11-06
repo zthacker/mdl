@@ -285,6 +285,19 @@ impl FamilySets {
         &self.family
     }
 
+    /// The set of this name, if it's loaded.
+    pub(super) fn loaded(&self, set: &str) -> Option<&LoadedSet> {
+        self.sets.get(set)
+    }
+
+    /// The family's byte order, or `None` for JSON payloads.
+    pub(super) fn byte_order(&self) -> Option<ByteOrder> {
+        match self.kind {
+            Kind::Binary(order) => Some(order),
+            Kind::Json => None,
+        }
+    }
+
     /// Which asset sent `message` and which set decodes it.
     pub fn route<R: Resolver + ?Sized>(
         &self,
@@ -587,6 +600,7 @@ fn bits_problem(err: BitsError) -> String {
             "a little-endian value spanning bytes must be whole bytes".to_string()
         }
         BitsError::BadSize => "sizes are 1 to 64 bits".to_string(),
+        BitsError::TooWide => "a value wider than its size".to_string(),
     }
 }
 

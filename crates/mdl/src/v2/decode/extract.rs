@@ -793,5 +793,6 @@ fn bits_problem(err: BitsError) -> Problem {
             Problem::Layout("a little-endian value spanning bytes must be whole bytes")
         }
         BitsError::BadSize => Problem::Layout("numbers are 1 to 64 bits"),
+        BitsError::TooWide => Problem::Layout("a value wider than its size"),
     }
 }

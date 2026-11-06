@@ -1,4 +1,5 @@
-//! Unsigned integers at bit positions in a binary payload.
+//! Unsigned integers at bit positions in a binary payload, read and
+//! written.
 //!
 //! Bits are numbered from the most significant bit of the first byte, in
 //! both byte orders: bit 0 is the top bit of byte 0, bit 8 the top bit of
@@ -18,6 +19,8 @@ pub(crate) enum BitsError {
     Misaligned,
     /// A size outside 1 to 64 bits.
     BadSize,
+    /// A value to write that doesn't fit its size.
+    TooWide,
 }
 
 /// The `size_bits`-bit unsigned value at `offset_bits`.
@@ -27,12 +30,72 @@ pub(crate) fn read_bits(
     size_bits: u32,
     order: ByteOrder,
 ) -> Result<u64, BitsError> {
+    let (first, last) = span(payload.len(), offset_bits, size_bits, order)?;
+    let bytes = &payload[first..=last];
+    match order {
+        ByteOrder::Little if first != last => Ok(bytes
+            .iter()
+            .rev()
+            .fold(0, |value, &byte| (value << 8) | u64::from(byte))),
+        _ => Ok(most_significant_first(
+            bytes,
+            offset_bits % 8,
+            u64::from(size_bits),
+        )),
+    }
+}
+
+/// Writes `value` as the `size_bits`-bit unsigned value at `offset_bits`,
+/// so [`read_bits`] reads it back, leaving every other bit of `payload` as
+/// it was. A value wider than `size_bits` is an error, never truncated.
+pub(crate) fn write_bits(
+    payload: &mut [u8],
+    offset_bits: u64,
+    size_bits: u32,
+    value: u64,
+    order: ByteOrder,
+) -> Result<(), BitsError> {
+    let (first, last) = span(payload.len(), offset_bits, size_bits, order)?;
+    let size = u64::from(size_bits);
+    if size < 64 && value >> size != 0 {
+        return Err(BitsError::TooWide);
+    }
+    let bytes = &mut payload[first..=last];
+    let count = bytes.len();
+    match order {
+        // Whole bytes, at most 8 of them.
+        ByteOrder::Little if first != last => {
+            bytes.copy_from_slice(&value.to_le_bytes()[..count]);
+        }
+        _ => {
+            let window = bytes
+                .iter()
+                .fold(0_u128, |window, &byte| (window << 8) | u128::from(byte));
+            let unused_low = 8 * count as u64 - offset_bits % 8 - size;
+            let mask = ((1_u128 << size) - 1) << unused_low;
+            let window = (window & !mask) | (u128::from(value) << unused_low);
+            // At most 9 bytes, the low ones of the 16.
+            bytes.copy_from_slice(&window.to_be_bytes()[16 - count..]);
+        }
+    }
+    Ok(())
+}
+
+/// The first and last byte a value of `size_bits` at `offset_bits` takes,
+/// once it's known to be inside a payload of `len` bytes and laid out as
+/// `order` allows.
+fn span(
+    len: usize,
+    offset_bits: u64,
+    size_bits: u32,
+    order: ByteOrder,
+) -> Result<(usize, usize), BitsError> {
     if !(1..=64).contains(&size_bits) {
         return Err(BitsError::BadSize);
     }
     let size = u64::from(size_bits);
     // usize is at most 64 bits on every target Rust supports.
-    let payload_bits = (payload.len() as u64).saturating_mul(8);
+    let payload_bits = (len as u64).saturating_mul(8);
     let end_bits = offset_bits.saturating_add(size);
     let past_end = BitsError::PastEnd {
         end_bits,
@@ -41,22 +104,16 @@ pub(crate) fn read_bits(
     if end_bits > payload_bits {
         return Err(past_end);
     }
-    // Both are below payload.len(), so they fit a usize.
+    // Both are below len, so they fit a usize.
     let first = usize::try_from(offset_bits / 8).map_err(|_| past_end)?;
     let last = usize::try_from((end_bits - 1) / 8).map_err(|_| past_end)?;
-    let bytes = &payload[first..=last];
-    match order {
-        ByteOrder::Little if first != last => {
-            if !offset_bits.is_multiple_of(8) || !size.is_multiple_of(8) {
-                return Err(BitsError::Misaligned);
-            }
-            Ok(bytes
-                .iter()
-                .rev()
-                .fold(0, |value, &byte| (value << 8) | u64::from(byte)))
-        }
-        _ => Ok(most_significant_first(bytes, offset_bits % 8, size)),
+    if order == ByteOrder::Little
+        && first != last
+        && (!offset_bits.is_multiple_of(8) || !size.is_multiple_of(8))
+    {
+        return Err(BitsError::Misaligned);
     }
+    Ok((first, last))
 }
 
 /// The low `size_bits` bits of `raw` as a two's-complement number:
