@@ -4,6 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::MAX_NESTING;
+use super::command;
 use super::layout::{Layout, exact_type_sizes, static_offsets, type_name};
 use super::mapping;
 use super::rules::{
@@ -68,6 +69,7 @@ pub(super) fn check_all(
         let heights = check_types(set, &scope, &place, report);
         let type_sizes = exact_type_sizes(&set.types, &heights);
         check_packets(set, family, &scope, &type_sizes, &place, report);
+        command::check_packets(set, family, &bundle.catalog, &place, report);
         if let Some(family) = family {
             check_layout(set, family, &bundle.catalog, &heights, &place, report);
         }
@@ -95,6 +97,7 @@ fn check_layout(
         let type_place = place.map_item("types", name, "type");
         let shape = layout.check_container(&struct_type.entries, None, true, &type_place, report);
         mapping::check_entries(&struct_type.entries, catalog, &type_place, report);
+        command::check_telemetry_fields(&struct_type.entries, &type_place, report);
         if let Some(shape) = shape {
             layout.types.insert(name, shape);
         }
@@ -110,9 +113,14 @@ fn check_layout(
             report,
         );
         mapping::check_entries(&packet.entries, catalog, &packet_place, report);
+        command::check_telemetry_fields(&packet.entries, &packet_place, report);
         mapping::check_composites(packet, &set.types, catalog, &packet_place, report);
         mapping::check_duplicate_mappings(packet, &type_mappings, catalog, &packet_place, report);
         check_fixed_regions(set, family, packet, &packet_place, report);
+    }
+    for (index, packet) in set.commands.iter().enumerate() {
+        let packet_place = place.item("commands", index, "command", &packet.name);
+        layout.check_container(&packet.entries, None, false, &packet_place, report);
     }
 }
 

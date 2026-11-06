@@ -273,7 +273,7 @@ fn json_pointer(path: &serde_path_to_error::Path) -> String {
     out
 }
 
-/// Packets and composites have no meaningful order, so a set artifact
+/// Packets, commands and composites have no meaningful order, so a set artifact
 /// lists them by name; any other order would be a second spelling with a
 /// second digest.
 fn out_of_order(set: &crate::v2::ir::Set) -> Option<(String, String)> {
@@ -282,6 +282,13 @@ fn out_of_order(set: &crate::v2::ir::Set) -> Option<(String, String)> {
         return Some((
             format!("/set/packets/{}", index + 1),
             "packets are listed in name order, each name once".to_string(),
+        ));
+    }
+    let commands = set.commands.windows(2).position(|w| w[0].name >= w[1].name);
+    if let Some(index) = commands {
+        return Some((
+            format!("/set/commands/{}", index + 1),
+            "commands are listed in name order, each name once".to_string(),
         ));
     }
     for (index, packet) in set.packets.iter().enumerate() {

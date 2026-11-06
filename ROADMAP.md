@@ -42,14 +42,11 @@ checked. Phases are ordered by dependency: each builds on the previous one.
       since stored artifacts can come from more than one build
 - [x] Decoder: compiled in-memory program, identification index, record
       tree output, canonical values (composites, array samples), quality
-- [ ] TOML frontend v2; examples updated, including mixed versions on one link
-- [ ] `morphc build` (writes artifacts), `inspect`, `decode` (hex or file in,
-      JSON out), `--set`
-- [ ] Fuzzing (`cargo-fuzz`) for every decoder entry point
-- [ ] Remove v1 (`ir`, `validate`, `interpret`, `plan`, `frontend`) and move
-      `v2::*` up one level; decouple `bits` from v1 first
 
 ## Phase 2: commands (encode)
+
+Commands come before the frontends, so each importer brings in telemetry
+and commands in one pass.
 
 - [ ] Canonical commands and arguments in the catalog (types, units, ranges,
       states)
@@ -57,28 +54,72 @@ checked. Phases are ordered by dependency: each builds on the previous one.
       lengths, payload checksums (CRC-16/32 variants, sum, xor)
 - [ ] Inverse conversions (linear, states, monotonic tables; explicit inverse
       for polynomials)
-- [ ] Encoder; `encode → decode` round-trip property tests; `morphc encode`
+- [ ] Encoder; `encode → decode` round-trip property tests
+- [ ] `spec/encoding.md`: the normative encoding rules
 
-## Phase 3: encodings, units, calibrations
+## Phase 3: what importers need from the IR
 
-- [ ] CBOR and MessagePack payloads (JSON Pointer locations)
 - [ ] Calibrations: lookup tables (linear or step, with extrapolation
       policy), natural cubic splines
+- [ ] Time: Unix (s/ms/µs/ns), GPS week + seconds
 - [ ] Units: UCUM subset with dimensional analysis; a field in a different
       but compatible unit is converted automatically (mV → V, degC → K)
-- [ ] Time: Unix (s/ms/µs/ns), GPS week + seconds, boot-relative with
-      correlation description
 
-## Phase 4: interoperability
+## Phase 4: frontends
 
+Each frontend is its own crate, so the `mdl` core takes on no format
+dependencies. An import is honest: anything the source has that MDL can't
+represent is a diagnostic naming the construct and where it is, never a
+silent drop.
+
+- [ ] Frontend crates and source-located diagnostics (file, line, column)
+- [ ] TOML (MDL's own authoring format), with examples, including mixed
+      versions on one link
+- [ ] JSON: the IR itself, documented as a frontend
+- [ ] XTCE import: telemetry and commands (SpaceSystem, parameter and
+      argument types with encodings and calibrators, sequence containers
+      with base containers and restriction criteria, MetaCommands); the
+      supported subset documented
+
+## Phase 5: `morphc`
+
+- [ ] `morphc build` (any frontend to artifacts), `inspect`, `decode` (hex
+      or file in, JSON out), `encode`, `--set`
+- [ ] README and examples rewritten around v2
+- [ ] Remove v1 (`ir`, `validate`, `interpret`, `plan`, `frontend`, `bits`)
+      and move `v2::*` up one level
+
+## Phase 6: hardening
+
+- [ ] A kitchen-sink definition using every IR feature, written in every
+      frontend, all producing identical artifacts
+- [ ] Real-world corpora: public XTCE definitions imported, validated and
+      decoded
+- [ ] Differential tests (`just diff-test`, optional, run in CI): traffic
+      generated with reference implementations (Yamcs) decoded by MDL and
+      compared
+- [ ] Fuzzing (`cargo-fuzz`): reader, bindings, decoder, encoder and
+      importers, plus generated definitions
+- [ ] `encode → decode` and `decode → encode` round trips across the
+      kitchen sink
+
+## Phase 7: performance
+
+- [ ] Benchmarks: a small housekeeping packet, a wide packet, a high-rate
+      block, a JSON payload, identification across hundreds of packets,
+      routing plus decoding end to end; throughput per core and allocations
+      per message
+- [ ] A baseline, then budgets, then tuning against them
+- [ ] Benchmark regressions checked in CI
+
+## Phase 8: interoperability
+
+- [ ] CBOR and MessagePack payloads (JSON Pointer locations)
 - [ ] JSON Schema for every IR artifact, generated and checked in
 - [ ] Conformance suite: language-neutral cases (artifacts + payload hex +
       expected output or expected diagnostics) and a runner
-- [ ] XTCE import frontend (SpaceSystem, parameter types with encodings and
-      calibrators, sequence containers with base containers and restriction
-      criteria)
 
-## Phase 5: language bindings
+## Phase 9: language bindings
 
 All bindings share one coarse API: load artifacts, decode, encode, with
 results as JSON or CBOR, so each binding stays thin.
@@ -90,11 +131,10 @@ results as JSON or CBOR, so each binding stays thin.
 - [ ] WebAssembly (browser and Node)
 - [ ] Elixir (Rustler NIF)
 
-## Phase 6: release
+## Phase 10: release
 
 - [ ] The MDL specification (IR, semantics, canonical form, conformance)
 - [ ] User guide (mdBook)
 - [ ] CI: fmt, clippy, tests, MSRV, fuzz smoke, `cargo-deny`, conformance
-- [ ] Benchmarks (decode throughput per encoding)
 - [ ] Final crate names; publish to crates.io, PyPI, npm, Hex
 - [ ] CHANGELOG, CONTRIBUTING, SECURITY, versioning policy

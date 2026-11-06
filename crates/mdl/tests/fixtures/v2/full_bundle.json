@@ -33,6 +33,28 @@
         "unit": "m",
         "frame": "ECEF"
       }
+    },
+    "commands": {
+      "eps.load_table": {
+        "description": "Load a table into one of the power system's slots",
+        "arguments": [
+          { "name": "table", "type": "bytes" },
+          { "name": "slot", "type": "u64", "range": { "max": 7 }, "default": 0 }
+        ]
+      },
+      "eps.set_mode": {
+        "description": "Switch the power system's mode",
+        "arguments": [
+          { "name": "mode", "type": "enum", "states": ["SAFE", "NOMINAL"] },
+          {
+            "name": "delay_s",
+            "type": "f64",
+            "unit": "s",
+            "range": { "min": 0, "max": 3600 },
+            "default": 0
+          }
+        ]
+      }
     }
   },
   "families": [
@@ -275,6 +297,54 @@
             }
           ]
         }
+      ],
+      "commands": [
+        {
+          "name": "LOAD_TABLE",
+          "canonical": "eps.load_table",
+          "metadata": { "apid": 300 },
+          "entries": [
+            { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 3 },
+            { "kind": "field", "name": "slot", "type": "uint", "size_bits": 8, "argument": "slot" },
+            { "kind": "field", "name": "len", "type": "uint", "size_bits": 16 },
+            {
+              "kind": "field",
+              "name": "table",
+              "type": "bytes",
+              "length": { "kind": "field", "field": "len" },
+              "argument": "table"
+            }
+          ]
+        },
+        {
+          "name": "SET_MODE",
+          "canonical": "eps.set_mode",
+          "metadata": { "apid": 300 },
+          "entries": [
+            { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 26 },
+            {
+              "kind": "field",
+              "name": "mode",
+              "type": "uint",
+              "size_bits": 8,
+              "conversion": {
+                "kind": "states",
+                "states": [{ "raw": 0, "name": "SAFE" }, { "raw": 1, "name": "NOMINAL" }]
+              },
+              "argument": "mode"
+            },
+            {
+              "kind": "field",
+              "name": "delay",
+              "type": "uint",
+              "size_bits": 16,
+              "conversion": { "kind": "poly", "coefficients": [0, 0.1] },
+              "unit": "s",
+              "argument": "delay_s",
+              "inverse": { "kind": "poly", "coefficients": [0, 10] }
+            }
+          ]
+        }
       ]
     },
     {
@@ -331,6 +401,24 @@
                 "kind": "struct",
                 "name": "cell"
               }
+            }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "SET_MODE",
+          "canonical": "eps.set_mode",
+          "entries": [
+            { "kind": "field", "name": "op", "type": "string", "pointer": "/op", "value": "set_mode" },
+            { "kind": "field", "name": "mode", "type": "string", "pointer": "/args/mode", "argument": "mode" },
+            {
+              "kind": "field",
+              "name": "delay",
+              "type": "float",
+              "pointer": "/args/delay",
+              "unit": "s",
+              "argument": "delay_s"
             }
           ]
         }

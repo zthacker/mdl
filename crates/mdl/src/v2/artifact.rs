@@ -8,7 +8,7 @@
 //!
 //! Every artifact records the lowest IR version that can read it, so moving
 //! the compiler to a newer minor version doesn't change the identity of
-//! artifacts that don't use anything new. Packets and composites have no
+//! artifacts that don't use anything new. Packets, commands and composites have no
 //! meaningful order, so artifacts list them by name: reordering a bundle
 //! never changes an identity.
 //!
@@ -31,7 +31,9 @@ use thiserror::Error;
 
 use crate::canonical::{self, CanonicalError};
 use crate::v2::diagnostics::{Code, Diagnostics, Place, Report};
-use crate::v2::ir::{Artifact, Bundle, Catalog, Digest, IrVersion, Param, Set};
+use crate::v2::ir::{
+    ArgumentRange, Artifact, Bundle, Catalog, Command, Digest, IrVersion, Param, Set,
+};
 use crate::v2::read::Loaded;
 use crate::v2::validate::{Validated, validate};
 
@@ -293,10 +295,12 @@ pub fn rebuild(validated: &Validated, previous: &Artifacts) -> Result<Artifacts,
     Ok(artifacts)
 }
 
-/// Packets and composites in name order, the one order artifacts use.
+/// Packets, commands and composites in name order, the one order artifacts
+/// use.
 fn in_name_order(set: &Set) -> Set {
     let mut set = set.clone();
     set.packets.sort_by(|a, b| a.name.cmp(&b.name));
+    set.commands.sort_by(|a, b| a.name.cmp(&b.name));
     for packet in &mut set.packets {
         packet
             .composites
@@ -399,7 +403,12 @@ fn write(name: &str, artifact: Artifact) -> Result<Written, BuildError> {
 /// `old`? Canonical names are a schema: a param may be added, deprecated or
 /// redescribed, and its limits may change, but it is never removed, and its
 /// type, unit and frame never change. Enum states may only be appended.
-/// Set artifacts validated against `old` then stay valid against `new`.
+/// Commands follow the same rule: never removed; an argument keeps its
+/// type, unit and default, its states may only be appended, and its range
+/// may only widen; a new argument has a default, so callers written for
+/// `old` stay valid (and sets that don't encode it still validate: they
+/// send only its default). Set artifacts validated against `old` then stay
+/// valid against `new`.
 pub fn check_compatible(old: &Catalog, new: &Catalog) -> Result<(), Diagnostics> {
     let mut report = Report::default();
     let catalog = Place::root("").section("catalog");
@@ -417,7 +426,124 @@ pub fn check_compatible(old: &Catalog, new: &Catalog) -> Result<(), Diagnostics>
             Some(after) => compare(name, before, after, &place, &mut report),
         }
     }
+    for (name, before) in &old.commands {
+        let place = catalog.map_item("commands", name, "command");
+        match new.commands.get(name) {
+            None => report.error(
+                Code::RemovedCommand,
+                &place,
+                format!(
+                    "{name} is gone; canonical commands are never removed (mark it deprecated \
+                     instead)"
+                ),
+            ),
+            Some(after) => compare_command(name, before, after, &place, &mut report),
+        }
+    }
     report.finish(())
+}
+
+fn compare_command(
+    name: &str,
+    before: &Command,
+    after: &Command,
+    place: &Place,
+    report: &mut Report,
+) {
+    let mut changed = |at: Place, what: String| {
+        report.error(
+            Code::ChangedCommand,
+            &at,
+            format!("{name}: {what}; add a new command and deprecate this one instead"),
+        );
+    };
+    for argument in &before.arguments {
+        let Some((index, now)) = after
+            .arguments
+            .iter()
+            .enumerate()
+            .find(|(_, now)| now.name == argument.name)
+        else {
+            changed(
+                place.key("arguments"),
+                format!("argument {} is gone", argument.name),
+            );
+            continue;
+        };
+        let at = place.item("arguments", index, "argument", &now.name);
+        if now.ty != argument.ty {
+            changed(
+                at.key("type"),
+                format!("argument {}'s type changed", now.name),
+            );
+        }
+        if now.unit != argument.unit {
+            changed(
+                at.key("unit"),
+                format!("argument {}'s unit changed", now.name),
+            );
+        }
+        if !now.states.starts_with(&argument.states) {
+            changed(
+                at.key("states"),
+                format!(
+                    "argument {}'s states changed (new states may only be added at the end)",
+                    now.name
+                ),
+            );
+        }
+        if narrows(argument.range, now.range) {
+            changed(
+                at.key("range"),
+                format!(
+                    "argument {}'s range is narrower, so a value callers could send is now \
+                     refused",
+                    now.name
+                ),
+            );
+        }
+        if now.default != argument.default {
+            changed(
+                at.key("default"),
+                format!(
+                    "argument {}'s default changed, which changes what callers that leave it \
+                     out send",
+                    now.name
+                ),
+            );
+        }
+    }
+    for (index, argument) in after.arguments.iter().enumerate() {
+        let new = !before.arguments.iter().any(|old| old.name == argument.name);
+        if new && argument.default.is_none() {
+            changed(
+                place.item("arguments", index, "argument", &argument.name),
+                format!(
+                    "new argument {} has no default, so callers written for the older catalog \
+                     would leave it out",
+                    argument.name
+                ),
+            );
+        }
+    }
+}
+
+/// Does `after` refuse a value `before` allowed? An open end allows every
+/// value on its side.
+fn narrows(before: Option<ArgumentRange>, after: Option<ArgumentRange>) -> bool {
+    let before = before.unwrap_or_default();
+    let after = after.unwrap_or_default();
+    let min_raised = match (before.min, after.min) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(old), Some(new)) => new > old,
+    };
+    let max_lowered = match (before.max, after.max) {
+        (_, None) => false,
+        (None, Some(_)) => true,
+        (Some(old), Some(new)) => new < old,
+    };
+    min_raised || max_lowered
 }
 
 fn compare(name: &str, before: &Param, after: &Param, place: &Place, report: &mut Report) {

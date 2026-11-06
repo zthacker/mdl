@@ -104,8 +104,8 @@ fn unknown_fields_are_rejected_everywhere() {
         rejects::<Bundle>(json!({ "mdl_version": "2.0", "catalog": {}, "x": 1 })),
     );
     check(
-        "catalog (commands arrive in Phase 2)",
-        rejects::<Catalog>(json!({ "commands": {} })),
+        "catalog command",
+        rejects::<Catalog>(json!({ "commands": { "eps.go": { "argz": [] } } })),
     );
     check(
         "param",
@@ -531,4 +531,29 @@ mod properties {
             prop_assert_eq!(back, scalar);
         }
     }
+}
+
+#[test]
+fn literals_read_as_canonical_json_writes_them() {
+    let read = |value: Value| serde_json::from_value::<Literal>(value);
+    assert_eq!(read(json!(true)).unwrap(), Literal::Bool(true));
+    assert_eq!(read(json!(3)).unwrap(), Literal::Int(3));
+    // A number with no fraction is an integer, as canonical JSON writes it.
+    assert_eq!(read(json!(3.0)).unwrap(), Literal::Int(3));
+    assert_eq!(read(json!(-0.5)).unwrap(), Literal::Float(-0.5));
+    assert_eq!(read(json!("0a1b")).unwrap(), Literal::Str("0a1b".into()));
+    let error = read(json!(u64::MAX)).unwrap_err().to_string();
+    assert!(error.contains("write it as the string"), "{error}");
+    assert!(read(json!(null)).is_err());
+    assert!(read(json!([1])).is_err());
+    assert_eq!(
+        canonical(&Literal::Float(0.25)),
+        "0.25",
+        "a fraction is written as a number"
+    );
+    assert!(serde_json::to_value(Literal::Float(f64::NAN)).is_err());
+    // Literals compare by value, as their canonical JSON does.
+    assert_eq!(Literal::Float(2.0), Literal::Int(2));
+    assert_ne!(Literal::Float(2.5), Literal::Int(2));
+    assert_ne!(Literal::Float(9.3e18), Literal::Int(i64::MAX));
 }

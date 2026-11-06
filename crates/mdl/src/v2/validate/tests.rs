@@ -140,6 +140,7 @@ fn set_names_and_versions() {
         copy["family"] = json!("legacy");
         copy.as_object_mut().unwrap().remove("time");
         copy.as_object_mut().unwrap().remove("types");
+        copy.as_object_mut().unwrap().remove("commands");
         copy["packets"][0]
             .as_object_mut()
             .unwrap()
@@ -1985,5 +1986,338 @@ fn clock_fields_are_unconditional_uints() {
             let entries = time_packet(v)["entries"].as_array_mut().unwrap();
             entries.swap(0, 1);
         },
+    );
+}
+
+// ---- Commands ----
+
+fn command<'v>(v: &'v mut Value, name: &str) -> &'v mut Value {
+    &mut v["catalog"]["commands"][name]
+}
+
+fn set_mode_packet(v: &mut Value) -> &mut Value {
+    &mut set_x(v)["commands"][1]
+}
+
+#[test]
+fn catalog_commands_are_well_formed() {
+    assert_one(
+        Code::ParamShape,
+        "/catalog/commands/nav.point/arguments/0/type",
+        |v| {
+            *command(v, "nav.point") =
+                json!({ "arguments": [{ "name": "target", "type": "vec3" }] });
+        },
+    );
+    assert_one(Code::InvalidName, "/catalog/commands/Point", |v| {
+        *command(v, "Point") = json!({});
+    });
+    assert_one(Code::DuplicateName, "/catalog/commands/eps.mode", |v| {
+        *command(v, "eps.mode") = json!({});
+    });
+    assert_one(
+        Code::DuplicateName,
+        "/catalog/commands/eps.load_table/arguments/2/name",
+        |v| {
+            command(v, "eps.load_table")["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "slot", "type": "u64", "default": 1 }));
+        },
+    );
+}
+
+#[test]
+fn argument_ranges_and_defaults_fit_their_argument() {
+    let delay = "/catalog/commands/eps.set_mode/arguments/1";
+    let range = |v: &mut Value, r: Value| command(v, "eps.set_mode")["arguments"][1]["range"] = r;
+    assert_one(Code::LimitsOrder, &format!("{delay}/range"), |v| {
+        range(v, json!({ "min": 10, "max": 1 }))
+    });
+    assert_one(Code::Empty, &format!("{delay}/range"), |v| {
+        range(v, json!({}))
+    });
+    assert_one(
+        Code::ValueRange,
+        "/catalog/commands/eps.load_table/arguments/1/range/max",
+        |v| command(v, "eps.load_table")["arguments"][1]["range"]["max"] = json!(7.5),
+    );
+    assert_one(
+        Code::ParamShape,
+        "/catalog/commands/eps.set_mode/arguments/0/range",
+        |v| command(v, "eps.set_mode")["arguments"][0]["range"] = json!({ "max": 1 }),
+    );
+
+    let default = |v: &mut Value, argument: usize, value: Value| {
+        command(v, "eps.set_mode")["arguments"][argument]["default"] = value;
+    };
+    for bad in [json!("fast"), json!(5000), json!(true)] {
+        assert_one(Code::DefaultValue, &format!("{delay}/default"), |v| {
+            default(v, 1, bad.clone())
+        });
+    }
+    assert_one(
+        Code::DefaultValue,
+        "/catalog/commands/eps.set_mode/arguments/0/default",
+        |v| default(v, 0, json!("OFF")),
+    );
+    assert_eq!(problems(|v| default(v, 0, json!("SAFE"))), vec![]);
+    assert_eq!(problems(|v| default(v, 1, json!(0.5))), vec![]);
+    let slot = "/catalog/commands/eps.load_table/arguments/1/default";
+    assert_one(Code::DefaultValue, slot, |v| {
+        command(v, "eps.load_table")["arguments"][1]["default"] = json!(-1)
+    });
+    let table = "/catalog/commands/eps.load_table/arguments/0/default";
+    assert_one(Code::DefaultValue, table, |v| {
+        command(v, "eps.load_table")["arguments"][0]["default"] = json!("0G")
+    });
+    assert_eq!(
+        problems(|v| command(v, "eps.load_table")["arguments"][0]["default"] = json!("0a1b")),
+        vec![]
+    );
+}
+
+#[test]
+fn every_command_field_gets_its_value_from_one_place() {
+    let field = |index: usize| format!("/sets/0/commands/1/entries/{index}");
+    assert_one(Code::NoValue, &field(0), |v| {
+        set_mode_packet(v)["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("value");
+    });
+    assert_one(Code::CommandShape, &field(2), |v| {
+        set_mode_packet(v)["entries"][2]["value"] = json!(5);
+    });
+    assert_one(
+        Code::UnknownArgument,
+        &format!("{}/argument", field(1)),
+        |v| {
+            set_mode_packet(v)["entries"][1]["argument"] = json!("nope");
+            set_mode_packet(v)["entries"].as_array_mut().unwrap().push(
+                json!({ "kind": "field", "name": "mode2", "type": "uint", "size_bits": 8,
+                          "argument": "mode",
+                          "conversion": { "kind": "states",
+                                          "states": [{ "raw": 0, "name": "SAFE" },
+                                                     { "raw": 1, "name": "NOMINAL" }] } }),
+            );
+        },
+    );
+    assert_one(
+        Code::DuplicateMapping,
+        &format!("{}/argument", field(3)),
+        |v| {
+            set_mode_packet(v)["entries"].as_array_mut().unwrap().push(
+                json!({ "kind": "field", "name": "mode2", "type": "uint", "size_bits": 8,
+                          "argument": "mode",
+                          "conversion": { "kind": "states",
+                                          "states": [{ "raw": 0, "name": "SAFE" },
+                                                     { "raw": 1, "name": "NOMINAL" }] } }),
+            );
+        },
+    );
+    assert_one(
+        Code::UnmappedArgument,
+        "/sets/0/commands/1/canonical",
+        |v| {
+            set_mode_packet(v)["entries"]
+                .as_array_mut()
+                .unwrap()
+                .remove(1);
+        },
+    );
+    // An argument with a default may be left out, as by a layout from
+    // before the argument existed; the encoder then sends only its default.
+    assert_eq!(
+        problems(|v| {
+            set_mode_packet(v)["entries"].as_array_mut().unwrap().pop();
+        }),
+        vec![]
+    );
+    assert_one(Code::UnknownCommand, "/sets/0/commands/1/canonical", |v| {
+        set_mode_packet(v)["canonical"] = json!("eps.reboot");
+    });
+    assert_one(Code::ValueRange, &format!("{}/value", field(0)), |v| {
+        set_mode_packet(v)["entries"][0]["value"] = json!(300);
+    });
+    assert_one(
+        Code::ReferenceType,
+        "/sets/1/commands/0/entries/0/value",
+        |v| v["sets"][1]["commands"][0]["entries"][0]["value"] = json!(1),
+    );
+    assert_one(
+        Code::UnknownMetadata,
+        "/sets/0/commands/1/metadata/sysid",
+        |v| {
+            set_mode_packet(v)["metadata"]["sysid"] = json!(1);
+        },
+    );
+}
+
+#[test]
+fn an_argument_fits_the_field_that_encodes_it() {
+    let delay = "/sets/0/commands/1/entries/2";
+    assert_one(Code::ConversionType, &format!("{delay}/conversion"), |v| {
+        set_mode_packet(v)["entries"][2]
+            .as_object_mut()
+            .unwrap()
+            .remove("inverse");
+    });
+    assert_one(Code::ConversionType, &format!("{delay}/inverse"), |v| {
+        set_mode_packet(v)["entries"][2]["conversion"] =
+            json!({ "kind": "linear", "scale": 0.1, "offset": 0.0 });
+    });
+    assert_one(Code::UnitMismatch, &format!("{delay}/unit"), |v| {
+        set_mode_packet(v)["entries"][2]["unit"] = json!("ms");
+    });
+    assert_one(
+        Code::CanonicalType,
+        "/sets/0/commands/1/entries/1/argument",
+        |v| {
+            let mode = &mut set_mode_packet(v)["entries"][1];
+            mode["type"] = json!("float");
+            mode["size_bits"] = json!(32);
+            mode.as_object_mut().unwrap().remove("conversion");
+        },
+    );
+    assert_one(
+        Code::CanonicalType,
+        "/sets/0/commands/1/entries/1/conversion/states/1",
+        |v| {
+            set_mode_packet(v)["entries"][1]["conversion"]["states"][1]["name"] = json!("ON");
+        },
+    );
+}
+
+#[test]
+fn command_packets_and_telemetry_keep_to_their_own_keys() {
+    assert_one(Code::CommandShape, "/sets/0/commands/1/entries/3", |v| {
+        set_mode_packet(v)["entries"].as_array_mut().unwrap().push(
+            json!({ "kind": "array", "name": "pad",
+                          "count": { "kind": "fixed", "count": 1 },
+                          "element": { "kind": "scalar", "type": "uint", "size_bits": 8 } }),
+        );
+    });
+    for (key, value) in [("canonical", json!("eps.mode")), ("invalid", json!([255]))] {
+        assert_one(
+            Code::CommandShape,
+            &format!("/sets/0/commands/1/entries/0/{key}"),
+            |v| set_mode_packet(v)["entries"][0][key] = value.clone(),
+        );
+    }
+    assert_one(Code::CommandOnly, &entry(0, "/value"), |v| {
+        hk(v)["entries"][0]["value"] = json!(1);
+    });
+    assert_one(Code::CommandOnly, &entry(0, "/argument"), |v| {
+        hk(v)["entries"][0]["argument"] = json!("mode");
+    });
+}
+
+fn load_table_packet(v: &mut Value) -> &mut Value {
+    &mut set_x(v)["commands"][0]
+}
+
+#[test]
+fn every_command_packet_encodes_one_way() {
+    assert_one(
+        Code::DuplicateMapping,
+        "/sets/0/commands/2/canonical",
+        |v| {
+            let mut copy = set_mode_packet(v).clone();
+            copy["name"] = json!("SET_MODE_AGAIN");
+            set_x(v)["commands"].as_array_mut().unwrap().push(copy);
+        },
+    );
+    assert_one(
+        Code::CommandShape,
+        "/sets/0/commands/1/entries/1/when",
+        |v| {
+            set_mode_packet(v)["entries"][1]["when"] =
+                json!({ "kind": "compare", "field": "opcode", "op": "eq", "value": 26 });
+        },
+    );
+    assert_one(
+        Code::ConversionType,
+        "/sets/0/commands/1/entries/2/conversion/scale",
+        |v| {
+            let delay = &mut set_mode_packet(v)["entries"][2];
+            delay["conversion"] = json!({ "kind": "linear", "scale": 0.0, "offset": 0.0 });
+            delay.as_object_mut().unwrap().remove("inverse");
+        },
+    );
+    assert_one(
+        Code::DuplicateValue,
+        "/sets/0/commands/1/entries/1/conversion/states/2",
+        |v| {
+            set_mode_packet(v)["entries"][1]["conversion"]["states"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "raw": 2, "name": "SAFE" }));
+        },
+    );
+    // Two data fields can't share one length field.
+    assert_one(
+        Code::CommandShape,
+        "/sets/0/commands/0/entries/4/length/field",
+        |v| {
+            command(v, "eps.load_table")["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "extra", "type": "bytes", "default": "" }));
+            load_table_packet(v)["entries"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "kind": "field", "name": "extra", "type": "bytes",
+                              "length": { "kind": "field", "field": "len" },
+                              "argument": "extra" }));
+        },
+    );
+}
+
+#[test]
+fn a_set_encodes_every_value_the_catalog_allows() {
+    assert_one(
+        Code::CanonicalType,
+        "/sets/0/commands/1/entries/1/conversion",
+        |v| {
+            command(v, "eps.set_mode")["arguments"][0]["states"] =
+                json!(["SAFE", "NOMINAL", "SCIENCE"]);
+        },
+    );
+    let slot = "/sets/0/commands/0/entries/1/argument";
+    assert_one(Code::ValueRange, slot, |v| {
+        command(v, "eps.load_table")["arguments"][1]["range"]["max"] = json!(1000);
+    });
+    // Without a range an argument promises every value of its type.
+    assert_one(Code::ValueRange, slot, |v| {
+        command(v, "eps.load_table")["arguments"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("range");
+    });
+    // A linear conversion maps the range: 0 to 7 at 0.5 per count is raw
+    // 0 to 14, which fits.
+    assert_eq!(
+        problems(|v| {
+            load_table_packet(v)["entries"][1]["conversion"] =
+                json!({ "kind": "linear", "scale": 0.5, "offset": 0.0 });
+            let slot = &mut command(v, "eps.load_table")["arguments"][1];
+            slot["type"] = json!("f64");
+            slot["range"]["min"] = json!(0);
+        }),
+        vec![]
+    );
+}
+
+#[test]
+fn a_new_argument_with_a_default_keeps_sets_valid() {
+    assert_eq!(
+        problems(|v| {
+            command(v, "eps.load_table")["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "verify", "type": "bool", "default": false }));
+        }),
+        vec![]
     );
 }
