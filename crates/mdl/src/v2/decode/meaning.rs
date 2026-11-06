@@ -166,6 +166,9 @@ pub(super) fn visit<'a, 'v, E>(
             (Entry::Array(array), Value::Array(items)) => {
                 for (position, item) in items.iter().enumerate() {
                     let position = position as u64;
+                    if *item == Value::Null {
+                        continue;
+                    }
                     let item_path = format!("{path}[{position}]");
                     match &array.element {
                         Element::Scalar(element) => each(Visit {
@@ -322,7 +325,7 @@ fn raw_value(value: &Value<'_>) -> Option<SampleValue> {
         Value::Bool(b) => SampleValue::Bool(*b),
         Value::Str(text) => SampleValue::Str(text.clone()),
         Value::Bytes(bytes) => SampleValue::Bytes(bytes.clone()),
-        Value::Array(_) | Value::Record(_) => return None,
+        Value::Array(_) | Value::Record(_) | Value::Null => return None,
     })
 }
 
@@ -535,7 +538,7 @@ impl CompiledComposite {
         let mut values = Vec::with_capacity(self.members.len());
         let mut quality = Quality::Good;
         for member in &self.members {
-            let Some(value) = value_at(&member.parts, record) else {
+            let Some(value) = value_at(&member.parts, record).filter(|v| **v != Value::Null) else {
                 return Ok(None);
             };
             let meaning = ScalarMeaning {

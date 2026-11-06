@@ -958,7 +958,7 @@ fn reads_to_end(entry: &Entry) -> bool {
     }
 }
 
-fn type_name(ty: ScalarType) -> &'static str {
+pub(super) fn type_name(ty: ScalarType) -> &'static str {
     match ty {
         ScalarType::Uint => "uint",
         ScalarType::Int => "int",

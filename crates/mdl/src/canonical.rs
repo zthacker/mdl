@@ -95,7 +95,7 @@ impl CanonicalError {
 /// serde_json's own `Value` understands. Artifacts are parsed once per load,
 /// so the second pass is cheap.
 ///
-/// Nesting is capped at serde_json's default depth of 128 in both passes,
+/// Nesting is capped at serde_json's limit, 127 levels, in both passes,
 /// so hostile input can't exhaust the stack.
 pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
     let value = parse_without_duplicates(bytes)?;
@@ -116,7 +116,10 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
 /// UTF-8 JSON with no duplicate object keys at any depth, so a JSON Pointer
 /// finds one value whichever parser reads it. Numbers are read as
 /// serde_json reads them: integers that fit 64 bits exactly, anything else
-/// as a double. Nesting is capped at serde_json's depth of 128.
+/// as a double. Nesting is capped at serde_json's limit of 127 levels.
+/// A number beyond the range of a double is refused, as it is under
+/// default features, also in a build where serde_json's
+/// `arbitrary_precision` feature is on (features unify across a build).
 pub fn parse_without_duplicates(bytes: &[u8]) -> Result<Value, CanonicalError> {
     serde_json::from_slice::<NoDuplicates>(bytes).map_err(|err| {
         let detail = err.to_string();
@@ -128,9 +131,38 @@ pub fn parse_without_duplicates(bytes: &[u8]) -> Result<Value, CanonicalError> {
             _ => CanonicalError::InvalidJson { detail },
         }
     })?;
-    serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
+    let value = serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
         detail: err.to_string(),
-    })
+    })?;
+    check_finite(&value, &mut String::new())?;
+    Ok(value)
+}
+
+/// Every number is an integer that fits 64 bits or a finite double.
+fn check_finite(value: &Value, path: &mut String) -> Result<(), CanonicalError> {
+    match value {
+        Value::Number(number) => {
+            let finite = number.as_u64().is_some()
+                || number.as_i64().is_some()
+                || number.as_f64().is_some_and(f64::is_finite);
+            if finite {
+                Ok(())
+            } else {
+                Err(CanonicalError::InvalidJson {
+                    detail: format!(
+                        "number {number} at {path} is outside the range of an IEEE 754 double"
+                    ),
+                })
+            }
+        }
+        Value::Array(items) => items.iter().enumerate().try_for_each(|(index, item)| {
+            with_segment(path, &index.to_string(), |path| check_finite(item, path))
+        }),
+        Value::Object(members) => members
+            .iter()
+            .try_for_each(|(key, item)| with_segment(path, key, |path| check_finite(item, path))),
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
+    }
 }
 
 /// Walks a document and fails on the first duplicate object key. Builds

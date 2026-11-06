@@ -140,3 +140,46 @@ proptest! {
         );
     }
 }
+
+#[test]
+fn payload_instants_are_any_rfc3339() {
+    let utc = |text: &str| Timestamp::from_rfc3339(text).map(|t| t.to_string());
+    for (text, expected) in [
+        ("2026-06-01T12:00:00Z", "2026-06-01T12:00:00Z"),
+        ("2026-06-01t12:00:00z", "2026-06-01T12:00:00Z"),
+        ("2026-06-01 12:00:00Z", "2026-06-01T12:00:00Z"),
+        ("2026-06-01T14:00:00.250+02:00", "2026-06-01T12:00:00.25Z"),
+        ("2026-06-01T12:00:00-00:00", "2026-06-01T12:00:00Z"),
+        (
+            "2026-06-01T12:00:00.1234567891234Z",
+            "2026-06-01T12:00:00.123456789Z",
+        ),
+        ("2016-12-31T23:59:60Z", "2016-12-31T23:59:59.999999999Z"),
+        ("2016-12-31T23:59:60.5Z", "2016-12-31T23:59:59.999999999Z"),
+    ] {
+        assert_eq!(utc(text).as_deref(), Ok(expected), "{text}");
+    }
+    for bad in [
+        "2026-06-01T12:00:00",
+        "2026-06-01T12:00Z",
+        "0000-01-01T00:00:00Z",
+        "2026-06-01T12:00:00+2400",
+        "yesterday",
+    ] {
+        assert!(Timestamp::from_rfc3339(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn wide_nanoseconds_round_trip_within_range() {
+    for t in [Timestamp::MIN, Timestamp::UNIX_EPOCH, Timestamp::MAX] {
+        assert_eq!(
+            Timestamp::from_unix_nanos_wide(t.unix_nanos_wide()),
+            Some(t)
+        );
+    }
+    assert_eq!(
+        Timestamp::from_unix_nanos_wide(Timestamp::MAX.unix_nanos_wide() + 1),
+        None
+    );
+}

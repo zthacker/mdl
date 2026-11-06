@@ -40,7 +40,7 @@ checked. Phases are ordered by dependency: each builds on the previous one.
       selection (version locator, else binding effective at ground time);
       the sets loaded for one family are checked together (unique versions),
       since stored artifacts can come from more than one build
-- [ ] Decoder: compiled in-memory program, identification index, record
+- [x] Decoder: compiled in-memory program, identification index, record
       tree output, canonical values (composites, array samples), quality
 - [ ] TOML frontend v2; examples updated, including mixed versions on one link
 - [ ] `morphc build` (writes artifacts), `inspect`, `decode` (hex or file in,

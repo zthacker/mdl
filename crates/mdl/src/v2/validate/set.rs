@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::MAX_NESTING;
-use super::layout::{Layout, exact_type_sizes, static_offsets};
+use super::layout::{Layout, exact_type_sizes, static_offsets, type_name};
 use super::mapping;
 use super::rules::{
     check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
@@ -363,17 +363,45 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                         ("unix_field", &correlate.unix_field),
                         ("boot_field", &correlate.boot_field),
                     ] {
-                        if top_level_field(packet, field).is_none() {
-                            report.error(
+                        let field_place = correlate_place.key(key);
+                        match top_level_field(packet, field) {
+                            Some((_, field)) => check_clock_field(field, key, &field_place, report),
+                            None => report.error(
                                 Code::UnknownEntry,
-                                &correlate_place.key(key),
+                                &field_place,
                                 format!("packet {} has no top-level field {field}", packet.name),
-                            );
+                            ),
                         }
                     }
                 }
             }
         }
+    }
+}
+
+/// A clock (a packet's `time_field`, a correlation's two clocks) is read
+/// from every message it's in, so it's an unsigned integer that's always
+/// there.
+fn check_clock_field(field: &Field, what: &str, place: &Place, report: &mut Report) {
+    let problem = if field.ty != ScalarType::Uint {
+        Some(format!("a {} field", type_name(field.ty)))
+    } else if field.when.is_some() {
+        Some("conditional".to_string())
+    } else if field.optional == Some(true) {
+        Some("optional".to_string())
+    } else {
+        None
+    };
+    if let Some(problem) = problem {
+        report.error(
+            Code::ReferenceType,
+            place,
+            format!(
+                "{what} {} is read from every message, so it's an unconditional uint field, not \
+                 {problem}",
+                field.name
+            ),
+        );
     }
 }
 
@@ -458,12 +486,17 @@ fn check_packets(
                     &field_place,
                     "time_field only applies when the set's time is boot-relative",
                 );
-            } else if top_level_field(packet, time_field).is_none() {
-                report.error(
-                    Code::UnknownEntry,
-                    &field_place,
-                    format!("packet {} has no top-level field {time_field}", packet.name),
-                );
+            } else {
+                match top_level_field(packet, time_field) {
+                    Some((_, field)) => {
+                        check_clock_field(field, "time_field", &field_place, report)
+                    }
+                    None => report.error(
+                        Code::UnknownEntry,
+                        &field_place,
+                        format!("packet {} has no top-level field {time_field}", packet.name),
+                    ),
+                }
             }
         }
         if packet.length.is_some() && encoding.is_some_and(|e| e != Encoding::Binary) {
