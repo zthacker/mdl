@@ -89,3 +89,95 @@ proptest! {
         prop_assert_eq!(read, Ok(u64::from_le_bytes(padded)));
     }
 }
+
+fn fit(value: u64, size: u32) -> u64 {
+    if size == 64 {
+        value
+    } else {
+        value & ((1 << size) - 1)
+    }
+}
+
+proptest! {
+    #[test]
+    fn a_write_reads_back_and_leaves_every_other_bit_alone(
+        payload in proptest::collection::vec(any::<u8>(), 1..12),
+        offset in 0_u64..96,
+        size in 1_u32..=64,
+        value in any::<u64>(),
+        little in any::<bool>(),
+    ) {
+        let value = fit(value, size);
+        // Little-endian values span whole bytes or sit inside one.
+        let order = if little { ByteOrder::Little } else { ByteOrder::Big };
+        let aligned = offset % 8 == 0 && size % 8 == 0;
+        let inside_one_byte = offset / 8 == (offset + u64::from(size) - 1) / 8;
+        prop_assume!(!little || aligned || inside_one_byte);
+        let mut written = payload.clone();
+        let result = write_bits(&mut written, offset, size, value, order);
+        let payload_bits = payload.len() as u64 * 8;
+        if offset + u64::from(size) > payload_bits {
+            let is_past_end = matches!(result, Err(BitsError::PastEnd { .. }));
+            prop_assert!(is_past_end);
+            prop_assert_eq!(written, payload);
+            return Ok(());
+        }
+        prop_assert_eq!(result, Ok(()));
+        prop_assert_eq!(read_bits(&written, offset, size, order), Ok(value));
+        for bit in (0..payload_bits).filter(|bit| !(offset..offset + u64::from(size)).contains(bit)) {
+            prop_assert_eq!(
+                reference_big(&written, bit, 1),
+                reference_big(&payload, bit, 1),
+                "bit {}", bit
+            );
+        }
+    }
+
+    #[test]
+    fn little_endian_whole_bytes_write_as_to_le_bytes(
+        payload in proptest::collection::vec(any::<u8>(), 8..12),
+        first in 0_usize..4,
+        bytes in 1_usize..=8,
+        value in any::<u64>(),
+    ) {
+        prop_assume!(first + bytes <= payload.len());
+        let value = fit(value, bytes as u32 * 8);
+        let mut written = payload.clone();
+        write_bits(&mut written, first as u64 * 8, bytes as u32 * 8, value, ByteOrder::Little).unwrap();
+        prop_assert_eq!(&written[first..first + bytes], &value.to_le_bytes()[..bytes]);
+    }
+}
+
+#[test]
+fn writes_refuse_what_reads_refuse_and_values_too_wide() {
+    let mut payload = [0xAA_u8; 3];
+    assert_eq!(
+        write_bits(&mut payload, 0, 3, 0b1000, ByteOrder::Big),
+        Err(BitsError::TooWide)
+    );
+    assert_eq!(
+        write_bits(&mut payload, 0, 0, 0, ByteOrder::Big),
+        Err(BitsError::BadSize)
+    );
+    assert_eq!(
+        write_bits(&mut payload, 4, 8, 0, ByteOrder::Little),
+        Err(BitsError::Misaligned)
+    );
+    assert_eq!(
+        write_bits(&mut payload, 20, 8, 0, ByteOrder::Big),
+        Err(BitsError::PastEnd {
+            end_bits: 28,
+            payload_bits: 24
+        })
+    );
+    // Nothing is written when a write fails.
+    assert_eq!(payload, [0xAA; 3]);
+    // A 64-bit value starting mid-byte spans 9 bytes.
+    let mut wide = [0_u8; 9];
+    write_bits(&mut wide, 4, 64, u64::MAX, ByteOrder::Big).unwrap();
+    assert_eq!(wide, [0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0]);
+    // Inside one byte, byte order doesn't apply.
+    let mut byte = [0_u8; 1];
+    write_bits(&mut byte, 1, 3, 0b101, ByteOrder::Little).unwrap();
+    assert_eq!(byte, [0b0101_0000]);
+}

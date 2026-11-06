@@ -104,6 +104,23 @@ pub(super) fn is_json_pointer(pointer: &str) -> bool {
     true
 }
 
+/// A JSON Pointer's reference tokens, unescaped (`~1` is `/`, then `~0` is
+/// `~`), or `None` if it isn't one.
+pub(crate) fn pointer_tokens(pointer: &str) -> Option<Vec<String>> {
+    if !is_json_pointer(pointer) {
+        return None;
+    }
+    if pointer.is_empty() {
+        return Some(Vec::new());
+    }
+    Some(
+        pointer[1..]
+            .split('/')
+            .map(|token| token.replace("~1", "/").replace("~0", "~"))
+            .collect(),
+    )
+}
+
 pub(super) fn check_pointer(pointer: &str, place: &Place, report: &mut Report) {
     if !is_json_pointer(pointer) {
         report.error(

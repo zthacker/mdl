@@ -367,7 +367,7 @@ fn check_numbers(value: &Value, path: &mut String) -> Result<(), CanonicalError>
 
 /// ECMAScript `Number.prototype.toString` for a finite double. serde_json
 /// never holds NaN or infinity, so every double here is finite.
-fn format_double(n: f64) -> String {
+pub(crate) fn format_double(n: f64) -> String {
     if n == 0.0 {
         // Covers -0, which ECMAScript writes as "0".
         return "0".to_string();
@@ -375,7 +375,7 @@ fn format_double(n: f64) -> String {
     ryu_js::Buffer::new().format_finite(n).to_string()
 }
 
-fn write_string(out: &mut String, text: &str) {
+pub(crate) fn write_string(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {
         match c {

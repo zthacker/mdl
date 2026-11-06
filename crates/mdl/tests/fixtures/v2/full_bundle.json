@@ -494,7 +494,14 @@
               },
               "argument": "mode"
             },
-            { "kind": "field", "name": "unit", "type": "uint", "size_bits": 8, "target": true },
+            {
+              "kind": "field",
+              "name": "unit",
+              "type": "string",
+              "length": { "kind": "terminator", "byte": 0 },
+              "text": "ascii",
+              "target": true
+            },
             { "kind": "checksum", "name": "parity", "algorithm": { "kind": "xor" } },
             { "kind": "checksum", "name": "sum", "algorithm": { "kind": "sum", "width": 16 } }
           ]

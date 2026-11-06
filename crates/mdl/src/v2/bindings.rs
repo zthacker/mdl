@@ -28,7 +28,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::v2::diagnostics::{Code, Diagnostics, Place, Report, escape_pointer_token};
-use crate::v2::ir::{Locator, Scalar};
+use crate::v2::encode::{length_raw, run_bytes, target_value};
+use crate::v2::ir::{Bundle, ByteLength, Encoding, Entry, Family, Locator, Scalar};
 use crate::v2::read::{self, ReadError};
 use crate::v2::time::Timestamp;
 use crate::v2::validate::Validated;
@@ -311,9 +312,10 @@ impl Bindings {
     }
 
     /// Check the bindings against a build: each family exists, each native
-    /// id is one its family's alias locator can produce, and each binding
+    /// id is one its family's alias locator can produce, each binding
     /// names a set of its family exactly when the family has no version
-    /// locator. For tools and CI; decoding doesn't need it.
+    /// locator, and each command field that writes the target's native id
+    /// can hold it. For tools and CI; decoding doesn't need it.
     pub fn check(&self, validated: &Validated) -> Result<(), Diagnostics> {
         let bundle = validated.bundle();
         let mut report = Report::default();
@@ -340,6 +342,20 @@ impl Bindings {
                     let Some(binding) = &change.binding else {
                         continue;
                     };
+                    let sets = match (&family.version, &binding.set) {
+                        (Some(_), None) => Some(None),
+                        (None, Some(set)) => Some(Some(set.as_str())),
+                        _ => None,
+                    };
+                    if let Some(problem) =
+                        sets.and_then(|set| target_problem(bundle, family, set, native_id))
+                    {
+                        report.error(
+                            Code::NativeId,
+                            &place.key("native_id"),
+                            format!("commands can't be sent to {native_id}: {problem}"),
+                        );
+                    }
                     match (&family.version, &binding.set) {
                         (Some(_), Some(_)) => report.error(
                             Code::BindingSet,
@@ -495,6 +511,53 @@ fn alias_problem(locator: &Locator, native_id: &NativeId) -> Option<String> {
             .then(|| format!("its alias is always {value}")),
         Locator::Metadata { .. } | Locator::Path { .. } => None,
     }
+}
+
+/// The first command field that writes the target's native id and can't
+/// hold this one, in the binding's set, or in every set of the family when
+/// each message names its own.
+fn target_problem(
+    bundle: &Bundle,
+    family: &Family,
+    set: Option<&str>,
+    native_id: &NativeId,
+) -> Option<String> {
+    let binary = family.encoding == Encoding::Binary;
+    let sets = bundle
+        .sets
+        .iter()
+        .filter(|s| s.family == family.name && set.is_none_or(|name| s.name == name));
+    for s in sets {
+        for packet in &s.commands {
+            for entry in &packet.entries {
+                let Entry::Field(field) = entry else {
+                    continue;
+                };
+                if field.target != Some(true) {
+                    continue;
+                }
+                let fits = target_value(field, native_id, binary).and_then(|value| {
+                    if !binary {
+                        return Ok(());
+                    }
+                    let bytes = run_bytes(field, &value)?;
+                    match &field.length {
+                        Some(ByteLength::Field(from)) => {
+                            length_raw(packet, from, bytes.len()).map(|_| ())
+                        }
+                        _ => Ok(()),
+                    }
+                });
+                if let Err(problem) = fits {
+                    return Some(format!(
+                        "set {}, command packet {}, field {}: {problem}",
+                        s.name, packet.name, field.name
+                    ));
+                }
+            }
+        }
+    }
+    None
 }
 
 /// A bindings file, as written.
