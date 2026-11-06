@@ -829,9 +829,10 @@ impl Packet {
     }
 }
 
-/// A binary payload's length. Longer payloads than an exact length are
-/// accepted (a vendor appending fields mustn't break readers); shorter ones
-/// are an error.
+/// A binary payload's length. `exact` means every entry fits within that
+/// many bytes in every message; use `at_least` for layouts whose size
+/// varies beyond it. Longer payloads are accepted either way (a vendor
+/// appending fields mustn't break readers); shorter ones are an error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
@@ -871,7 +872,22 @@ impl StructType {
 ///
 /// Binary position: an entry with `offset_bits` sits at that bit from the
 /// start of its container; one without starts where the previous entry
-/// ended. Self-describing payloads use `pointer`, relative to the container.
+/// ended. Bits are numbered from the most significant bit of the first
+/// byte, in both byte orders: bit 0 is the top bit of byte 0, bit 8 the top
+/// bit of byte 1. The byte order decides how the bytes of a multi-byte
+/// value combine. Self-describing payloads use `pointer`, relative to the
+/// container.
+///
+/// Rules a decoder follows:
+///
+/// - An absent conditional entry ends where it would have started, so an
+///   absent entry with `offset_bits` still moves the position of the next
+///   sequential entry to that offset.
+/// - A struct's size in a message, for the entries after it, is the
+///   furthest end of its entries present in that message.
+/// - Conditions, counts, lengths and identify values use raw values, before
+///   any conversion. A count or length taken from a field is
+///   `raw * multiply + add` ([`FromField`]).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
@@ -976,9 +992,9 @@ pub enum TextEncoding {
 pub enum ByteLength {
     #[non_exhaustive]
     Fixed { bytes: u32 },
-    /// An earlier integer entry holds the length in bytes.
-    #[non_exhaustive]
-    Field { field: String },
+    /// An earlier unsigned integer entry holds the length in bytes (after
+    /// its adjustment).
+    Field(FromField),
     /// Up to (not including) this byte, which is consumed.
     #[non_exhaustive]
     Terminator { byte: u8 },
@@ -993,9 +1009,7 @@ impl ByteLength {
     }
 
     pub fn field(field: impl Into<String>) -> Self {
-        ByteLength::Field {
-            field: field.into(),
-        }
+        ByteLength::Field(FromField::new(field))
     }
 
     pub fn terminator(byte: u8) -> Self {
@@ -1061,8 +1075,9 @@ impl ArrayEntry {
 pub enum Count {
     #[non_exhaustive]
     Fixed { count: u32 },
-    #[non_exhaustive]
-    Field { field: String },
+    /// An earlier unsigned integer entry holds the count (after its
+    /// adjustment).
+    Field(FromField),
     /// As many elements as fit before the container ends.
     #[non_exhaustive]
     Remaining {},
@@ -1074,13 +1089,46 @@ impl Count {
     }
 
     pub fn field(field: impl Into<String>) -> Self {
-        Count::Field {
-            field: field.into(),
-        }
+        Count::Field(FromField::new(field))
     }
 
     pub fn remaining() -> Self {
         Count::Remaining {}
+    }
+}
+
+/// A count or length read from an earlier field, as `raw * multiply + add`.
+/// The adjustment covers encodings such as CCSDS's packet length ("octets
+/// minus one": `add: 1`) or lengths in 16-bit words (`multiply: 2`). A
+/// result below zero means the message is malformed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct FromField {
+    pub field: String,
+    /// Defaults to 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub multiply: Option<u32>,
+    /// Defaults to 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub add: Option<i64>,
+}
+
+impl FromField {
+    pub fn new(field: impl Into<String>) -> Self {
+        FromField {
+            field: field.into(),
+            multiply: None,
+            add: None,
+        }
+    }
+
+    /// The largest value this can produce when the field holds at most
+    /// `max_raw`, or `None` if it would overflow.
+    pub fn max_value(&self, max_raw: u64) -> Option<u64> {
+        let value = i128::from(max_raw) * i128::from(self.multiply.unwrap_or(1))
+            + i128::from(self.add.unwrap_or(0));
+        u64::try_from(value.max(0)).ok()
     }
 }
 

@@ -137,6 +137,11 @@ pub fn read_artifact(bytes: &[u8]) -> Result<Loaded<Artifact>, ReadError> {
     if let Some((path, detail)) = first_difference(&value, &normal, String::new()) {
         return Err(ReadError::NotNormalForm { path, detail });
     }
+    if let Artifact::Set { set, .. } = &artifact
+        && let Some((path, detail)) = out_of_order(set)
+    {
+        return Err(ReadError::NotNormalForm { path, detail });
+    }
     Ok(Loaded {
         value: artifact,
         digest: Digest::of_canonical(&canonical),
@@ -252,6 +257,32 @@ fn json_pointer(path: &serde_path_to_error::Path) -> String {
         }
     }
     out
+}
+
+/// Packets and composites have no meaningful order, so a set artifact
+/// lists them by name; any other order would be a second spelling with a
+/// second digest.
+fn out_of_order(set: &crate::v2::ir::Set) -> Option<(String, String)> {
+    let packets = set.packets.windows(2).position(|w| w[0].name >= w[1].name);
+    if let Some(index) = packets {
+        return Some((
+            format!("/set/packets/{}", index + 1),
+            "packets are listed in name order, each name once".to_string(),
+        ));
+    }
+    for (index, packet) in set.packets.iter().enumerate() {
+        let composites = packet
+            .composites
+            .windows(2)
+            .position(|w| w[0].canonical >= w[1].canonical);
+        if let Some(at) = composites {
+            return Some((
+                format!("/set/packets/{index}/composites/{}", at + 1),
+                "composites are listed in canonical name order, each name once".to_string(),
+            ));
+        }
+    }
+    None
 }
 
 /// Where the document as read and its normal form first differ, and how.

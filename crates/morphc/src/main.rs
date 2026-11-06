@@ -34,7 +34,7 @@ struct Cli {
 enum Command {
     /// Check definitions and report every problem.
     Build {
-        /// A directory of TOML definitions: catalog.toml plus sets/<set>.toml.
+        /// A directory of TOML definitions: `catalog.toml` plus `sets/<set>.toml`.
         #[arg(required_unless_present = "ir", conflicts_with = "ir")]
         dir: Option<PathBuf>,
 
