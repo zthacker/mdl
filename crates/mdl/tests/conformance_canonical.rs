@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use mdl::canonical::{CanonicalError, parse_strict, to_canonical_string};
+use mdl::canonical::{parse_strict, to_canonical_string};
 use serde_json::Value;
 
 fn fixture(name: &str) -> Value {
@@ -71,13 +71,10 @@ fn mdl_input_rules_reject_what_they_should() {
         // The input rules are parse_strict's job alone: a reader that
         // parses and then types values must already have been refused.
         let result = parse_strict(&input_bytes(case));
-        let kind = match result {
+        let code = match result {
             Ok(value) => panic!("{name}: expected an error, parsed {value}"),
-            Err(CanonicalError::DuplicateKey { .. }) => "duplicate_key",
-            Err(CanonicalError::InexactInteger { .. }) => "inexact_integer",
-            Err(CanonicalError::InvalidJson { .. }) => "invalid_json",
-            Err(other) => panic!("{name}: unexpected error {other}"),
+            Err(err) => err.code(),
         };
-        assert_eq!(kind, case["error"].as_str().unwrap(), "{name}");
+        assert_eq!(code, case["error"].as_str().unwrap(), "{name}");
     }
 }

@@ -66,6 +66,19 @@ pub enum CanonicalError {
     OutOfRange { path: String, value: String },
 }
 
+impl CanonicalError {
+    /// The code conformance vectors use (`spec/canonical-json.md`, §1).
+    pub fn code(&self) -> &'static str {
+        match self {
+            CanonicalError::InexactInteger { .. } => "inexact_integer",
+            CanonicalError::DuplicateKey { .. } => "duplicate_key",
+            CanonicalError::InvalidJson { .. } | CanonicalError::OutOfRange { .. } => {
+                "invalid_json"
+            }
+        }
+    }
+}
+
 /// Parse an artifact's bytes, refusing input that has no single canonical
 /// form: invalid UTF-8, unpaired surrogates, numbers too large for a double,
 /// a leading byte order mark, an object with a duplicate key (at any depth),

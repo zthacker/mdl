@@ -7,7 +7,9 @@
 //! replace the top-level v1 ones and this module goes away.
 
 pub mod artifact;
+pub mod bindings;
 pub mod diagnostics;
 pub mod ir;
 pub mod read;
+pub mod time;
 pub mod validate;

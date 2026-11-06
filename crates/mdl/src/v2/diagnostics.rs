@@ -108,6 +108,20 @@ pub enum Code {
     ReadsToEnd,
     /// Two entries of one packet mapping to the same canonical param.
     DuplicateMapping,
+    /// A binding naming a set its family doesn't have.
+    UnknownSet,
+    /// Text that isn't MDL's one spelling of an instant.
+    InvalidInstant,
+    /// Two bindings rows for one native id from the same instant.
+    DuplicateBinding,
+    /// A bindings row that is neither a binding nor a retirement: no asset
+    /// and not retired, or retired but naming an asset or set.
+    BindingShape,
+    /// A binding that names a set when its family reads a version from
+    /// each message, or none when the family doesn't.
+    BindingSet,
+    /// A native id the family's alias locator can't produce.
+    NativeId,
 }
 
 impl Code {
@@ -162,6 +176,12 @@ impl Code {
             Code::ChangedParam => "changed_param",
             Code::ReadsToEnd => "reads_to_end",
             Code::DuplicateMapping => "duplicate_mapping",
+            Code::UnknownSet => "unknown_set",
+            Code::InvalidInstant => "invalid_instant",
+            Code::DuplicateBinding => "duplicate_binding",
+            Code::BindingShape => "binding_shape",
+            Code::BindingSet => "binding_set",
+            Code::NativeId => "native_id",
         }
     }
 }
