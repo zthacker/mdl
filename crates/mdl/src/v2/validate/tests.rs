@@ -2340,6 +2340,169 @@ fn a_new_argument_with_a_default_keeps_sets_valid() {
     );
 }
 
+fn legacy_set_mode(v: &mut Value) -> &mut Value {
+    &mut v["sets"][2]["commands"][0]
+}
+
+fn target_field(ty: &str) -> Value {
+    let mut field = json!({ "kind": "field", "name": "target", "type": ty, "target": true });
+    match ty {
+        "string" => {}
+        "float" => field["size_bits"] = json!(32),
+        _ => field["size_bits"] = json!(8),
+    }
+    field
+}
+
+fn insert_target(v: &mut Value, field: Value) {
+    legacy_set_mode(v)["entries"]
+        .as_array_mut()
+        .unwrap()
+        .insert(0, field);
+}
+
+#[test]
+fn a_command_field_may_hold_the_targets_native_id() {
+    assert_eq!(problems(|v| insert_target(v, target_field("uint"))), vec![]);
+    // In a JSON payload too, as text.
+    assert_eq!(
+        problems(|v| {
+            v["sets"][1]["commands"][0]["entries"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "kind": "field", "name": "device", "type": "string",
+                              "pointer": "/device", "target": true }));
+        }),
+        vec![]
+    );
+}
+
+#[test]
+fn a_target_field_holds_the_id_as_it_is() {
+    let at = |rest: &str| format!("/sets/2/commands/0/entries/0{rest}");
+    assert_one(Code::CommandShape, &at("/target"), |v| {
+        insert_target(v, target_field("float"));
+    });
+    assert_one(Code::CommandShape, &at("/conversion"), |v| {
+        let mut field = target_field("uint");
+        field["conversion"] = json!({ "kind": "linear", "scale": 2.0, "offset": 0.0 });
+        insert_target(v, field);
+    });
+    assert_one(Code::CommandShape, &at("/unit"), |v| {
+        let mut field = target_field("uint");
+        field["unit"] = json!("count");
+        insert_target(v, field);
+    });
+    assert_one(Code::CommandShape, &at(""), |v| {
+        let mut field = target_field("uint");
+        field["value"] = json!(1);
+        insert_target(v, field);
+    });
+    // false is the default, and the field still needs a value.
+    assert_eq!(
+        problems(|v| {
+            let mut field = target_field("uint");
+            field["target"] = json!(false);
+            insert_target(v, field);
+        }),
+        vec![
+            (Code::NoValue, at("")),
+            (Code::ExplicitDefault, at("/target")),
+        ]
+    );
+    assert_one(
+        Code::CommandOnly,
+        "/sets/2/packets/0/entries/0/target",
+        |v| {
+            v["sets"][2]["packets"][0]["entries"][0]["target"] = json!(true);
+        },
+    );
+}
+
+#[test]
+fn a_sets_command_packets_can_be_told_apart() {
+    // LOAD_TABLE's opcode is 3, and both have apid 300.
+    assert_one(Code::AmbiguousIdentify, "/sets/0/commands/1", |v| {
+        set_mode_packet(v)["entries"][0]["value"] = json!(3);
+    });
+    // Constants compare as the bits they write: int8 -1 is 0xFF, which
+    // differs from 3 and equals uint8 255.
+    let opcode_minus_one = |v: &mut Value| {
+        set_mode_packet(v)["entries"][0]["type"] = json!("int");
+        set_mode_packet(v)["entries"][0]["value"] = json!(-1);
+    };
+    assert_eq!(problems(opcode_minus_one), vec![]);
+    assert_one(Code::AmbiguousIdentify, "/sets/0/commands/1", |v| {
+        opcode_minus_one(v);
+        load_table_packet(v)["entries"][0]["value"] = json!(255);
+    });
+    // Metadata tells them apart as well as a field does.
+    assert_eq!(
+        problems(|v| {
+            set_mode_packet(v)["entries"][0]["value"] = json!(3);
+            set_mode_packet(v)["metadata"]["apid"] = json!(301);
+        }),
+        vec![]
+    );
+    // In a JSON payload, by a constant at the same pointer.
+    let reset = |op: &'static str| {
+        move |v: &mut Value| {
+            v["catalog"]["commands"]["eps.reset"] = json!({});
+            v["sets"][1]["commands"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({
+                    "name": "RESET",
+                    "canonical": "eps.reset",
+                    "entries": [{ "kind": "field", "name": "op", "type": "string",
+                                  "pointer": "/op", "value": op }]
+                }));
+        }
+    };
+    assert_one(
+        Code::AmbiguousIdentify,
+        "/sets/1/commands/1",
+        reset("set_mode"),
+    );
+    assert_eq!(problems(reset("reset")), vec![]);
+}
+
+#[test]
+fn command_identities_are_constants_a_decoder_reads_directly() {
+    use super::command::command_identities;
+    use super::{KeyId, KeyValue};
+    let mut value = fixture();
+    // A constant after the variable-length table has no static position.
+    load_table_packet(&mut value)["entries"]
+        .as_array_mut()
+        .unwrap()
+        .insert(
+            4,
+            json!({ "kind": "field", "name": "marker", "type": "uint",
+                           "size_bits": 8, "value": 255 }),
+        );
+    let validated = validate(bundle(value)).unwrap();
+    let bundle = validated.bundle();
+    let identities = command_identities(&bundle.sets[0], &bundle.families[0]);
+    let opcode = KeyId::Bits {
+        offset: 0,
+        size: 8,
+        signed: false,
+    };
+    let apid = KeyId::Metadata("apid".to_string());
+    assert_eq!(
+        identities,
+        vec![
+            [
+                (apid.clone(), KeyValue::Int(300)),
+                (opcode.clone(), KeyValue::Int(3))
+            ]
+            .into(),
+            [(apid, KeyValue::Int(300)), (opcode, KeyValue::Int(26))].into(),
+        ]
+    );
+}
+
 // ---- Checksums ----
 
 fn crc16() -> Value {

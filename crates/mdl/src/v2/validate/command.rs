@@ -1,14 +1,17 @@
-//! Command packet checks: each encodes one catalog command, and every field
-//! gets its value from exactly one place.
+//! Command packet checks: each encodes one catalog command, every field
+//! gets its value from exactly one place, and a set's command packets can
+//! be told apart.
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::layout::static_offsets;
 use super::mapping::check_unit;
 use super::rules::{check_integer_spelling, check_scalar, integer_value, is_identifier};
+use super::set::{KeyId, KeyValue, by_value, exact};
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
-    Argument, ByteLength, Catalog, CommandPacket, Conversion, Entry, Family, Field, ParamType,
-    Scalar, ScalarType, Set,
+    Argument, ByteLength, Catalog, CommandPacket, Conversion, Encoding, Entry, Family, Field,
+    ParamType, Scalar, ScalarType, Set,
 };
 
 /// Every command packet of a set: names, the command it encodes, link
@@ -69,6 +72,134 @@ pub(super) fn check_packets(
         }
         let arguments = command.map(|command| command.arguments.as_slice());
         check_entries(packet, arguments, &packet_place, report);
+    }
+}
+
+/// The keys that identify each command packet of a set, by value: its
+/// metadata, and its constant fields that a decoder can read without
+/// decoding anything else. In a binary family those are integer and bool
+/// fields at static positions; in a JSON family, integer and string
+/// fields. Decoding a command reads exactly these.
+pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<KeyId, KeyValue>> {
+    set.commands
+        .iter()
+        .map(|packet| {
+            let mut keys: BTreeMap<KeyId, KeyValue> = packet
+                .metadata
+                .iter()
+                .map(|(name, value)| (KeyId::Metadata(name.clone()), by_value(value)))
+                .collect();
+            // Command packets hold no struct types.
+            let offsets = match family.encoding {
+                Encoding::Binary => static_offsets(&packet.entries, &BTreeMap::new()),
+                _ => Vec::new(),
+            };
+            for (index, entry) in packet.entries.iter().enumerate() {
+                let Entry::Field(field) = entry else {
+                    continue;
+                };
+                let (Some(value), None) = (&field.value, &field.when) else {
+                    continue;
+                };
+                let key = match family.encoding {
+                    Encoding::Binary => {
+                        binary_key(field, value, offsets.get(index).copied().flatten())
+                    }
+                    _ => json_key(field, value),
+                };
+                if let Some((id, value)) = key {
+                    keys.insert(id, value);
+                }
+            }
+            keys
+        })
+        .collect()
+}
+
+/// A constant integer or bool field at a static position, as the raw
+/// unsigned bits it puts in the payload: an int8 -1 and a uint8 255 are the
+/// same key and value, and an int8 -1 and a uint8 1 differ.
+fn binary_key(field: &Field, value: &Scalar, offset: Option<u64>) -> Option<(KeyId, KeyValue)> {
+    let offset = offset?;
+    let size = field.size_bits.filter(|size| (1..=64).contains(size))?;
+    if !matches!(
+        field.ty,
+        ScalarType::Uint | ScalarType::Int | ScalarType::Bool
+    ) {
+        return None;
+    }
+    // Two's complement in the field's size; values out of range are
+    // reported by check_value, which leaves the packet out of check_distinct.
+    let raw = integer_value(value)? & ((1_i128 << size) - 1);
+    Some((
+        KeyId::Bits {
+            offset,
+            size,
+            signed: false,
+        },
+        KeyValue::Int(raw),
+    ))
+}
+
+/// A constant integer or string field, by its pointer.
+fn json_key(field: &Field, value: &Scalar) -> Option<(KeyId, KeyValue)> {
+    let pointer = KeyId::Pointer(field.pointer.clone()?);
+    match (field.ty, value) {
+        (ScalarType::Uint | ScalarType::Int, _) => {
+            Some((pointer, KeyValue::Int(integer_value(value)?)))
+        }
+        (ScalarType::String, Scalar::Str(_)) => Some((pointer, exact(value))),
+        _ => None,
+    }
+}
+
+/// Every two command packets of a set differ in some key both have, so a
+/// payload matches at most one of them. Runs after every other check of
+/// the set: a packet with problems of its own is left out, since a key it
+/// lost to them would only echo them here.
+pub(super) fn check_distinct(set: &Set, family: &Family, place: &Place, report: &mut Report) {
+    let identities = command_identities(set, family);
+    let places: Vec<Place> = set
+        .commands
+        .iter()
+        .enumerate()
+        .map(|(index, packet)| place.item("commands", index, "command", &packet.name))
+        .collect();
+    let clean: Vec<bool> = places
+        .iter()
+        .map(|place| !report.reported_under(place))
+        .collect();
+    for (later, keys) in identities.iter().enumerate() {
+        if !clean.get(later).copied().unwrap_or(false) {
+            continue;
+        }
+        let alike = identities[..later]
+            .iter()
+            .enumerate()
+            .position(|(index, earlier)| {
+                clean.get(index).copied().unwrap_or(false)
+                    && !earlier
+                        .iter()
+                        .any(|(key, value)| keys.get(key).is_some_and(|other| other != value))
+            });
+        let (Some(earlier), Some(packet), Some(packet_place)) =
+            (alike, set.commands.get(later), places.get(later))
+        else {
+            continue;
+        };
+        let first = set
+            .commands
+            .get(earlier)
+            .map_or("", |packet| packet.name.as_str());
+        report.error(
+            Code::AmbiguousIdentify,
+            packet_place,
+            format!(
+                "nothing tells command packets {first} and {} apart: give both a constant field \
+                 at the same position, or metadata of the same name, with different values",
+                packet.name
+            ),
+        );
     }
 }
 
@@ -172,6 +303,7 @@ fn check_entries(
         let sources = [
             field.value.is_some(),
             field.argument.is_some(),
+            field.target == Some(true),
             computed.contains(field.name.as_str()),
         ];
         match sources.iter().filter(|&&source| source).count() {
@@ -179,8 +311,8 @@ fn check_entries(
                 Code::NoValue,
                 &field_place,
                 format!(
-                    "field {} gets no value: give it a value or an argument, or let a later \
-                     entry's length come from it",
+                    "field {} gets no value: give it a value, an argument or the target, or let \
+                     a later entry's length come from it",
                     field.name
                 ),
             ),
@@ -189,14 +321,17 @@ fn check_entries(
                 Code::CommandShape,
                 &field_place,
                 format!(
-                    "field {} gets its value from more than one place (a value, an argument, a \
-                     later entry's length)",
+                    "field {} gets its value from more than one place (a value, an argument, \
+                     the target, a later entry's length)",
                     field.name
                 ),
             ),
         }
         if let Some(value) = &field.value {
             check_value(field, value, &field_place.key("value"), report);
+        }
+        if let Some(target) = field.target {
+            check_target(field, target, &field_place, report);
         }
         if field.inverse.is_some() && !matches!(field.conversion, Some(Conversion::Poly { .. })) {
             report.error(
@@ -285,6 +420,49 @@ fn check_telemetry_keys(field: &Field, place: &Place, report: &mut Report) {
             "optional is for telemetry members that may be missing; a command field is always \
              written",
         );
+    }
+}
+
+/// A target field holds the asset's native id as it is: an integer or
+/// text, unconverted.
+fn check_target(field: &Field, target: bool, place: &Place, report: &mut Report) {
+    if !target {
+        report.error(
+            Code::ExplicitDefault,
+            &place.key("target"),
+            "false is the default for target; omit it",
+        );
+        return;
+    }
+    if !matches!(
+        field.ty,
+        ScalarType::Uint | ScalarType::Int | ScalarType::String
+    ) {
+        report.error(
+            Code::CommandShape,
+            &place.key("target"),
+            format!(
+                "a native id is an integer or text, so target field {} is a uint, int or string \
+                 field",
+                field.name
+            ),
+        );
+    }
+    for (present, key) in [
+        (field.conversion.is_some(), "conversion"),
+        (field.inverse.is_some(), "inverse"),
+        (field.unit.is_some(), "unit"),
+    ] {
+        if present {
+            report.error(
+                Code::CommandShape,
+                &place.key(key),
+                format!(
+                    "target field {} writes the native id as it is, with no {key}",
+                    field.name
+                ),
+            );
+        }
     }
 }
 
@@ -539,7 +717,7 @@ fn requirement(ty: ParamType) -> &'static str {
 }
 
 /// Telemetry fields don't take command-only keys: a field in a packet or
-/// struct type has no constant value, argument or inverse.
+/// struct type has no constant value, argument, inverse or target.
 pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &mut Report) {
     for (index, entry) in entries.iter().enumerate() {
         let Entry::Field(field) = entry else {
@@ -550,6 +728,7 @@ pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &
             (field.value.is_some(), "value"),
             (field.argument.is_some(), "argument"),
             (field.inverse.is_some(), "inverse"),
+            (field.target.is_some(), "target"),
         ] {
             if present {
                 report.error(

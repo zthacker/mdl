@@ -419,6 +419,15 @@ impl Report {
         self.diagnostics.push((place.segments.clone(), diagnostic));
     }
 
+    /// Whether anything at or under `place` was reported, so a later check
+    /// can leave out a part whose problems are already known instead of
+    /// echoing them.
+    pub(crate) fn reported_under(&self, place: &Place) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|(segments, _)| segments.starts_with(&place.segments))
+    }
+
     /// The value if nothing went wrong, otherwise every diagnostic in
     /// document order, then by code.
     pub(crate) fn finish<T>(mut self, value: T) -> Result<T, Diagnostics> {

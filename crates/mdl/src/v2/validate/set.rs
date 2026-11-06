@@ -84,6 +84,7 @@ pub(super) fn check_all(
         }
         if let Some(family) = family {
             check_layout(set, family, &bundle.catalog, &heights, &place, report);
+            command::check_distinct(set, family, &place, report);
         }
     }
 }
