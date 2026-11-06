@@ -313,6 +313,19 @@
               "type": "bytes",
               "length": { "kind": "field", "field": "len" },
               "argument": "table"
+            },
+            {
+              "kind": "checksum",
+              "name": "crc",
+              "algorithm": {
+                "kind": "crc",
+                "width": 16,
+                "poly": 4129,
+                "init": 65535,
+                "reflect_in": false,
+                "reflect_out": false,
+                "xor_out": 0
+              }
             }
           ]
         },
@@ -342,7 +355,8 @@
               "unit": "s",
               "argument": "delay_s",
               "inverse": { "kind": "poly", "coefficients": [0, 10] }
-            }
+            },
+            { "kind": "checksum", "name": "check", "algorithm": { "kind": "iso8473" } }
           ]
         }
       ]
@@ -461,6 +475,27 @@
               "type": "uint",
               "size_bits": 32
             }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "SET_MODE",
+          "canonical": "eps.set_mode",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "mode",
+              "type": "uint",
+              "size_bits": 8,
+              "conversion": {
+                "kind": "states",
+                "states": [{ "raw": 0, "name": "SAFE" }, { "raw": 1, "name": "NOMINAL" }]
+              },
+              "argument": "mode"
+            },
+            { "kind": "checksum", "name": "parity", "algorithm": { "kind": "xor" } },
+            { "kind": "checksum", "name": "sum", "algorithm": { "kind": "sum", "width": 16 } }
           ]
         }
       ]

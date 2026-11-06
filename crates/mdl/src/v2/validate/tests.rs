@@ -2105,7 +2105,8 @@ fn every_command_field_gets_its_value_from_one_place() {
     );
     assert_one(
         Code::DuplicateMapping,
-        &format!("{}/argument", field(3)),
+        // After the packet's checksum, at 3.
+        &format!("{}/argument", field(4)),
         |v| {
             set_mode_packet(v)["entries"].as_array_mut().unwrap().push(
                 json!({ "kind": "field", "name": "mode2", "type": "uint", "size_bits": 8,
@@ -2191,14 +2192,22 @@ fn an_argument_fits_the_field_that_encodes_it() {
 
 #[test]
 fn command_packets_and_telemetry_keep_to_their_own_keys() {
-    assert_one(Code::CommandShape, "/sets/0/commands/1/entries/3", |v| {
+    assert_one(Code::CommandShape, "/sets/0/commands/1/entries/4", |v| {
         set_mode_packet(v)["entries"].as_array_mut().unwrap().push(
             json!({ "kind": "array", "name": "pad",
                           "count": { "kind": "fixed", "count": 1 },
                           "element": { "kind": "scalar", "type": "uint", "size_bits": 8 } }),
         );
     });
-    for (key, value) in [("canonical", json!("eps.mode")), ("invalid", json!([255]))] {
+    // Each is one mistake with one diagnostic, though the shared field
+    // checks would otherwise look at these keys too.
+    for (key, value) in [
+        ("canonical", json!("eps.mode")),
+        ("canonical", json!("no.such")),
+        ("invalid", json!([255])),
+        ("invalid", json!([999])),
+        ("optional", json!(true)),
+    ] {
         assert_one(
             Code::CommandShape,
             &format!("/sets/0/commands/1/entries/0/{key}"),
@@ -2258,7 +2267,7 @@ fn every_command_packet_encodes_one_way() {
     // Two data fields can't share one length field.
     assert_one(
         Code::CommandShape,
-        "/sets/0/commands/0/entries/4/length/field",
+        "/sets/0/commands/0/entries/5/length/field",
         |v| {
             command(v, "eps.load_table")["arguments"]
                 .as_array_mut()
@@ -2276,13 +2285,22 @@ fn every_command_packet_encodes_one_way() {
 
 #[test]
 fn a_set_encodes_every_value_the_catalog_allows() {
-    assert_one(
-        Code::CanonicalType,
-        "/sets/0/commands/1/entries/1/conversion",
-        |v| {
+    // Every set that encodes the command is told.
+    assert_eq!(
+        problems(|v| {
             command(v, "eps.set_mode")["arguments"][0]["states"] =
                 json!(["SAFE", "NOMINAL", "SCIENCE"]);
-        },
+        }),
+        vec![
+            (
+                Code::CanonicalType,
+                "/sets/0/commands/1/entries/1/conversion".to_string()
+            ),
+            (
+                Code::CanonicalType,
+                "/sets/2/commands/0/entries/0/conversion".to_string()
+            ),
+        ]
     );
     let slot = "/sets/0/commands/0/entries/1/argument";
     assert_one(Code::ValueRange, slot, |v| {
@@ -2317,6 +2335,78 @@ fn a_new_argument_with_a_default_keeps_sets_valid() {
                 .as_array_mut()
                 .unwrap()
                 .push(json!({ "name": "verify", "type": "bool", "default": false }));
+        }),
+        vec![]
+    );
+}
+
+// ---- Checksums ----
+
+fn crc16() -> Value {
+    json!({ "kind": "checksum", "name": "crc",
+            "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535,
+                           "reflect_in": false, "reflect_out": false, "xor_out": 0 } })
+}
+
+#[test]
+fn checksums_are_computable_as_written() {
+    let crc_at = |v: &mut Value| -> usize {
+        let entries = load_table_packet(v)["entries"].as_array().unwrap();
+        entries.len() - 1
+    };
+    let algorithm = |v: &mut Value, key: &str, value: Value| {
+        let at = crc_at(v);
+        load_table_packet(v)["entries"][at]["algorithm"][key] = value;
+    };
+    let path = |rest: &str| format!("/sets/0/commands/0/entries/4{rest}");
+    assert_one(Code::Checksum, &path("/algorithm/width"), |v| {
+        algorithm(v, "width", json!(12))
+    });
+    assert_one(Code::Checksum, &path("/algorithm/poly"), |v| {
+        algorithm(v, "poly", json!(65536))
+    });
+    assert_one(Code::IntegerAsString, &path("/algorithm/init"), |v| {
+        algorithm(v, "init", json!("65535"))
+    });
+    assert_one(Code::Alignment, &path("/from_bits"), |v| {
+        let at = crc_at(v);
+        load_table_packet(v)["entries"][at]["from_bits"] = json!(4);
+    });
+    // A checksum covers bytes before its own start.
+    assert_one(
+        Code::Checksum,
+        "/sets/2/packets/0/entries/2/from_bits",
+        |v| {
+            let legacy = &mut v["sets"][2]["packets"][0];
+            legacy["entries"].as_array_mut().unwrap().push(json!(
+            { "kind": "checksum", "name": "xor", "offset_bits": 96, "from_bits": 104,
+              "algorithm": { "kind": "xor" } }));
+            legacy["length"]["bytes"] = json!(13);
+        },
+    );
+}
+
+#[test]
+fn checksums_sit_at_a_binary_packets_top_level() {
+    assert_one(Code::Checksum, "/sets/0/types/vec3_i32/entries/3", |v| {
+        set_x(v)["types"]["vec3_i32"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(crc16());
+    });
+    assert_one(Code::WrongEncoding, "/sets/1/packets/0/entries/2", |v| {
+        v["sets"][1]["packets"][0]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(crc16());
+    });
+    // Telemetry may end with one too.
+    assert_eq!(
+        problems(|v| {
+            let legacy = &mut v["sets"][2]["packets"][0];
+            legacy["entries"].as_array_mut().unwrap().push(json!(
+                { "kind": "checksum", "name": "xor", "algorithm": { "kind": "xor" } }));
+            legacy["length"]["bytes"] = json!(13);
         }),
         vec![]
     );

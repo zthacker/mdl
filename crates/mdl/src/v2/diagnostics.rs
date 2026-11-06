@@ -142,6 +142,10 @@ pub enum Code {
     RemovedCommand,
     /// A newer catalog that changes what a command means.
     ChangedCommand,
+    /// A checksum that can't be computed as written: a width that isn't
+    /// whole bytes from 8 to 64, a parameter that doesn't fit it, a range
+    /// past the checksum, or a checksum inside a struct type.
+    Checksum,
 }
 
 impl Code {
@@ -211,6 +215,7 @@ impl Code {
             Code::NoValue => "no_value",
             Code::RemovedCommand => "removed_command",
             Code::ChangedCommand => "changed_command",
+            Code::Checksum => "checksum",
         }
     }
 }

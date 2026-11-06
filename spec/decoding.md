@@ -123,7 +123,7 @@ otherwise as decoding starts, so a payload that isn't valid JSON is
 
 Each packet's identify keys resolve as validation resolves them: a JSON
 Pointer; a metadata name the family declares; or a top-level integer or
-bool field of the packet, by its static bit position if it has one.
+bool field of the packet, by its static position (§5.2) if it has one.
 Values compare as in §3.2: pointers exactly, metadata and fields by value.
 
 - A message matches a packet when every key's value in the message equals
@@ -172,6 +172,16 @@ struct).
   holds (§5.4). An absent entry ends where it would have started: an
   absent entry with `offset_bits` still moves the next sequential entry to
   that offset.
+- **Static positions.** An entry's position is static when no message
+  can move it: it has `offset_bits`, or it is its container's first
+  entry, or the entry before it has a static position and an exact size.
+  Exact sizes are those of an entry without `when` that is a field with
+  `size_bits` or a `fixed` length, padding, an array with a `fixed` count
+  of elements with an exact size, a struct whose type has an exact size,
+  or any checksum. A struct type has an exact size when every entry of it
+  has a static position and an exact size; its size is then the furthest
+  end of its entries. Identification (§4) and checksums (§5.6) depend on
+  static positions, so every decoder MUST compute them this way.
 - **Fields** read a value (§2.1, §2.2). A string or bytes field's length
   is `fixed`, taken from a field (§5.4), up to a `terminator` byte (which
   ends the value but isn't part of it; none before the packet's end is
@@ -183,6 +193,7 @@ struct).
   `fixed`, taken from a field (§5.4), or `remaining`: elements until the
   packet ends.
 - **Padding** skips its bits.
+- **Checksums** are verified (§5.6).
 
 ### 5.3 JSON entries
 
@@ -223,6 +234,51 @@ takes no bits is [`empty_element`]. Strings and bytes are checked before
 they're copied. A decoder MUST NOT recurse deeper than the definition
 nests (validation caps it at 32), and MUST NOT panic or crash on any
 payload.
+
+### 5.6 Checksums
+
+A `checksum` entry sits at a packet's top level, starts on a byte
+boundary, and holds an unsigned integer of its algorithm's width, in the
+family's byte order unless the algorithm fixes its own. It covers the
+packet's bytes from `from_bits` (default 0, a byte boundary) up to its own
+start. A decoder computes the checksum of those bytes; if the stored value
+isn't one the algorithm accepts for it (the computed value, for all but
+`iso8473`), the message is [`bad_checksum`].
+
+A checksum at a static position (§5.2) is verified before any other entry
+of the packet is extracted, so damage anywhere it covers is
+`bad_checksum`, not whatever error the damaged entry would cause. Any
+other checksum is verified when the decoder reaches it.
+
+- `crc`, with `width` (8 to 64 bits, whole bytes), `poly`, `init`,
+  `reflect_in`, `reflect_out` and `xor_out`, the parameters of the CRC
+  catalogue's model. A register of `width` bits starts at `init`. For each
+  byte (with its bit order reversed if `reflect_in`), the byte is
+  exclusive-ored into the register's top 8 bits; then, 8 times, the
+  register shifts left one bit and, if the bit shifted out was 1, is
+  exclusive-ored with `poly`. After the last byte, the register's bit
+  order is reversed if `reflect_out`, and it is exclusive-ored with
+  `xor_out`. For the bytes `123456789`, `width` 16, `poly` 0x1021, `init`
+  0xFFFF, no reflection and `xor_out` 0 (CRC-16/IBM-3740), the result is
+  0x29B1.
+- `sum`, with `width` (8 to 64 bits, whole bytes): the bytes added as
+  unsigned integers, modulo 2^width.
+- `xor`: the bytes exclusive-ored together, 8 bits.
+- `iso8473`: the ISO checksum of ISO 8473-1 (Fletcher's checksum, modulo
+  255) that ECSS PUS uses for packet error control, as ECSS-E-70-41A
+  Annex A.2 specifies it. C0 and C1 start at 0; for each byte, C0 becomes
+  C0 + byte and C1 becomes C1 + C0, modulo 255. The first check byte is
+  −(C0 + C1) and the second is C1, modulo 255, each written as 255 where it
+  would be 0. The two bytes are stored first then second, whatever the
+  family's byte order, so as a 16-bit value the first is the high byte. A
+  decoder accepts what the standard's decoding procedure accepts: not
+  exactly one check byte 0, and C0 and C1 both 0 after the covered bytes
+  and both check bytes. That is the computed value, and also 0x0000 when
+  the computed value is 0xFFFF. For the bytes `AB CD EF 01` the check bytes
+  are `9C F8`; for `00 00`, `FF FF`.
+
+Names like `CRC-32` are a frontend convenience; an artifact always holds
+the parameters.
 
 ## 6. Records
 
@@ -358,6 +414,6 @@ restarts.
 | `wrong_encoding`, `invalid_json`, `unreadable_locator`, `unknown_asset`, `unknown_version`, `unknown_set`, `missing_set`, `unexpected_set` | routing (§3) |
 | `no_packet` | identification (§4) |
 | `too_short` | length (§5.1) |
-| `past_end`, `no_terminator`, `invalid_text`, `empty_element`, `bad_length`, `missing_value`, `wrong_type`, `out_of_range` | an entry (§5); the error names the entry's path |
+| `past_end`, `no_terminator`, `invalid_text`, `empty_element`, `bad_length`, `missing_value`, `wrong_type`, `out_of_range`, `bad_checksum` | an entry (§5); the error names the entry's path |
 | `invalid_time` | event time (§8) |
 | `invalid_layout` | a definition that didn't pass validation; never for a validated one |

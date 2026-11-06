@@ -468,6 +468,7 @@ fn entry_name(entry: &Entry) -> Option<&String> {
         Entry::Field(field) => Some(&field.name),
         Entry::Array(array) => Some(&array.name),
         Entry::Struct(inner) => Some(&inner.name),
+        Entry::Checksum(checksum) => Some(&checksum.name),
         Entry::Padding(_) => None,
     }
 }

@@ -64,7 +64,7 @@ pub(super) fn check_entries(
                 let entry_place = place.item("entries", index, "array", &array.name);
                 check_array(array, catalog, &entry_place, report);
             }
-            Entry::Struct(_) | Entry::Padding(_) => {}
+            Entry::Struct(_) | Entry::Padding(_) | Entry::Checksum(_) => {}
         }
     }
 }
@@ -552,6 +552,7 @@ fn resolve<'a>(
             Entry::Field(f) => f.name == name,
             Entry::Array(a) => a.name == name,
             Entry::Struct(s) => s.name == name,
+            Entry::Checksum(c) => c.name == name,
             Entry::Padding(_) => false,
         }) else {
             return fail(format!("{path}: there is no entry {name}"));

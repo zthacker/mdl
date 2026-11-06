@@ -180,6 +180,26 @@ struct Earlier<'a> {
 struct Scope<'a> {
     earlier: BTreeMap<&'a str, Earlier<'a>>,
     all: BTreeSet<&'a str>,
+    /// A command packet, whose fields have no sentinels (command.rs
+    /// reports any).
+    command: bool,
+}
+
+impl Scope<'_> {
+    /// A field's sentinels, as the value checks should see them.
+    fn sentinels<'s>(&self, invalid: &'s [Scalar]) -> &'s [Scalar] {
+        if self.command { &[] } else { invalid }
+    }
+}
+
+/// What kind of container entries are in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Container {
+    Packet,
+    StructType,
+    /// A command packet: telemetry-only keys are reported by command.rs,
+    /// so the shared checks leave them alone.
+    Command,
 }
 
 /// Where an entry can be, for the overlap check.
@@ -221,20 +241,22 @@ impl Extent {
 impl<'a> Layout<'a> {
     /// Check one container; return its shape, or `None` when an error
     /// reported for it makes its size unknown. `length` is a packet's
-    /// declared length; `in_struct` is true for a struct type's entries.
+    /// declared length.
     pub(super) fn check_container(
         &self,
         entries: &'a [Entry],
         length: Option<&Length>,
-        in_struct: bool,
+        container: Container,
         place: &Place,
         report: &mut Report,
     ) -> Option<Shape> {
+        let in_struct = container == Container::StructType;
         let mut scope = Scope {
             earlier: BTreeMap::new(),
             all: entries.iter().filter_map(entry_name).collect(),
+            command: container == Container::Command,
         };
-        for (index, entry) in entries.iter().enumerate() {
+        for (index, entry) in entries.iter().enumerate().filter(|_| !scope.command) {
             check_optional(
                 entry,
                 self.binary,
@@ -405,7 +427,7 @@ impl<'a> Layout<'a> {
                     field.ty,
                     field.size_bits,
                     field.conversion.as_ref(),
-                    &field.invalid,
+                    scope.sentinels(&field.invalid),
                     place,
                     report,
                 );
@@ -422,6 +444,12 @@ impl<'a> Layout<'a> {
                 }
                 let bits = u64::from(padding.size_bits);
                 Facts::plain(Size::fixed(bits), Residues::at(bits))
+            }
+            Entry::Checksum(checksum) => {
+                let bits = u64::from(checksum.algorithm.width_bits());
+                let mut facts = Facts::plain(Size::fixed(bits), Residues::at(bits));
+                facts.needs_byte = true;
+                facts
             }
             Entry::Array(array) => self.array_facts(array, scope, place, report)?,
             Entry::Struct(entry) => {
@@ -765,6 +793,11 @@ impl<'a> Layout<'a> {
                 place,
                 "padding only applies to binary payloads",
             ),
+            Entry::Checksum(_) => report.error(
+                Code::WrongEncoding,
+                place,
+                "checksums only apply to binary payloads",
+            ),
             Entry::Field(field) => {
                 if field.pointer.is_none() {
                     wrong(report, "pointer", needs_pointer);
@@ -792,7 +825,7 @@ impl<'a> Layout<'a> {
                     field.ty,
                     None,
                     field.conversion.as_ref(),
-                    &field.invalid,
+                    scope.sentinels(&field.invalid),
                     place,
                     report,
                 );
@@ -894,7 +927,7 @@ fn check_optional(entry: &Entry, binary: bool, place: &Place, report: &mut Repor
         Entry::Field(field) => field.optional,
         Entry::Array(array) => array.optional,
         Entry::Struct(inner) => inner.optional,
-        Entry::Padding(_) => None,
+        Entry::Padding(_) | Entry::Checksum(_) => None,
     };
     match optional {
         Some(false) => report.error(
@@ -917,6 +950,7 @@ fn entry_place(container: &Place, index: usize, entry: &Entry) -> Place {
         Entry::Field(field) => ("field", field.name.as_str()),
         Entry::Array(array) => ("array", array.name.as_str()),
         Entry::Struct(entry) => ("struct", entry.name.as_str()),
+        Entry::Checksum(checksum) => ("checksum", checksum.name.as_str()),
         Entry::Padding(_) => ("padding", ""),
     };
     container.item("entries", index, label, name)
@@ -927,6 +961,7 @@ fn entry_name(entry: &Entry) -> Option<&str> {
         Entry::Field(field) => Some(&field.name),
         Entry::Array(array) => Some(&array.name),
         Entry::Struct(entry) => Some(&entry.name),
+        Entry::Checksum(checksum) => Some(&checksum.name),
         Entry::Padding(_) => None,
     }
 }
@@ -937,6 +972,7 @@ fn entry_condition(entry: &Entry) -> Option<&Condition> {
         Entry::Array(array) => array.when.as_ref(),
         Entry::Struct(entry) => entry.when.as_ref(),
         Entry::Padding(padding) => padding.when.as_ref(),
+        Entry::Checksum(_) => None,
     }
 }
 
@@ -946,6 +982,7 @@ fn explicit_offset(entry: &Entry) -> Option<u64> {
         Entry::Array(array) => array.offset_bits,
         Entry::Struct(entry) => entry.offset_bits,
         Entry::Padding(padding) => padding.offset_bits,
+        Entry::Checksum(checksum) => checksum.offset_bits,
     }
     .map(u64::from)
 }
@@ -954,7 +991,7 @@ fn reads_to_end(entry: &Entry) -> bool {
     match entry {
         Entry::Field(field) => matches!(field.length, Some(ByteLength::Remaining { .. })),
         Entry::Array(array) => matches!(array.count, Some(Count::Remaining { .. })),
-        Entry::Struct(_) | Entry::Padding(_) => false,
+        Entry::Struct(_) | Entry::Padding(_) | Entry::Checksum(_) => false,
     }
 }
 
@@ -1388,13 +1425,14 @@ fn integer_range(ty: ScalarType, size_bits: Option<u32>) -> Option<(i128, i128)>
     }
 }
 
-/// The bit offset of each entry where it is *static*: an explicit
-/// `offset_bits`, or a sequential entry that follows only unconditional
-/// entries of exact size (fixed-size scalars and padding, fixed-count arrays
-/// of fixed-size scalars, and structs whose type has an exact size in
-/// `type_sizes`). Identification compares field keys by this position, so
-/// every implementation must compute it the same way.
-pub(super) fn static_offsets(
+/// The bit offset of each entry where it is *static*, as
+/// `spec/decoding.md` §5.2 defines it: an explicit `offset_bits`, the first
+/// entry, or an entry after one with a static offset and an exact size
+/// ([`exact_size`], with struct types' sizes in `type_sizes`).
+/// Identification compares field keys by this position, and decoding
+/// verifies checksums at one first, so every implementation must compute
+/// it the same way.
+pub(crate) fn static_offsets(
     entries: &[Entry],
     type_sizes: &BTreeMap<&str, u64>,
 ) -> Vec<Option<u64>> {
@@ -1462,6 +1500,7 @@ fn exact_size(entry: &Entry, type_sizes: &BTreeMap<&str, u64>) -> Option<u64> {
         Entry::Struct(entry) if entry.when.is_none() => {
             type_sizes.get(entry.struct_type.as_str()).copied()
         }
+        Entry::Checksum(checksum) => Some(u64::from(checksum.algorithm.width_bits())),
         _ => None,
     }
 }
