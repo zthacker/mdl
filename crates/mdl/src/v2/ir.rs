@@ -556,6 +556,15 @@ pub struct Family {
     /// Where the payload names its layout version, if it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<Locator>,
+    /// The metadata names the family's link provides (`apid`, `sysid`).
+    /// Identify keys and metadata locators may only use these, so a typo is
+    /// a build error, and a consumer can check its link provides them all.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub metadata: Vec<String>,
 }
 
 impl Family {
@@ -566,6 +575,7 @@ impl Family {
             byte_order: None,
             alias,
             version: None,
+            metadata: Vec::new(),
         }
     }
 }
@@ -694,7 +704,8 @@ pub enum Time {
     #[non_exhaustive]
     Iso8601 { pointer: String },
     /// Time since boot, in each packet's `time_field`, turned into absolute
-    /// time by a packet that carries both clocks.
+    /// time by a packet that carries both clocks. A packet without a
+    /// `time_field` carries ground time only.
     #[non_exhaustive]
     Boot {
         unit: TimeUnit,

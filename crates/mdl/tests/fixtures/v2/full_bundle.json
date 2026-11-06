@@ -43,7 +43,11 @@
       "version": {
         "kind": "metadata",
         "name": "fmt"
-      }
+      },
+      "metadata": [
+        "apid",
+        "fmt"
+      ]
     },
     {
       "name": "vendor_j",
