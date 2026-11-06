@@ -6,9 +6,10 @@ use serde_json::Value as Json;
 
 use super::{Problem, Record, Value};
 use crate::v2::bits::{BitsError, read_bits, sign_extend};
+use crate::v2::checksum::{Algorithm, Compiled};
 use crate::v2::ir::{
-    ArrayEntry, ByteLength, ByteOrder, CompareOp, Condition, Count, Element, Entry, Field,
-    FromField, Scalar, ScalarElement, ScalarType, StructType, TextEncoding,
+    ArrayEntry, ByteLength, ByteOrder, ChecksumEntry, CompareOp, Condition, Count, Element, Entry,
+    Field, FromField, Scalar, ScalarElement, ScalarType, StructType, TextEncoding,
 };
 use crate::v2::route::json_integer;
 use crate::v2::validate::rules::integer_value;
@@ -86,6 +87,15 @@ impl<'a> ScalarShape<'a> {
     }
 }
 
+/// A packet's checksums, compiled once.
+#[derive(Debug, Clone, Default)]
+pub(super) struct PacketChecksums {
+    /// Each checksum ready to compute, by entry index.
+    pub(super) compiled: BTreeMap<usize, Compiled>,
+    /// Checksums at a static position, as (entry index, bit).
+    pub(super) fixed: Vec<(usize, u64)>,
+}
+
 /// Reads entries from a binary packet. Positions are in bits from the
 /// start of the packet; `bytes` is the packet, cut to its exact length.
 pub(super) struct BinaryWalker<'a, 'p> {
@@ -93,6 +103,11 @@ pub(super) struct BinaryWalker<'a, 'p> {
     bytes: &'p [u8],
     order: ByteOrder,
     path: Vec<Segment<'a>>,
+    /// The packet's checksums, for its top level only.
+    checksums: Option<&'a PacketChecksums>,
+    /// Whether every fixed checksum was verified before the walk, so the
+    /// walk only reads them.
+    verified: bool,
 }
 
 impl<'a, 'p> BinaryWalker<'a, 'p> {
@@ -102,7 +117,41 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
             bytes,
             order,
             path: Vec::new(),
+            checksums: None,
+            verified: false,
         }
+    }
+
+    pub(super) fn with_checksums(mut self, checksums: Option<&'a PacketChecksums>) -> Self {
+        self.checksums = checksums;
+        self
+    }
+
+    /// Verifies the packet's checksums at static positions before anything
+    /// else is read, so damage anywhere they cover is a bad checksum. Only
+    /// a bad checksum fails here; the walk finds any other problem again,
+    /// in order.
+    pub(super) fn verify_fixed(&mut self, entries: &'a [Entry]) -> Result<(), Problem> {
+        let Some(checksums) = self.checksums else {
+            return Ok(());
+        };
+        let mut all = true;
+        for &(index, at) in &checksums.fixed {
+            let Some(Entry::Checksum(checksum)) = entries.get(index) else {
+                all = false;
+                continue;
+            };
+            match self.checksum(checksum, checksums.compiled.get(&index), 0, at) {
+                Ok(_) => {}
+                Err(problem @ Problem::BadChecksum { .. }) => {
+                    self.path.push(Segment::Name(&checksum.name));
+                    return Err(problem);
+                }
+                Err(_) => all = false,
+            }
+        }
+        self.verified = all;
+        Ok(())
     }
 
     /// The path of the entry being read, or of the one that failed.
@@ -115,15 +164,29 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
         (self.bytes.len() as u64).saturating_mul(8)
     }
 
-    /// A container's entries from bit `start`: the record and the furthest
-    /// end of its present entries. With `until`, stop once the field of
-    /// that name is decoded (identification reads a key this way).
+    /// A packet's top-level entries from bit `start`: the record and the
+    /// furthest end of its present entries. With `until`, stop once the
+    /// field of that name is decoded (identification reads a key this way).
     pub(super) fn entries(
         &mut self,
         entries: &'a [Entry],
         names: &'a FieldNames,
         start: u64,
         until: Option<&str>,
+    ) -> Result<(Record<'a>, u64), Problem> {
+        self.container(entries, names, start, until, self.checksums)
+    }
+
+    /// A container's entries, as [`entries`](Self::entries) reads them,
+    /// with the checksums compiled for this container (a packet's, at its
+    /// top level; none in a struct type).
+    fn container(
+        &mut self,
+        entries: &'a [Entry],
+        names: &'a FieldNames,
+        start: u64,
+        until: Option<&str>,
+        checksums: Option<&'a PacketChecksums>,
     ) -> Result<(Record<'a>, u64), Problem> {
         let mut record = Record::default();
         let mut cursor = start;
@@ -178,16 +241,87 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
                 Entry::Struct(inner) => {
                     self.path.push(Segment::Name(&inner.name));
                     let (entries, inner_names) = self.tables.struct_type(&inner.struct_type)?;
-                    let (value, end) = self.entries(entries, inner_names, at, None)?;
+                    let (value, end) = self.container(entries, inner_names, at, None, None)?;
                     self.path.pop();
                     record.push(index, &inner.name, Value::Record(value));
                     end
+                }
+                Entry::Checksum(checksum) => {
+                    self.path.push(Segment::Name(&checksum.name));
+                    let compiled = checksums.and_then(|checksums| checksums.compiled.get(&index));
+                    let verified = self.verified
+                        && checksums
+                            .is_some_and(|checksums| checksums.fixed.contains(&(index, at)));
+                    let value = if verified {
+                        self.stored(checksum, compiled, at)?
+                    } else {
+                        self.checksum(checksum, compiled, start, at)?
+                    };
+                    self.path.pop();
+                    record.push(index, &checksum.name, Value::Uint(value));
+                    at + u64::from(checksum.algorithm.width_bits())
                 }
             };
             cursor = end;
             furthest = furthest.max(end);
         }
         Ok((record, furthest))
+    }
+
+    /// A checksum's stored value, after checking it against the bytes it
+    /// covers: from `from_bits` past the container's start up to `at`.
+    fn checksum(
+        &self,
+        checksum: &ChecksumEntry,
+        compiled: Option<&Compiled>,
+        start: u64,
+        at: u64,
+    ) -> Result<u64, Problem> {
+        let fallback;
+        let compiled = match compiled {
+            Some(compiled) => compiled,
+            None => {
+                fallback = Compiled::new(resolve(checksum)?);
+                &fallback
+            }
+        };
+        let stored = self.stored(checksum, Some(compiled), at)?;
+        let from = start.saturating_add(u64::from(checksum.from_bits.unwrap_or(0)));
+        if !from.is_multiple_of(8) || !at.is_multiple_of(8) || from > at {
+            return Err(Problem::Layout(
+                "a checksum covers whole bytes before its own start",
+            ));
+        }
+        let covered = usize::try_from(from / 8)
+            .ok()
+            .zip(usize::try_from(at / 8).ok())
+            .and_then(|(first, end)| self.bytes.get(first..end))
+            .ok_or(Problem::Layout("a checksum range inside the packet"))?;
+        let computed = compiled.compute(covered);
+        if !compiled.algorithm().matches(stored, computed) {
+            return Err(Problem::BadChecksum { stored, computed });
+        }
+        Ok(stored)
+    }
+
+    /// A checksum's stored value, unchecked.
+    fn stored(
+        &self,
+        checksum: &ChecksumEntry,
+        compiled: Option<&Compiled>,
+        at: u64,
+    ) -> Result<u64, Problem> {
+        let algorithm = match compiled {
+            Some(compiled) => *compiled.algorithm(),
+            None => resolve(checksum)?,
+        };
+        read_bits(
+            self.bytes,
+            at,
+            checksum.algorithm.width_bits(),
+            algorithm.order(self.order),
+        )
+        .map_err(bits_problem)
     }
 
     /// The end of `size` bits from `at`, if they're inside the packet.
@@ -333,7 +467,7 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
             Element::Scalar(scalar) => self.scalar(ScalarShape::of_element(scalar), at, scope),
             Element::Struct { name } => {
                 let (entries, names) = self.tables.struct_type(name)?;
-                let (value, end) = self.entries(entries, names, at, None)?;
+                let (value, end) = self.container(entries, names, at, None, None)?;
                 Ok((Value::Record(value), end - at))
             }
         }
@@ -416,6 +550,7 @@ impl<'a> JsonWalker<'a> {
                     self.path.pop();
                 }
                 Entry::Padding(_) => return Err(Problem::Layout("padding in a JSON payload")),
+                Entry::Checksum(_) => return Err(Problem::Layout("a checksum in a JSON payload")),
             }
         }
         Ok(record)
@@ -532,6 +667,7 @@ fn offset(entry: &Entry) -> Option<u32> {
         Entry::Array(array) => array.offset_bits,
         Entry::Struct(inner) => inner.offset_bits,
         Entry::Padding(padding) => padding.offset_bits,
+        Entry::Checksum(checksum) => checksum.offset_bits,
     }
 }
 
@@ -541,6 +677,7 @@ fn when(entry: &Entry) -> Option<&Condition> {
         Entry::Array(array) => array.when.as_ref(),
         Entry::Struct(inner) => inner.when.as_ref(),
         Entry::Padding(padding) => padding.when.as_ref(),
+        Entry::Checksum(_) => None,
     }
 }
 
@@ -634,6 +771,13 @@ fn text(bytes: &[u8], encoding: Option<TextEncoding>) -> Result<String, Problem>
         TextEncoding::Ascii => Err(Problem::InvalidText { encoding: "ASCII" }),
         TextEncoding::Latin1 => Ok(bytes.iter().map(|&b| char::from(b)).collect()),
     }
+}
+
+/// A checksum's algorithm, for a checksum the program didn't compile.
+fn resolve(checksum: &ChecksumEntry) -> Result<Algorithm, Problem> {
+    Algorithm::resolve(&checksum.algorithm).ok_or(Problem::Layout(
+        "a checksum whose parameters don't fit its width",
+    ))
 }
 
 fn bits_problem(err: BitsError) -> Problem {

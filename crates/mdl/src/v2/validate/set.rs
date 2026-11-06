@@ -5,16 +5,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::MAX_NESTING;
 use super::command;
-use super::layout::{Layout, exact_type_sizes, static_offsets, type_name};
+use super::layout::{Container, Layout, exact_type_sizes, static_offsets, type_name};
 use super::mapping;
 use super::rules::{
     check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
     integer_value, is_identifier, is_token,
 };
+use crate::v2::checksum;
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
-    ArrayEntry, Bundle, Catalog, Condition, Conversion, Element, Encoding, Entry, Family, Field,
-    Locator, Packet, Scalar, ScalarElement, ScalarType, Set, StructType, TextEncoding, Time,
+    ArrayEntry, Bundle, Catalog, Checksum, ChecksumEntry, Condition, Conversion, Element, Encoding,
+    Entry, Family, Field, Locator, Packet, Scalar, ScalarElement, ScalarType, Set, StructType,
+    TextEncoding, Time,
 };
 use crate::v2::time::Timestamp;
 
@@ -70,6 +72,16 @@ pub(super) fn check_all(
         let type_sizes = exact_type_sizes(&set.types, &heights);
         check_packets(set, family, &scope, &type_sizes, &place, report);
         command::check_packets(set, family, &bundle.catalog, &place, report);
+        for (index, packet) in set.commands.iter().enumerate() {
+            let packet_place = place.item("commands", index, "command", &packet.name);
+            check_entries(
+                &packet.entries,
+                Container::Command,
+                &scope,
+                &packet_place,
+                report,
+            );
+        }
         if let Some(family) = family {
             check_layout(set, family, &bundle.catalog, &heights, &place, report);
         }
@@ -95,7 +107,13 @@ fn check_layout(
     order.sort_by_key(|(name, _)| heights.get(name.as_str()).copied().unwrap_or(0));
     for (name, struct_type) in order {
         let type_place = place.map_item("types", name, "type");
-        let shape = layout.check_container(&struct_type.entries, None, true, &type_place, report);
+        let shape = layout.check_container(
+            &struct_type.entries,
+            None,
+            Container::StructType,
+            &type_place,
+            report,
+        );
         mapping::check_entries(&struct_type.entries, catalog, &type_place, report);
         command::check_telemetry_fields(&struct_type.entries, &type_place, report);
         if let Some(shape) = shape {
@@ -108,7 +126,7 @@ fn check_layout(
         layout.check_container(
             &packet.entries,
             packet.length.as_ref(),
-            false,
+            Container::Packet,
             &packet_place,
             report,
         );
@@ -120,7 +138,13 @@ fn check_layout(
     }
     for (index, packet) in set.commands.iter().enumerate() {
         let packet_place = place.item("commands", index, "command", &packet.name);
-        layout.check_container(&packet.entries, None, false, &packet_place, report);
+        layout.check_container(
+            &packet.entries,
+            None,
+            Container::Command,
+            &packet_place,
+            report,
+        );
     }
 }
 
@@ -447,7 +471,13 @@ fn check_types<'a>(
                 "a struct type has at least one entry",
             );
         }
-        check_entries(&struct_type.entries, scope, &type_place, report);
+        check_entries(
+            &struct_type.entries,
+            Container::StructType,
+            scope,
+            &type_place,
+            report,
+        );
     }
     check_type_graph(&set.types, place, report)
 }
@@ -522,7 +552,13 @@ fn check_packets(
             &packet_place,
             report,
         ));
-        check_entries(&packet.entries, scope, &packet_place, report);
+        check_entries(
+            &packet.entries,
+            Container::Packet,
+            scope,
+            &packet_place,
+            report,
+        );
         for (index, composite) in packet.composites.iter().enumerate() {
             let composite_place =
                 packet_place.item("composites", index, "composite", &composite.canonical);
@@ -871,13 +907,24 @@ fn overlap_without_winner(a: &Identity, b: &Identity) -> bool {
     a_in_b == b_in_a
 }
 
-fn check_entries(entries: &[Entry], scope: &Scope, container: &Place, report: &mut Report) {
+/// The entries of a container: names, and each entry's own rules. A
+/// struct type can't hold a checksum; a command packet's telemetry-only
+/// keys are reported by command.rs.
+fn check_entries(
+    entries: &[Entry],
+    kind: Container,
+    scope: &Scope,
+    container: &Place,
+    report: &mut Report,
+) {
+    let top_level = kind != Container::StructType;
     let mut names: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, entry) in entries.iter().enumerate() {
         let (label, name) = match entry {
             Entry::Field(field) => ("field", Some(field.name.as_str())),
             Entry::Array(array) => ("array", Some(array.name.as_str())),
             Entry::Struct(entry) => ("struct", Some(entry.name.as_str())),
+            Entry::Checksum(checksum) => ("checksum", Some(checksum.name.as_str())),
             Entry::Padding(_) => ("padding", None),
         };
         let place = container.item("entries", index, label, name.unwrap_or(""));
@@ -901,7 +948,7 @@ fn check_entries(entries: &[Entry], scope: &Scope, container: &Place, report: &m
             }
         }
         match entry {
-            Entry::Field(field) => check_field(field, scope, &place, report),
+            Entry::Field(field) => check_field(field, kind, scope, &place, report),
             Entry::Array(array) => check_array(array, scope, &place, report),
             Entry::Struct(entry) => {
                 check_type_ref(&entry.struct_type, scope, &place.key("struct"), report);
@@ -917,12 +964,92 @@ fn check_entries(entries: &[Entry], scope: &Scope, container: &Place, report: &m
                     check_condition(when, &place.key("when"), 1, report);
                 }
             }
+            Entry::Checksum(checksum) => check_checksum(checksum, top_level, &place, report),
         }
     }
 }
 
-fn check_field(field: &Field, scope: &Scope, place: &Place, report: &mut Report) {
-    if let Some(canonical) = &field.canonical {
+/// A checksum covers whole bytes of a packet up to its own start, with
+/// parameters that fit its width.
+fn check_checksum(checksum: &ChecksumEntry, top_level: bool, place: &Place, report: &mut Report) {
+    if !top_level {
+        report.error(
+            Code::Checksum,
+            place,
+            "a checksum covers a packet's bytes, so it sits at the packet's top level, not in a \
+             struct type",
+        );
+    }
+    let algorithm_place = place.key("algorithm");
+    let width = match &checksum.algorithm {
+        Checksum::Crc { width, .. } | Checksum::Sum { width } => Some(*width),
+        Checksum::Xor {} | Checksum::Iso8473 {} => None,
+    };
+    if let Some(width) = width
+        && !checksum::is_width(width)
+    {
+        report.error(
+            Code::Checksum,
+            &algorithm_place.key("width"),
+            format!("a checksum is whole bytes from 8 to 64 bits wide, not {width}"),
+        );
+    }
+    if let Checksum::Crc {
+        width,
+        poly,
+        init,
+        xor_out,
+        ..
+    } = &checksum.algorithm
+    {
+        for (key, value) in [("poly", poly), ("init", init), ("xor_out", xor_out)] {
+            let value_place = algorithm_place.key(key);
+            check_scalar(value, key, &value_place, report);
+            check_integer_spelling(value, key, &value_place, report);
+            let fits = checksum::is_width(*width)
+                && integer_value(value)
+                    .and_then(|n| u64::try_from(n).ok())
+                    .is_some_and(|n| n <= checksum::mask(u32::from(*width)));
+            if checksum::is_width(*width) && !fits {
+                report.error(
+                    Code::Checksum,
+                    &value_place,
+                    format!("{key} is an unsigned integer that fits the CRC's {width} bits"),
+                );
+            }
+        }
+    }
+    if let Some(from) = checksum.from_bits {
+        if !from.is_multiple_of(8) {
+            report.error(
+                Code::Alignment,
+                &place.key("from_bits"),
+                format!(
+                    "a checksum covers whole bytes, so from_bits is a byte boundary, not {from}"
+                ),
+            );
+        }
+        if let Some(offset) = checksum.offset_bits
+            && from > offset
+        {
+            report.error(
+                Code::Checksum,
+                &place.key("from_bits"),
+                format!(
+                    "a checksum covers bytes before its own start ({offset}), so from_bits can't \
+                     be {from}"
+                ),
+            );
+        }
+    }
+}
+
+fn check_field(field: &Field, kind: Container, scope: &Scope, place: &Place, report: &mut Report) {
+    if let Some(canonical) = field
+        .canonical
+        .as_ref()
+        .filter(|_| kind != Container::Command)
+    {
         check_canonical(canonical, scope, &place.key("canonical"), report);
     }
     if let Some(pointer) = &field.pointer {
@@ -1200,7 +1327,7 @@ fn used_types(entries: &[Entry]) -> BTreeSet<&str> {
                 Element::Struct { name } => Some(name.as_str()),
                 Element::Scalar(_) => None,
             },
-            Entry::Field(_) | Entry::Padding(_) => None,
+            Entry::Field(_) | Entry::Padding(_) | Entry::Checksum(_) => None,
         })
         .collect()
 }

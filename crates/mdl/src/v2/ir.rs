@@ -1147,6 +1147,8 @@ pub enum Entry {
     Struct(StructEntry),
     /// Skipped bits (binary only).
     Padding(Padding),
+    /// A checksum over earlier bytes of the packet (binary only).
+    Checksum(ChecksumEntry),
 }
 
 /// One scalar value.
@@ -1501,6 +1503,108 @@ impl StructEntry {
             struct_type: struct_type.into(),
             when: None,
             optional: None,
+        }
+    }
+}
+
+/// A checksum over the bytes of a packet from `from_bits` (a byte
+/// boundary, default 0) up to the checksum's own start, stored as an
+/// unsigned integer of the algorithm's width in the family's byte order
+/// (`iso8473` fixes its own). Decoding verifies it; encoding writes it.
+/// Only at a packet's top level, and always present.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ChecksumEntry {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_bits: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_bits: Option<u32>,
+    pub algorithm: Checksum,
+}
+
+impl ChecksumEntry {
+    pub fn new(name: impl Into<String>, algorithm: Checksum) -> Self {
+        ChecksumEntry {
+            name: name.into(),
+            offset_bits: None,
+            from_bits: None,
+            algorithm,
+        }
+    }
+}
+
+/// How a checksum is computed over bytes.
+///
+/// `Crc` is the parametric model of the CRC catalogue (Rocksoft): every
+/// parameter is required, so each CRC has one spelling; values past
+/// ±(2^53 − 1), such as a CRC-64 polynomial, are decimal strings.
+/// [`crate::v2::checksum::preset`] gives the parameters of named CRCs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[non_exhaustive]
+pub enum Checksum {
+    /// A cyclic redundancy check, 8 to 64 bits in whole bytes.
+    #[non_exhaustive]
+    Crc {
+        width: u8,
+        poly: Scalar,
+        init: Scalar,
+        reflect_in: bool,
+        reflect_out: bool,
+        xor_out: Scalar,
+    },
+    /// The bytes added, modulo 2^width: 8 to 64 bits in whole bytes.
+    #[non_exhaustive]
+    Sum { width: u8 },
+    /// The bytes exclusive-ored together: 8 bits.
+    #[non_exhaustive]
+    Xor {},
+    /// The ISO checksum of ISO 8473-1 (Fletcher's arithmetic checksum,
+    /// modulo 255) that ECSS PUS uses for packet error control: two check
+    /// bytes, stored first then second whatever the family's byte order.
+    #[non_exhaustive]
+    Iso8473 {},
+}
+
+impl Checksum {
+    pub fn crc(
+        width: u8,
+        poly: impl Into<Scalar>,
+        init: impl Into<Scalar>,
+        reflect_in: bool,
+        reflect_out: bool,
+        xor_out: impl Into<Scalar>,
+    ) -> Self {
+        Checksum::Crc {
+            width,
+            poly: poly.into(),
+            init: init.into(),
+            reflect_in,
+            reflect_out,
+            xor_out: xor_out.into(),
+        }
+    }
+
+    pub fn sum(width: u8) -> Self {
+        Checksum::Sum { width }
+    }
+
+    pub fn xor() -> Self {
+        Checksum::Xor {}
+    }
+
+    pub fn iso8473() -> Self {
+        Checksum::Iso8473 {}
+    }
+
+    /// Bits the checksum's value takes in the packet.
+    pub fn width_bits(&self) -> u32 {
+        match self {
+            Checksum::Crc { width, .. } | Checksum::Sum { width } => u32::from(*width),
+            Checksum::Xor {} => 8,
+            Checksum::Iso8473 {} => 16,
         }
     }
 }

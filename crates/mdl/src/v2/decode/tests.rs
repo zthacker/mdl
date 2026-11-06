@@ -65,6 +65,49 @@ fn bundle() -> Json {
                 ]
             },
             {
+                "name": "CHECKED",
+                "identify": { "kind": 6 },
+                "entries": [
+                    field("kind"),
+                    { "kind": "field", "name": "data", "type": "uint", "size_bits": 16 },
+                    { "kind": "checksum", "name": "crc",
+                      "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535,
+                                     "reflect_in": false, "reflect_out": false, "xor_out": 0 } }
+                ]
+            },
+            {
+                "name": "TEXTED",
+                "identify": { "kind": 8 },
+                "entries": [
+                    field("kind"),
+                    { "kind": "field", "name": "name", "type": "string",
+                      "length": { "kind": "fixed", "bytes": 4 } },
+                    { "kind": "checksum", "name": "crc",
+                      "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535,
+                                     "reflect_in": false, "reflect_out": false, "xor_out": 0 } }
+                ]
+            },
+            {
+                "name": "ISO",
+                "identify": { "kind": 20 },
+                "entries": [
+                    field("kind"),
+                    { "kind": "field", "name": "body", "type": "bytes",
+                      "length": { "kind": "fixed", "bytes": 5 } },
+                    { "kind": "checksum", "name": "check", "algorithm": { "kind": "iso8473" } }
+                ]
+            },
+            {
+                "name": "SUMMED",
+                "identify": { "kind": 7 },
+                "entries": [
+                    field("kind"),
+                    field("data"),
+                    { "kind": "checksum", "name": "sum", "from_bits": 8,
+                      "algorithm": { "kind": "sum", "width": 8 } }
+                ]
+            },
+            {
                 "name": "NESTED",
                 "identify": { "kind": 5 },
                 "entries": [
@@ -87,7 +130,11 @@ fn bundle() -> Json {
 }
 
 fn artifacts() -> Artifacts {
-    let bundle = read_bundle(&serde_json::to_vec(&bundle()).unwrap())
+    artifacts_of(&bundle())
+}
+
+fn artifacts_of(bundle: &Json) -> Artifacts {
+    let bundle = read_bundle(&serde_json::to_vec(bundle).unwrap())
         .unwrap()
         .value;
     build(&validate(bundle).unwrap()).unwrap()
@@ -429,7 +476,15 @@ fn a_little_endian_packet_with_an_exact_length() {
 }
 
 fn identified(payload: &[u8]) -> Result<(String, Vec<(String, String)>), DecodeError> {
-    let artifacts = artifacts();
+    identified_in(&bundle(), payload)
+}
+
+/// Decodes a payload of the `ident` family, from this bundle.
+fn identified_in(
+    bundle: &Json,
+    payload: &[u8],
+) -> Result<(String, Vec<(String, String)>), DecodeError> {
+    let artifacts = artifacts_of(bundle);
     let sets = family_sets(&artifacts, "ident");
     let message = Message::new(Payload::Binary(payload), now());
     sets.decode(&message, &registry())
@@ -943,4 +998,87 @@ fn json_numbers_beyond_a_double_are_refused() {
     assert!(
         parse_without_duplicates(br#"[18446744073709551615, -9223372036854775808, 1e308]"#).is_ok()
     );
+}
+
+#[test]
+fn a_checksum_is_verified_when_decoding() {
+    use crate::v2::checksum::preset;
+    let crc = |bytes: &[u8]| {
+        let algorithm =
+            crate::v2::checksum::Algorithm::resolve(&preset("CRC-16/IBM-3740").unwrap().checksum())
+                .unwrap();
+        algorithm.compute(bytes) as u16
+    };
+    let body = [6_u8, 0x12, 0x34];
+    let mut payload = body.to_vec();
+    payload.extend_from_slice(&crc(&body).to_be_bytes());
+    let (name, record) = identified(&payload).unwrap();
+    assert_eq!(name, "CHECKED");
+    assert_eq!(record[2], ("crc".to_string(), crc(&body).to_string()));
+
+    // One flipped bit and the message is refused, naming the checksum.
+    let mut damaged = payload.clone();
+    damaged[1] ^= 0x01;
+    let err = identified(&damaged).unwrap_err();
+    assert_eq!(err.code(), "bad_checksum");
+    assert!(
+        err.to_string()
+            .starts_with("packet CHECKED, crc: it reads "),
+        "{err}"
+    );
+    // Too short to hold the checksum at all.
+    assert_eq!(code(identified(&payload[..4])), "past_end");
+
+    // A checksum covers from from_bits: here, everything after the first byte.
+    assert_eq!(identified(&[7, 0x40, 0x40]).unwrap().0, "SUMMED");
+    assert_eq!(code(identified(&[7, 0x40, 0x41])), "bad_checksum");
+}
+
+#[test]
+fn the_iso_checksum_is_verified_first_byte_first_in_either_byte_order() {
+    let mut little = bundle();
+    let families = little["families"].as_array_mut().unwrap();
+    families.last_mut().unwrap()["byte_order"] = json!("little");
+    for bundle in [bundle(), little] {
+        // The last test vector of ECSS-E-70-41A, A.2.5, with 0x14 as the kind.
+        let payload = [0x14, 0x56, 0xF8, 0x9A, 0x00, 0x01, 0x24, 0xDC];
+        let (name, record) = identified_in(&bundle, &payload).unwrap();
+        assert_eq!(name, "ISO");
+        assert_eq!(record[2], ("check".to_string(), 0x24DC.to_string()));
+        let mut swapped = payload;
+        swapped.swap(6, 7);
+        assert_eq!(code(identified_in(&bundle, &swapped)), "bad_checksum");
+
+        // Both sums of these bytes are 0: encoding writes FFFF, and the
+        // standard's decoder also takes 0000, but not a single 0 byte.
+        let zero_sums = [0x14, 0xD7, 0x14, 0x00, 0x00, 0x00];
+        for (check, good) in [([0xFF, 0xFF], true), ([0, 0], true), ([0, 0xFF], false)] {
+            let mut payload = zero_sums.to_vec();
+            payload.extend_from_slice(&check);
+            assert_eq!(
+                identified_in(&bundle, &payload).is_ok(),
+                good,
+                "{payload:02X?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn damage_a_static_checksum_covers_is_reported_as_a_bad_checksum() {
+    let algorithm = crate::v2::checksum::Algorithm::resolve(
+        &crate::v2::checksum::preset("CRC-16/IBM-3740")
+            .unwrap()
+            .checksum(),
+    )
+    .unwrap();
+    let body = [8_u8, b'a', b'b', b'c', b'd'];
+    let mut payload = body.to_vec();
+    payload.extend_from_slice(&(algorithm.compute(&body) as u16).to_be_bytes());
+    assert_eq!(identified(&payload).unwrap().0, "TEXTED");
+    // The damage makes the text invalid UTF-8, which the checksum, verified
+    // first, explains.
+    let mut damaged = payload.clone();
+    damaged[2] = 0xFF;
+    assert_eq!(code(identified(&damaged)), "bad_checksum");
 }

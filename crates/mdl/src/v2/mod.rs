@@ -9,6 +9,7 @@
 pub mod artifact;
 pub mod bindings;
 pub(crate) mod bits;
+pub mod checksum;
 pub mod decode;
 pub mod diagnostics;
 pub mod ir;

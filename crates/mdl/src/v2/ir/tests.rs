@@ -219,6 +219,20 @@ fn unknown_fields_are_rejected_everywhere() {
         check("conversion", rejects::<Conversion>(conversion));
     }
     check(
+        "checksum entry",
+        rejects::<Entry>(json!({ "kind": "checksum", "name": "c", "to_bits": 8,
+            "algorithm": { "kind": "xor" } })),
+    );
+    for algorithm in [
+        json!({ "kind": "crc", "width": 16, "poly": 4129, "init": 0, "reflect_in": false,
+                "reflect_out": false, "xor_out": 0, "check": 12739 }),
+        json!({ "kind": "sum", "width": 8, "x": 1 }),
+        json!({ "kind": "xor", "width": 8 }),
+        json!({ "kind": "iso8473", "width": 16 }),
+    ] {
+        check("checksum", rejects::<Checksum>(algorithm));
+    }
+    check(
         "state",
         rejects::<State>(json!({ "raw": 0, "name": "SAFE", "x": 1 })),
     );

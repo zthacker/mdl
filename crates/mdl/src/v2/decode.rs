@@ -64,12 +64,13 @@ use thiserror::Error;
 
 use crate::v2::bindings::Resolver;
 use crate::v2::bits::{read_bits, sign_extend};
+use crate::v2::checksum::{Algorithm, Compiled};
 use crate::v2::ir::{Catalog, Entry, Family, Length, Packet, Scalar, Set};
 use crate::v2::message::{Message, MetaValue};
 use crate::v2::route::{FamilySets, Readable, Route, RouteError, json_integer};
-use crate::v2::validate::{KeyId, KeyValue, by_value, decoding_facts, exact};
+use crate::v2::validate::{KeyId, KeyValue, by_value, decoding_facts, exact, static_offsets};
 
-use extract::{BinaryWalker, FieldNames, JsonWalker, Segment, Tables};
+use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Tables};
 use identify::Index;
 use meaning::{CompiledComposite, sample_value, visit};
 
@@ -265,6 +266,10 @@ pub enum Problem {
         value: String,
         expected: &'static str,
     },
+    /// A checksum that doesn't match the bytes it covers: the message was
+    /// damaged on the way.
+    #[error("it reads {stored:#x}, but the bytes it covers give {computed:#x}")]
+    BadChecksum { stored: u64, computed: u64 },
     /// Only for a definition that didn't pass validation.
     #[error("the definition can't be decoded: {0}")]
     Layout(&'static str),
@@ -281,6 +286,7 @@ impl Problem {
             Problem::Missing { .. } => "missing_value",
             Problem::WrongType { .. } => "wrong_type",
             Problem::OutOfRange { .. } => "out_of_range",
+            Problem::BadChecksum { .. } => "bad_checksum",
             Problem::Layout(_) => "invalid_layout",
         }
     }
@@ -328,13 +334,34 @@ pub(crate) struct Program {
     type_names: BTreeMap<String, FieldNames>,
     /// Each packet's composites, by packet index.
     composites: Vec<Vec<CompiledComposite>>,
+    /// Each packet's checksums, by packet index.
+    checksums: Vec<PacketChecksums>,
 }
 
 impl Program {
     /// For a validated set and its family.
     pub(crate) fn compile(set: &Set, family: &Family) -> Program {
         let (identities, type_sizes) = decoding_facts(set, family);
+        let mut checksums = Vec::with_capacity(set.packets.len());
+        for packet in &set.packets {
+            let offsets = static_offsets(&packet.entries, &type_sizes);
+            let mut compiled = PacketChecksums::default();
+            for (index, entry) in packet.entries.iter().enumerate() {
+                let Entry::Checksum(checksum) = entry else {
+                    continue;
+                };
+                let Some(algorithm) = Algorithm::resolve(&checksum.algorithm) else {
+                    continue;
+                };
+                compiled.compiled.insert(index, Compiled::new(algorithm));
+                if let Some(Some(at)) = offsets.get(index) {
+                    compiled.fixed.push((index, *at));
+                }
+            }
+            checksums.push(compiled);
+        }
         Program {
+            checksums,
             index: Index::new(identities),
             type_sizes: type_sizes
                 .into_iter()
@@ -491,7 +518,8 @@ impl Program {
             }
             _ => bytes,
         };
-        let mut walker = BinaryWalker::new(self.tables(set), bytes, *order);
+        let mut walker = BinaryWalker::new(self.tables(set), bytes, *order)
+            .with_checksums(self.checksums.get(index));
         let (record, _) = walker.entries(&packet.entries, names, 0, Some(name)).ok()?;
         record_key(record.get(name)?)
     }
@@ -514,8 +542,11 @@ impl Program {
         match (readable, json) {
             (Readable::Binary { bytes, order }, _) => {
                 let bytes = within_length(packet, bytes)?;
-                let mut walker = BinaryWalker::new(self.tables(set), bytes, *order);
-                let result = walker.entries(&packet.entries, names, 0, None);
+                let mut walker = BinaryWalker::new(self.tables(set), bytes, *order)
+                    .with_checksums(self.checksums.get(index));
+                let result = walker
+                    .verify_fixed(&packet.entries)
+                    .and_then(|()| walker.entries(&packet.entries, names, 0, None));
                 result
                     .map(|(record, _)| record)
                     .map_err(|problem| entry_error(packet, walker.path(), problem))

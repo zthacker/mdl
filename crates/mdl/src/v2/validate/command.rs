@@ -147,13 +147,13 @@ fn check_entries(
         }
         let field = match entry {
             Entry::Field(field) => field,
-            Entry::Padding(_) => continue,
+            Entry::Padding(_) | Entry::Checksum(_) => continue,
             Entry::Array(array) => {
                 let entry_place = place.item("entries", index, "array", &array.name);
                 report.error(
                     Code::CommandShape,
                     &entry_place,
-                    "a command packet holds fields and padding",
+                    "a command packet holds fields, padding and checksums",
                 );
                 continue;
             }
@@ -162,7 +162,7 @@ fn check_entries(
                 report.error(
                     Code::CommandShape,
                     &entry_place,
-                    "a command packet holds fields and padding",
+                    "a command packet holds fields, padding and checksums",
                 );
                 continue;
             }
