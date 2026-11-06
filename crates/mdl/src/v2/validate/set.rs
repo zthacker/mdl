@@ -1,0 +1,1009 @@
+//! Set checks: names and references, versions, time, identification, and
+//! numbers inside layouts and conversions.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use super::MAX_NESTING;
+use super::layout::static_offsets;
+use super::rules::{
+    check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
+    integer_value, is_identifier, is_strict_instant, is_token,
+};
+use crate::v2::diagnostics::{Code, Place, Report};
+use crate::v2::ir::{
+    ArrayEntry, Bundle, Catalog, Condition, Conversion, Element, Encoding, Entry, Family, Field,
+    Locator, Packet, Scalar, ScalarElement, ScalarType, Set, StructType, TextEncoding, Time,
+};
+
+/// What entries may refer to.
+struct Scope<'a> {
+    catalog: &'a Catalog,
+    types: &'a BTreeMap<String, StructType>,
+}
+
+pub(super) fn check_all(
+    bundle: &Bundle,
+    families: &BTreeMap<&str, &Family>,
+    root: &Place,
+    report: &mut Report,
+) {
+    let mut names: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut versions: BTreeMap<(&str, KeyValue), &str> = BTreeMap::new();
+    for (index, set) in bundle.sets.iter().enumerate() {
+        let place = root.item("sets", index, "set", &set.name);
+        if !is_token(&set.name) {
+            report.error(
+                Code::InvalidName,
+                &place.key("name"),
+                "set names are lowercase letters, digits and '_', starting with a letter",
+            );
+        }
+        if let Some(first) = names.get(set.name.as_str()) {
+            report.error(
+                Code::DuplicateName,
+                &place,
+                format!("set {} is already defined at sets/{first}", set.name),
+            );
+        } else {
+            names.insert(&set.name, index);
+        }
+
+        let family = families.get(set.family.as_str()).copied();
+        match family {
+            None => report.error(
+                Code::UnknownFamily,
+                &place.key("family"),
+                format!("family {} isn't defined", set.family),
+            ),
+            Some(family) => check_version(set, family, &mut versions, &place, report),
+        }
+        check_time(set, family.map(|f| f.encoding), &place, report);
+
+        let scope = Scope {
+            catalog: &bundle.catalog,
+            types: &set.types,
+        };
+        check_types(set, &scope, &place, report);
+        check_packets(set, family, &scope, &place, report);
+    }
+}
+
+/// A value as a key reads it. Bits and metadata read integers, so a
+/// decimal string compares by value (`"2"` is `2`); a JSON Pointer reads a
+/// JSON value, where the string `"2"` and the number `2` differ.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum KeyValue {
+    Int(i128),
+    Str(String),
+}
+
+fn by_value(scalar: &Scalar) -> KeyValue {
+    match integer_value(scalar) {
+        Some(n) => KeyValue::Int(n),
+        None => exact(scalar),
+    }
+}
+
+fn exact(scalar: &Scalar) -> KeyValue {
+    match scalar {
+        Scalar::Int(n) => KeyValue::Int(i128::from(*n)),
+        Scalar::Str(text) => KeyValue::Str(text.clone()),
+    }
+}
+
+fn show(scalar: &Scalar) -> String {
+    match scalar {
+        Scalar::Int(n) => n.to_string(),
+        Scalar::Str(s) => format!("{s:?}"),
+    }
+}
+
+fn check_version<'a>(
+    set: &'a Set,
+    family: &'a Family,
+    versions: &mut BTreeMap<(&'a str, KeyValue), &'a str>,
+    place: &Place,
+    report: &mut Report,
+) {
+    let version_place = place.key("version");
+    match (&family.version, &set.version) {
+        (Some(_), None) => report.error(
+            Code::SetVersion,
+            &version_place,
+            format!(
+                "family {} reads a layout version from each message, so each of its sets has a \
+                 version",
+                family.name
+            ),
+        ),
+        (None, Some(_)) => report.error(
+            Code::SetVersion,
+            &version_place,
+            format!(
+                "family {} has no version locator, so its sets have no version (the asset \
+                 registry picks the set)",
+                family.name
+            ),
+        ),
+        (Some(locator), Some(version)) => {
+            check_scalar(version, "version", &version_place, report);
+            if let Scalar::Str(text) = version {
+                check_not_empty(text, "version", &version_place, report);
+            }
+            if matches!(locator, Locator::Metadata { .. }) {
+                check_integer_spelling(version, "version", &version_place, report);
+            }
+            if let Locator::Bits { size_bits, .. } = locator {
+                check_integer_spelling(version, "version", &version_place, report);
+                let max = if *size_bits >= 64 {
+                    i128::from(u64::MAX)
+                } else {
+                    (1_i128 << size_bits) - 1
+                };
+                let fits = integer_value(version).is_some_and(|n| (0..=max).contains(&n));
+                if !fits {
+                    report.error(
+                        Code::SetVersion,
+                        &version_place,
+                        format!(
+                            "version {} can't come from family {}'s {size_bits}-bit version \
+                             locator, which reads integers from 0 to {max}",
+                            show(version),
+                            family.name
+                        ),
+                    );
+                }
+            }
+            let key = match locator {
+                Locator::Path { .. } => exact(version),
+                _ => by_value(version),
+            };
+            if let Some(other) = versions.insert((&family.name, key), &set.name) {
+                report.error(
+                    Code::SetVersion,
+                    &version_place,
+                    format!(
+                        "sets {other} and {} both have version {} in family {}",
+                        set.name,
+                        show(version),
+                        family.name
+                    ),
+                );
+            }
+        }
+        (None, None) => {}
+    }
+}
+
+fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut Report) {
+    let Some(time) = &set.time else {
+        return;
+    };
+    let place = place.key("time");
+    match time {
+        Time::Cuc {
+            coarse_bytes,
+            fine_bytes,
+            epoch,
+            ..
+        } => {
+            if encoding.is_some_and(|e| e != Encoding::Binary) {
+                report.error(
+                    Code::WrongEncoding,
+                    &place,
+                    "CUC time is in binary payloads; self-describing families use iso8601",
+                );
+            }
+            if !(1..=4).contains(coarse_bytes) || *fine_bytes > 3 {
+                report.error(
+                    Code::CucSize,
+                    &place,
+                    format!(
+                        "a CUC time code has 1 to 4 coarse bytes and 0 to 3 fine bytes, not \
+                         {coarse_bytes} and {fine_bytes}"
+                    ),
+                );
+            }
+            if !is_strict_instant(epoch) {
+                report.error(
+                    Code::InvalidEpoch,
+                    &place.key("epoch"),
+                    format!(
+                        "epoch {epoch:?} is not an instant like \"2000-01-01T00:00:00Z\" \
+                         (YYYY-MM-DDTHH:MM:SS, optional fraction, then Z)"
+                    ),
+                );
+            }
+        }
+        Time::Iso8601 { pointer } => {
+            if encoding == Some(Encoding::Binary) {
+                report.error(
+                    Code::WrongEncoding,
+                    &place,
+                    "iso8601 time is in self-describing payloads; binary families use cuc or boot",
+                );
+            }
+            check_pointer(pointer, &place.key("pointer"), report);
+        }
+        Time::Boot { correlate, .. } => {
+            let correlate_place = place.key("correlate");
+            if correlate.unix_field == correlate.boot_field {
+                report.error(
+                    Code::CorrelateFields,
+                    &correlate_place,
+                    format!(
+                        "unix_field and boot_field both name {}; the correlation packet carries \
+                         two clocks in two fields",
+                        correlate.boot_field
+                    ),
+                );
+            }
+            match set.packets.iter().find(|p| p.name == correlate.packet) {
+                None => report.error(
+                    Code::UnknownPacket,
+                    &correlate_place.key("packet"),
+                    format!(
+                        "packet {} isn't defined in set {}",
+                        correlate.packet, set.name
+                    ),
+                ),
+                Some(packet) => {
+                    for (key, field) in [
+                        ("unix_field", &correlate.unix_field),
+                        ("boot_field", &correlate.boot_field),
+                    ] {
+                        if top_level_field(packet, field).is_none() {
+                            report.error(
+                                Code::UnknownEntry,
+                                &correlate_place.key(key),
+                                format!("packet {} has no top-level field {field}", packet.name),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A top-level field of a packet by name, with its position in `entries`.
+fn top_level_field<'a>(packet: &'a Packet, name: &str) -> Option<(usize, &'a Field)> {
+    packet
+        .entries
+        .iter()
+        .enumerate()
+        .find_map(|(index, entry)| match entry {
+            Entry::Field(field) if field.name == name => Some((index, field)),
+            _ => None,
+        })
+}
+
+fn check_types(set: &Set, scope: &Scope, place: &Place, report: &mut Report) {
+    for (name, struct_type) in &set.types {
+        let type_place = place.map_item("types", name, "type");
+        if !is_identifier(name) {
+            report.error(
+                Code::InvalidName,
+                &type_place,
+                "type names are letters, digits and '_', not starting with a digit",
+            );
+        }
+        if struct_type.entries.is_empty() {
+            report.error(
+                Code::Empty,
+                &type_place.key("entries"),
+                "a struct type has at least one entry",
+            );
+        }
+        check_entries(&struct_type.entries, scope, &type_place, report);
+    }
+    check_type_graph(&set.types, place, report);
+}
+
+fn check_packets(
+    set: &Set,
+    family: Option<&Family>,
+    scope: &Scope,
+    place: &Place,
+    report: &mut Report,
+) {
+    let encoding = family.map(|f| f.encoding);
+    let boot = matches!(set.time, Some(Time::Boot { .. }));
+    let mut names: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut identities = Vec::with_capacity(set.packets.len());
+    for (index, packet) in set.packets.iter().enumerate() {
+        let packet_place = place.item("packets", index, "packet", &packet.name);
+        if !is_identifier(&packet.name) {
+            report.error(
+                Code::InvalidName,
+                &packet_place.key("name"),
+                "packet names are letters, digits and '_', not starting with a digit",
+            );
+        }
+        if let Some(first) = names.get(packet.name.as_str()) {
+            report.error(
+                Code::DuplicateName,
+                &packet_place,
+                format!(
+                    "packet {} is already defined at packets/{first}",
+                    packet.name
+                ),
+            );
+        } else {
+            names.insert(&packet.name, index);
+        }
+
+        if let Some(time_field) = &packet.time_field {
+            let field_place = packet_place.key("time_field");
+            if !boot {
+                report.error(
+                    Code::TimeField,
+                    &field_place,
+                    "time_field only applies when the set's time is boot-relative",
+                );
+            } else if top_level_field(packet, time_field).is_none() {
+                report.error(
+                    Code::UnknownEntry,
+                    &field_place,
+                    format!("packet {} has no top-level field {time_field}", packet.name),
+                );
+            }
+        }
+        if packet.length.is_some() && encoding.is_some_and(|e| e != Encoding::Binary) {
+            report.error(
+                Code::WrongEncoding,
+                &packet_place.key("length"),
+                "only binary payloads have a length",
+            );
+        }
+        identities.push(resolve_identify(
+            index,
+            packet,
+            family,
+            &packet_place,
+            report,
+        ));
+        check_entries(&packet.entries, scope, &packet_place, report);
+        for (index, composite) in packet.composites.iter().enumerate() {
+            let composite_place =
+                packet_place.item("composites", index, "composite", &composite.canonical);
+            check_canonical(
+                &composite.canonical,
+                scope,
+                &composite_place.key("canonical"),
+                report,
+            );
+            if composite.members.is_empty() {
+                report.error(
+                    Code::Empty,
+                    &composite_place.key("members"),
+                    "a composite lists its member entries",
+                );
+            }
+        }
+    }
+    check_ambiguity(set, &identities, place, report);
+}
+
+/// What an identify key reads, so keys in different packets can be compared
+/// by what they read rather than by name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum KeyId {
+    Metadata(String),
+    Pointer(String),
+    /// A field at a known position (byte order is the family's, shared).
+    Bits {
+        offset: u64,
+        size: u32,
+        signed: bool,
+    },
+    /// A field whose position isn't known statically: equal to no other key.
+    Unplaced {
+        packet: usize,
+        name: String,
+    },
+}
+
+struct Identity {
+    keys: BTreeMap<KeyId, KeyValue>,
+    /// Field keys whose position isn't known, for the diagnostic's advice.
+    unplaced: Vec<String>,
+    /// False when the family is unknown or a key didn't resolve: the
+    /// identity is then partial, and comparing it would report overlaps
+    /// that are really the earlier error.
+    complete: bool,
+}
+
+fn resolve_identify(
+    packet_index: usize,
+    packet: &Packet,
+    family: Option<&Family>,
+    place: &Place,
+    report: &mut Report,
+) -> Identity {
+    let offsets = static_offsets(&packet.entries);
+    let mut identity = Identity {
+        keys: BTreeMap::new(),
+        unplaced: Vec::new(),
+        complete: family.is_some(),
+    };
+    for (key, value) in &packet.identify {
+        let key_place = place.map_item("identify", key, "identify");
+        check_scalar(value, "identify value", &key_place, report);
+        let Some(family) = family else {
+            continue;
+        };
+        let packet_keys = PacketKeys {
+            index: packet_index,
+            packet,
+            family,
+            offsets: &offsets,
+        };
+        let resolved = packet_keys.resolve(key, value, &key_place, &mut identity.unplaced, report);
+        match resolved {
+            Some((id, value)) => {
+                identity.keys.insert(id, value);
+            }
+            None => identity.complete = false,
+        }
+    }
+    identity
+}
+
+/// What resolving one packet's identify keys needs.
+struct PacketKeys<'a> {
+    index: usize,
+    packet: &'a Packet,
+    family: &'a Family,
+    offsets: &'a [Option<u64>],
+}
+
+impl PacketKeys<'_> {
+    fn resolve(
+        &self,
+        key: &str,
+        value: &Scalar,
+        place: &Place,
+        unplaced: &mut Vec<String>,
+        report: &mut Report,
+    ) -> Option<(KeyId, KeyValue)> {
+        let PacketKeys {
+            index: packet_index,
+            packet,
+            family,
+            offsets,
+        } = *self;
+        let declared = family.metadata.iter().any(|m| m == key);
+        if key.starts_with('/') {
+            if family.encoding == Encoding::Binary {
+                report.error(
+                    Code::WrongEncoding,
+                    place,
+                    "JSON Pointer keys only apply to self-describing payloads; binary packets \
+                 identify by their own top-level fields or declared metadata",
+                );
+                return None;
+            }
+            check_pointer(key, place, report);
+            return Some((KeyId::Pointer(key.to_string()), exact(value)));
+        }
+        let field = match family.encoding {
+            Encoding::Binary => top_level_field(packet, key),
+            Encoding::Json => None,
+        };
+        match (field, declared) {
+            (Some(_), true) => {
+                report.error(
+                    Code::DuplicateName,
+                    place,
+                    format!(
+                        "{key} names both a top-level field of packet {} and metadata family {} \
+                     declares, so which one identifies the packet is unclear; rename the field \
+                     or the metadata",
+                        packet.name, family.name
+                    ),
+                );
+                None
+            }
+            (Some((index, field)), false) => {
+                let value = check_field_value(field, value, place, report)?;
+                let id = match (offsets[index], field.size_bits) {
+                    (Some(offset), Some(size)) if field.when.is_none() => KeyId::Bits {
+                        offset,
+                        size,
+                        signed: field.ty == ScalarType::Int,
+                    },
+                    _ => {
+                        unplaced.push(key.to_string());
+                        KeyId::Unplaced {
+                            packet: packet_index,
+                            name: key.to_string(),
+                        }
+                    }
+                };
+                Some((id, value))
+            }
+            (None, true) => {
+                check_integer_spelling(value, "identify value", place, report);
+                Some((KeyId::Metadata(key.to_string()), by_value(value)))
+            }
+            (None, false) => {
+                let what = if family.encoding == Encoding::Binary {
+                    format!(
+                        "{key:?} is neither a top-level field of packet {} nor a metadata name \
+                     family {} declares",
+                        packet.name, family.name
+                    )
+                } else {
+                    format!(
+                        "{key:?} is neither a JSON Pointer (\"/ch\") nor a metadata name family {} \
+                     declares",
+                        family.name
+                    )
+                };
+                report.error(Code::UnknownMetadata, place, what);
+                None
+            }
+        }
+    }
+}
+
+/// An identify value for a field key: an integer the field can hold.
+fn check_field_value(
+    field: &Field,
+    value: &Scalar,
+    place: &Place,
+    report: &mut Report,
+) -> Option<KeyValue> {
+    let kind = match field.ty {
+        ScalarType::Uint => "unsigned",
+        ScalarType::Int => "signed",
+        ScalarType::Bool => "bool",
+        _ => {
+            report.error(
+                Code::IdentifyValue,
+                place,
+                format!(
+                    "identify keys that name a field need an integer or bool field; {} isn't one",
+                    field.name
+                ),
+            );
+            return None;
+        }
+    };
+    check_integer_spelling(value, "identify value", place, report);
+    let Some(n) = integer_value(value) else {
+        report.error(
+            Code::IdentifyValue,
+            place,
+            format!(
+                "identify value {value:?} isn't an integer, so field {} can never hold it",
+                field.name
+            ),
+        );
+        return None;
+    };
+    // An invalid size is reported by the layout check; skip the range then.
+    let size = field.size_bits.filter(|s| (1..=64).contains(s))?;
+    let (low, high) = match field.ty {
+        ScalarType::Bool => (0, 1),
+        ScalarType::Int => (-(1_i128 << (size - 1)), (1_i128 << (size - 1)) - 1),
+        _ => (0, (1_i128 << size) - 1),
+    };
+    if !(low..=high).contains(&n) {
+        report.error(
+            Code::IdentifyValue,
+            place,
+            format!(
+                "identify value {n} is out of range for {kind} {size}-bit field {} ({low} to \
+                 {high}), so it can never match",
+                field.name
+            ),
+        );
+        return None;
+    }
+    Some(KeyValue::Int(n))
+}
+
+/// Packets are tried most specific first. A message matches a packet when
+/// every identify key matches. If two packets can both match one message,
+/// the one whose keys strictly contain the other's wins; if neither contains
+/// the other (or they're identical), decoding would depend on packet order,
+/// so that's an error.
+fn check_ambiguity(set: &Set, identities: &[Identity], place: &Place, report: &mut Report) {
+    for (index, later) in identities.iter().enumerate() {
+        let conflicts: Vec<usize> = identities[..index]
+            .iter()
+            .enumerate()
+            .filter(|(_, earlier)| overlap_without_winner(earlier, later))
+            .map(|(i, _)| i)
+            .collect();
+        let Some(&first) = conflicts.first() else {
+            continue;
+        };
+        let names: Vec<&str> = conflicts
+            .iter()
+            .take(3)
+            .map(|i| set.packets[*i].name.as_str())
+            .collect();
+        let others = match conflicts.len() {
+            n if n > 3 => format!(" and {} others", n - 3),
+            _ => String::new(),
+        };
+        let mut message = format!(
+            "packet {} can match the same message as {}{others}, and neither is more specific \
+             (its identify keys don't strictly contain the other's); give them a key with \
+             different values",
+            set.packets[index].name,
+            names.join(", ")
+        );
+        let unplaced: BTreeSet<&str> = later
+            .unplaced
+            .iter()
+            .chain(&identities[first].unplaced)
+            .map(String::as_str)
+            .collect();
+        if !unplaced.is_empty() {
+            let list: Vec<&str> = unplaced.into_iter().collect();
+            message.push_str(&format!(
+                ". The position of {} isn't known without decoding, so it counts as a different \
+                 key in each packet; an explicit offset_bits lets this check see it's the same \
+                 field",
+                list.join(", ")
+            ));
+        }
+        report.error(
+            Code::AmbiguousIdentify,
+            &place
+                .item("packets", index, "packet", &set.packets[index].name)
+                .key("identify"),
+            message,
+        );
+    }
+}
+
+fn overlap_without_winner(a: &Identity, b: &Identity) -> bool {
+    if !a.complete || !b.complete {
+        return false;
+    }
+    let disagree = a
+        .keys
+        .iter()
+        .any(|(key, value)| b.keys.get(key).is_some_and(|other| other != value));
+    if disagree {
+        return false;
+    }
+    let a_in_b = a.keys.keys().all(|key| b.keys.contains_key(key));
+    let b_in_a = b.keys.keys().all(|key| a.keys.contains_key(key));
+    // Strict containment either way means one is more specific.
+    a_in_b == b_in_a
+}
+
+fn check_entries(entries: &[Entry], scope: &Scope, container: &Place, report: &mut Report) {
+    let mut names: BTreeMap<&str, usize> = BTreeMap::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let (label, name) = match entry {
+            Entry::Field(field) => ("field", Some(field.name.as_str())),
+            Entry::Array(array) => ("array", Some(array.name.as_str())),
+            Entry::Struct(entry) => ("struct", Some(entry.name.as_str())),
+            Entry::Padding(_) => ("padding", None),
+        };
+        let place = container.item("entries", index, label, name.unwrap_or(""));
+        if let Some(name) = name {
+            if !is_identifier(name) {
+                report.error(
+                    Code::InvalidName,
+                    &place.key("name"),
+                    "entry names are letters, digits and '_', not starting with a digit (no dots \
+                     or brackets: output paths use them)",
+                );
+            }
+            if let Some(first) = names.get(name) {
+                report.error(
+                    Code::DuplicateName,
+                    &place,
+                    format!("entry {name} is already defined at entries/{first}"),
+                );
+            } else {
+                names.insert(name, index);
+            }
+        }
+        match entry {
+            Entry::Field(field) => check_field(field, scope, &place, report),
+            Entry::Array(array) => check_array(array, scope, &place, report),
+            Entry::Struct(entry) => {
+                check_type_ref(&entry.struct_type, scope, &place.key("struct"), report);
+                if let Some(pointer) = &entry.pointer {
+                    check_pointer(pointer, &place.key("pointer"), report);
+                }
+                if let Some(when) = &entry.when {
+                    check_condition(when, &place.key("when"), 1, report);
+                }
+            }
+            Entry::Padding(padding) => {
+                if let Some(when) = &padding.when {
+                    check_condition(when, &place.key("when"), 1, report);
+                }
+            }
+        }
+    }
+}
+
+fn check_field(field: &Field, scope: &Scope, place: &Place, report: &mut Report) {
+    if let Some(canonical) = &field.canonical {
+        check_canonical(canonical, scope, &place.key("canonical"), report);
+    }
+    if let Some(pointer) = &field.pointer {
+        check_pointer(pointer, &place.key("pointer"), report);
+    }
+    if let Some(unit) = &field.unit {
+        check_not_empty(unit, "unit", &place.key("unit"), report);
+    }
+    check_text(field.text, place, report);
+    if let Some(conversion) = &field.conversion {
+        check_conversion(conversion, &place.key("conversion"), report);
+    }
+    check_invalid(&field.invalid, place, report);
+    if let Some(when) = &field.when {
+        check_condition(when, &place.key("when"), 1, report);
+    }
+}
+
+fn check_text(text: Option<TextEncoding>, place: &Place, report: &mut Report) {
+    if text == Some(TextEncoding::Utf8) {
+        report.error(
+            Code::ExplicitDefault,
+            &place.key("text"),
+            "utf8 is the default text encoding; omit text",
+        );
+    }
+}
+
+fn check_array(array: &ArrayEntry, scope: &Scope, place: &Place, report: &mut Report) {
+    if let Some(canonical) = &array.canonical {
+        check_canonical(canonical, scope, &place.key("canonical"), report);
+    }
+    if let Some(interval) = array.sample_interval_ms {
+        let interval_place = place.key("sample_interval_ms");
+        check_finite(interval, "sample_interval_ms", &interval_place, report);
+        if interval.is_finite() && interval <= 0.0 {
+            report.error(
+                Code::SampleInterval,
+                &interval_place,
+                format!("sample_interval_ms must be positive, not {interval}"),
+            );
+        }
+        if array.canonical.is_none() {
+            report.error(
+                Code::SampleInterval,
+                &interval_place,
+                "sample_interval_ms spaces out canonical samples, so it needs canonical",
+            );
+        }
+    }
+    if let Some(pointer) = &array.pointer {
+        check_pointer(pointer, &place.key("pointer"), report);
+    }
+    match &array.element {
+        Element::Scalar(element) => check_element(element, &place.key("element"), report),
+        Element::Struct { name } => check_type_ref(name, scope, &place.key("element"), report),
+    }
+    if let Some(when) = &array.when {
+        check_condition(when, &place.key("when"), 1, report);
+    }
+}
+
+fn check_element(element: &ScalarElement, place: &Place, report: &mut Report) {
+    if let Some(unit) = &element.unit {
+        check_not_empty(unit, "unit", &place.key("unit"), report);
+    }
+    check_text(element.text, place, report);
+    if let Some(conversion) = &element.conversion {
+        check_conversion(conversion, &place.key("conversion"), report);
+    }
+    check_invalid(&element.invalid, place, report);
+}
+
+fn check_invalid(invalid: &[Scalar], place: &Place, report: &mut Report) {
+    for (index, value) in invalid.iter().enumerate() {
+        check_scalar(value, "invalid value", &place.at("invalid", index), report);
+    }
+}
+
+fn check_canonical(name: &str, scope: &Scope, place: &Place, report: &mut Report) {
+    if !scope.catalog.params.contains_key(name) {
+        report.error(
+            Code::UnknownCanonical,
+            place,
+            format!("param {name} isn't in the catalog"),
+        );
+    }
+}
+
+fn check_type_ref(name: &str, scope: &Scope, place: &Place, report: &mut Report) {
+    if !scope.types.contains_key(name) {
+        report.error(
+            Code::UnknownType,
+            place,
+            format!("struct type {name} isn't defined in this set's types"),
+        );
+    }
+}
+
+fn check_conversion(conversion: &Conversion, place: &Place, report: &mut Report) {
+    match conversion {
+        Conversion::Linear { scale, offset } => {
+            check_finite(*scale, "scale", &place.key("scale"), report);
+            check_finite(*offset, "offset", &place.key("offset"), report);
+        }
+        Conversion::Poly { coefficients } => {
+            if coefficients.is_empty() {
+                report.error(
+                    Code::Empty,
+                    &place.key("coefficients"),
+                    "a polynomial has at least one coefficient",
+                );
+            }
+            for (index, c) in coefficients.iter().enumerate() {
+                check_finite(
+                    *c,
+                    "a coefficient",
+                    &place.at("coefficients", index),
+                    report,
+                );
+            }
+        }
+        Conversion::States { states } => {
+            if states.is_empty() {
+                report.error(
+                    Code::Empty,
+                    &place.key("states"),
+                    "a states conversion lists at least one state",
+                );
+            }
+            let mut raws = BTreeSet::new();
+            for (index, state) in states.iter().enumerate() {
+                let state_place = place.at("states", index);
+                check_int(state.raw, "raw value", &state_place, report);
+                check_not_empty(&state.name, "a state name", &state_place, report);
+                if !raws.insert(state.raw) {
+                    report.error(
+                        Code::DuplicateValue,
+                        &state_place,
+                        format!("raw value {} has two states", state.raw),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Conditions nest at most `MAX_NESTING` deep; deeper ones are reported and
+/// not walked, so the check's own recursion is bounded too.
+fn check_condition(condition: &Condition, place: &Place, depth: usize, report: &mut Report) {
+    if depth > MAX_NESTING {
+        report.error(
+            Code::NestingDepth,
+            place,
+            format!("conditions nest deeper than the limit of {MAX_NESTING} levels"),
+        );
+        return;
+    }
+    match condition {
+        Condition::Compare { value, .. } => {
+            check_scalar(value, "condition value", &place.key("value"), report);
+        }
+        Condition::In { values, .. } => {
+            if values.is_empty() {
+                report.error(
+                    Code::Empty,
+                    &place.key("values"),
+                    "an `in` condition lists at least one value",
+                );
+            }
+            for (index, value) in values.iter().enumerate() {
+                check_scalar(value, "condition value", &place.at("values", index), report);
+            }
+        }
+        Condition::All { conditions } | Condition::Any { conditions } => {
+            if conditions.is_empty() {
+                report.error(
+                    Code::Empty,
+                    &place.key("conditions"),
+                    "`all` and `any` list at least one condition",
+                );
+            }
+            for (index, inner) in conditions.iter().enumerate() {
+                check_condition(inner, &place.at("conditions", index), depth + 1, report);
+            }
+        }
+        Condition::Not { condition } => {
+            check_condition(condition, &place.key("condition"), depth + 1, report)
+        }
+    }
+}
+
+/// Struct types may nest, never contain themselves, and nest at most
+/// `MAX_NESTING` deep, so decoding depth is bounded by a fixed limit every
+/// implementation shares. The walk is iterative: a type graph is a flat map
+/// in JSON, so its depth isn't bounded by the parser's nesting limit.
+fn check_type_graph(types: &BTreeMap<String, StructType>, place: &Place, report: &mut Report) {
+    let uses: BTreeMap<&str, BTreeSet<&str>> = types
+        .iter()
+        .map(|(name, struct_type)| (name.as_str(), used_types(&struct_type.entries)))
+        .collect();
+    // On the stack while being explored; height once done (cycle members
+    // count as height 1 so the walk can finish).
+    let mut on_stack: BTreeSet<&str> = BTreeSet::new();
+    let mut height: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut cycles: BTreeSet<BTreeSet<&str>> = BTreeSet::new();
+    for &start in uses.keys() {
+        if height.contains_key(start) {
+            continue;
+        }
+        let mut stack: Vec<(&str, std::collections::btree_set::Iter<&str>)> =
+            vec![(start, uses[start].iter())];
+        on_stack.insert(start);
+        while let Some((name, next)) = stack.last_mut() {
+            let name = *name;
+            match next.next().copied() {
+                None => {
+                    let below = uses[name]
+                        .iter()
+                        .filter_map(|used| height.get(used))
+                        .max()
+                        .copied()
+                        .unwrap_or(0);
+                    height.insert(name, below + 1);
+                    on_stack.remove(name);
+                    stack.pop();
+                }
+                Some(used) if on_stack.contains(used) => {
+                    let at = stack.iter().position(|(n, _)| *n == used).unwrap_or(0);
+                    let mut cycle: Vec<&str> = stack[at..].iter().map(|(n, _)| *n).collect();
+                    cycle.push(used);
+                    let members: BTreeSet<&str> = cycle.iter().copied().collect();
+                    if cycles.insert(members) {
+                        report.error(
+                            Code::TypeCycle,
+                            &place.map_item("types", cycle[0], "type"),
+                            format!("struct types contain themselves: {}", cycle.join(" -> ")),
+                        );
+                    }
+                }
+                Some(used) if height.contains_key(used) => {}
+                Some(used) => {
+                    if let Some(next) = uses.get(used) {
+                        on_stack.insert(used);
+                        stack.push((used, next.iter()));
+                    }
+                }
+            }
+        }
+    }
+    if let Some((name, deepest)) = height
+        .iter()
+        .max_by_key(|(name, h)| (**h, std::cmp::Reverse(**name)))
+        && *deepest > MAX_NESTING
+    {
+        report.error(
+            Code::NestingDepth,
+            &place.map_item("types", name, "type"),
+            format!("struct type {name} nests {deepest} levels deep; the limit is {MAX_NESTING}"),
+        );
+    }
+}
+
+fn used_types(entries: &[Entry]) -> BTreeSet<&str> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            Entry::Struct(entry) => Some(entry.struct_type.as_str()),
+            Entry::Array(array) => match &array.element {
+                Element::Struct { name } => Some(name.as_str()),
+                Element::Scalar(_) => None,
+            },
+            Entry::Field(_) | Entry::Padding(_) => None,
+        })
+        .collect()
+}

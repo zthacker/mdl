@@ -42,16 +42,12 @@ impl std::error::Error for Errors {}
 
 /// Collects diagnostics while definitions are walked. `source` is the file
 /// or set being looked at right now, so call sites only say where in it.
-// Only v1 builds a Report until v2 validation (Phase 1, step 1b) does.
-#[cfg_attr(not(feature = "v1"), allow(dead_code))]
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     pub(crate) source: String,
     diagnostics: Vec<Diagnostic>,
 }
 
-// Only v1 builds a Report until v2 validation (Phase 1, step 1b) does.
-#[cfg_attr(not(feature = "v1"), allow(dead_code))]
 impl Report {
     pub(crate) fn new(source: impl Into<String>) -> Self {
         Report {

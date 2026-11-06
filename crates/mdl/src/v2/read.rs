@@ -27,6 +27,7 @@ use serde_json::{Number, Value};
 use thiserror::Error;
 
 use crate::canonical::{self, CanonicalError};
+use crate::v2::diagnostics::escape_pointer_token;
 use crate::v2::ir::{Artifact, Bundle, Catalog, Digest, Family, IrVersion, Set};
 
 /// A document that passed every check, with its identity.
@@ -57,20 +58,29 @@ pub enum ReadError {
         needed: IrVersion,
         reader: IrVersion,
     },
-    /// The document doesn't have the IR's shape. `path` is where, like
-    /// `sets[0].packets[2].entries[5]` (`.` for the top level). Paths stop
-    /// at the nearest tagged object (an entry, a condition): the message
-    /// then names the field inside it.
-    #[error("{path}: {message}")]
+    /// The document doesn't have the IR's shape. `path` is a JSON Pointer
+    /// (RFC 6901) like `/sets/0/packets/2/entries/5`, empty for the whole
+    /// document. Paths stop at the nearest tagged object (an entry, a
+    /// condition): the message then names the field inside it.
+    #[error("{}", at(path, message))]
     Shape { path: String, message: String },
     /// An artifact spelled differently from its normal form (a `null`, an
     /// empty optional list): its digest would differ from the same value
-    /// written normally.
+    /// written normally. `path` is the first place that differs.
     #[error(
-        "the artifact is not in normal form (absent values and empty optional lists must be \
-         omitted, not written as null or empty); its normal form is: {normal}"
+        "{}",
+        at(path, &format!("{detail} (artifacts are written in normal form: absent values and \
+                            empty optional lists are omitted)"))
     )]
-    NotNormalForm { normal: String },
+    NotNormalForm { path: String, detail: String },
+}
+
+fn at(path: &str, message: &str) -> String {
+    if path.is_empty() {
+        message.to_string()
+    } else {
+        format!("{path}: {message}")
+    }
 }
 
 fn unsupported(needed: IrVersion, reader: IrVersion) -> String {
@@ -108,7 +118,7 @@ pub fn read_artifact(bytes: &[u8]) -> Result<Loaded<Artifact>, ReadError> {
         }
         other => {
             return Err(ReadError::Shape {
-                path: "artifact".to_string(),
+                path: "/artifact".to_string(),
                 message: match other {
                     Some(kind) => format!(
                         "unknown artifact kind {kind:?}, expected \"catalog\", \"family\" or \"set\""
@@ -120,15 +130,12 @@ pub fn read_artifact(bytes: &[u8]) -> Result<Loaded<Artifact>, ReadError> {
             });
         }
     };
-    let normal =
-        canonical::to_canonical_string(&serde_json::to_value(&artifact).map_err(|err| {
-            ReadError::Shape {
-                path: ".".to_string(),
-                message: err.to_string(),
-            }
-        })?)?;
-    if normal != canonical {
-        return Err(ReadError::NotNormalForm { normal });
+    let normal = serde_json::to_value(&artifact).map_err(|err| ReadError::Shape {
+        path: String::new(),
+        message: err.to_string(),
+    })?;
+    if let Some((path, detail)) = first_difference(&value, &normal, String::new()) {
+        return Err(ReadError::NotNormalForm { path, detail });
     }
     Ok(Loaded {
         value: artifact,
@@ -219,12 +226,78 @@ fn doubles_beyond_64_bits(value: &mut Value) {
     }
 }
 
-/// Step 4: type a value, naming the JSON path of any error.
+/// Step 4: type a value, naming the JSON Pointer of any error.
 pub(crate) fn typed<T: DeserializeOwned>(value: &Value) -> Result<T, ReadError> {
     serde_path_to_error::deserialize(value).map_err(|err| ReadError::Shape {
-        path: err.path().to_string(),
+        path: json_pointer(err.path()),
         message: err.inner().to_string(),
     })
+}
+
+fn json_pointer(path: &serde_path_to_error::Path) -> String {
+    use serde_path_to_error::Segment;
+    let mut out = String::new();
+    for segment in path.iter() {
+        match segment {
+            Segment::Seq { index } => out.push_str(&format!("/{index}")),
+            Segment::Map { key } => {
+                out.push('/');
+                out.push_str(&escape_pointer_token(key));
+            }
+            Segment::Enum { variant } => {
+                out.push('/');
+                out.push_str(&escape_pointer_token(variant));
+            }
+            Segment::Unknown => break,
+        }
+    }
+    out
+}
+
+/// Where the document as read and its normal form first differ, and how.
+/// Both are walked in canonical key order, so the answer is the first
+/// difference in the canonical text.
+fn first_difference(read: &Value, normal: &Value, path: String) -> Option<(String, String)> {
+    match (read, normal) {
+        (Value::Object(read), Value::Object(normal)) => {
+            let mut keys: Vec<&String> = read.keys().chain(normal.keys()).collect();
+            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            keys.dedup();
+            keys.into_iter().find_map(|key| {
+                let child = format!("{path}/{}", escape_pointer_token(key));
+                match (read.get(key), normal.get(key)) {
+                    (Some(Value::Null), None) => Some((child, "null must be omitted".to_string())),
+                    (Some(Value::Array(a)), None) if a.is_empty() => {
+                        Some((child, "an empty list must be omitted".to_string()))
+                    }
+                    (Some(Value::Object(o)), None) if o.is_empty() => {
+                        Some((child, "an empty object must be omitted".to_string()))
+                    }
+                    (Some(_), None) => Some((child, "this value must be omitted".to_string())),
+                    (None, Some(_)) => Some((child, "this value is missing".to_string())),
+                    (Some(a), Some(b)) => first_difference(a, b, child),
+                    (None, None) => None,
+                }
+            })
+        }
+        (Value::Array(read), Value::Array(normal)) if read.len() == normal.len() => read
+            .iter()
+            .zip(normal)
+            .enumerate()
+            .find_map(|(index, (a, b))| first_difference(a, b, format!("{path}/{index}"))),
+        _ if canonical_equal(read, normal) => None,
+        _ => Some((path, "written differently from its normal form".to_string())),
+    }
+}
+
+fn canonical_equal(a: &Value, b: &Value) -> bool {
+    match (
+        canonical::to_canonical_string(a),
+        canonical::to_canonical_string(b),
+    ) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
 }
 
 fn check_version(value: &Value) -> Result<(), ReadError> {
@@ -378,12 +451,21 @@ mod tests {
                 "alias":{{"kind":"path","pointer":"/a"}}{extra}}}}}"#
             )
         };
-        let normal = read_artifact(family("").as_bytes()).unwrap();
+        assert!(read_artifact(family("").as_bytes()).is_ok());
         let error = read_artifact(family(r#","version":null"#).as_bytes()).unwrap_err();
         assert!(matches!(error, ReadError::NotNormalForm { .. }), "{error}");
         assert!(
-            error.to_string().ends_with(&normal.canonical),
-            "the error shows the normal form: {error}"
+            error
+                .to_string()
+                .starts_with("/family/version: null must be omitted"),
+            "{error}"
+        );
+        let error = read_artifact(family(r#","metadata":[]"#).as_bytes()).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("/family/metadata: an empty list must be omitted"),
+            "{error}"
         );
         // Bundles aren't content-addressed and may use either spelling.
         let lenient = br#"{"mdl_version":"2.0","catalog":{"params":{}},"families":null}"#;
@@ -399,14 +481,14 @@ mod tests {
         );
         let error = read_artifact(set.as_bytes()).unwrap_err().to_string();
         assert!(
-            error.starts_with("set.packets[0].length_bytes: unknown field `length_bytes`"),
+            error.starts_with("/set/packets/0/length_bytes: unknown field `length_bytes`"),
             "{error}"
         );
         let family = br#"{"artifact":"family","mdl_version":"2.0","family":{"name":"f",
             "encoding":"xml","alias":{"kind":"path","pointer":"/a"}}}"#;
         let error = read_artifact(family).unwrap_err().to_string();
         assert!(
-            error.starts_with("family.encoding: unknown variant `xml`"),
+            error.starts_with("/family/encoding: unknown variant `xml`"),
             "{error}"
         );
         let error = read_artifact(br#"{"artifact":"plan","mdl_version":"2.0"}"#)
@@ -414,7 +496,7 @@ mod tests {
             .to_string();
         assert_eq!(
             error,
-            "artifact: unknown artifact kind \"plan\", expected \"catalog\", \"family\" or \"set\""
+            "/artifact: unknown artifact kind \"plan\", expected \"catalog\", \"family\" or \"set\""
         );
     }
 
@@ -438,7 +520,7 @@ mod tests {
         let bundle = br#"{"mdl_version":"2.0","catalog":{},"sets":[{"name":"s","family":"f","version":1e20}]}"#;
         assert_eq!(
             read_bundle(bundle).unwrap_err().to_string(),
-            "sets[0].version: integer 100000000000000000000 is outside the 64-bit range; write \
+            "/sets/0/version: integer 100000000000000000000 is outside the 64-bit range; write \
              it as a string"
         );
     }
@@ -450,7 +532,7 @@ mod tests {
         });
         let error = read_bundle(&bytes).unwrap_err().to_string();
         assert!(
-            error.starts_with("sets[0].packets[0].entries[1]: unknown field `fill`"),
+            error.starts_with("/sets/0/packets/0/entries/1: unknown field `fill`"),
             "{error}"
         );
         let bytes = bundle_with(|v| {
@@ -458,7 +540,7 @@ mod tests {
         });
         let error = read_bundle(&bytes).unwrap_err().to_string();
         assert!(
-            error.starts_with("families[1].encoding: unknown variant `xml`"),
+            error.starts_with("/families/1/encoding: unknown variant `xml`"),
             "{error}"
         );
     }

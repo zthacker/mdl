@@ -6,5 +6,7 @@
 //! compiler rejects any crossing. When Phase 1 is done, these modules
 //! replace the top-level v1 ones and this module goes away.
 
+pub mod diagnostics;
 pub mod ir;
 pub mod read;
+pub mod validate;
