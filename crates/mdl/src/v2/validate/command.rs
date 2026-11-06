@@ -10,11 +10,13 @@ use super::rules::{
     check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
 };
 use super::set::{KeyId, KeyValue, by_value, exact};
+use crate::v2::decode::convert;
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
     Argument, ByteLength, Catalog, CommandPacket, Conversion, Encoding, Entry, Family, Field,
     ParamType, Scalar, ScalarType, Set,
 };
+use crate::v2::text;
 
 /// Every command packet of a set: names, the command it encodes, link
 /// metadata, and its fields. Positions and references are checked with
@@ -80,8 +82,8 @@ pub(super) fn check_packets(
 /// The keys that identify each command packet of a set, by value: its
 /// metadata, and its constant fields that a decoder can read without
 /// decoding anything else. In a binary family those are integer and bool
-/// fields at static positions; in a JSON family, integer and string
-/// fields. Decoding a command reads exactly these.
+/// fields and fixed-length strings at static positions; in a JSON family,
+/// integer and string fields. Decoding a command reads exactly these.
 pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<KeyId, KeyValue>> {
     set.commands
         .iter()
@@ -118,11 +120,23 @@ pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<Key
         .collect()
 }
 
-/// A constant integer or bool field at a static position, as the raw
-/// unsigned bits it puts in the payload: an int8 -1 and a uint8 255 are the
-/// same key and value, and an int8 -1 and a uint8 1 differ.
+/// A constant field at a static position, as what it puts in the payload:
+/// an integer or bool as its raw unsigned bits (an int8 -1 and a uint8 255
+/// are the same key and value, an int8 -1 and a uint8 1 differ), a
+/// fixed-length string as its bytes.
 fn binary_key(field: &Field, value: &Scalar, offset: Option<u64>) -> Option<(KeyId, KeyValue)> {
     let offset = offset?;
+    if let (ScalarType::String, Scalar::Str(text), Some(ByteLength::Fixed { bytes })) =
+        (field.ty, value, &field.length)
+    {
+        let encoded = text::encode(text, field.text)?;
+        let fits = offset.is_multiple_of(8) && encoded.len() == *bytes as usize;
+        let key = KeyId::Bytes {
+            offset,
+            length: *bytes,
+        };
+        return fits.then_some((key, KeyValue::Bytes(encoded)));
+    }
     let size = field.size_bits.filter(|size| (1..=64).contains(size))?;
     if !matches!(
         field.ty,
@@ -261,6 +275,7 @@ fn check_entries(
         }
     }
     let mut encoded: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut target: Option<usize> = None;
     for (index, entry) in packet.entries.iter().enumerate() {
         let condition = match entry {
             Entry::Field(field) => field
@@ -332,8 +347,22 @@ fn check_entries(
         if let Some(value) = &field.value {
             check_value(field, value, &field_place.key("value"), report);
         }
-        if let Some(target) = field.target {
-            check_target(field, target, &field_place, report);
+        if let Some(is_target) = field.target {
+            check_target(field, is_target, &field_place, report);
+        }
+        // One target field, so a payload can't hold two ids that disagree.
+        if field.target == Some(true) {
+            match target {
+                Some(first) => report.error(
+                    Code::CommandShape,
+                    &field_place.key("target"),
+                    format!(
+                        "entries/{first} already holds the target's native id; a command packet \
+                         holds it once"
+                    ),
+                ),
+                None => target = Some(index),
+            }
         }
         if field.inverse.is_some() && !matches!(field.conversion, Some(Conversion::Poly { .. })) {
             report.error(
@@ -520,7 +549,7 @@ fn check_target(field: &Field, target: bool, place: &Place, report: &mut Report)
 /// a string field holds the text.
 fn check_value(field: &Field, value: &Scalar, place: &Place, report: &mut Report) {
     match (field.ty, value) {
-        (ScalarType::String, Scalar::Str(_)) => {}
+        (ScalarType::String, Scalar::Str(text)) => check_text_value(field, text, place, report),
         (ScalarType::String, Scalar::Int(_)) => report.error(
             Code::ReferenceType,
             place,
@@ -558,6 +587,43 @@ fn check_value(field: &Field, value: &Scalar, place: &Place, report: &mut Report
                 );
             }
         }
+    }
+}
+
+/// A string constant can be written in its field: in its text encoding, at
+/// exactly a fixed length, without a terminator byte inside it.
+fn check_text_value(field: &Field, value: &str, place: &Place, report: &mut Report) {
+    let Some(encoded) = text::encode(value, field.text) else {
+        report.error(
+            Code::ReferenceType,
+            place,
+            format!(
+                "{value:?} can't be written as {}, field {}'s text encoding",
+                text::name(field.text),
+                field.name
+            ),
+        );
+        return;
+    };
+    match &field.length {
+        Some(ByteLength::Fixed { bytes }) if encoded.len() != *bytes as usize => report.error(
+            Code::ValueRange,
+            place,
+            format!(
+                "{value:?} is {} bytes, and field {} is exactly {bytes}",
+                encoded.len(),
+                field.name
+            ),
+        ),
+        Some(ByteLength::Terminator { byte }) if encoded.contains(byte) => report.error(
+            Code::ValueRange,
+            place,
+            format!(
+                "{value:?} contains field {}'s terminator byte {byte:#04x}",
+                field.name
+            ),
+        ),
+        _ => {}
     }
 }
 
@@ -628,6 +694,12 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
             "a polynomial conversion on an argument needs an inverse (engineering value to raw)",
         );
     }
+    // An inverse that rises and falls says nothing about coverage at its
+    // ends, so coverage waits until it's monotonic.
+    let monotonic = match (poly, &field.inverse) {
+        (true, Some(inverse)) => check_poly_inverse(field, inverse, argument, place, report),
+        _ => true,
+    };
     if let Some(Conversion::Linear { scale, .. }) = field.conversion
         && scale == 0.0
     {
@@ -682,7 +754,9 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
             }
         }
     }
-    check_coverage(field, argument, place, report);
+    if monotonic {
+        check_coverage(field, argument, place, report);
+    }
     if matches!(
         argument.ty,
         ParamType::F64 | ParamType::I64 | ParamType::U64
@@ -697,11 +771,75 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
     }
 }
 
+/// Evenly spaced points at which a polynomial inverse is checked over its
+/// argument's range (and the ends), as `spec/encoding.md` §3.1 says.
+const INVERSE_SAMPLES: u32 = 4096;
+
+/// A polynomial inverse is checked over a bounded range, and only rises or
+/// only falls across it, so a raw value tells back the values it came from
+/// (decoding relies on it). Whether it was found to.
+fn check_poly_inverse(
+    field: &Field,
+    inverse: &Conversion,
+    argument: &Argument,
+    place: &Place,
+    report: &mut Report,
+) -> bool {
+    let range = argument.range.unwrap_or_default();
+    let (Some(min), Some(max)) = (range.min, range.max) else {
+        // A range with no ends is reported on the catalog.
+        if argument
+            .range
+            .is_some_and(|r| r.min.is_none() && r.max.is_none())
+        {
+            return false;
+        }
+        report.error(
+            Code::ValueRange,
+            &place.key("argument"),
+            format!(
+                "argument {} is encoded through a polynomial, so it needs a range with both ends \
+                 to check the inverse over",
+                argument.name
+            ),
+        );
+        return false;
+    };
+    let Some(mut previous) = convert(inverse, min) else {
+        return false;
+    };
+    let (mut rising, mut falling) = (false, false);
+    for k in 1..=INVERSE_SAMPLES {
+        let x = min + f64::from(k) * (max - min) / f64::from(INVERSE_SAMPLES);
+        let Some(y) = convert(inverse, x) else {
+            return false;
+        };
+        rising |= y > previous;
+        falling |= y < previous;
+        if rising && falling {
+            report.error(
+                Code::ConversionType,
+                &place.key("inverse"),
+                format!(
+                    "field {}'s inverse rises and falls over argument {}'s range (it turns near \
+                     {x}), so a raw value can't be traced back; give an inverse that only rises \
+                     or only falls from {min} to {max}",
+                    field.name, argument.name
+                ),
+            );
+            return false;
+        }
+        previous = y;
+    }
+    true
+}
+
 /// Every value the catalog lets a caller give, through the field's
 /// conversion, fits the field: checked for integer fields with a size,
-/// unconverted or through a linear conversion (a polynomial's inverse is
-/// checked per message). An argument without a range promises every value
-/// of its type.
+/// unconverted, through a linear conversion, or through a polynomial's
+/// inverse (at the range's ends, which bound it: `check_poly_inverse`
+/// requires it to be monotonic). An argument without a range promises every
+/// value of its type.
 fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mut Report) {
     let Some((field_low, field_high)) =
         integer_range(field).filter(|_| field.ty != ScalarType::Bool)
@@ -722,6 +860,15 @@ fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mu
         Some(Conversion::Linear { scale, offset }) if scale != 0.0 => {
             let ends = ((low - offset) / scale, (high - offset) / scale);
             (ends.0.min(ends.1), ends.0.max(ends.1))
+        }
+        Some(Conversion::Poly { .. }) => {
+            let (Some(inverse), Some(_), Some(_)) = (&field.inverse, range.min, range.max) else {
+                return;
+            };
+            let (Some(a), Some(b)) = (convert(inverse, low), convert(inverse, high)) else {
+                return;
+            };
+            (a.min(b), a.max(b))
         }
         _ => return,
     };

@@ -93,6 +93,14 @@ linear inverse subtracts, then divides; it does not multiply by `1 /
 scale`. So 0.15 at scale 0.1 is 1.4999999999999998, and an inverse
 `[-0.1, 10]` at 0.36 is 3.4999999999999996.
 
+Validation guarantees that an argument encoded through a polynomial has a
+range with both ends and that the field's `inverse` only rises or only
+falls over it: its values at the 4097 points `min + (k × (max − min)) /
+4096`, for k from 0 to 4096, never both increase and decrease from one
+point to the next. It also guarantees that the range's ends, through a
+linear conversion or a polynomial's inverse and rounded as below, fit an
+integer field, so every value in range does.
+
 A result for an integer field is rounded to the nearest integer, ties away
 from zero (0.25 s at 0.1 s per count is raw 3; the two results above are
 raw 1 and raw 3). A result for a 32-bit float field is rounded to the
@@ -179,11 +187,107 @@ JSON.
 - the command's `deprecated` note, if it has one. A deprecated command
   still encodes; a caller SHOULD warn.
 
-## 7. Error codes
+## 7. Decoding commands
+
+Decoding a command turns a command payload back into its catalog command
+and arguments: what a simulated asset does with a command it receives,
+and what command history records. It is the inverse of §1 to §6: every
+payload an encoder writes MUST decode, and its arguments MUST encode to
+the same payload again wherever §7.4 says they do.
+
+### 7.1 Inputs
+
+The artifacts, the set that decodes the payload, by name (as for
+encoding, the caller chooses) [`unknown_set`], and a message as
+`decoding.md` §1 defines it: the payload and the link's metadata. The
+payload MUST be in the family's encoding [`wrong_encoding`,
+`invalid_json`]. A command packet's metadata is part of its identity
+(§7.2), so the message MUST carry the metadata the link framed the
+command with; command history keeps it with the payload.
+
+### 7.2 Identification
+
+A command packet's keys are its metadata, by value, and its constant
+fields that can be read without decoding anything else:
+
+- binary: integer and bool fields at static positions (`decoding.md`
+  §5.2), as the raw unsigned bits they write (an `int` 8-bit −1 and a
+  `uint` 8-bit 255 are the same key and value); and fixed-length string
+  fields at static byte-aligned positions, as the bytes they write;
+- JSON: integer and string fields, by pointer, compared exactly.
+
+Validation guarantees that every two command packets of a set share a key
+with different values, so a payload matches at most one. A payload
+matches a packet when every key's value in the message equals the
+packet's; a key that can't be read (missing metadata, bits past the end)
+doesn't match. No match is [`no_packet`].
+
+### 7.3 The packet
+
+The packet's entries are read as `decoding.md` §5 reads a packet's, with
+the same errors (`past_end`, `bad_checksum`, `missing_value` and the
+rest). A command packet has no length: the payload is the packet, and
+bytes after its last entry, or keys of a JSON payload that no field
+reads, are ignored, so layouts may grow at the end. A checksum covers
+only bytes before it, so bytes past the packet are covered by the link's
+framing alone; a `remaining` value takes in whatever follows it. Every
+constant field MUST hold its value, including those that took no part in
+identification [`wrong_constant`].
+
+### 7.4 Arguments
+
+Each argument the packet encodes is its field's raw value:
+
+- through a `states` conversion, the name of the state listing the raw
+  value [`unknown_state`];
+- through a `linear` or `poly` conversion, as `decoding.md` §7.1
+  converts it;
+- unconverted, as it is: an integer as the nearest double for an `f64`
+  argument, 0 or 1 as false or true for a `bool` argument
+  [`out_of_range`].
+
+The value MUST be one the catalog allows, by §2.2 and §2.3, with the same
+codes, but an `f64` argument with a range is tested on its raw value, in
+this order:
+
+1. a float raw value MUST be finite [`non_finite`];
+2. the raw value MUST lie between what the range's two ends become by
+   §3.1 (the inverse conversion and its rounding, without the fit check),
+   ends included, in either order; an open end counts as the largest
+   finite double of its sign. An integer raw value is compared with the
+   ends exactly, as §2.3 compares integers with bounds, never after
+   converting it to a double [`out_of_range`];
+3. the argument is the converted raw value, held to the range: a value
+   past an end, infinite included, is that end.
+
+So 3600.06 s at 0.1 s per count encodes to raw 36001, which converts to
+3600.1 s and decodes as 3600.06 s when the range ends there. With an
+inverse that only rises or only falls over the range (linear ones always
+do; validation checks polynomial ones, §3.1), a raw value the encoder
+writes for an in-range value is never refused, whether or not the inverse
+undoes the conversion exactly.
+
+Encoding the decoded arguments gives the same payload when every
+converted field's inverse undoes its conversion: when the raw value,
+converted and then encoded again by §3.1, is the raw value. That holds
+for unconverted arguments and states, and for linear conversions into
+integer fields whose offset doesn't swamp the scaled value. It need not
+hold for a float field with a conversion, or for a polynomial whose
+`inverse` is approximate; there the decoded argument is what the raw value
+means by the field's conversion, and the record holds the raw value
+exactly.
+
+An argument the set doesn't encode is its default, and the result lists
+it as defaulted. A packet with a target field gives the target's native
+id: an integer field's integer, or a string field's text (text in an
+integer's one decimal spelling is that integer).
+
+## 8. Error codes
 
 | Code | Where |
 | --- | --- |
 | `unknown_set`, `unknown_command` | the request (§1) |
-| `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `out_of_range`, `not_default` | an argument (§2); the error names it |
+| `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `out_of_range`, `not_default` | an argument (§2, §7.4); the error names it |
 | `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length` | a field (§3); the error names it |
+| `no_packet`, `wrong_constant`, and the routing and entry codes of `decoding.md` | decoding a command (§7) |
 | `invalid_layout` | a definition that didn't pass validation; never for a validated one |

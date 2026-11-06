@@ -53,6 +53,7 @@
 //!   present field's pointer is an error.
 
 mod clock;
+mod command;
 mod extract;
 mod identify;
 mod meaning;
@@ -65,11 +66,16 @@ use thiserror::Error;
 use crate::v2::bindings::Resolver;
 use crate::v2::bits::{read_bits, sign_extend};
 use crate::v2::checksum::{Algorithm, Compiled};
-use crate::v2::ir::{Catalog, Entry, Family, Length, Packet, Scalar, Set};
+use crate::v2::ir::{
+    ByteOrder, Catalog, CommandPacket, Entry, Family, Length, Packet, Scalar, Set,
+};
 use crate::v2::message::{Message, MetaValue};
 use crate::v2::route::{FamilySets, Readable, Route, RouteError, json_integer};
-use crate::v2::validate::{KeyId, KeyValue, by_value, decoding_facts, exact, static_offsets};
+use crate::v2::validate::{
+    KeyId, KeyValue, by_value, command_identities, decoding_facts, exact, static_offsets,
+};
 
+pub use command::{CommandDecodeError, DecodedCommand};
 use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Tables};
 use identify::Index;
 pub(crate) use meaning::convert;
@@ -337,32 +343,68 @@ pub(crate) struct Program {
     composites: Vec<Vec<CompiledComposite>>,
     /// Each packet's checksums, by packet index.
     checksums: Vec<PacketChecksums>,
+    commands: CommandProgram,
+}
+
+/// What decoding a set's command packets precomputes, by command index.
+#[derive(Debug, Clone)]
+struct CommandProgram {
+    index: Index,
+    names: Vec<FieldNames>,
+    checksums: Vec<PacketChecksums>,
+}
+
+/// A packet's checksums, compiled, with those at static positions.
+fn packet_checksums(entries: &[Entry], type_sizes: &BTreeMap<&str, u64>) -> PacketChecksums {
+    let offsets = static_offsets(entries, type_sizes);
+    let mut compiled = PacketChecksums::default();
+    for (index, entry) in entries.iter().enumerate() {
+        let Entry::Checksum(checksum) = entry else {
+            continue;
+        };
+        let Some(algorithm) = Algorithm::resolve(&checksum.algorithm) else {
+            continue;
+        };
+        compiled.compiled.insert(index, Compiled::new(algorithm));
+        if let Some(Some(at)) = offsets.get(index) {
+            compiled.fixed.push((index, *at));
+        }
+    }
+    compiled
+}
+
+/// A packet's payload, ready to walk.
+enum Walked<'p> {
+    Binary(&'p [u8], ByteOrder),
+    Json(&'p Json),
 }
 
 impl Program {
     /// For a validated set and its family.
     pub(crate) fn compile(set: &Set, family: &Family) -> Program {
         let (identities, type_sizes) = decoding_facts(set, family);
-        let mut checksums = Vec::with_capacity(set.packets.len());
-        for packet in &set.packets {
-            let offsets = static_offsets(&packet.entries, &type_sizes);
-            let mut compiled = PacketChecksums::default();
-            for (index, entry) in packet.entries.iter().enumerate() {
-                let Entry::Checksum(checksum) = entry else {
-                    continue;
-                };
-                let Some(algorithm) = Algorithm::resolve(&checksum.algorithm) else {
-                    continue;
-                };
-                compiled.compiled.insert(index, Compiled::new(algorithm));
-                if let Some(Some(at)) = offsets.get(index) {
-                    compiled.fixed.push((index, *at));
-                }
-            }
-            checksums.push(compiled);
-        }
+        let checksums = set
+            .packets
+            .iter()
+            .map(|packet| packet_checksums(&packet.entries, &type_sizes))
+            .collect();
+        // Command packets hold no struct types.
+        let commands = CommandProgram {
+            index: Index::new(command_identities(set, family)),
+            names: set
+                .commands
+                .iter()
+                .map(|packet| field_names(&packet.entries))
+                .collect(),
+            checksums: set
+                .commands
+                .iter()
+                .map(|packet| packet_checksums(&packet.entries, &BTreeMap::new()))
+                .collect(),
+        };
         Program {
             checksums,
+            commands,
             index: Index::new(identities),
             type_sizes: type_sizes
                 .into_iter()
@@ -470,20 +512,7 @@ impl Program {
         readable: &Readable<'_>,
     ) -> Result<(usize, &'a Packet, Record<'a>), DecodeError> {
         let json = readable.json(family)?;
-        let mut evaluate = |key: &KeyId| -> Option<KeyValue> {
-            match key {
-                KeyId::Metadata(name) => metadata_key(message, name),
-                KeyId::Pointer(pointer) => {
-                    json.and_then(|doc| doc.pointer(pointer)).and_then(json_key)
-                }
-                KeyId::Bits {
-                    offset,
-                    size,
-                    signed,
-                } => bits_key(readable, *offset, *size, *signed),
-                KeyId::Unplaced { packet, name } => self.unplaced_key(set, *packet, name, readable),
-            }
-        };
+        let mut evaluate = |key: &KeyId| self.key(set, key, message, readable, json);
         let found = self.index.find(&mut evaluate);
         let found = found.and_then(|index| Some((index, set.packets.get(index)?)));
         let Some((index, packet)) = found else {
@@ -494,6 +523,78 @@ impl Program {
         };
         let record = self.extract(set, index, packet, readable, json)?;
         Ok((index, packet, record))
+    }
+
+    /// The command packet a payload is, by index, and its record; `None` if
+    /// no command packet of the set matches.
+    pub(super) fn decode_command<'a>(
+        &'a self,
+        set: &'a Set,
+        family: &str,
+        message: &Message<'_>,
+        readable: &Readable<'_>,
+    ) -> Result<Option<(&'a CommandPacket, Record<'a>)>, DecodeError> {
+        let json = readable.json(family)?;
+        let mut evaluate = |key: &KeyId| self.key(set, key, message, readable, json);
+        let found = self.commands.index.find(&mut evaluate);
+        let Some((index, packet)) = found.and_then(|index| Some((index, set.commands.get(index)?)))
+        else {
+            return Ok(None);
+        };
+        let (Some(names), checksums) = (
+            self.commands.names.get(index),
+            self.commands.checksums.get(index),
+        ) else {
+            return Err(entry_error(
+                &packet.name,
+                &[],
+                Problem::Layout("a command packet not compiled"),
+            ));
+        };
+        // A command packet has no length: the payload is the packet, and
+        // anything after its last entry is ignored, as layouts may grow.
+        let payload = match (readable, json) {
+            (Readable::Binary { bytes, order }, _) => Walked::Binary(bytes, *order),
+            (Readable::Json { .. }, Some(document)) => Walked::Json(document),
+            (Readable::Json { .. }, None) => {
+                return Err(entry_error(
+                    &packet.name,
+                    &[],
+                    Problem::Layout("a JSON payload that wasn't parsed"),
+                ));
+            }
+        };
+        let record = self.walk(
+            set,
+            &packet.name,
+            &packet.entries,
+            names,
+            checksums,
+            payload,
+        )?;
+        Ok(Some((packet, record)))
+    }
+
+    /// A key's value in a message, or `None` if it can't be read.
+    fn key(
+        &self,
+        set: &Set,
+        key: &KeyId,
+        message: &Message<'_>,
+        readable: &Readable<'_>,
+        json: Option<&Json>,
+    ) -> Option<KeyValue> {
+        match key {
+            KeyId::Metadata(name) => metadata_key(message, name),
+            KeyId::Pointer(pointer) => json.and_then(|doc| doc.pointer(pointer)).and_then(json_key),
+            KeyId::Bits {
+                offset,
+                size,
+                signed,
+            } => bits_key(readable, *offset, *size, *signed),
+            KeyId::Bytes { offset, length } => bytes_key(readable, *offset, *length),
+            KeyId::Unplaced { packet, name } => self.unplaced_key(set, *packet, name, readable),
+        }
     }
 
     /// A field key without a static position: the packet decoded up to
@@ -535,33 +636,62 @@ impl Program {
     ) -> Result<Record<'a>, DecodeError> {
         let Some(names) = self.packet_names.get(index) else {
             return Err(entry_error(
-                packet,
+                &packet.name,
                 &[],
                 Problem::Layout("a packet not compiled"),
             ));
         };
-        match (readable, json) {
+        let payload = match (readable, json) {
             (Readable::Binary { bytes, order }, _) => {
-                let bytes = within_length(packet, bytes)?;
-                let mut walker = BinaryWalker::new(self.tables(set), bytes, *order)
-                    .with_checksums(self.checksums.get(index));
+                Walked::Binary(within_length(packet, bytes)?, *order)
+            }
+            (Readable::Json { .. }, Some(document)) => Walked::Json(document),
+            (Readable::Json { .. }, None) => {
+                return Err(entry_error(
+                    &packet.name,
+                    &[],
+                    Problem::Layout("a JSON payload that wasn't parsed"),
+                ));
+            }
+        };
+        let checksums = self.checksums.get(index);
+        self.walk(
+            set,
+            &packet.name,
+            &packet.entries,
+            names,
+            checksums,
+            payload,
+        )
+    }
+
+    /// A packet's entries read from its payload; a binary packet's checksums
+    /// at static positions are verified first.
+    fn walk<'a>(
+        &'a self,
+        set: &'a Set,
+        name: &str,
+        entries: &'a [Entry],
+        names: &'a FieldNames,
+        checksums: Option<&'a PacketChecksums>,
+        payload: Walked<'_>,
+    ) -> Result<Record<'a>, DecodeError> {
+        match payload {
+            Walked::Binary(bytes, order) => {
+                let mut walker =
+                    BinaryWalker::new(self.tables(set), bytes, order).with_checksums(checksums);
                 let result = walker
-                    .verify_fixed(&packet.entries)
-                    .and_then(|()| walker.entries(&packet.entries, names, 0, None));
+                    .verify_fixed(entries)
+                    .and_then(|()| walker.entries(entries, names, 0, None));
                 result
                     .map(|(record, _)| record)
-                    .map_err(|problem| entry_error(packet, walker.path(), problem))
+                    .map_err(|problem| entry_error(name, walker.path(), problem))
             }
-            (Readable::Json { .. }, Some(document)) => {
+            Walked::Json(document) => {
                 let mut walker = JsonWalker::new(self.tables(set));
-                let result = walker.entries(&packet.entries, names, document);
-                result.map_err(|problem| entry_error(packet, walker.path(), problem))
+                let result = walker.entries(entries, names, document);
+                result.map_err(|problem| entry_error(name, walker.path(), problem))
             }
-            (Readable::Json { .. }, None) => Err(entry_error(
-                packet,
-                &[],
-                Problem::Layout("a JSON payload that wasn't parsed"),
-            )),
         }
     }
 }
@@ -602,7 +732,7 @@ fn within_length<'p>(packet: &Packet, payload: &'p [u8]) -> Result<&'p [u8], Dec
     })
 }
 
-fn entry_error(packet: &Packet, path: &[Segment<'_>], problem: Problem) -> DecodeError {
+fn entry_error(packet: &str, path: &[Segment<'_>], problem: Problem) -> DecodeError {
     let mut text = String::new();
     for segment in path {
         match segment {
@@ -620,7 +750,7 @@ fn entry_error(packet: &Packet, path: &[Segment<'_>], problem: Problem) -> Decod
         }
     }
     DecodeError::Entry {
-        packet: packet.name.clone(),
+        packet: packet.to_string(),
         path: text,
         problem,
     }
@@ -663,6 +793,19 @@ fn bits_key(readable: &Readable<'_>, offset: u64, size: u32, signed: bool) -> Op
     } else {
         i128::from(raw)
     }))
+}
+
+fn bytes_key(readable: &Readable<'_>, offset: u64, length: u32) -> Option<KeyValue> {
+    let Readable::Binary { bytes, .. } = readable else {
+        return None;
+    };
+    let first = usize::try_from(offset / 8)
+        .ok()
+        .filter(|_| offset.is_multiple_of(8))?;
+    let stop = first.checked_add(usize::try_from(length).ok()?)?;
+    bytes
+        .get(first..stop)
+        .map(|run| KeyValue::Bytes(run.to_vec()))
 }
 
 /// A field key read from a decoded record.

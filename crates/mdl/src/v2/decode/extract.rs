@@ -12,6 +12,7 @@ use crate::v2::ir::{
     Field, FromField, Scalar, ScalarElement, ScalarType, StructType, TextEncoding,
 };
 use crate::v2::route::json_integer;
+use crate::v2::text;
 use crate::v2::validate::rules::integer_value;
 
 /// Each field of a container by name, with its index among the
@@ -761,16 +762,9 @@ fn from_field(from: &FromField, scope: &Scope<'_, '_>) -> Result<u64, Problem> {
 }
 
 fn text(bytes: &[u8], encoding: Option<TextEncoding>) -> Result<String, Problem> {
-    match encoding.unwrap_or(TextEncoding::Utf8) {
-        TextEncoding::Utf8 => std::str::from_utf8(bytes)
-            .map(str::to_string)
-            .map_err(|_| Problem::InvalidText { encoding: "UTF-8" }),
-        TextEncoding::Ascii if bytes.is_ascii() => {
-            Ok(bytes.iter().map(|&b| char::from(b)).collect())
-        }
-        TextEncoding::Ascii => Err(Problem::InvalidText { encoding: "ASCII" }),
-        TextEncoding::Latin1 => Ok(bytes.iter().map(|&b| char::from(b)).collect()),
-    }
+    text::decode(bytes, encoding).ok_or(Problem::InvalidText {
+        encoding: text::name(encoding),
+    })
 }
 
 /// A checksum's algorithm, for a checksum the program didn't compile.

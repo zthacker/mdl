@@ -205,11 +205,13 @@ fn check_fixed_regions(
 
 /// A value as a key reads it. Bits and metadata read integers, so a
 /// decimal string compares by value (`"2"` is `2`); a JSON Pointer reads a
-/// JSON value, where the string `"2"` and the number `2` differ.
+/// JSON value, where the string `"2"` and the number `2` differ; a run of
+/// bytes compares byte for byte.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum KeyValue {
     Int(i128),
     Str(String),
+    Bytes(Vec<u8>),
 }
 
 pub(crate) fn by_value(scalar: &Scalar) -> KeyValue {
@@ -592,6 +594,12 @@ pub(crate) enum KeyId {
         offset: u64,
         size: u32,
         signed: bool,
+    },
+    /// Whole bytes at a known byte-aligned position: a fixed-length string
+    /// constant of a command packet, as the bytes it writes.
+    Bytes {
+        offset: u64,
+        length: u32,
     },
     /// A field whose position isn't known statically: equal to no other key.
     Unplaced {
