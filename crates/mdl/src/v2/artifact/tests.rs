@@ -408,3 +408,117 @@ fn assemble_validates_artifacts_whose_pins_match() {
         other => panic!("expected invalid artifacts, got {other:?}"),
     }
 }
+
+fn command_incompatibilities(old: Value, new: Value) -> Vec<(Code, String)> {
+    let catalog = |commands: Value| -> Catalog {
+        serde_json::from_value(json!({ "commands": commands })).unwrap()
+    };
+    match check_compatible(&catalog(old), &catalog(new)) {
+        Ok(()) => Vec::new(),
+        Err(diagnostics) => diagnostics
+            .iter()
+            .map(|d| (d.code, d.path.clone()))
+            .collect(),
+    }
+}
+
+#[test]
+fn commands_evolve_like_params() {
+    let old = json!({ "eps.go": { "arguments": [
+        { "name": "mode", "type": "enum", "states": ["A"] },
+        { "name": "n", "type": "u64", "default": 1, "range": { "max": 9 } } ] } });
+    // Appended states, a new argument with a default, a description and a
+    // new command keep callers written for the older catalog valid.
+    let compatible = json!({
+        "eps.go": { "description": "Go", "arguments": [
+            { "name": "mode", "type": "enum", "states": ["A", "B"] },
+            { "name": "n", "type": "u64", "default": 1, "range": { "max": 99 } },
+            { "name": "fast", "type": "bool", "default": false } ] },
+        "eps.stop": {} });
+    assert_eq!(command_incompatibilities(old.clone(), compatible), vec![]);
+
+    let go = "/catalog/commands/eps.go";
+    let path = |rest: &str| format!("{go}{rest}");
+    let breaking = |change: &dyn Fn(&mut Value)| {
+        let mut new = old.clone();
+        change(&mut new);
+        command_incompatibilities(old.clone(), new)
+    };
+    assert_eq!(
+        breaking(&|new| *new = json!({})),
+        vec![(Code::RemovedCommand, go.to_string())]
+    );
+    assert_eq!(
+        breaking(&|new| new["eps.go"]["arguments"][1]["type"] = json!("i64")),
+        vec![(Code::ChangedCommand, path("/arguments/1/type"))]
+    );
+    assert_eq!(
+        breaking(&|new| new["eps.go"]["arguments"][1]["default"] = json!(2)),
+        vec![(Code::ChangedCommand, path("/arguments/1/default"))]
+    );
+    // A narrower range refuses values callers could send.
+    assert_eq!(
+        breaking(&|new| new["eps.go"]["arguments"][1]["range"]["max"] = json!(5)),
+        vec![(Code::ChangedCommand, path("/arguments/1/range"))]
+    );
+    assert_eq!(
+        breaking(&|new| new["eps.go"]["arguments"][1]["range"]["min"] = json!(1)),
+        vec![(Code::ChangedCommand, path("/arguments/1/range"))]
+    );
+    assert_eq!(
+        breaking(&|new| new["eps.go"]["arguments"][0]["states"] = json!(["B", "A"])),
+        vec![(Code::ChangedCommand, path("/arguments/0/states"))]
+    );
+    assert_eq!(
+        breaking(&|new| {
+            new["eps.go"]["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "m", "type": "bool" }));
+        }),
+        vec![(Code::ChangedCommand, path("/arguments/2"))]
+    );
+    assert_eq!(
+        breaking(&|new| {
+            new["eps.go"]["arguments"].as_array_mut().unwrap().remove(0);
+        }),
+        vec![(Code::ChangedCommand, path("/arguments"))]
+    );
+}
+
+#[test]
+fn set_artifacts_list_commands_in_name_order() {
+    let artifacts = built(&fixture());
+    let value: Value = serde_json::from_str(&artifacts.sets["vendor_x_v2"].canonical).unwrap();
+    let names: Vec<&str> = value["set"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["LOAD_TABLE", "SET_MODE"]);
+
+    // Any other order is a second spelling, so it's refused.
+    let mut reordered = value.clone();
+    reordered["set"]["commands"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    let error = read_artifact(&serde_json::to_vec(&reordered).unwrap())
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("/set/commands/1: commands are listed in name order"),
+        "{error}"
+    );
+    // A bundle in another order builds the same set artifact.
+    let mut shuffled = fixture();
+    shuffled["sets"][0]["commands"]
+        .as_array_mut()
+        .unwrap()
+        .reverse();
+    assert_eq!(
+        built(&shuffled).sets["vendor_x_v2"].digest,
+        artifacts.sets["vendor_x_v2"].digest
+    );
+}

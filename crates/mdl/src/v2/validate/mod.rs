@@ -39,6 +39,7 @@
 //! back to the less specific one.
 
 mod catalog;
+mod command;
 mod family;
 mod layout;
 mod mapping;

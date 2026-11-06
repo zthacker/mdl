@@ -188,7 +188,7 @@ fn requirement(ty: ParamType) -> &'static str {
     }
 }
 
-fn check_unit(
+pub(super) fn check_unit(
     unit: Option<&str>,
     expected: Option<&str>,
     param: &str,

@@ -122,6 +122,26 @@ pub enum Code {
     BindingSet,
     /// A native id the family's alias locator can't produce.
     NativeId,
+    /// A command packet for a command the catalog doesn't have.
+    UnknownCommand,
+    /// A field encoding an argument its command doesn't have.
+    UnknownArgument,
+    /// A command argument no field of the command packet encodes.
+    UnmappedArgument,
+    /// An argument default that doesn't fit the argument.
+    DefaultValue,
+    /// A command-only key (`value`, `argument`, `inverse`) in telemetry.
+    CommandOnly,
+    /// Something a command packet can't hold, or a field that gets its
+    /// value from more than one place.
+    CommandShape,
+    /// A command field that gets no value: no constant, no argument, and
+    /// no later entry takes a length or count from it.
+    NoValue,
+    /// A newer catalog without a command the older one had.
+    RemovedCommand,
+    /// A newer catalog that changes what a command means.
+    ChangedCommand,
 }
 
 impl Code {
@@ -182,6 +202,15 @@ impl Code {
             Code::BindingShape => "binding_shape",
             Code::BindingSet => "binding_set",
             Code::NativeId => "native_id",
+            Code::UnknownCommand => "unknown_command",
+            Code::UnknownArgument => "unknown_argument",
+            Code::UnmappedArgument => "unmapped_argument",
+            Code::DefaultValue => "default_value",
+            Code::CommandOnly => "command_only",
+            Code::CommandShape => "command_shape",
+            Code::NoValue => "no_value",
+            Code::RemovedCommand => "removed_command",
+            Code::ChangedCommand => "changed_command",
         }
     }
 }

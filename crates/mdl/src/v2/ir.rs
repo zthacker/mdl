@@ -223,6 +223,107 @@ impl From<&str> for Scalar {
     }
 }
 
+/// A typed constant: a command argument's default. Validation checks it
+/// against the argument's type. A number with no fraction reads as an
+/// integer (`1.0` is `1`), as canonical JSON writes it; integers beyond
+/// ±(2^53 − 1) and bytes (lowercase hex) are strings. Literals compare by
+/// value: `Float(2.0)` equals `Int(2)`, as their canonical JSON does.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Literal {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Str(String),
+}
+
+impl PartialEq for Literal {
+    fn eq(&self, other: &Literal) -> bool {
+        match (self, other) {
+            (Literal::Bool(a), Literal::Bool(b)) => a == b,
+            (Literal::Int(a), Literal::Int(b)) => a == b,
+            (Literal::Float(a), Literal::Float(b)) => a == b,
+            (Literal::Int(n), Literal::Float(x)) | (Literal::Float(x), Literal::Int(n)) => {
+                // Exact both ways: `x` has no fraction and converts back to `n`.
+                x.fract() == 0.0 && i64_from_integral(*x) == Some(*n)
+            }
+            (Literal::Str(a), Literal::Str(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+/// The i64 an integral double holds exactly, if it's in range.
+fn i64_from_integral(x: f64) -> Option<i64> {
+    // -2^63 is exactly representable; 2^63 is not an i64.
+    ((-9.223_372_036_854_776e18..9.223_372_036_854_776e18).contains(&x)).then_some(x as i64)
+}
+
+impl Serialize for Literal {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Literal::Bool(b) => serializer.serialize_bool(*b),
+            Literal::Int(n) => serializer.serialize_i64(*n),
+            Literal::Float(x) if x.is_finite() => serializer.serialize_f64(*x),
+            Literal::Float(x) => Err(serde::ser::Error::custom(format!(
+                "{x} isn't a finite number, which JSON can't hold"
+            ))),
+            Literal::Str(s) => serializer.serialize_str(s),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Literal {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(LiteralVisitor)
+    }
+}
+
+struct LiteralVisitor;
+
+impl Visitor<'_> for LiteralVisitor {
+    type Value = Literal;
+
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("a bool, a number or a string")
+    }
+
+    fn visit_bool<E>(self, b: bool) -> Result<Literal, E> {
+        Ok(Literal::Bool(b))
+    }
+
+    fn visit_i64<E>(self, n: i64) -> Result<Literal, E> {
+        Ok(Literal::Int(n))
+    }
+
+    fn visit_u64<E: de::Error>(self, n: u64) -> Result<Literal, E> {
+        i64::try_from(n).map(Literal::Int).map_err(|_| {
+            E::custom(format!(
+                "integer {n} is too large for a JSON number here; write it as the string \"{n}\""
+            ))
+        })
+    }
+
+    fn visit_f64<E: de::Error>(self, x: f64) -> Result<Literal, E> {
+        if x.fract() != 0.0 {
+            return Ok(Literal::Float(x));
+        }
+        i64_from_integral(x).map(Literal::Int).ok_or_else(|| {
+            E::custom(format!(
+                "integer {x} is outside the 64-bit range; write it as a string"
+            ))
+        })
+    }
+
+    fn visit_str<E>(self, s: &str) -> Result<Literal, E> {
+        Ok(Literal::Str(s.to_string()))
+    }
+
+    fn visit_string<E>(self, s: String) -> Result<Literal, E> {
+        Ok(Literal::Str(s))
+    }
+}
+
 // ---- Serde helpers: finite floats, null as empty ------------------------------------
 
 /// Serialize-side checks that keep the "never null" rule: serde_json would
@@ -431,6 +532,109 @@ pub struct Catalog {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub params: BTreeMap<String, Param>,
+    /// Canonical commands: what can be asked of an asset, whatever its
+    /// vendor.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub commands: BTreeMap<String, Command>,
+}
+
+/// One canonical command. Its name is its key in [`Catalog::commands`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Command {
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub arguments: Vec<Argument>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Set when the command is retired; the text says what replaces it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deprecated: Option<String>,
+}
+
+impl Command {
+    pub fn new(arguments: Vec<Argument>) -> Self {
+        Command {
+            arguments,
+            description: None,
+            deprecated: None,
+        }
+    }
+}
+
+/// One argument of a canonical command: a scalar of a param type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct Argument {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: ParamType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Enum arguments: the allowed states.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub states: Vec<String>,
+    /// Numeric arguments: the values a caller may give, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<ArgumentRange>,
+    /// The value used when a caller leaves the argument out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Literal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+impl Argument {
+    pub fn new(name: impl Into<String>, ty: ParamType) -> Self {
+        Argument {
+            name: name.into(),
+            ty,
+            unit: None,
+            states: Vec::new(),
+            range: None,
+            default: None,
+            description: None,
+        }
+    }
+}
+
+/// The values a numeric argument may take, inclusive; either end may be
+/// open.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ArgumentRange {
+    #[serde(
+        default,
+        serialize_with = "finite::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub min: Option<f64>,
+    #[serde(
+        default,
+        serialize_with = "finite::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max: Option<f64>,
+}
+
+impl ArgumentRange {
+    pub fn new(min: Option<f64>, max: Option<f64>) -> Self {
+        ArgumentRange { min, max }
+    }
 }
 
 /// One canonical parameter. Its name is its key in [`Catalog::params`].
@@ -671,6 +875,13 @@ pub struct Set {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub packets: Vec<Packet>,
+    /// How this layout version encodes canonical commands.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub commands: Vec<CommandPacket>,
 }
 
 impl Set {
@@ -682,6 +893,7 @@ impl Set {
             time: None,
             types: BTreeMap::new(),
             packets: Vec::new(),
+            commands: Vec::new(),
         }
     }
 }
@@ -779,6 +991,44 @@ impl Correlate {
 }
 
 // ---- Packets and layout -------------------------------------------------------
+
+/// How one canonical command is encoded: a payload layout whose fields get
+/// their values from the command's arguments, from constants, or from the
+/// data (a count or length another entry takes from them).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct CommandPacket {
+    pub name: String,
+    /// The catalog command this encodes.
+    pub canonical: String,
+    /// Values the link frames the command with (`apid`), by names the
+    /// family declares.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub metadata: BTreeMap<String, Scalar>,
+    /// The payload; absent for a command the link frames with no payload.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub entries: Vec<Entry>,
+}
+
+impl CommandPacket {
+    pub fn new(name: impl Into<String>, canonical: impl Into<String>, entries: Vec<Entry>) -> Self {
+        CommandPacket {
+            name: name.into(),
+            canonical: canonical.into(),
+            metadata: BTreeMap::new(),
+            entries,
+        }
+    }
+}
 
 /// One message layout.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -943,6 +1193,18 @@ pub struct Field {
     /// rejects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optional: Option<bool>,
+    /// Command packets: the raw value this field always has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Scalar>,
+    /// Command packets: the command argument this field encodes, through
+    /// the inverse of `conversion`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument: Option<String>,
+    /// Command packets: engineering value to raw value, for an argument
+    /// whose `conversion` is a polynomial (linear and states conversions
+    /// invert exactly).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse: Option<Conversion>,
 }
 
 impl Field {
@@ -961,6 +1223,9 @@ impl Field {
             invalid: Vec::new(),
             when: None,
             optional: None,
+            value: None,
+            argument: None,
+            inverse: None,
         }
     }
 }
