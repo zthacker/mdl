@@ -59,6 +59,15 @@ pub(crate) fn read_bits(
     }
 }
 
+/// The low `size_bits` bits of `raw` as a two's-complement number:
+/// `sign_extend(0b11, 2)` is -1.
+pub(crate) fn sign_extend(raw: u64, size_bits: u32) -> i64 {
+    let unused = 64 - size_bits.clamp(1, 64);
+    // Move the value's top bit to bit 63, reinterpret the bits as signed,
+    // then shift back: `>>` on an i64 copies the sign bit in.
+    ((raw << unused) as i64) >> unused
+}
+
 /// `size` bits of `bytes`, starting `skip` bits into the first byte. A
 /// 64-bit value that starts mid-byte spans 9 bytes, so a u128 holds them.
 fn most_significant_first(bytes: &[u8], skip: u64, size: u64) -> u64 {

@@ -45,6 +45,8 @@ mod mapping;
 pub(crate) mod rules;
 mod set;
 
+pub(crate) use set::{KeyId, KeyValue, by_value, decoding_facts, exact};
+
 #[cfg(test)]
 mod tests;
 
