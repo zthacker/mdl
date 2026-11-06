@@ -42,7 +42,7 @@ mod catalog;
 mod family;
 mod layout;
 mod mapping;
-mod rules;
+pub(crate) mod rules;
 mod set;
 
 #[cfg(test)]

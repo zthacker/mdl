@@ -75,6 +75,20 @@ pub enum ReadError {
     NotNormalForm { path: String, detail: String },
 }
 
+impl ReadError {
+    /// A stable code for the error, for tools and conformance vectors.
+    pub fn code(&self) -> &'static str {
+        match self {
+            ReadError::Canonical(err) => err.code(),
+            ReadError::NotAnObject { .. } | ReadError::Shape { .. } => "wrong_shape",
+            ReadError::MissingVersion => "missing_version",
+            ReadError::BadVersion { .. } => "invalid_version",
+            ReadError::UnsupportedVersion { .. } => "unsupported_version",
+            ReadError::NotNormalForm { .. } => "not_normal_form",
+        }
+    }
+}
+
 fn at(path: &str, message: &str) -> String {
     if path.is_empty() {
         message.to_string()
@@ -337,17 +351,21 @@ fn check_version(value: &Value) -> Result<(), ReadError> {
             found: json_type(value),
         });
     };
-    let needed = match members.get("mdl_version") {
-        None => return Err(ReadError::MissingVersion),
-        Some(Value::String(text)) => text
-            .parse::<IrVersion>()
-            .map_err(|message| ReadError::BadVersion { message })?,
-        Some(other) => {
-            return Err(ReadError::BadVersion {
-                message: format!("expected a string like \"2.0\", got {}", json_type(other)),
-            });
-        }
-    };
+    match members.get("mdl_version") {
+        None => Err(ReadError::MissingVersion),
+        Some(Value::String(text)) => check_version_text(text),
+        Some(other) => Err(ReadError::BadVersion {
+            message: format!("expected a string like \"2.0\", got {}", json_type(other)),
+        }),
+    }
+}
+
+/// An `mdl_version` this build can read: the same major version, and a
+/// minor version no newer than its own.
+pub(crate) fn check_version_text(text: &str) -> Result<(), ReadError> {
+    let needed = text
+        .parse::<IrVersion>()
+        .map_err(|message| ReadError::BadVersion { message })?;
     if IrVersion::CURRENT.can_read(needed) {
         Ok(())
     } else {

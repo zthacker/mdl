@@ -8,13 +8,14 @@ use super::layout::{Layout, exact_type_sizes, static_offsets};
 use super::mapping;
 use super::rules::{
     check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
-    integer_value, is_identifier, is_strict_instant, is_token,
+    integer_value, is_identifier, is_token,
 };
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
     ArrayEntry, Bundle, Catalog, Condition, Conversion, Element, Encoding, Entry, Family, Field,
     Locator, Packet, Scalar, ScalarElement, ScalarType, Set, StructType, TextEncoding, Time,
 };
+use crate::v2::time::Timestamp;
 
 /// What entries may refer to.
 struct Scope<'a> {
@@ -314,13 +315,13 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                     ),
                 );
             }
-            if !is_strict_instant(epoch) {
+            if epoch.parse::<Timestamp>().is_err() {
                 report.error(
                     Code::InvalidEpoch,
                     &place.key("epoch"),
                     format!(
                         "epoch {epoch:?} is not an instant like \"2000-01-01T00:00:00Z\" \
-                         (YYYY-MM-DDTHH:MM:SS, optional fraction, then Z)"
+                         (YYYY-MM-DDTHH:MM:SS, optional fraction without trailing zeros, then Z)"
                     ),
                 );
             }

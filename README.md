@@ -38,6 +38,7 @@ Requires Rust 1.88 or later and [`just`](https://github.com/casey/just).
 | `crates/mdl` | the library: IR, frontends, validation, plans, interpreter |
 | `crates/morphc` | the compiler CLI |
 | `examples/definitions` | a worked example (a CCSDS satellite, a JSON satellite, a MAVLink drone) and, for now, the schema reference |
+| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md) |
 
 ## License
 
