@@ -54,6 +54,7 @@
 
 mod extract;
 mod identify;
+mod meaning;
 
 use std::collections::BTreeMap;
 
@@ -62,13 +63,16 @@ use thiserror::Error;
 
 use crate::v2::bindings::Resolver;
 use crate::v2::bits::{read_bits, sign_extend};
-use crate::v2::ir::{Entry, Family, Length, Packet, Scalar, Set};
+use crate::v2::ir::{Catalog, Entry, Family, Length, Packet, Scalar, Set};
 use crate::v2::message::{Message, MetaValue};
 use crate::v2::route::{FamilySets, Readable, Route, RouteError, json_integer};
 use crate::v2::validate::{KeyId, KeyValue, by_value, decoding_facts, exact};
 
 use extract::{BinaryWalker, FieldNames, JsonWalker, Segment, Tables};
 use identify::Index;
+use meaning::{CompiledComposite, sample_value, visit};
+
+pub use meaning::{Engineering, Quality, Sample, SampleValue};
 
 /// A decoded message.
 #[derive(Debug, Clone, PartialEq)]
@@ -77,7 +81,43 @@ pub struct Decoded<'a> {
     /// Who sent it and which set decoded it.
     pub route: Route<'a>,
     pub packet: &'a Packet,
+    /// Every entry, raw.
     pub record: Record<'a>,
+    /// The canonical values: mapped fields and array elements in record
+    /// order, then composites in definition order.
+    pub samples: Vec<Sample<'a>>,
+}
+
+impl<'a> Decoded<'a> {
+    /// The engineering value of the field or scalar element at `path`
+    /// (`bus_counts`, `pos.x`, `samples[3]`), mapped or not: its raw value
+    /// through its conversion. `None` if nothing scalar is there.
+    pub fn engineering(&self, path: &str) -> Option<Engineering> {
+        meaning::engineering_at(path, self.packet, &self.route.set.types, &self.record)
+    }
+
+    /// The engineering value of every field and scalar element, by path,
+    /// in record order. Computed on each call, not during decoding.
+    pub fn engineering_values(&self) -> Vec<(String, Engineering)> {
+        let mut values = Vec::new();
+        let walked = visit::<std::convert::Infallible>(
+            &self.packet.entries,
+            &self.record,
+            &self.route.set.types,
+            "",
+            None,
+            &mut |visit| {
+                if let Some(engineering) = meaning::engineering(visit.meaning, visit.value) {
+                    values.push((visit.path, engineering));
+                }
+                Ok(())
+            },
+        );
+        match walked {
+            Ok(()) => values,
+            Err(never) => match never {},
+        }
+    }
 }
 
 /// The decoded entries of a packet or struct, in definition order. Absent
@@ -203,7 +243,7 @@ pub enum Problem {
     EmptyElement,
     #[error("a length or count taken from a field is {value}")]
     BadLength { value: i128 },
-    #[error("nothing at {pointer}")]
+    #[error("no value at {pointer}")]
     Missing { pointer: String },
     #[error("expected {expected}, found {found}")]
     WrongType {
@@ -245,14 +285,15 @@ impl FamilySets {
     ) -> Result<Decoded<'_>, DecodeError> {
         let readable = self.readable(message)?;
         let (route, loaded) = self.route_parts(message, &readable, resolver)?;
-        let (packet, record) =
-            loaded
-                .program
-                .decode(&loaded.set, &self.family().name, message, &readable)?;
+        let program = &loaded.program;
+        let (index, packet, record) =
+            program.decode(&loaded.set, &self.family().name, message, &readable)?;
+        let samples = program.samples(index, packet, &loaded.set, &loaded.catalog, &record)?;
         Ok(Decoded {
             route,
             packet,
             record,
+            samples,
         })
     }
 }
@@ -266,6 +307,8 @@ pub(crate) struct Program {
     /// Field names of each packet, by packet index, and of each type.
     packet_names: Vec<FieldNames>,
     type_names: BTreeMap<String, FieldNames>,
+    /// Each packet's composites, by packet index.
+    composites: Vec<Vec<CompiledComposite>>,
 }
 
 impl Program {
@@ -288,7 +331,80 @@ impl Program {
                 .iter()
                 .map(|(name, struct_type)| (name.clone(), field_names(&struct_type.entries)))
                 .collect(),
+            composites: set
+                .packets
+                .iter()
+                .map(|packet| {
+                    packet
+                        .composites
+                        .iter()
+                        .filter_map(|composite| {
+                            CompiledComposite::compile(composite, packet, &set.types)
+                        })
+                        .collect()
+                })
+                .collect(),
         }
+    }
+
+    /// The canonical samples of a decoded packet.
+    fn samples<'a>(
+        &'a self,
+        index: usize,
+        packet: &'a Packet,
+        set: &'a Set,
+        catalog: &Catalog,
+        record: &Record<'a>,
+    ) -> Result<Vec<Sample<'a>>, DecodeError> {
+        let failed = |path: String, problem: Problem| DecodeError::Entry {
+            packet: packet.name.clone(),
+            path,
+            problem,
+        };
+        let mut samples = Vec::new();
+        let mut failed_at = String::new();
+        let walked = visit(
+            &packet.entries,
+            record,
+            &set.types,
+            "",
+            None,
+            &mut |visit| {
+                let Some((param_name, param)) = visit
+                    .canonical
+                    .and_then(|name| Some((name, catalog.params.get(name)?)))
+                else {
+                    return Ok(());
+                };
+                match sample_value(param, visit.meaning, visit.value) {
+                    Ok((value, quality)) => {
+                        samples.push(Sample {
+                            param: param_name,
+                            value,
+                            path: visit.path,
+                            index: visit.index,
+                            time_offset_ns: visit.time_offset_ns,
+                            quality,
+                        });
+                        Ok(())
+                    }
+                    Err(problem) => {
+                        failed_at = visit.path;
+                        Err(problem)
+                    }
+                }
+            },
+        );
+        if let Err(problem) = walked {
+            return Err(failed(failed_at, problem));
+        }
+        for composite in self.composites.get(index).into_iter().flatten() {
+            let sample = composite
+                .sample(catalog, record)
+                .map_err(|problem| failed(String::new(), problem))?;
+            samples.extend(sample);
+        }
+        Ok(samples)
     }
 
     fn tables<'a>(&'a self, set: &'a Set) -> Tables<'a> {
@@ -305,7 +421,7 @@ impl Program {
         family: &str,
         message: &Message<'_>,
         readable: &Readable<'_>,
-    ) -> Result<(&'a Packet, Record<'a>), DecodeError> {
+    ) -> Result<(usize, &'a Packet, Record<'a>), DecodeError> {
         let json = readable.json(family)?;
         let mut evaluate = |key: &KeyId| -> Option<KeyValue> {
             match key {
@@ -330,7 +446,7 @@ impl Program {
             });
         };
         let record = self.extract(set, index, packet, readable, json)?;
-        Ok((packet, record))
+        Ok((index, packet, record))
     }
 
     /// A field key without a static position: the packet decoded up to

@@ -81,6 +81,8 @@ pub struct FamilySets {
 pub(super) struct LoadedSet {
     pub(super) set: Set,
     pub(super) def_version: Digest,
+    /// The catalog the set pins, shared by sets that pin the same one.
+    pub(super) catalog: Arc<Catalog>,
     pub(super) program: Program,
 }
 
@@ -211,6 +213,7 @@ impl FamilySets {
 
         let mut loaded = BTreeMap::new();
         let mut by_version: BTreeMap<VersionKey, String> = BTreeMap::new();
+        let mut shared: BTreeMap<Digest, Arc<Catalog>> = BTreeMap::new();
         for set in sets {
             let Artifact::Set {
                 catalog: pinned,
@@ -234,6 +237,20 @@ impl FamilySets {
                 });
             };
             assemble(set, family, catalog)?;
+            let Artifact::Catalog {
+                catalog: catalog_body,
+                ..
+            } = &catalog.value
+            else {
+                return Err(AssembleError::WrongKind {
+                    expected: "catalog",
+                });
+            };
+            let pinned_catalog = Arc::clone(
+                shared
+                    .entry(catalog.digest.clone())
+                    .or_insert_with(|| Arc::new(catalog_body.clone())),
+            );
             if let (Some(locator), Some(version)) = (&body.version, &set_body.version) {
                 let key = VersionKey::of_set(version, is_exact(locator));
                 if let Some(first) = by_version.get(&key) {
@@ -251,6 +268,7 @@ impl FamilySets {
                 LoadedSet {
                     set: set_body.clone(),
                     def_version: set.digest.clone(),
+                    catalog: pinned_catalog,
                     program: Program::compile(set_body, body),
                 },
             );

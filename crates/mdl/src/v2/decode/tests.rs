@@ -16,6 +16,12 @@ const FULL_BUNDLE: &str = include_str!("../../../tests/fixtures/v2/full_bundle.j
 /// packets keyed by their own fields.
 fn bundle() -> Json {
     let mut value: Json = serde_json::from_str(FULL_BUNDLE).unwrap();
+    // BUS also reports a temperature, but not always.
+    value["sets"][1]["packets"][0]["entries"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "kind": "field", "name": "temp", "type": "float",
+                      "pointer": "/temp", "optional": true }));
     let field =
         |name: &str| json!({ "kind": "field", "name": name, "type": "uint", "size_bits": 8 });
     value["families"].as_array_mut().unwrap().push(json!({
@@ -374,7 +380,7 @@ fn a_json_packet_that_cant_be_decoded_is_rejected_with_the_entry() {
     );
     let missing = r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 1}"#;
     let err = decode_json(missing).unwrap_err();
-    assert_eq!(err.to_string(), "packet BUS, cells: nothing at /cells");
+    assert_eq!(err.to_string(), "packet BUS, cells: no value at /cells");
     assert_eq!(code(decode_json(&with("\"1\"", "[]"))), "wrong_type");
     assert_eq!(code(decode_json(&with("1.5", "[]"))), "out_of_range");
     assert_eq!(code(decode_json(&with("1e30", "[]"))), "out_of_range");
@@ -553,4 +559,180 @@ proptest! {
             let _ = families["vendor_j"].decode(&message, registry);
         }
     }
+}
+
+fn hk_decoded(hk: &Hk<'_>) -> Vec<(String, String, String)> {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_x");
+    let payload = hk.bytes();
+    let message = Message::new(Payload::Binary(&payload), now()).with_metadata(HK_METADATA);
+    let decoded = sets.decode(&message, &registry()).unwrap();
+    decoded.samples.iter().map(sample_text).collect()
+}
+
+/// A sample as (param, value and where it's from, quality).
+fn sample_text(sample: &Sample<'_>) -> (String, String, String) {
+    let mut place = sample.path.clone();
+    if let Some(offset) = sample.time_offset_ns {
+        place.push_str(&format!(" +{offset}ns"));
+    }
+    (
+        sample.param.to_string(),
+        format!("{:?} at {place}", sample.value),
+        sample.quality.as_str().to_string(),
+    )
+}
+
+fn triples(expected: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
+    expected
+        .iter()
+        .map(|(a, b, c)| (a.to_string(), b.to_string(), c.to_string()))
+        .collect()
+}
+
+#[test]
+fn mapped_values_become_canonical_samples() {
+    let samples = hk_decoded(&Hk {
+        flags: 1,
+        samples: &[100, -5],
+        pos: Some([1, 2, -3]),
+        label: b"",
+        blobs: &[],
+    });
+    assert_eq!(
+        samples,
+        triples(&[
+            ("eps.bus_voltage", "F64(7.42) at bus_counts", "good"),
+            ("eps.mode", "Enum(\"NOMINAL\") at mode", "good"),
+            ("eps.bus_current", "F64(0.1) at samples[0] +0ns", "good"),
+            (
+                "eps.bus_current",
+                "F64(-0.005) at samples[1] +100000000ns",
+                "good"
+            ),
+            (
+                "nav.pos_ecef",
+                "Vec3 { frame: EciJ2000, x: 1.0, y: 2.0, z: -3.0 } at pos.x,pos.y,pos.z",
+                "good"
+            ),
+        ])
+    );
+}
+
+#[test]
+fn bad_values_are_samples_with_a_quality_and_their_raw_value() {
+    let mut payload = Hk {
+        flags: 0,
+        samples: &[],
+        pos: None,
+        label: b"",
+        blobs: &[],
+    }
+    .bytes();
+    // bus_counts 65535 is "no reading"; mode 2 is no state.
+    payload[8..10].copy_from_slice(&65535_u16.to_be_bytes());
+    payload[10] = 0b0000_0010;
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_x");
+    let message = Message::new(Payload::Binary(&payload), now()).with_metadata(HK_METADATA);
+    let decoded = sets.decode(&message, &registry()).unwrap();
+    // No position, so no composite either.
+    assert_eq!(
+        decoded.samples.iter().map(sample_text).collect::<Vec<_>>(),
+        triples(&[
+            ("eps.bus_voltage", "U64(65535) at bus_counts", "invalid"),
+            ("eps.mode", "U64(2) at mode", "unknown_state"),
+        ])
+    );
+}
+
+#[test]
+fn engineering_values_are_there_for_every_field() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_x");
+    let payload = Hk {
+        flags: 3,
+        samples: &[100],
+        pos: Some([1, 2, -3]),
+        label: b"AB",
+        blobs: &[b"z"],
+    }
+    .bytes();
+    let message = Message::new(Payload::Binary(&payload), now()).with_metadata(HK_METADATA);
+    let decoded = sets.decode(&message, &registry()).unwrap();
+    let value = |path: &str| decoded.engineering(path).map(|e| format!("{:?}", e.value));
+    assert_eq!(value("bus_counts").as_deref(), Some("F64(7.42)"));
+    assert_eq!(value("mode").as_deref(), Some("Enum(\"NOMINAL\")"));
+    assert_eq!(value("samples[0]").as_deref(), Some("F64(0.1)"));
+    assert_eq!(value("flags").as_deref(), Some("U64(3)"));
+    assert_eq!(value("pos.y").as_deref(), Some("I64(2)"));
+    assert_eq!(value("label").as_deref(), Some("Str(\"AB\")"));
+    assert_eq!(value("blobs[0]").as_deref(), Some("Bytes([122])"));
+    for nothing in [
+        "samples",
+        "pos",
+        "nope",
+        "samples[9]",
+        "samples[01]",
+        "pos..x",
+    ] {
+        assert_eq!(value(nothing), None, "{nothing}");
+    }
+    let paths: Vec<String> = decoded
+        .engineering_values()
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(
+        paths,
+        [
+            "bus_counts",
+            "mode",
+            "flags",
+            "n",
+            "samples[0]",
+            "pos.x",
+            "pos.y",
+            "pos.z",
+            "label_len",
+            "label",
+            "blobs[0]"
+        ]
+    );
+}
+
+#[test]
+fn an_optional_json_member_may_be_missing_or_null() {
+    let decode = |extra: &str| {
+        decode_json(&format!(
+            r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 1, "cells": []{extra}}}"#
+        ))
+    };
+    let names = |decoded: Vec<(String, String)>| -> Vec<String> {
+        decoded.into_iter().map(|(name, _)| name).collect()
+    };
+    assert_eq!(names(decode("").unwrap()), ["v", "cells"]);
+    assert_eq!(names(decode(r#", "temp": null"#).unwrap()), ["v", "cells"]);
+    assert_eq!(
+        decode(r#", "temp": 21.5"#).unwrap()[2],
+        ("temp".to_string(), "21.5".to_string())
+    );
+    // A required member that's null is missing.
+    let err =
+        decode_json(r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "v": null, "cells": []}"#).unwrap_err();
+    assert_eq!(err.to_string(), "packet BUS, v: no value at /v");
+}
+
+#[test]
+fn a_json_value_maps_through_its_conversion() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "vendor_j");
+    let text = br#"{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 28000, "cells": []}"#;
+    let decoded = sets
+        .decode(&Message::new(Payload::Json(text), now()), &registry())
+        .unwrap();
+    assert_eq!(
+        decoded.samples.iter().map(sample_text).collect::<Vec<_>>(),
+        triples(&[("eps.bus_voltage", "F64(28.0) at v", "good")])
+    );
 }

@@ -937,6 +937,12 @@ pub struct Field {
     pub invalid: Vec<Scalar>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<Condition>,
+    /// Self-describing payloads only: `Some(true)` makes the entry absent
+    /// when its pointer finds nothing or `null`; without it, that rejects
+    /// the message. `Some(false)` spells out the default, which validation
+    /// rejects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
 }
 
 impl Field {
@@ -954,6 +960,7 @@ impl Field {
             canonical: None,
             invalid: Vec::new(),
             when: None,
+            optional: None,
         }
     }
 }
@@ -1050,6 +1057,12 @@ pub struct ArrayEntry {
     pub sample_interval_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<Condition>,
+    /// Self-describing payloads only: `Some(true)` makes the entry absent
+    /// when its pointer finds nothing or `null`; without it, that rejects
+    /// the message. `Some(false)` spells out the default, which validation
+    /// rejects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
 }
 
 impl ArrayEntry {
@@ -1063,6 +1076,7 @@ impl ArrayEntry {
             canonical: None,
             sample_interval_ms: None,
             when: None,
+            optional: None,
         }
     }
 }
@@ -1205,6 +1219,12 @@ pub struct StructEntry {
     pub struct_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<Condition>,
+    /// Self-describing payloads only: `Some(true)` makes the entry absent
+    /// when its pointer finds nothing or `null`; without it, that rejects
+    /// the message. `Some(false)` spells out the default, which validation
+    /// rejects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optional: Option<bool>,
 }
 
 impl StructEntry {
@@ -1215,6 +1235,7 @@ impl StructEntry {
             pointer: None,
             struct_type: struct_type.into(),
             when: None,
+            optional: None,
         }
     }
 }
