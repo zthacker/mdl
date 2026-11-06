@@ -234,6 +234,14 @@ impl<'a> Layout<'a> {
             earlier: BTreeMap::new(),
             all: entries.iter().filter_map(entry_name).collect(),
         };
+        for (index, entry) in entries.iter().enumerate() {
+            check_optional(
+                entry,
+                self.binary,
+                &entry_place(place, index, entry),
+                report,
+            );
+        }
         if !self.binary {
             for (index, entry) in entries.iter().enumerate() {
                 let entry_place = entry_place(place, index, entry);
@@ -871,9 +879,36 @@ fn remember<'a>(entry: &'a Entry, scope: &mut Scope<'a>) {
             &field.name,
             Earlier {
                 field,
-                conditional: field.when.is_some(),
+                // An optional field may be missing, so references treat it
+                // like a conditional one.
+                conditional: field.when.is_some() || field.optional == Some(true),
             },
         );
+    }
+}
+
+/// `optional` is for self-describing payloads, whose members can be
+/// missing, and is only ever spelled `true`.
+fn check_optional(entry: &Entry, binary: bool, place: &Place, report: &mut Report) {
+    let optional = match entry {
+        Entry::Field(field) => field.optional,
+        Entry::Array(array) => array.optional,
+        Entry::Struct(inner) => inner.optional,
+        Entry::Padding(_) => None,
+    };
+    match optional {
+        Some(false) => report.error(
+            Code::ExplicitDefault,
+            &place.key("optional"),
+            "optional: false is the default; omit it",
+        ),
+        Some(true) if binary => report.error(
+            Code::WrongEncoding,
+            &place.key("optional"),
+            "a binary entry is always there unless a condition says otherwise; optional only \
+             applies to self-describing payloads, whose members can be missing",
+        ),
+        _ => {}
     }
 }
 

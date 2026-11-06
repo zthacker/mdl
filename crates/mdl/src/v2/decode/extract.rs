@@ -393,23 +393,27 @@ impl<'a> JsonWalker<'a> {
             match entry {
                 Entry::Field(field) => {
                     self.path.push(Segment::Name(&field.name));
-                    let value = json_scalar(field.ty, found(node, field.pointer.as_deref())?)?;
+                    if let Some(found) = member(node, field.pointer.as_deref(), field.optional)? {
+                        record.push(index, &field.name, json_scalar(field.ty, found)?);
+                    }
                     self.path.pop();
-                    record.push(index, &field.name, value);
                 }
                 Entry::Array(array) => {
                     self.path.push(Segment::Name(&array.name));
-                    let value = self.array(array, found(node, array.pointer.as_deref())?)?;
+                    if let Some(found) = member(node, array.pointer.as_deref(), array.optional)? {
+                        let value = self.array(array, found)?;
+                        record.push(index, &array.name, value);
+                    }
                     self.path.pop();
-                    record.push(index, &array.name, value);
                 }
                 Entry::Struct(inner) => {
                     self.path.push(Segment::Name(&inner.name));
-                    let (entries, inner_names) = self.tables.struct_type(&inner.struct_type)?;
-                    let value =
-                        self.entries(entries, inner_names, found(node, inner.pointer.as_deref())?)?;
+                    if let Some(found) = member(node, inner.pointer.as_deref(), inner.optional)? {
+                        let (entries, inner_names) = self.tables.struct_type(&inner.struct_type)?;
+                        let value = self.entries(entries, inner_names, found)?;
+                        record.push(index, &inner.name, Value::Record(value));
+                    }
                     self.path.pop();
-                    record.push(index, &inner.name, Value::Record(value));
                 }
                 Entry::Padding(_) => return Err(Problem::Layout("padding in a JSON payload")),
             }
@@ -440,11 +444,21 @@ impl<'a> JsonWalker<'a> {
     }
 }
 
-fn found<'j>(node: &'j Json, pointer: Option<&str>) -> Result<&'j Json, Problem> {
+/// The value at an entry's pointer. Nothing there, or `null`, makes an
+/// optional entry absent (`None`) and is an error for any other.
+fn member<'j>(
+    node: &'j Json,
+    pointer: Option<&str>,
+    optional: Option<bool>,
+) -> Result<Option<&'j Json>, Problem> {
     let pointer = pointer.ok_or(Problem::Layout("JSON entries have a pointer"))?;
-    node.pointer(pointer).ok_or_else(|| Problem::Missing {
-        pointer: pointer.to_string(),
-    })
+    match node.pointer(pointer) {
+        None | Some(Json::Null) if optional == Some(true) => Ok(None),
+        None | Some(Json::Null) => Err(Problem::Missing {
+            pointer: pointer.to_string(),
+        }),
+        Some(value) => Ok(Some(value)),
+    }
 }
 
 fn json_scalar<'a>(ty: ScalarType, value: &Json) -> Result<Value<'a>, Problem> {

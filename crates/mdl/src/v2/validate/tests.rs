@@ -1921,3 +1921,36 @@ fn duplicate_mappings_are_counted_once_per_type() {
     expected.sort();
     assert_eq!(found, expected);
 }
+
+#[test]
+fn optional_is_for_self_describing_entries_and_spelled_true() {
+    assert_one(Code::WrongEncoding, &entry(0, "/optional"), |v| {
+        hk(v)["entries"][0]["optional"] = json!(true);
+    });
+    fn bus(v: &mut Value) -> &mut Value {
+        &mut v["sets"][1]["packets"][0]
+    }
+    assert_one(
+        Code::ExplicitDefault,
+        "/sets/1/packets/0/entries/0/optional",
+        |v| bus(v)["entries"][0]["optional"] = json!(false),
+    );
+    assert_eq!(
+        problems(|v| bus(v)["entries"][1]["optional"] = json!(true)),
+        vec![]
+    );
+    // A condition can't use a field that may be missing.
+    assert_one(
+        Code::ReferenceType,
+        "/sets/1/packets/0/entries/3/when/field",
+        |v| {
+            let entries = bus(v)["entries"].as_array_mut().unwrap();
+            entries.push(json!({ "kind": "field", "name": "mode", "type": "string",
+                                 "pointer": "/mode", "optional": true }));
+            entries.push(json!({ "kind": "field", "name": "extra", "type": "int",
+                                 "pointer": "/x",
+                                 "when": { "kind": "compare", "field": "mode", "op": "eq",
+                                           "value": "on" } }));
+        },
+    );
+}
