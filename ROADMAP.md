@@ -57,8 +57,8 @@ and commands in one pass.
       in the payload
 - [ ] Inverse conversions (linear, states, monotonic tables; explicit inverse
       for polynomials)
-- [ ] Encoder; `encode → decode` round-trip property tests
-- [ ] Command decoding: a command packet identified by its constants and
+- [x] Encoder; `encode → decode` round-trip property tests
+- [x] Command decoding: a command packet identified by its constants and
       metadata, its arguments decoded (simulators, command history)
 - [x] `spec/encoding.md`: the normative encoding rules
 

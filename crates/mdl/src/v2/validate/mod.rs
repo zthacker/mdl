@@ -46,6 +46,7 @@ mod mapping;
 pub(crate) mod rules;
 mod set;
 
+pub(crate) use command::command_identities;
 pub(crate) use layout::static_offsets;
 pub(crate) use set::{KeyId, KeyValue, by_value, decoding_facts, exact};
 

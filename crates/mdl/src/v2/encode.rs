@@ -20,9 +20,11 @@ use crate::v2::bindings::NativeId;
 use crate::v2::decode::{Record, Value, convert};
 use crate::v2::ir::{
     Argument, ArgumentRange, ByteLength, Command, CommandPacket, Conversion, Digest, Entry, Field,
-    FromField, Literal, ParamType, Scalar, ScalarType, Set, TextEncoding,
+    FromField, Literal, ParamType, Scalar, ScalarType, Set,
 };
+use crate::v2::message::MetaValue;
 use crate::v2::route::FamilySets;
+use crate::v2::text;
 use crate::v2::validate::rules::integer_value;
 
 /// A value for one argument of a command, in the argument's engineering
@@ -171,6 +173,25 @@ pub struct Encoded<'a> {
     pub deprecated: Option<&'a str>,
 }
 
+impl Encoded<'_> {
+    /// The packet's metadata as a link provides it with the payload: what
+    /// a sender frames the command with, what command history keeps with
+    /// it, and what decoding it again needs (`spec/encoding.md` §7.1).
+    pub fn metadata(&self) -> Vec<(&str, MetaValue<'_>)> {
+        self.packet
+            .metadata
+            .iter()
+            .map(|(name, value)| {
+                let value = match value {
+                    Scalar::Int(n) => MetaValue::Int(*n),
+                    Scalar::Str(text) => MetaValue::Text(text),
+                };
+                (name.as_str(), value)
+            })
+            .collect()
+    }
+}
+
 /// Why a command can't be encoded.
 #[derive(Debug, Clone, PartialEq, Error)]
 #[non_exhaustive]
@@ -224,8 +245,19 @@ pub enum ArgumentProblem {
     NonFinite { given: String },
     #[error("{given:?} isn't one of its states")]
     UnknownState { given: String },
+    /// Decoding: a raw value its field's states don't list.
+    #[error("raw value {raw} names none of its states")]
+    NoState { raw: String },
     #[error("{given} is outside its range, {range}")]
     OutOfRange { given: String, range: String },
+    /// Decoding: a converted argument's raw value outside what its range
+    /// encodes to.
+    #[error("raw value {raw} is outside {low} to {high}, the raw values its range encodes to")]
+    RawOutOfRange {
+        raw: String,
+        low: String,
+        high: String,
+    },
     #[error("the set doesn't encode it, so it can only be its default, {default}")]
     NotDefault { default: String },
 }
@@ -238,8 +270,12 @@ impl ArgumentProblem {
             ArgumentProblem::Missing => "missing_argument",
             ArgumentProblem::WrongType { .. } => "wrong_type",
             ArgumentProblem::NonFinite { .. } => "non_finite",
-            ArgumentProblem::UnknownState { .. } => "unknown_state",
-            ArgumentProblem::OutOfRange { .. } => "out_of_range",
+            ArgumentProblem::UnknownState { .. } | ArgumentProblem::NoState { .. } => {
+                "unknown_state"
+            }
+            ArgumentProblem::OutOfRange { .. } | ArgumentProblem::RawOutOfRange { .. } => {
+                "out_of_range"
+            }
             ArgumentProblem::NotDefault { .. } => "not_default",
         }
     }
@@ -409,6 +445,20 @@ fn check_arguments<'a>(
     Ok((checked, defaulted))
 }
 
+/// Whether the catalog allows `value` for `argument`: its type, states and
+/// range, as encoding checks them.
+pub(crate) fn allowed(argument: &Argument, value: &ArgumentValue) -> Result<(), ArgumentProblem> {
+    check(argument, value).map(|_| ())
+}
+
+/// An argument's default as a value, if it has one.
+pub(crate) fn default_of(argument: &Argument) -> Option<Result<ArgumentValue, ArgumentProblem>> {
+    argument
+        .default
+        .as_ref()
+        .map(|literal| from_literal(argument, literal))
+}
+
 /// A catalog default as a value: bytes are written as lowercase hex, and
 /// integers past ±(2^53 − 1) as decimal strings.
 fn from_literal(argument: &Argument, literal: &Literal) -> Result<ArgumentValue, ArgumentProblem> {
@@ -426,6 +476,9 @@ fn from_literal(argument: &Argument, literal: &Literal) -> Result<ArgumentValue,
         (ParamType::U64, Literal::Str(digits)) => {
             ArgumentValue::Uint(digits.parse().map_err(|_| invalid())?)
         }
+        // An f64 default is a number whatever its spelling; integer
+        // literals are within ±(2^53 - 1), so this is exact.
+        (ParamType::F64, Literal::Int(value)) => ArgumentValue::Float(*value as f64),
         (_, Literal::Bool(value)) => ArgumentValue::Bool(*value),
         (_, Literal::Int(value)) => ArgumentValue::Int(*value),
         (_, Literal::Float(value)) => ArgumentValue::Float(*value),
@@ -560,7 +613,7 @@ fn check_range(
 /// saturates, which keeps the order). Below that, the integer either
 /// converts exactly or is farther from 0 than the bound, so converting it
 /// can't change the order.
-fn compare(n: i128, bound: f64) -> Ordering {
+pub(crate) fn compare(n: i128, bound: f64) -> Ordering {
     const EXACT: f64 = 9_007_199_254_740_992.0;
     if bound.abs() >= EXACT {
         n.cmp(&(bound as i128))
@@ -731,16 +784,7 @@ fn from_argument(
     binary: bool,
 ) -> Result<Value<'static>, FieldProblem> {
     let cannot = FieldProblem::Layout("an argument this field can't encode");
-    let converted = |x: f64| -> Result<f64, FieldProblem> {
-        match (&field.conversion, &field.inverse) {
-            (None, _) => Ok(x),
-            (Some(Conversion::Linear { scale, offset }), None) => Ok((x - offset) / scale),
-            (Some(Conversion::Poly { .. }), Some(inverse)) => {
-                convert(inverse, x).ok_or(cannot.clone())
-            }
-            _ => Err(cannot.clone()),
-        }
-    };
+    let converted = |x: f64| inverse(field, x).ok_or(cannot.clone());
     match (field.ty, value) {
         (ScalarType::Uint | ScalarType::Int, Checked::Integer(n)) if field.conversion.is_none() => {
             integer_raw(field, *n, binary)
@@ -775,6 +819,33 @@ fn from_argument(
         (ScalarType::Bytes, Checked::Bytes(bytes)) => Ok(Value::Bytes(bytes.clone())),
         _ => Err(cannot),
     }
+}
+
+/// An f64 argument through the inverse of its field's conversion: as it is
+/// with none, `(x - offset) / scale` for a linear one, the explicit inverse
+/// for a polynomial one. `None` for a field that can't encode a number.
+fn inverse(field: &Field, x: f64) -> Option<f64> {
+    match (&field.conversion, &field.inverse) {
+        (None, _) => Some(x),
+        (Some(Conversion::Linear { scale, offset }), None) => Some((x - offset) / scale),
+        (Some(Conversion::Poly { .. }), Some(inverse)) => convert(inverse, x),
+        _ => None,
+    }
+}
+
+/// The raw value an f64 argument of `x` becomes in `field` before it's
+/// checked against the field: through the inverse conversion, then
+/// rounded as §3.1 rounds it (to an integer, ties away from zero, for an
+/// integer field; to the nearest binary32 for a 32-bit float field).
+/// Infinite where the arithmetic overflows; `None` for a field that can't
+/// encode a number.
+pub(crate) fn raw_unchecked(field: &Field, x: f64, binary: bool) -> Option<f64> {
+    let raw = inverse(field, x)?;
+    Some(match field.ty {
+        ScalarType::Uint | ScalarType::Int => raw.round(),
+        ScalarType::Float if binary && field.size_bits == Some(32) => f64::from(raw as f32),
+        _ => raw,
+    })
 }
 
 /// The nearest integer to `x`, ties away from zero, if `x` is finite and
@@ -892,7 +963,9 @@ pub(crate) fn target_value(
 /// included, once they fit its length; empty for other fields.
 pub(crate) fn run_bytes(field: &Field, value: &Value<'_>) -> Result<Vec<u8>, FieldProblem> {
     let bytes = match value {
-        Value::Str(text) => text_bytes(text, field.text)?,
+        Value::Str(text) => text::encode(text, field.text).ok_or(FieldProblem::InvalidText {
+            encoding: text::name(field.text),
+        })?,
         Value::Bytes(bytes) => bytes.clone(),
         _ => return Ok(Vec::new()),
     };
@@ -907,23 +980,6 @@ pub(crate) fn run_bytes(field: &Field, value: &Value<'_>) -> Result<Vec<u8>, Fie
             Err(FieldProblem::ContainsTerminator { byte: *byte })
         }
         _ => Ok(bytes),
-    }
-}
-
-/// Text in a field's encoding: UTF-8 as it is, ASCII below 0x80, Latin-1
-/// one byte per code point up to U+00FF.
-fn text_bytes(text: &str, encoding: Option<TextEncoding>) -> Result<Vec<u8>, FieldProblem> {
-    match encoding.unwrap_or(TextEncoding::Utf8) {
-        TextEncoding::Utf8 => Ok(text.as_bytes().to_vec()),
-        TextEncoding::Ascii if text.is_ascii() => Ok(text.as_bytes().to_vec()),
-        TextEncoding::Ascii => Err(FieldProblem::InvalidText { encoding: "ASCII" }),
-        TextEncoding::Latin1 => text
-            .chars()
-            .map(|c| u8::try_from(u32::from(c)).ok())
-            .collect::<Option<Vec<u8>>>()
-            .ok_or(FieldProblem::InvalidText {
-                encoding: "Latin-1",
-            }),
     }
 }
 

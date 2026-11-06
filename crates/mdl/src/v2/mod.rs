@@ -17,5 +17,6 @@ pub mod ir;
 pub mod message;
 pub mod read;
 pub mod route;
+pub(crate) mod text;
 pub mod time;
 pub mod validate;

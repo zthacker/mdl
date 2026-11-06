@@ -15,8 +15,8 @@ pub(super) struct Index {
 
 #[derive(Debug, Clone)]
 struct Group {
-    /// In `KeyId` order: metadata, pointers, bits, then keys that need a
-    /// trial decode, so the costly ones come last.
+    /// In `KeyId` order: metadata, pointers, bits, byte runs, then keys
+    /// that need a trial decode, so the costly ones come last.
     keys: Vec<KeyId>,
     /// The values each packet's keys must have, in `keys` order.
     packets: BTreeMap<Vec<KeyValue>, usize>,

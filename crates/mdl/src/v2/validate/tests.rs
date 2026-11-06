@@ -2354,11 +2354,9 @@ fn target_field(ty: &str) -> Value {
     field
 }
 
+/// The legacy SET_MODE's target field (entries/1), replaced.
 fn insert_target(v: &mut Value, field: Value) {
-    legacy_set_mode(v)["entries"]
-        .as_array_mut()
-        .unwrap()
-        .insert(0, field);
+    legacy_set_mode(v)["entries"][1] = field;
 }
 
 #[test]
@@ -2379,7 +2377,7 @@ fn a_command_field_may_hold_the_targets_native_id() {
 
 #[test]
 fn a_target_field_holds_the_id_as_it_is() {
-    let at = |rest: &str| format!("/sets/2/commands/0/entries/0{rest}");
+    let at = |rest: &str| format!("/sets/2/commands/0/entries/1{rest}");
     assert_one(Code::CommandShape, &at("/target"), |v| {
         insert_target(v, target_field("float"));
     });
@@ -2415,6 +2413,22 @@ fn a_target_field_holds_the_id_as_it_is() {
         "/sets/2/packets/0/entries/0/target",
         |v| {
             v["sets"][2]["packets"][0]["entries"][0]["target"] = json!(true);
+        },
+    );
+}
+
+#[test]
+fn a_command_packet_holds_the_target_once() {
+    // A second id could disagree with the first, and decoding would have
+    // to pick one.
+    assert_one(
+        Code::CommandShape,
+        "/sets/2/commands/0/entries/2/target",
+        |v| {
+            legacy_set_mode(v)["entries"]
+                .as_array_mut()
+                .unwrap()
+                .insert(0, target_field("uint"));
         },
     );
 }
@@ -2503,6 +2517,78 @@ fn coverage_compares_raw_values_exactly_at_the_top_of_64_bits() {
             });
         },
     );
+}
+
+#[test]
+fn a_string_constant_fits_its_field() {
+    let tag = |v: &mut Value, text: &str, length: Value| {
+        set_mode_packet(v)["entries"]
+            .as_array_mut()
+            .unwrap()
+            .insert(
+                1,
+                json!({ "kind": "field", "name": "tag", "type": "string",
+                               "text": "ascii", "length": length, "value": text }),
+            );
+    };
+    let at = "/sets/0/commands/1/entries/1/value";
+    assert_one(Code::ValueRange, at, |v| {
+        tag(v, "PIN", json!({ "kind": "fixed", "bytes": 4 }));
+    });
+    assert_one(Code::ValueRange, at, |v| {
+        tag(v, "A;B", json!({ "kind": "terminator", "byte": 59 }));
+    });
+    assert_one(Code::ReferenceType, at, |v| {
+        tag(v, "PÏN", json!({ "kind": "fixed", "bytes": 4 }));
+    });
+}
+
+#[test]
+fn text_tags_tell_command_packets_apart_by_their_bytes() {
+    // Both packets start with a 4-byte tag in place of an opcode.
+    let tagged = |v: &mut Value, load: &str, set: &str| {
+        for (index, text) in [(0, load), (1, set)] {
+            v["sets"][0]["commands"][index]["entries"][0] = json!({
+                "kind": "field", "name": "opcode", "type": "string", "text": "ascii",
+                "length": { "kind": "fixed", "bytes": 4 }, "value": text });
+        }
+    };
+    assert_eq!(problems(|v| tagged(v, "LOAD", "MODE")), vec![]);
+    assert_one(Code::AmbiguousIdentify, "/sets/0/commands/1", |v| {
+        tagged(v, "MODE", "MODE");
+    });
+}
+
+#[test]
+fn a_polynomial_inverse_is_checked_over_its_arguments_range() {
+    let delay = "/sets/0/commands/1/entries/2";
+    // The range bounds the check, so it needs both ends.
+    assert_one(Code::ValueRange, &format!("{delay}/argument"), |v| {
+        command(v, "eps.set_mode")["arguments"][1]["range"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max");
+    });
+    // 10x - 0.01x^3 peaks near 18.3 s, inside 0 to 3600 s: a raw value
+    // could come from two arguments.
+    assert_one(Code::ConversionType, &format!("{delay}/inverse"), |v| {
+        set_mode_packet(v)["entries"][2]["inverse"] =
+            json!({ "kind": "poly", "coefficients": [0, 10, 0, -0.01] });
+    });
+    // Through the inverse, 3600 s is 0.7 + 36000 counts: a u16 holds it,
+    // but 6553.5 s is raw 65535.7, written 65536, which doesn't fit.
+    assert_eq!(
+        problems(|v| {
+            set_mode_packet(v)["entries"][2]["inverse"] =
+                json!({ "kind": "poly", "coefficients": [0.7, 10] });
+        }),
+        vec![]
+    );
+    assert_one(Code::ValueRange, &format!("{delay}/argument"), |v| {
+        set_mode_packet(v)["entries"][2]["inverse"] =
+            json!({ "kind": "poly", "coefficients": [0.7, 10] });
+        command(v, "eps.set_mode")["arguments"][1]["range"]["max"] = json!(6553.5);
+    });
 }
 
 #[test]
