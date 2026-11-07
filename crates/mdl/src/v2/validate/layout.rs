@@ -713,7 +713,16 @@ impl<'a> Layout<'a> {
                     );
                     return None;
                 }
-                Some(ByteLength::Fixed { bytes }) => Size::fixed(u64::from(*bytes) * 8),
+                Some(ByteLength::Fixed { bytes, terminator }) => {
+                    if *bytes == 0 && terminator.is_some() {
+                        report.error(
+                            Code::FieldSize,
+                            &length_place.key("terminator"),
+                            "an empty buffer holds no value to end; leave out its terminator",
+                        );
+                    }
+                    Size::fixed(u64::from(*bytes) * 8)
+                }
                 Some(ByteLength::Field(from)) => {
                     let scope = scope?;
                     let max = check_from_field(from, "length", scope, &length_place, report)?;
@@ -1630,7 +1639,7 @@ fn exact_size(entry: &Entry, type_sizes: &BTreeMap<&str, u64>) -> Option<u64> {
 fn simple_size(ty: ScalarType, size_bits: Option<u32>, length: Option<&ByteLength>) -> Option<u64> {
     match ty {
         ScalarType::String | ScalarType::Bytes => match length? {
-            ByteLength::Fixed { bytes } => Some(u64::from(*bytes) * 8),
+            ByteLength::Fixed { bytes, .. } => Some(u64::from(*bytes) * 8),
             _ => None,
         },
         _ => size_bits.map(u64::from),

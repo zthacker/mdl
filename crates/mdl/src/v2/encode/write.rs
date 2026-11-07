@@ -113,14 +113,18 @@ fn positions(
     for (index, entry) in packet.entries.iter().enumerate() {
         let (offset, size) = match entry {
             Entry::Field(field) => {
-                let size = match field.ty {
-                    ScalarType::String | ScalarType::Bytes => {
+                let size = match (field.ty, &field.length) {
+                    // A fixed length, terminated or not, takes every byte.
+                    (
+                        ScalarType::String | ScalarType::Bytes,
+                        Some(ByteLength::Fixed { bytes, .. }),
+                    ) => u64::from(*bytes) * 8,
+                    (ScalarType::String | ScalarType::Bytes, length) => {
                         let bytes = raws
                             .get(index)
                             .and_then(Option::as_ref)
                             .map_or(0, |raw| raw.bytes.len());
-                        let terminator =
-                            matches!(field.length, Some(ByteLength::Terminator { .. }));
+                        let terminator = matches!(length, Some(ByteLength::Terminator { .. }));
                         (bytes as u64 + u64::from(terminator)) * 8
                     }
                     _ => u64::from(field.size_bits.unwrap_or(0)),
@@ -180,12 +184,24 @@ fn write_field(
                 .ok()
                 .filter(|_| at.is_multiple_of(8))
                 .ok_or(FieldProblem::Layout("strings and bytes start on a byte"))?;
-            let terminator = match length {
-                Some(ByteLength::Terminator { byte }) => Some(*byte),
-                _ => None,
+            // After the value, a terminator: once for a terminated length,
+            // to the end of the buffer for a terminated fixed one, which a
+            // value filling the buffer leaves out.
+            let filler = match length {
+                Some(
+                    ByteLength::Terminator { byte }
+                    | ByteLength::Fixed {
+                        terminator: Some(byte),
+                        ..
+                    },
+                ) => *byte,
+                _ => 0,
             };
-            let run = raw.bytes.iter().copied().chain(terminator);
-            let stop = first + raw.bytes.len() + usize::from(terminator.is_some());
+            let run = raw.bytes.iter().copied().chain(std::iter::repeat(filler));
+            let stop = usize::try_from(size / 8)
+                .ok()
+                .and_then(|bytes| first.checked_add(bytes))
+                .ok_or_else(|| inside.clone())?;
             let target = payload
                 .get_mut(first..stop)
                 .ok_or(FieldProblem::Layout("a field inside the packet"))?;

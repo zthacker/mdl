@@ -1249,6 +1249,48 @@ fn a_struct_holding_narrow_values_says_why_it_starts_on_a_byte() {
 }
 
 #[test]
+fn a_terminated_buffer_has_room_for_its_values() {
+    let padded = |bytes: u32| {
+        json!({ "kind": "field", "name": "s", "type": "string",
+                "length": { "kind": "fixed", "bytes": bytes, "terminator": 0 } })
+    };
+    assert_eq!(one(json!([padded(8), uint("after", 8)])), vec![]);
+    assert_eq!(
+        one(json!([padded(0)])),
+        vec![(Code::FieldSize, entry(0, "/length/terminator"))]
+    );
+    // A command's constant fits the buffer and holds no terminator.
+    let constant = |value: &str| {
+        let mut field = padded(4);
+        field["value"] = json!(value);
+        field
+    };
+    let command = |field: Value| {
+        move |v: &mut Value| {
+            set_x(v)["commands"][0]["entries"]
+                .as_array_mut()
+                .unwrap()
+                .push(field);
+        }
+    };
+    assert_eq!(problems(command(constant("ok"))), vec![]);
+    assert_eq!(
+        problems(command(constant("toolong"))),
+        vec![(
+            Code::ValueRange,
+            "/sets/0/commands/0/entries/5/value".to_string()
+        )]
+    );
+    assert_eq!(
+        problems(command(constant("a\u{0}b"))),
+        vec![(
+            Code::ValueRange,
+            "/sets/0/commands/0/entries/5/value".to_string()
+        )]
+    );
+}
+
+#[test]
 fn identify_keys_inside_one_byte_ignore_byte_order() {
     // A's byte_order is refused, and nothing else: both read byte 0 the
     // same, so their keys don't overlap.

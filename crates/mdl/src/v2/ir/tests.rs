@@ -462,6 +462,8 @@ mod properties {
     fn byte_length() -> impl Strategy<Value = ByteLength> {
         prop_oneof![
             any::<u32>().prop_map(ByteLength::fixed),
+            (any::<u32>(), any::<u8>())
+                .prop_map(|(bytes, byte)| ByteLength::fixed_terminated(bytes, byte)),
             name().prop_map(ByteLength::field),
             any::<u8>().prop_map(ByteLength::terminator),
             Just(ByteLength::remaining()),

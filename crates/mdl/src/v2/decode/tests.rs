@@ -527,6 +527,44 @@ fn a_big_endian_header_in_a_little_endian_family() {
 }
 
 #[test]
+fn a_terminated_buffer_holds_its_value_up_to_the_terminator() {
+    let mut bundle = bundle();
+    let ident = bundle["sets"].as_array_mut().unwrap().last_mut().unwrap();
+    ident["packets"].as_array_mut().unwrap().push(json!({
+        "name": "NAMED",
+        "identify": { "kind": 10 },
+        "entries": [
+            { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+            { "kind": "field", "name": "name", "type": "string",
+              "length": { "kind": "fixed", "bytes": 6, "terminator": 0 } },
+            { "kind": "array", "name": "tags", "count": { "kind": "fixed", "count": 2 },
+              "element": { "kind": "scalar", "type": "string",
+                           "length": { "kind": "fixed", "bytes": 3, "terminator": 0 } } },
+            { "kind": "field", "name": "after", "type": "uint", "size_bits": 8 }
+        ]
+    }));
+    // The padding after a terminator isn't text, and isn't read as any.
+    let mut payload = vec![10, b'h', b'i', 0, 0xFF, 0xFE, 0x80];
+    payload.extend_from_slice(b"ab\0xyz");
+    payload.push(7);
+    assert_eq!(
+        identified_in(&bundle, &payload).unwrap().1,
+        pairs(&[
+            ("kind", "10"),
+            ("name", "\"hi\""),
+            ("tags", "[\"ab\", \"xyz\"]"),
+            ("after", "7")
+        ])
+    );
+    // A buffer without a terminator is all value.
+    let mut full = vec![10];
+    full.extend_from_slice(b"abcdef\0\0\0\0\0\0");
+    full.push(9);
+    let (_, record) = identified_in(&bundle, &full).unwrap();
+    assert_eq!(record[1], ("name".to_string(), "\"abcdef\"".to_string()));
+}
+
+#[test]
 fn values_and_keys_are_read_in_their_own_byte_order() {
     // MIXED's word and pair are little-endian, in a big-endian family.
     let payload = [9, 0x02, 0x01, 0x12, 0x34, 0xFF, 0xFF, 0x02, 0x00];

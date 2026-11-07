@@ -284,6 +284,11 @@ fn errors_name_the_command_and_what_went_wrong() {
 /// (lab_v10). Family `web`: a JSON command with no fields.
 fn lab() -> Json {
     let bytes = |name: &str| json!({ "arguments": [{ "name": name, "type": "bytes" }] });
+    // A command's name in a NUL-terminated eight-byte buffer.
+    let padded_tag = |name: &str| {
+        json!({ "kind": "field", "name": "tag", "type": "string", "text": "ascii",
+                "length": { "kind": "fixed", "bytes": 8, "terminator": 0 }, "value": name })
+    };
     let points = |pairs: &[(f64, f64)]| {
         Json::Array(
             pairs
@@ -426,6 +431,29 @@ fn lab() -> Json {
                       "argument": "temp" }
                 ]
             }] },
+            { "name": "lab_v11", "family": "lab", "commands": [
+                { "name": "TUNE", "canonical": "lab.tune", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 11 },
+                    { "kind": "field", "name": "name", "type": "string", "text": "ascii",
+                      "length": { "kind": "fixed", "bytes": 8, "terminator": 0 },
+                      "argument": "name" },
+                    { "kind": "field", "name": "gain", "type": "float", "size_bits": 32,
+                      "argument": "gain" },
+                    { "kind": "field", "name": "offset", "type": "int", "size_bits": 16,
+                      "argument": "offset" }
+                ] },
+                { "name": "BLOB", "canonical": "lab.blob", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 12 },
+                    { "kind": "field", "name": "data", "type": "bytes",
+                      "length": { "kind": "fixed", "bytes": 6, "terminator": 255 },
+                      "argument": "data" },
+                    { "kind": "field", "name": "tail", "type": "uint", "size_bits": 8, "value": 7 }
+                ] }
+            ] },
+            { "name": "lab_v12", "family": "lab", "commands": [
+                { "name": "PING", "canonical": "lab.ping", "entries": [padded_tag("PING")] },
+                { "name": "PONG", "canonical": "lab.pong", "entries": [padded_tag("PONG")] }
+            ] },
             { "name": "web_v1", "family": "web", "commands": [
                 { "name": "PING", "canonical": "lab.ping" }
             ] }
@@ -464,6 +492,60 @@ fn fixed_strings_floats_padding_and_signed_fields_are_laid_out_bit_by_bit() {
     assert_eq!(
         code(sets.encode(&tune("PING").with_argument("gain", 1e39))),
         "raw_range"
+    );
+}
+
+#[test]
+fn a_terminated_buffer_is_padded_with_its_terminator() {
+    let sets = sets_of(&lab(), "lab");
+    let tune = |name: &str| CommandRequest::new("lab_v11", "lab.tune").with_argument("name", name);
+    let encoded = sets.encode(&tune("AB")).unwrap();
+    // 1.0 as binary32 is 3F800000; offset 0.
+    assert_eq!(
+        encoded.payload,
+        [11, b'A', b'B', 0, 0, 0, 0, 0, 0, 0x3F, 0x80, 0, 0, 0, 0]
+    );
+    // A value that fills the buffer has no terminator; an empty one is all
+    // terminator.
+    let full = sets.encode(&tune("ABCDEFGH")).unwrap();
+    assert_eq!(&full.payload[1..9], b"ABCDEFGH");
+    let empty = sets.encode(&tune("")).unwrap();
+    assert_eq!(&empty.payload[1..9], [0; 8]);
+    assert_eq!(code(sets.encode(&tune("ABCDEFGHI"))), "bad_length");
+    assert_eq!(code(sets.encode(&tune("A\u{0}B"))), "contains_terminator");
+    // Bytes pad with theirs, and what follows the buffer stays in place.
+    let blob = CommandRequest::new("lab_v11", "lab.blob").with_argument("data", vec![1_u8, 2]);
+    let encoded = sets.encode(&blob).unwrap();
+    assert_eq!(encoded.payload, [12, 1, 2, 255, 255, 255, 255, 7]);
+    // Decoding reads up to the terminator, whatever the padding holds.
+    let decoded = sets
+        .decode_command("lab_v11", &binary(&[12, 9, 255, 0xAB, 0xCD, 0xEF, 0x01, 7]))
+        .unwrap();
+    assert_eq!(
+        arguments(&decoded),
+        vec![("data".to_string(), ArgumentValue::Bytes(vec![9]))]
+    );
+}
+
+#[test]
+fn commands_are_told_apart_by_terminated_tags() {
+    let sets = sets_of(&lab(), "lab");
+    let pong = sets
+        .encode(&CommandRequest::new("lab_v12", "lab.pong"))
+        .unwrap();
+    assert_eq!(pong.payload, *b"PONG\0\0\0\0");
+    // The padding after the terminator can be anything.
+    let decoded = sets
+        .decode_command("lab_v12", &binary(b"PONG\0xyz"))
+        .unwrap();
+    assert_eq!(decoded.command(), "lab.pong");
+    let decoded = sets
+        .decode_command("lab_v12", &binary(b"PING\0\0\0\0"))
+        .unwrap();
+    assert_eq!(decoded.command(), "lab.ping");
+    assert_eq!(
+        decode_code(sets.decode_command("lab_v12", &binary(b"PANG\0\0\0\0"))),
+        "no_packet"
     );
 }
 
@@ -1106,6 +1188,10 @@ fn command_cases() -> Vec<(Json, &'static str, &'static str, &'static str, bool)
         ("lab_v8", "lab.heat", true),
         ("lab_v9", "lab.pump", false),
         ("lab_v10", "lab.cool", true),
+        ("lab_v11", "lab.tune", true),
+        ("lab_v11", "lab.blob", true),
+        ("lab_v12", "lab.ping", true),
+        ("lab_v12", "lab.pong", true),
     ] {
         cases.push((lab(), "lab", set, command, exact));
     }
@@ -1187,7 +1273,15 @@ fn valid_requests(bundle: &Json, set: &str, command: &str) -> BoxedStrategy<Comm
 /// otherwise.
 fn byte_lengths(entries: &[Entry], field: &Field, binary: bool) -> BoxedStrategy<usize> {
     match (&field.length, binary) {
-        (Some(ByteLength::Fixed { bytes }), true) => Just(*bytes as usize).boxed(),
+        (
+            Some(ByteLength::Fixed {
+                bytes,
+                terminator: None,
+            }),
+            true,
+        ) => Just(*bytes as usize).boxed(),
+        // A terminated buffer holds a value of any length up to its size.
+        (Some(ByteLength::Fixed { bytes, .. }), true) => (0..=*bytes as usize).boxed(),
         (Some(ByteLength::Field(from)), true) => {
             let multiply = i64::from(from.multiply.unwrap_or(1));
             let add = from.add.unwrap_or(0);
@@ -1209,11 +1303,22 @@ fn byte_lengths(entries: &[Entry], field: &Field, binary: bool) -> BoxedStrategy
     }
 }
 
-fn text_strategy(field: &Field, lengths: BoxedStrategy<usize>) -> BoxedStrategy<String> {
-    let terminator = match field.length {
-        Some(ByteLength::Terminator { byte }) => Some(char::from(byte)),
+/// The terminator a string or bytes value mustn't contain.
+fn terminator_of(field: &Field) -> Option<u8> {
+    match field.length {
+        Some(
+            ByteLength::Terminator { byte }
+            | ByteLength::Fixed {
+                terminator: Some(byte),
+                ..
+            },
+        ) => Some(byte),
         _ => None,
-    };
+    }
+}
+
+fn text_strategy(field: &Field, lengths: BoxedStrategy<usize>) -> BoxedStrategy<String> {
+    let terminator = terminator_of(field).map(char::from);
     let range = move |low: u32, high: u32| {
         (low..=high).prop_filter_map("a character", move |code| {
             char::from_u32(code).filter(|c| Some(*c) != terminator)
@@ -1301,10 +1406,7 @@ fn value_strategy(
             .prop_map(ArgumentValue::Text)
             .boxed(),
         ParamType::Bytes => {
-            let terminator = match field.length {
-                Some(ByteLength::Terminator { byte }) => Some(byte),
-                _ => None,
-            };
+            let terminator = terminator_of(field);
             lengths
                 .prop_flat_map(move |length| {
                     proptest::collection::vec(

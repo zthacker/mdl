@@ -397,10 +397,10 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
         let bytes = self.bytes;
         let first = usize::try_from(at / 8).map_err(|_| Problem::Layout("a position"))?;
         let rest = bytes.get(first..).unwrap_or_default();
-        let len = match length {
-            Some(ByteLength::Fixed { bytes }) => u64::from(*bytes),
-            Some(ByteLength::Field(from)) => from_field(from, scope)?,
-            Some(ByteLength::Remaining {}) => rest.len() as u64,
+        let (len, end_at) = match length {
+            Some(ByteLength::Fixed { bytes, terminator }) => (u64::from(*bytes), *terminator),
+            Some(ByteLength::Field(from)) => (from_field(from, scope)?, None),
+            Some(ByteLength::Remaining {}) => (rest.len() as u64, None),
             Some(ByteLength::Terminator { byte }) => {
                 let Some(position) = rest.iter().position(|b| b == byte) else {
                     return Err(Problem::NoTerminator { byte: *byte });
@@ -412,7 +412,17 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
         };
         let stop = self.span(at, len.saturating_mul(8))?;
         let count = usize::try_from(len).map_err(|_| Problem::Layout("a length"))?;
-        Ok((&rest[..count], stop - at))
+        let run = &rest[..count];
+        // In a terminated buffer the value ends at the first terminator, and
+        // the rest is padding; the entry still takes every byte.
+        let value = match end_at {
+            Some(byte) => run
+                .iter()
+                .position(|b| *b == byte)
+                .map_or(run, |end| &run[..end]),
+            None => run,
+        };
+        Ok((value, stop - at))
     }
 
     fn array(
@@ -483,7 +493,7 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
     fn element_bits(&self, element: &Element) -> Option<u64> {
         match element {
             Element::Scalar(scalar) => match (scalar.ty, &scalar.length) {
-                (ScalarType::String | ScalarType::Bytes, Some(ByteLength::Fixed { bytes })) => {
+                (ScalarType::String | ScalarType::Bytes, Some(ByteLength::Fixed { bytes, .. })) => {
                     Some(u64::from(*bytes) * 8)
                 }
                 (ScalarType::String | ScalarType::Bytes, _) => None,
