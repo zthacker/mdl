@@ -26,6 +26,7 @@ use crate::v2::ir::{
 use crate::v2::message::MetaValue;
 use crate::v2::route::FamilySets;
 use crate::v2::text;
+use crate::v2::units::convert_between;
 use crate::v2::validate::rules::integer_value;
 
 /// A value for one argument of a command, in the argument's engineering
@@ -377,14 +378,17 @@ enum Checked {
     Bytes(Vec<u8>),
 }
 
-/// Every argument of the command, checked: given or defaulted, by name, and
-/// the names that were defaulted.
+/// Each argument's checked value and unit, by name.
+type Arguments<'a> = BTreeMap<&'a str, (Checked, Option<&'a str>)>;
+
+/// Every argument of the command, checked: given or defaulted, by name, with
+/// its unit, and the names that were defaulted.
 fn check_arguments<'a>(
     name: &str,
     command: &'a Command,
     packet: &CommandPacket,
     request: &CommandRequest,
-) -> Result<(BTreeMap<&'a str, Checked>, Vec<&'a str>), EncodeError> {
+) -> Result<(Arguments<'a>, Vec<&'a str>), EncodeError> {
     let error = |argument: &str, problem| EncodeError::Argument {
         command: name.to_string(),
         argument: argument.to_string(),
@@ -444,7 +448,7 @@ fn check_arguments<'a>(
                 ArgumentProblem::NotDefault { default },
             ));
         }
-        checked.insert(argument.name.as_str(), value);
+        checked.insert(argument.name.as_str(), (value, argument.unit.as_deref()));
     }
     Ok((checked, defaulted))
 }
@@ -656,7 +660,7 @@ struct Raw {
 /// yet.
 fn raw_values(
     packet: &CommandPacket,
-    arguments: &BTreeMap<&str, Checked>,
+    arguments: &Arguments<'_>,
     target: Option<&NativeId>,
     binary: bool,
 ) -> Result<Vec<Option<Raw>>, EncodeError> {
@@ -675,7 +679,7 @@ fn raw_values(
             let checked = arguments
                 .get(name.as_str())
                 .ok_or(FieldProblem::Layout("an argument the command doesn't have"));
-            checked.and_then(|checked| from_argument(field, checked, binary))
+            checked.and_then(|(checked, unit)| from_argument(field, checked, *unit, binary))
         } else if let Some(value) = &field.value {
             constant(field, value, binary)
         } else if field.target == Some(true) {
@@ -781,14 +785,20 @@ pub(crate) fn length_raw(
 
 /// An argument's raw value in its field: unconverted, or through the
 /// inverse of the field's conversion, rounded to the nearest integer (ties
-/// away from zero) for an integer field.
+/// away from zero) for an integer field. A number goes from the argument's
+/// `unit` into the field's first.
 fn from_argument(
     field: &Field,
     value: &Checked,
+    unit: Option<&str>,
     binary: bool,
 ) -> Result<Value<'static>, FieldProblem> {
     let cannot = FieldProblem::Layout("an argument this field can't encode");
-    let converted = |x: f64| inverse(field, x).number().ok_or(cannot.clone());
+    let converted = |x: f64| {
+        convert_between(x, unit, field.unit.as_deref())
+            .and_then(|x| inverse(field, x).number())
+            .ok_or(cannot.clone())
+    };
     match (field.ty, value) {
         (ScalarType::Uint | ScalarType::Int, Checked::Integer(n)) if field.conversion.is_none() => {
             integer_raw(field, *n, binary)
@@ -825,13 +835,19 @@ fn from_argument(
     }
 }
 
-/// The raw value an f64 argument of `x` becomes in `field` before it's
-/// checked against the field: through the inverse conversion, then
-/// rounded as §3.1 rounds it (to an integer, ties away from zero, for an
-/// integer field; to the nearest binary32 for a 32-bit float field).
-/// Infinite where the arithmetic overflows; `None` for a field that can't
-/// encode a number.
-pub(crate) fn raw_unchecked(field: &Field, x: f64, binary: bool) -> Option<f64> {
+/// The raw value an f64 argument of `x`, in `unit`, becomes in `field`
+/// before it's checked against the field: into the field's unit, through
+/// the inverse conversion, then rounded as §3.1 rounds it (to an integer,
+/// ties away from zero, for an integer field; to the nearest binary32 for a
+/// 32-bit float field). Infinite where the arithmetic overflows; `None` for
+/// a field that can't encode a number.
+pub(crate) fn raw_unchecked(
+    field: &Field,
+    x: f64,
+    unit: Option<&str>,
+    binary: bool,
+) -> Option<f64> {
+    let x = convert_between(x, unit, field.unit.as_deref())?;
     let raw = inverse(field, x).number()?;
     Some(match field.ty {
         ScalarType::Uint | ScalarType::Int => raw.round(),

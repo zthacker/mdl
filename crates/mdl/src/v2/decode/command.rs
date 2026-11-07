@@ -18,6 +18,7 @@ use crate::v2::ir::{
 };
 use crate::v2::message::Message;
 use crate::v2::route::FamilySets;
+use crate::v2::units::convert_between;
 use crate::v2::validate::rules::integer_value;
 
 /// A decoded command.
@@ -253,6 +254,15 @@ fn argument_value(
         allowed(argument, &value)?;
         return Ok(value);
     }
+    // From the field's unit into the argument's, which validation found
+    // compatible.
+    let value = match value {
+        ArgumentValue::Float(x) => ArgumentValue::Float(
+            convert_between(x, field.unit.as_deref(), argument.unit.as_deref())
+                .ok_or_else(wrong)?,
+        ),
+        other => other,
+    };
     let (ArgumentValue::Float(x), Some(range)) = (&value, argument.range) else {
         // Without a range, any finite value is allowed.
         allowed(argument, &value)?;
@@ -261,7 +271,7 @@ fn argument_value(
     if number(raw).is_none_or(|n| !n.is_finite()) {
         return Err(ArgumentProblem::NonFinite { given: show(raw) });
     }
-    in_raw_range(field, range, raw, binary)?;
+    in_raw_range(field, range, argument.unit.as_deref(), raw, binary)?;
     let held = range.min.map_or(*x, |min| x.max(min));
     let held = range.max.map_or(held, |max| held.min(max));
     let value = ArgumentValue::Float(held);
@@ -275,10 +285,12 @@ fn argument_value(
 fn in_raw_range(
     field: &Field,
     range: ArgumentRange,
+    unit: Option<&str>,
     raw: &Value<'_>,
     binary: bool,
 ) -> Result<(), ArgumentProblem> {
-    let end = |bound: Option<f64>, open: f64| raw_unchecked(field, bound.unwrap_or(open), binary);
+    let end =
+        |bound: Option<f64>, open: f64| raw_unchecked(field, bound.unwrap_or(open), unit, binary);
     let (Some(a), Some(b)) = (end(range.min, f64::MIN), end(range.max, f64::MAX)) else {
         return Err(ArgumentProblem::WrongType {
             given: show(raw),

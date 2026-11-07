@@ -23,6 +23,7 @@ fn plain() -> ScalarMeaning<'static> {
     ScalarMeaning {
         conversion: None,
         invalid: &[],
+        unit: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn numbers_that_arent_finite_are_flagged_with_their_raw_value() {
     let scaled = ScalarMeaning {
         conversion: Some(&huge),
         invalid: &[],
+        unit: None,
     };
     assert_eq!(
         sample_value(&f64_param, scaled, &Value::Float(1e10)).unwrap(),
@@ -80,6 +82,7 @@ fn a_composite_has_its_worst_members_quality() {
                 parts: vec![Part::Name(name.to_string())],
                 conversion: None,
                 invalid: vec![Scalar::Int(-1)],
+                unit: None,
             })
             .collect(),
     };

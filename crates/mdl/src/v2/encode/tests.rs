@@ -280,7 +280,8 @@ fn errors_name_the_command_and_what_went_wrong() {
 /// (n + 2) / 2 (lab_v5); two commands told apart by a text tag (lab_v6);
 /// conversions whose inverse doesn't undo them exactly, and a negative
 /// scale (lab_v7); a linear table read backwards (lab_v8); a spline with an
-/// inverse table (lab_v9). Family `web`: a JSON command with no fields.
+/// inverse table (lab_v9); an argument in Celsius for a field in kelvin
+/// (lab_v10). Family `web`: a JSON command with no fields.
 fn lab() -> Json {
     let bytes = |name: &str| json!({ "arguments": [{ "name": name, "type": "bytes" }] });
     let points = |pairs: &[(f64, f64)]| {
@@ -314,6 +315,10 @@ fn lab() -> Json {
             "lab.pong": {},
             "lab.heat": { "arguments": [
                 { "name": "temp", "type": "f64", "range": { "min": -40, "max": 60 } }
+            ] },
+            "lab.cool": { "arguments": [
+                { "name": "temp", "type": "f64", "unit": "Cel",
+                  "range": { "min": -50, "max": 50 } }
             ] },
             "lab.pump": { "arguments": [
                 { "name": "rate", "type": "f64", "range": { "min": 0, "max": 12 } }
@@ -412,6 +417,13 @@ fn lab() -> Json {
                       "inverse": { "kind": "table", "points": points(&[
                           (0.0, 0.0), (4.0, 100.0), (10.0, 200.0), (12.0, 255.0)]) },
                       "argument": "rate" }
+                ]
+            }] },
+            { "name": "lab_v10", "family": "lab", "commands": [{
+                "name": "COOL", "canonical": "lab.cool", "entries": [
+                    { "kind": "field", "name": "temp", "type": "uint", "size_bits": 16,
+                      "unit": "K", "conversion": { "kind": "linear", "scale": 0.01, "offset": 0.0 },
+                      "argument": "temp" }
                 ]
             }] },
             { "name": "web_v1", "family": "web", "commands": [
@@ -1021,6 +1033,23 @@ fn an_argument_goes_through_a_table_and_comes_back() {
     assert_eq!(encoded.payload, [150]);
 }
 
+#[test]
+fn an_argument_goes_into_its_fields_unit_and_comes_back_in_its_own() {
+    let sets = sets_of(&lab(), "lab");
+    // 25 Cel is 298.15 K, raw 29815 at 0.01 K a count.
+    let encoded = sets
+        .encode(&CommandRequest::new("lab_v10", "lab.cool").with_argument("temp", 25.0))
+        .unwrap();
+    assert_eq!(encoded.payload, 29815_u16.to_be_bytes());
+    let decoded = sets
+        .decode_command("lab_v10", &binary(&encoded.payload))
+        .unwrap();
+    let ArgumentValue::Float(temp) = decoded.arguments[0].1 else {
+        panic!("a number");
+    };
+    assert!((temp - 25.0).abs() < 1e-9, "{temp}");
+}
+
 /// Each command of the fixture and the lab, by bundle, family and set, and
 /// whether its decoded arguments re-encode to the same payload (every
 /// converted field's inverse undoes its conversion).
@@ -1042,6 +1071,7 @@ fn command_cases() -> Vec<(Json, &'static str, &'static str, &'static str, bool)
         ("lab_v7", "lab.drift", false),
         ("lab_v8", "lab.heat", true),
         ("lab_v9", "lab.pump", false),
+        ("lab_v10", "lab.cool", true),
     ] {
         cases.push((lab(), "lab", set, command, exact));
     }
@@ -1369,7 +1399,7 @@ fn every_command_round_trips_through_its_payload() {
 proptest! {
     #[test]
     fn any_payload_decodes_or_is_refused_without_panicking(
-        case in 0_usize..15,
+        case in 0_usize..16,
         bytes in proptest::collection::vec(any::<u8>(), 0..48),
         framed_with_apid in any::<bool>(),
         mode in prop_oneof![Just(json!("SAFE")), Just(json!("NOMINAL")), Just(json!("X")), Just(json!(1))],

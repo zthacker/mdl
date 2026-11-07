@@ -9,7 +9,7 @@ use super::layout::{Container, Layout, exact_type_sizes, static_offsets, type_na
 use super::mapping;
 use super::rules::{
     check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
-    integer_value, is_identifier, is_token,
+    check_unit_code, integer_value, is_identifier, is_token,
 };
 use crate::v2::checksum;
 use crate::v2::convert::spline_is_finite;
@@ -1129,7 +1129,7 @@ fn check_field(field: &Field, kind: Container, scope: &Scope, place: &Place, rep
         check_pointer(pointer, &place.key("pointer"), report);
     }
     if let Some(unit) = &field.unit {
-        check_not_empty(unit, "unit", &place.key("unit"), report);
+        check_unit_code(unit, &place.key("unit"), report);
     }
     check_text(field.text, place, report);
     if let Some(conversion) = &field.conversion {
@@ -1187,7 +1187,7 @@ fn check_array(array: &ArrayEntry, scope: &Scope, place: &Place, report: &mut Re
 
 fn check_element(element: &ScalarElement, place: &Place, report: &mut Report) {
     if let Some(unit) = &element.unit {
-        check_not_empty(unit, "unit", &place.key("unit"), report);
+        check_unit_code(unit, &place.key("unit"), report);
     }
     check_text(element.text, place, report);
     if let Some(conversion) = &element.conversion {

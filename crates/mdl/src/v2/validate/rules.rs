@@ -2,6 +2,7 @@
 
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::Scalar;
+use crate::v2::units::Unit;
 
 /// The largest integer every JSON implementation reads exactly.
 pub(super) const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
@@ -167,6 +168,18 @@ pub(super) fn check_finite(n: f64, what: &str, place: &Place, report: &mut Repor
 pub(crate) fn check_not_empty(text: &str, what: &str, place: &Place, report: &mut Report) {
     if text.is_empty() {
         report.error(Code::Empty, place, format!("{what} must not be empty"));
+    }
+}
+
+/// A unit is one MDL knows (`spec/units.md`); an empty one is left out
+/// instead.
+pub(crate) fn check_unit_code(unit: &str, place: &Place, report: &mut Report) {
+    if unit.is_empty() {
+        check_not_empty(unit, "unit", place, report);
+        return;
+    }
+    if let Err(error) = Unit::parse(unit) {
+        report.error(Code::UnknownUnit, place, error.to_string());
     }
 }
 

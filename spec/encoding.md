@@ -94,6 +94,11 @@ An argument becomes its field's raw value:
   `table` conversion from value to raw, applied to the value. The first
   kinds invert exactly and take no `inverse`; these need one.
 
+An `f64` argument's value is first converted from the argument's unit
+into the field's (`units.md` §4), so 25 `Cel` into a `K` field is 298.15
+before its inverse; ranges stay in the argument's unit. Other argument
+types are in their field's unit already.
+
 Arithmetic follows `decoding.md` §7.1: binary64, each operation rounded
 on its own in the order written, no fused multiply-add, no reciprocal. A
 linear inverse subtracts, then divides; it does not multiply by `1 /
@@ -254,7 +259,9 @@ Each argument the packet encodes is its field's raw value:
   value [`unknown_state`];
 - through any other conversion, as `decoding.md` §7.1 converts it; a raw
   value outside a table's or spline's points that doesn't extrapolate is
-  [`out_of_range`];
+  [`out_of_range`]; an `f64` value then converts from the field's unit
+  into the argument's (`units.md` §4), and the range test below takes the
+  range's ends into the field's unit first;
 - unconverted, as it is: an integer as the nearest double for an `f64`
   argument, 0 or 1 as false or true for a `bool` argument
   [`out_of_range`].

@@ -1258,3 +1258,31 @@ fn a_correlation_reads_its_absolute_clock_on_its_epoch_and_scale() {
         Some(instant("2023-11-14T22:13:20Z"))
     );
 }
+
+#[test]
+fn a_sample_is_in_its_params_unit_and_an_engineering_value_in_its_fields() {
+    // BUS's voltage in millivolts, unconverted, for a param in volts.
+    let mut bundle = bundle();
+    let field = &mut bundle["sets"][1]["packets"][0]["entries"][0];
+    field["unit"] = json!("mV");
+    field.as_object_mut().unwrap().remove("conversion");
+    let artifacts = artifacts_of(&bundle);
+    let sets = family_sets(&artifacts, "vendor_j");
+    let text = r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z", "v": 1500, "cells": []}"#;
+    let decoded = sets
+        .decode(
+            &Message::new(Payload::Json(text.as_bytes()), now()),
+            &registry(),
+        )
+        .unwrap();
+    let voltage = decoded
+        .samples
+        .iter()
+        .find(|sample| sample.param == "eps.bus_voltage")
+        .unwrap();
+    assert_eq!(voltage.value, SampleValue::F64(1.5));
+    assert_eq!(
+        decoded.engineering("v").unwrap().value,
+        SampleValue::I64(1500)
+    );
+}

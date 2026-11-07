@@ -95,6 +95,7 @@ pub enum Code {
     CanonicalType,
     /// A unit that differs from the canonical param's.
     UnitMismatch,
+    UnknownUnit,
     /// A source frame consumers can't convert to the param's frame.
     FrameMismatch,
     /// A composite with the wrong members for its param.
@@ -194,6 +195,7 @@ impl Code {
             Code::ValueRange => "value_range",
             Code::CanonicalType => "canonical_type",
             Code::UnitMismatch => "unit_mismatch",
+            Code::UnknownUnit => "unknown_unit",
             Code::FrameMismatch => "frame_mismatch",
             Code::CompositeShape => "composite_shape",
             Code::RemovedParam => "removed_param",

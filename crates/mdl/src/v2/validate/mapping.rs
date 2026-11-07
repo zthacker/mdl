@@ -8,6 +8,7 @@ use crate::v2::ir::{
     ArrayEntry, Catalog, Composite, Conversion, Count, Element, Entry, Field, Frame, Packet, Param,
     ParamType, ScalarElement, ScalarType, StructType,
 };
+use crate::v2::units::Unit;
 
 /// A scalar that may map to a param: a field, or the element of an array.
 struct Source<'a> {
@@ -169,6 +170,7 @@ fn check_source(
             source.unit,
             param.unit.as_deref(),
             name,
+            param.ty == ParamType::F64,
             &place.key("unit"),
             report,
         );
@@ -188,10 +190,15 @@ fn requirement(ty: ParamType) -> &'static str {
     }
 }
 
+/// A value in `unit` can stand for `param`, which is in `expected`: the
+/// same unit, or, when the param's values `convert` (f64s do; integers
+/// would need rounding), a compatible one (`spec/units.md`). A unit that
+/// doesn't parse is reported where it's written.
 pub(super) fn check_unit(
     unit: Option<&str>,
     expected: Option<&str>,
     param: &str,
+    convert: bool,
     place: &Place,
     report: &mut Report,
 ) {
@@ -202,7 +209,20 @@ pub(super) fn check_unit(
         (None, Some(expected)) => format!("the unit is missing; {param} is in {expected:?}"),
         (Some(unit), None) => format!("{param} has no unit, so this can't be in {unit:?}"),
         (Some(unit), Some(expected)) => {
-            format!("unit {unit:?} doesn't match {param}, which is in {expected:?}")
+            let (Ok(from), Ok(to)) = (Unit::parse(unit), Unit::parse(expected)) else {
+                return;
+            };
+            match (from.is_compatible(&to), convert) {
+                (true, true) => return,
+                (true, false) => format!(
+                    "{param} is an integer in {expected:?}, which doesn't convert from {unit:?} \
+                     without rounding; use {expected:?}"
+                ),
+                (false, _) => format!(
+                    "unit {unit:?} doesn't convert to {param}'s {expected:?}: they measure \
+                     different things"
+                ),
+            }
         }
         (None, None) => return,
     };
@@ -458,7 +478,7 @@ fn check_composite(
         } else {
             param.unit.as_deref()
         };
-        check_unit(source.unit, unit, name, &member_place, report);
+        check_unit(source.unit, unit, name, true, &member_place, report);
     }
 }
 
