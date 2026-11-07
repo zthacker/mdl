@@ -484,13 +484,15 @@ mod properties {
             (
                 prop::collection::vec(scalar(), 0..3),
                 prop::option::of(condition()),
+                prop::option::of(byte_order()),
             ),
         )
             .prop_map(
-                |((n, ty, offset, size), (length, conversion, unit), (invalid, when))| {
+                |((n, ty, offset, size), (length, conversion, unit), (invalid, when, order))| {
                     let mut f = Field::new(n, ty);
                     f.offset_bits = offset;
                     f.size_bits = size;
+                    f.byte_order = order;
                     f.length = length;
                     f.conversion = conversion;
                     f.unit = unit;
@@ -499,6 +501,10 @@ mod properties {
                     f
                 },
             )
+    }
+
+    fn byte_order() -> impl Strategy<Value = ByteOrder> {
+        prop_oneof![Just(ByteOrder::Big), Just(ByteOrder::Little)]
     }
 
     fn entry() -> impl Strategy<Value = Entry> {
@@ -518,11 +524,13 @@ mod properties {
             (
                 name(),
                 prop::option::of(count),
-                scalar_type(),
+                (scalar_type(), prop::option::of(byte_order())),
                 prop::option::of(1.0_f64..1000.0)
             )
-                .prop_map(|(n, count, ty, interval)| {
-                    let mut a = ArrayEntry::new(n, Element::Scalar(ScalarElement::new(ty)));
+                .prop_map(|(n, count, (ty, order), interval)| {
+                    let mut element = ScalarElement::new(ty);
+                    element.byte_order = order;
+                    let mut a = ArrayEntry::new(n, Element::Scalar(element));
                     a.count = count;
                     a.sample_interval_ms = interval;
                     Entry::Array(a)

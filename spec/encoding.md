@@ -163,8 +163,9 @@ length it is].
   `decoding.md`): at its `offset_bits`, or where the previous entry ended.
   Validation guarantees that no two entries overlap.
 - **Values.** Integers and bools are written as `decoding.md` §2.1 reads
-  them, an `int` in two's complement in its size; floats as IEEE 754
-  binary32 or binary64; strings and bytes from a byte boundary.
+  them, in the field's `byte_order` or else the family's, an `int` in
+  two's complement in its size; floats as IEEE 754 binary32 or binary64,
+  in the same byte order; strings and bytes from a byte boundary.
 - **Padding and gaps.** Bits no entry covers, padding included, are 0.
 - **Size.** The payload ends where its furthest entry ends (after its
   last bit, or at its start for an entry that takes no bits, such as an
@@ -228,9 +229,10 @@ A command packet's keys are its metadata, by value, and its constant
 fields that can be read without decoding anything else:
 
 - binary: integer and bool fields at static positions (`decoding.md`
-  §5.2), as the raw unsigned bits they write (an `int` 8-bit −1 and a
-  `uint` 8-bit 255 are the same key and value); and fixed-length string
-  fields at static byte-aligned positions, as the bytes they write;
+  §5.2), as the raw unsigned bits they write, read in the field's byte
+  order as `decoding.md` §4 defines a key (an `int` 8-bit −1 and a `uint`
+  8-bit 255 are the same key and value); and fixed-length string fields
+  at static byte-aligned positions, as the bytes they write;
 - JSON: integer and string fields, by pointer, compared exactly.
 
 Validation guarantees that every two command packets of a set share a key

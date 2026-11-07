@@ -42,6 +42,7 @@ pub(super) fn binary<'a>(
                     .get(index)
                     .and_then(Option::as_ref)
                     .ok_or_else(|| fail(index, FieldProblem::Layout("a field with no value")))?;
+                let order = field.byte_order.unwrap_or(order);
                 write_field(&mut payload, raw, at, size, field.length.as_ref(), order)
                     .map_err(|problem| fail(index, problem))?;
             }

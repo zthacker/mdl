@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::rules::{check_not_empty, check_pointer, is_token};
 use crate::v2::diagnostics::{Code, Place, Report};
-use crate::v2::ir::{Encoding, Family, Locator};
+use crate::v2::ir::{ByteOrder, Encoding, Family, Locator};
 
 /// Check every family; return them by name (the first of any duplicates).
 pub(super) fn check_all<'a>(
@@ -106,7 +106,10 @@ fn check(family: &Family, place: &Place, report: &mut Report) {
 fn check_locator(family: &Family, locator: &Locator, place: &Place, report: &mut Report) {
     let encoding = family.encoding;
     match locator {
-        Locator::Bits { size_bits, .. } => {
+        Locator::Bits {
+            offset_bits,
+            size_bits,
+        } => {
             if encoding != Encoding::Binary {
                 report.error(
                     Code::WrongEncoding,
@@ -120,6 +123,23 @@ fn check_locator(family: &Family, locator: &Locator, place: &Place, report: &mut
                     place,
                     format!("a locator reads 1 to 64 bits, not {size_bits}"),
                 );
+            } else if family.byte_order == Some(ByteOrder::Little) {
+                // Locators read in the family's order, under the same
+                // rules as a little-endian field.
+                let start = offset_bits % 8;
+                let inside_one_byte = start + size_bits <= 8;
+                let whole_bytes = start == 0 && size_bits % 8 == 0;
+                if !inside_one_byte && !whole_bytes {
+                    report.error(
+                        Code::Alignment,
+                        place,
+                        format!(
+                            "a locator reads in its family's byte order, and a little-endian \
+                             value is whole bytes on byte boundaries or fits inside one byte; \
+                             {size_bits} bits at bit {offset_bits} is neither"
+                        ),
+                    );
+                }
             }
         }
         Locator::Path { pointer } => {

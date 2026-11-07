@@ -64,6 +64,7 @@ pub(super) enum Segment<'a> {
 struct ScalarShape<'a> {
     ty: ScalarType,
     size_bits: Option<u32>,
+    byte_order: Option<ByteOrder>,
     length: Option<&'a ByteLength>,
     text: Option<TextEncoding>,
 }
@@ -73,6 +74,7 @@ impl<'a> ScalarShape<'a> {
         ScalarShape {
             ty: field.ty,
             size_bits: field.size_bits,
+            byte_order: field.byte_order,
             length: field.length.as_ref(),
             text: field.text,
         }
@@ -82,6 +84,7 @@ impl<'a> ScalarShape<'a> {
         ScalarShape {
             ty: element.ty,
             size_bits: element.size_bits,
+            byte_order: element.byte_order,
             length: element.length.as_ref(),
             text: element.text,
         }
@@ -102,6 +105,7 @@ pub(super) struct PacketChecksums {
 pub(super) struct BinaryWalker<'a, 'p> {
     tables: Tables<'a>,
     bytes: &'p [u8],
+    /// The family's byte order: every value's that doesn't name its own.
     order: ByteOrder,
     path: Vec<Segment<'a>>,
     /// The packet's checksums, for its top level only.
@@ -346,7 +350,8 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
         match scalar.ty {
             ScalarType::Uint | ScalarType::Int | ScalarType::Bool | ScalarType::Float => {
                 let size = scalar.size_bits.unwrap_or(0);
-                let raw = read_bits(self.bytes, at, size, self.order).map_err(bits_problem)?;
+                let order = scalar.byte_order.unwrap_or(self.order);
+                let raw = read_bits(self.bytes, at, size, order).map_err(bits_problem)?;
                 let value = match (scalar.ty, size) {
                     (ScalarType::Uint, _) => Value::Uint(raw),
                     (ScalarType::Int, _) => Value::Int(sign_extend(raw, size)),

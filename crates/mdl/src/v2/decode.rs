@@ -595,7 +595,8 @@ impl Program {
                 offset,
                 size,
                 signed,
-            } => bits_key(readable, *offset, *size, *signed),
+                order,
+            } => bits_key(readable, *offset, *size, *signed, *order),
             KeyId::Bytes { offset, length } => bytes_key(readable, *offset, *length),
             KeyId::Unplaced { packet, name } => self.unplaced_key(set, *packet, name, readable),
         }
@@ -787,11 +788,17 @@ fn json_key(value: &Json) -> Option<KeyValue> {
     }
 }
 
-fn bits_key(readable: &Readable<'_>, offset: u64, size: u32, signed: bool) -> Option<KeyValue> {
-    let Readable::Binary { bytes, order } = readable else {
+fn bits_key(
+    readable: &Readable<'_>,
+    offset: u64,
+    size: u32,
+    signed: bool,
+    order: ByteOrder,
+) -> Option<KeyValue> {
+    let Readable::Binary { bytes, .. } = readable else {
         return None;
     };
-    let raw = read_bits(bytes, offset, size, *order).ok()?;
+    let raw = read_bits(bytes, offset, size, order).ok()?;
     Some(KeyValue::Int(if signed {
         i128::from(sign_extend(raw, size))
     } else {

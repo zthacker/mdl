@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use super::validate;
 use crate::v2::diagnostics::Code;
-use crate::v2::ir::{Bundle, Conversion, Entry};
+use crate::v2::ir::{Bundle, ByteOrder, Conversion, Entry};
 
 const FULL_BUNDLE: &str = include_str!("../../../tests/fixtures/v2/full_bundle.json");
 
@@ -496,6 +496,17 @@ fn identify_keys_are_compared_by_what_they_read() {
         ])),
         vec![]
     );
+    // The same bits in the other byte order are another key: `01 02` is
+    // 0x0102 to A and 0x0201 to B, so both match it.
+    assert_one(
+        Code::AmbiguousIdentify,
+        "/sets/0/packets/1/identify",
+        with_packets(vec![
+            json!({ "name": "A", "identify": { "w": 0x0102 }, "entries": [uint("w", 16)] }),
+            json!({ "name": "B", "identify": { "w": 0x0201 },
+                    "entries": [ordered(uint("w", 16), "little")] }),
+        ]),
+    );
     // An integer field's value has one spelling, and "1" equals 1.
     assert_eq!(
         problems(with_packets(vec![
@@ -902,6 +913,11 @@ fn at(mut entry: Value, offset: u32) -> Value {
     entry
 }
 
+fn ordered(mut entry: Value, order: &str) -> Value {
+    entry["byte_order"] = json!(order);
+    entry
+}
+
 fn when(mut entry: Value, condition: Value) -> Value {
     entry["when"] = condition;
     entry
@@ -1051,23 +1067,31 @@ fn array_rules() {
     );
 }
 
+/// The diagnostics for legacy_v1's packet (a little-endian family) with
+/// these entries.
+fn legacy(entries: Value) -> Vec<(Code, String)> {
+    legacy_with_types(json!({}), entries)
+}
+
+/// The same, with these struct types.
+fn legacy_with_types(types: Value, entries: Value) -> Vec<(Code, String)> {
+    problems(legacy_layout(types, entries))
+}
+
+/// Gives legacy_v1's packet these struct types and entries.
+fn legacy_layout(types: Value, entries: Value) -> impl FnOnce(&mut Value) {
+    move |v| {
+        v["sets"][2]["types"] = types;
+        v["sets"][2]["packets"][0]["entries"] = entries;
+        let packet = v["sets"][2]["packets"][0].as_object_mut().unwrap();
+        packet.remove("length");
+        packet.remove("time_field");
+        v["sets"][2].as_object_mut().unwrap().remove("time");
+    }
+}
+
 #[test]
 fn little_endian_alignment() {
-    // legacy_v1 is little-endian; replace its packet's entries.
-    let legacy = |entries: Value| {
-        problems(move |v| {
-            v["sets"][2]["packets"][0]["entries"] = entries;
-            v["sets"][2]["packets"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("length");
-            v["sets"][2].as_object_mut().unwrap().remove("time");
-            v["sets"][2]["packets"][0]
-                .as_object_mut()
-                .unwrap()
-                .remove("time_field");
-        })
-    };
     let path = |i: usize| format!("/sets/2/packets/0/entries/{i}");
     assert_eq!(
         legacy(json!([uint("a", 12)])),
@@ -1093,6 +1117,174 @@ fn little_endian_alignment() {
     assert_one(Code::Alignment, "/sets/0/time/offset_bits", |v| {
         set_x(v)["time"]["offset_bits"] = json!(4);
     });
+}
+
+#[test]
+fn a_number_can_have_its_own_byte_order() {
+    // vendor_x is big-endian: little-endian values and elements among
+    // big-endian ones.
+    let elements = json!({ "kind": "array", "name": "b", "count": { "kind": "fixed", "count": 2 },
+        "element": { "kind": "scalar", "type": "uint", "size_bits": 16,
+                     "byte_order": "little" } });
+    assert_eq!(
+        one(json!([
+            uint("x", 11),
+            uint("pad", 5),
+            ordered(uint("a", 16), "little"),
+            elements
+        ])),
+        vec![]
+    );
+    // A little-endian value follows the little-endian rules.
+    assert_eq!(
+        one(json!([ordered(uint("a", 12), "little")])),
+        vec![(Code::Alignment, entry(0, "/size_bits"))]
+    );
+    assert_eq!(
+        one(json!([uint("pad", 4), ordered(uint("a", 16), "little")])),
+        vec![(Code::Alignment, entry(1, ""))]
+    );
+    // In a little-endian family, a big-endian value may straddle bytes, as
+    // a CCSDS APID does.
+    assert_eq!(
+        legacy(json!([uint("pad", 5), ordered(uint("apid", 11), "big")])),
+        vec![]
+    );
+    // The family's own order is the default, spelled out.
+    assert_eq!(
+        one(json!([ordered(uint("a", 16), "big")])),
+        vec![(Code::ExplicitDefault, entry(0, "/byte_order"))]
+    );
+    assert_eq!(
+        legacy(json!([ordered(uint("a", 16), "little")])),
+        vec![(
+            Code::ExplicitDefault,
+            "/sets/2/packets/0/entries/0/byte_order".to_string()
+        )]
+    );
+    // Only numbers have a byte order.
+    let flag = json!({ "kind": "field", "name": "f", "type": "bool", "size_bits": 1 });
+    let text = json!({ "kind": "field", "name": "s", "type": "string",
+                       "length": { "kind": "fixed", "bytes": 2 } });
+    assert_eq!(
+        one(json!([
+            ordered(flag, "little"),
+            uint("pad", 7),
+            ordered(text, "little")
+        ])),
+        vec![
+            (Code::ByteOrder, entry(0, "/byte_order")),
+            (Code::ByteOrder, entry(2, "/byte_order"))
+        ]
+    );
+    // And only binary ones.
+    assert_one(
+        Code::WrongEncoding,
+        "/sets/1/packets/0/entries/0/byte_order",
+        |v| v["sets"][1]["packets"][0]["entries"][0]["byte_order"] = json!("little"),
+    );
+}
+
+#[test]
+fn a_byte_order_is_refused_where_it_changes_nothing() {
+    let elements = |count: u32, bits: u32| {
+        json!({ "kind": "array", "name": "a", "count": { "kind": "fixed", "count": count },
+                "element": { "kind": "scalar", "type": "uint", "size_bits": bits,
+                             "byte_order": "big" } })
+    };
+    let path = |i: usize, rest: &str| format!("/sets/2/packets/0/entries/{i}{rest}");
+    // Inside one byte, both orders read the same.
+    assert_eq!(
+        one(json!([
+            ordered(uint("a", 4), "little"),
+            uint("pad", 4),
+            ordered(uint("b", 8), "little")
+        ])),
+        vec![
+            (Code::ByteOrder, entry(0, "/byte_order")),
+            (Code::ByteOrder, entry(2, "/byte_order"))
+        ]
+    );
+    assert_eq!(
+        legacy(json!([elements(2, 4)])),
+        vec![(Code::ByteOrder, path(0, "/element/byte_order"))]
+    );
+    // Across a byte boundary, big-endian is what makes a narrow value
+    // legal in a little-endian family.
+    assert_eq!(
+        legacy(json!([uint("pad", 6), ordered(uint("a", 3), "big")])),
+        vec![]
+    );
+    assert_eq!(legacy(json!([elements(3, 3)])), vec![]);
+    // A struct holding such a value starts on a byte, so the positions
+    // checked inside it are the positions it's read at.
+    assert_eq!(
+        legacy_with_types(
+            json!({ "t": { "entries": [uint("pad", 6), ordered(uint("a", 3), "big")] } }),
+            json!([uint("n", 4), { "kind": "struct", "name": "s", "struct": "t" }])
+        ),
+        vec![(Code::Alignment, path(1, ""))]
+    );
+}
+
+#[test]
+fn a_struct_holding_narrow_values_says_why_it_starts_on_a_byte() {
+    let mut value = fixture();
+    let nibbles = json!({ "kind": "array", "name": "a", "count": { "kind": "fixed", "count": 2 },
+                          "element": { "kind": "scalar", "type": "uint", "size_bits": 4 } });
+    legacy_layout(
+        json!({ "t": { "entries": [nibbles] } }),
+        json!([uint("n", 4), { "kind": "struct", "name": "s", "struct": "t" }]),
+    )(&mut value);
+    let diagnostics = validate(bundle(value)).unwrap_err();
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        [
+            "s holds a value narrower than a byte whose place within a byte matters (a \
+          little-endian one, or one with its own byte_order), so it starts on a byte, but it \
+          can start at bit 4 of a byte"
+        ]
+    );
+}
+
+#[test]
+fn identify_keys_inside_one_byte_ignore_byte_order() {
+    // A's byte_order is refused, and nothing else: both read byte 0 the
+    // same, so their keys don't overlap.
+    assert_eq!(
+        problems(with_packets(vec![
+            json!({ "name": "A", "identify": { "op": 1 },
+                    "entries": [ordered(uint("op", 8), "little")] }),
+            json!({ "name": "B", "identify": { "op": 2 }, "entries": [uint("op", 8)] }),
+        ])),
+        vec![(
+            Code::ByteOrder,
+            "/sets/0/packets/0/entries/0/byte_order".to_string()
+        )]
+    );
+}
+
+#[test]
+fn a_bit_locator_follows_its_familys_byte_order() {
+    let alias = |offset: u32, size: u32| {
+        move |v: &mut Value| {
+            v["families"][2]["alias"] =
+                json!({ "kind": "bits", "offset_bits": offset, "size_bits": size });
+        }
+    };
+    // legacy is little-endian: an APID-like 11 bits at bit 5 can't be read.
+    assert_one(Code::Alignment, "/families/2/alias", alias(5, 11));
+    assert_eq!(problems(alias(8, 16)), vec![]);
+    assert_eq!(problems(alias(2, 3)), vec![]);
+    // Big-endian families read bits anywhere.
+    assert_eq!(
+        problems(|v| {
+            v["families"][0]["alias"] =
+                json!({ "kind": "bits", "offset_bits": 5, "size_bits": 11 });
+        }),
+        vec![]
+    );
 }
 
 #[test]
@@ -1512,20 +1704,14 @@ fn exact_length_bounds_every_possible_end() {
 
 #[test]
 fn alignment_holds_for_every_possible_start() {
-    let legacy = |types: Value, entries: Value| {
-        problems(move |v| {
-            v["sets"][2]["types"] = types;
-            v["sets"][2]["packets"][0]["entries"] = entries;
-            let packet = v["sets"][2]["packets"][0].as_object_mut().unwrap();
-            packet.remove("length");
-            packet.remove("time_field");
-            v["sets"][2].as_object_mut().unwrap().remove("time");
-        })
-    };
     let path = |i: usize| format!("/sets/2/packets/0/entries/{i}");
+    let three_bits = |count: u32| {
+        json!({ "kind": "array", "name": "a", "count": { "kind": "fixed", "count": count },
+                "element": { "kind": "scalar", "type": "uint", "size_bits": 3 } })
+    };
     // A struct holding a little-endian u16, placed at bit 4.
     assert_eq!(
-        legacy(
+        legacy_with_types(
             json!({ "t": { "entries": [uint("a", 16)] } }),
             json!([uint("n", 4), { "kind": "struct", "name": "s", "struct": "t" }])
         ),
@@ -1533,23 +1719,25 @@ fn alignment_holds_for_every_possible_start() {
     );
     // Three-bit little-endian elements: element 2 straddles a byte.
     assert_eq!(
-        legacy(
-            json!({}),
-            json!([{ "kind": "array", "name": "a", "count": { "kind": "fixed", "count": 3 },
-                     "element": { "kind": "scalar", "type": "uint", "size_bits": 3 } }])
-        ),
+        legacy(json!([three_bits(3)])),
         vec![(Code::Alignment, path(0))]
+    );
+    // Two of them fit in a byte, but a struct holding them, placed at bit
+    // 4, would put the second across a byte boundary.
+    assert_eq!(
+        legacy_with_types(
+            json!({ "t": { "entries": [three_bits(2)] } }),
+            json!([uint("n", 4), { "kind": "struct", "name": "s", "struct": "t" }])
+        ),
+        vec![(Code::Alignment, path(1))]
     );
     // A u16 that starts at bit 4 or 7 depending on an optional entry.
     assert_eq!(
-        legacy(
-            json!({}),
-            json!([
-                uint("flag", 4),
-                when(uint("opt", 3), on("flag", "eq", json!(1))),
-                uint("x", 16)
-            ])
-        ),
+        legacy(json!([
+            uint("flag", 4),
+            when(uint("opt", 3), on("flag", "eq", json!(1))),
+            uint("x", 16)
+        ])),
         vec![(Code::Alignment, path(2))]
     );
     // A big-endian struct holding a string, at bit 4.
@@ -2913,6 +3101,7 @@ fn command_identities_are_constants_a_decoder_reads_directly() {
         offset: 0,
         size: 8,
         signed: false,
+        order: ByteOrder::Big,
     };
     let apid = KeyId::Metadata("apid".to_string());
     assert_eq!(
