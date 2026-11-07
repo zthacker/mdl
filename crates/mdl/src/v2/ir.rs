@@ -1352,8 +1352,15 @@ pub enum TextEncoding {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 #[non_exhaustive]
 pub enum ByteLength {
+    /// Exactly this many bytes. With a `terminator`, the value ends before
+    /// the first terminator byte in them and the rest is padding, as in a
+    /// C `char[16]`; the entry still takes every byte.
     #[non_exhaustive]
-    Fixed { bytes: u32 },
+    Fixed {
+        bytes: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        terminator: Option<u8>,
+    },
     /// An earlier unsigned integer entry holds the length in bytes (after
     /// its adjustment).
     Field(FromField),
@@ -1367,7 +1374,18 @@ pub enum ByteLength {
 
 impl ByteLength {
     pub fn fixed(bytes: u32) -> Self {
-        ByteLength::Fixed { bytes }
+        ByteLength::Fixed {
+            bytes,
+            terminator: None,
+        }
+    }
+
+    /// A fixed-size buffer whose value ends at a terminator inside it.
+    pub fn fixed_terminated(bytes: u32, terminator: u8) -> Self {
+        ByteLength::Fixed {
+            bytes,
+            terminator: Some(terminator),
+        }
     }
 
     pub fn field(field: impl Into<String>) -> Self {

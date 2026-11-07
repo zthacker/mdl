@@ -701,31 +701,18 @@ fn string_length(encoding: El<'_>, report: &mut Report) -> Option<(Value, Span)>
         let terminator = size.child("TerminationChar");
         return match (size.child("Fixed"), terminator) {
             (Some(fixed), None) => {
-                fixed.check(
-                    &Expect {
-                        attrs: &[],
-                        children: &["FixedValue"],
-                        ignored: &[],
-                        text: false,
-                    },
-                    report,
-                );
-                let Some(value) = fixed.child("FixedValue") else {
-                    report.error(Code::Invalid, fixed.span(), "Fixed holds a FixedValue");
-                    return None;
-                };
-                let bytes = whole_bytes(value, report)?;
-                Some((json!({ "kind": "fixed", "bytes": bytes }), value.span()))
+                let (bytes, span) = fixed_bytes(fixed, report)?;
+                Some((json!({ "kind": "fixed", "bytes": bytes }), span))
             }
             (None, Some(terminator)) => terminated(terminator, report),
-            (Some(_), Some(terminator)) => {
-                report.error(
-                    Code::Unsupported,
-                    terminator.span(),
-                    "a terminated string in a fixed-size buffer isn't supported: MDL's fixed \
-                     strings keep every byte, so the value would change",
-                );
-                None
+            // A fixed-size buffer whose value ends at the terminator.
+            (Some(fixed), Some(terminator)) => {
+                let (bytes, span) = fixed_bytes(fixed, report)?;
+                let (byte, _) = terminator_byte(terminator, report)?;
+                Some((
+                    json!({ "kind": "fixed", "bytes": bytes, "terminator": byte }),
+                    span,
+                ))
             }
             (None, None) => {
                 report.error(
@@ -772,10 +759,34 @@ fn string_length(encoding: El<'_>, report: &mut Report) -> Option<(Value, Span)>
     None
 }
 
+/// A `Fixed` size in whole bytes, and where its value is.
+fn fixed_bytes(fixed: El<'_>, report: &mut Report) -> Option<(u32, Span)> {
+    fixed.check(
+        &Expect {
+            attrs: &[],
+            children: &["FixedValue"],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let Some(value) = fixed.child("FixedValue") else {
+        report.error(Code::Invalid, fixed.span(), "Fixed holds a FixedValue");
+        return None;
+    };
+    Some((whole_bytes(value, report)?, value.span()))
+}
+
 fn terminated(terminator: El<'_>, report: &mut Report) -> Option<(Value, Span)> {
+    let (byte, span) = terminator_byte(terminator, report)?;
+    Some((json!({ "kind": "terminator", "byte": byte }), span))
+}
+
+/// A TerminationChar: one byte, in hexadecimal.
+fn terminator_byte(terminator: El<'_>, report: &mut Report) -> Option<(u8, Span)> {
     let (text, span) = terminator.text();
     match (text.len(), u8::from_str_radix(&text, 16)) {
-        (2, Ok(byte)) => Some((json!({ "kind": "terminator", "byte": byte }), span)),
+        (2, Ok(byte)) => Some((byte, span)),
         _ => {
             report.error(
                 Code::Unsupported,

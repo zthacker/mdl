@@ -145,6 +145,11 @@ Then, by the field's length:
 
 - `fixed`: the bytes MUST be exactly that many [`bad_length`]; the
   caller pads a shorter value, and decoding keeps the padding;
+- `fixed` with a `terminator`: the bytes MUST be at most that many
+  [`bad_length`] and MUST NOT contain the terminator byte
+  [`contains_terminator`]; the terminator fills the rest of the length
+  (none when the bytes fill it), so a NUL terminator pads as C's
+  `strncpy` does and a space pads with spaces;
 - `terminator`: the bytes MUST NOT contain the terminator byte
   [`contains_terminator`], which is written after them;
 - `field`: any length the length field can give (§3.5);
@@ -232,7 +237,12 @@ fields that can be read without decoding anything else:
   §5.2), as the raw unsigned bits they write, read in the field's byte
   order as `decoding.md` §4 defines a key (an `int` 8-bit −1 and a `uint`
   8-bit 255 are the same key and value); and fixed-length string fields
-  at static byte-aligned positions, as the bytes they write;
+  at static byte-aligned positions, as the bytes they write. In a buffer
+  with a `terminator`, only the value and the one terminator after it
+  are certain, so those bytes are the key (all of the buffer when the
+  value fills it): `"PING"` in an 8-byte NUL-terminated buffer is the
+  5-byte key `PING\0`. Constants of one length then share a key, and
+  constants of different lengths are different keys;
 - JSON: integer and string fields, by pointer, compared exactly.
 
 Validation guarantees that every two command packets of a set share a key
@@ -298,7 +308,9 @@ integer fields whose offset doesn't swamp the scaled value. It need not
 hold for a float field with a conversion, or for a polynomial whose
 `inverse` is approximate; there the decoded argument is what the raw value
 means by the field's conversion, and the record holds the raw value
-exactly.
+exactly. A terminated buffer's padding isn't part of its value, so a
+payload padded otherwise than §3.4 pads decodes, and encodes again with
+§3.4's padding.
 
 An argument the set doesn't encode is its default, and the result lists
 it as defaulted. A packet with a target field gives the target's native

@@ -59,7 +59,13 @@ Strings and bytes start on a byte boundary and are a whole number of
 bytes. Text is decoded strictly: UTF-8 MUST be valid, ASCII MUST be below
 0x80, and Latin-1 maps each byte to the code point of the same value;
 anything else is `invalid_text`. A fixed length keeps every byte, padding
-included.
+included, unless it names a `terminator`: then the value is the bytes
+before the first terminator byte among them, or all of them when there's
+none, and the rest is padding, which isn't decoded (a C `char[16]`). The
+entry takes its whole length either way. The value ends at the first
+terminator, so it can't hold one; trailing padding to strip from a value
+that may contain the padding byte (`"HELLO WORLD   "`) is another thing,
+which a terminator doesn't describe.
 
 ### 2.3 JSON payloads
 
@@ -221,9 +227,10 @@ struct).
     a little-endian value narrower than a byte, or a value of at most 8
     bits that names its own `byte_order`.
 - **Fields** read a value (§2.1, §2.2). A string or bytes field's length
-  is `fixed`, taken from a field (§5.4), up to a `terminator` byte (which
-  ends the value but isn't part of it; none before the packet's end is
-  [`no_terminator`]), or the rest of the packet (`remaining`).
+  is `fixed` (with a `terminator` inside it, or not), taken from a field
+  (§5.4), up to a `terminator` byte (which ends the value but isn't part
+  of it; none before the packet's end is [`no_terminator`]), or the rest
+  of the packet (`remaining`).
 - **Structs** decode their type's entries from their start. A struct's
   size is the furthest end of its present entries, or zero if none is
   present.

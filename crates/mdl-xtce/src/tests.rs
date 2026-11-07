@@ -532,11 +532,6 @@ fn what_mdl_cant_represent_is_an_error() {
             "order 2 splines aren't supported: MDL interpolates flat (0) or linearly (1)",
         ),
         (
-            r#"<StringParameterType name="T"><StringDataEncoding><SizeInBits><Fixed><FixedValue>64</FixedValue></Fixed><TerminationChar>00</TerminationChar></SizeInBits></StringDataEncoding></StringParameterType>"#,
-            "a terminated string in a fixed-size buffer isn't supported: MDL's fixed strings \
-             keep every byte, so the value would change",
-        ),
-        (
             r#"<StringParameterType name="T"><StringDataEncoding encoding="UTF-16"><SizeInBits><Fixed><FixedValue>64</FixedValue></Fixed></SizeInBits></StringDataEncoding></StringParameterType>"#,
             "UTF-16 text isn't supported: MDL reads UTF-8, US-ASCII and ISO-8859-1",
         ),
@@ -648,18 +643,20 @@ fn strings_and_bytes_keep_their_lengths_and_text_encodings() {
     let types = format!(
         r#"{U8}<StringParameterType name="Name"><StringDataEncoding encoding="US-ASCII"><SizeInBits><Fixed><FixedValue>32</FixedValue></Fixed></SizeInBits></StringDataEncoding></StringParameterType>
            <StringParameterType name="Note"><StringDataEncoding encoding="ISO-8859-1"><SizeInBits><TerminationChar>0A</TerminationChar></SizeInBits></StringDataEncoding></StringParameterType>
+           <StringParameterType name="Buffer"><StringDataEncoding><SizeInBits><Fixed><FixedValue>64</FixedValue></Fixed><TerminationChar>00</TerminationChar></SizeInBits></StringDataEncoding></StringParameterType>
            <BinaryParameterType name="Blob"><BinaryDataEncoding><SizeInBits><FixedValue>24</FixedValue></SizeInBits></BinaryDataEncoding></BinaryParameterType>"#
     );
     let params = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         param("N", "Name"),
         param("M", "Note"),
+        param("F", "Buffer"),
         param("B", "Blob")
     );
     let packet = first_packet(&doc(&telemetry(
         &types,
         &params,
-        &container("P", &(entry("N") + &entry("M") + &entry("B"))),
+        &container("P", &(entry("N") + &entry("M") + &entry("F") + &entry("B"))),
     )));
     assert_eq!(
         packet["entries"],
@@ -668,6 +665,8 @@ fn strings_and_bytes_keep_their_lengths_and_text_encodings() {
               "length": { "kind": "fixed", "bytes": 4 }, "canonical": "sat.n" },
             { "kind": "field", "name": "M", "type": "string", "text": "latin1",
               "length": { "kind": "terminator", "byte": 10 }, "canonical": "sat.m" },
+            { "kind": "field", "name": "F", "type": "string",
+              "length": { "kind": "fixed", "bytes": 8, "terminator": 0 }, "canonical": "sat.f" },
             { "kind": "field", "name": "B", "type": "bytes",
               "length": { "kind": "fixed", "bytes": 3 }, "canonical": "sat.b" }
         ])

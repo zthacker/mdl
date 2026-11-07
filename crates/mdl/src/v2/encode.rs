@@ -978,15 +978,27 @@ pub(crate) fn run_bytes(field: &Field, value: &Value<'_>) -> Result<Vec<u8>, Fie
         _ => return Ok(Vec::new()),
     };
     match &field.length {
-        Some(ByteLength::Fixed { bytes: size }) if bytes.len() != *size as usize => {
-            Err(FieldProblem::BadLength {
-                length: bytes.len(),
-                reason: format!("the field is exactly {size} bytes"),
-            })
-        }
-        Some(ByteLength::Terminator { byte }) if bytes.contains(byte) => {
-            Err(FieldProblem::ContainsTerminator { byte: *byte })
-        }
+        Some(ByteLength::Fixed {
+            bytes: size,
+            terminator: None,
+        }) if bytes.len() != *size as usize => Err(FieldProblem::BadLength {
+            length: bytes.len(),
+            reason: format!("the field is exactly {size} bytes"),
+        }),
+        Some(ByteLength::Fixed {
+            bytes: size,
+            terminator: Some(_),
+        }) if bytes.len() > *size as usize => Err(FieldProblem::BadLength {
+            length: bytes.len(),
+            reason: format!("the field holds at most {size} bytes"),
+        }),
+        Some(
+            ByteLength::Terminator { byte }
+            | ByteLength::Fixed {
+                terminator: Some(byte),
+                ..
+            },
+        ) if bytes.contains(byte) => Err(FieldProblem::ContainsTerminator { byte: *byte }),
         _ => Ok(bytes),
     }
 }

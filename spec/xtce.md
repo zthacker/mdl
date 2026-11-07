@@ -109,7 +109,7 @@ An import produces one family and one set:
 | `FloatParameterType` | `float` (IEEE 754, 32 or 64 bits), or an integer encoding with or without a calibrator | `f64` |
 | `EnumeratedParameterType` | an integer encoding with a `states` conversion from its `EnumerationList` | `enum`, its labels in order, each once |
 | `BooleanParameterType` | `bool` for one bit, else `uint` | `bool`: nonzero is true |
-| `StringParameterType` | `string`, `utf8` (the default), `ascii` (`US-ASCII`) or `latin1` (`ISO-8859-1`); a `Fixed` size in whole bytes, or up to a one-byte `TerminationChar` | `str` |
+| `StringParameterType` | `string`, `utf8` (the default), `ascii` (`US-ASCII`) or `latin1` (`ISO-8859-1`); a `Fixed` size in whole bytes, up to a one-byte `TerminationChar`, or both: a fixed-size buffer whose value ends at the terminator | `str` |
 | `BinaryParameterType` | `bytes`, a fixed size in whole bytes | `bytes` |
 | `AggregateParameterType` | one field per member, depth first | one per member |
 
@@ -159,8 +159,7 @@ Encodings:
   name different orders, a calibrator on an integer, enumerated or boolean
   type (MDL's calibrations give floats), sign-magnitude, ones' complement
   and BCD integers, floats other than IEEE 754 binary32 and binary64, text
-  other than the three encodings above, a terminated string in a
-  fixed-size buffer (MDL's fixed strings keep every byte), leading sizes,
+  other than the three encodings above, leading sizes,
   dynamic sizes, binary transform algorithms, enumerations over a range of
   values (`maxValue`), type inheritance (`baseType`), absolute time
   parameters (an MDL field holds a number, not an instant), and, in this

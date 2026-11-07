@@ -128,7 +128,9 @@ pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<Key
 /// A constant field at a static position, as what it puts in the payload:
 /// an integer or bool as its raw unsigned bits (an int8 -1 and a uint8 255
 /// are the same key and value, an int8 -1 and a uint8 1 differ), a
-/// fixed-length string as its bytes.
+/// fixed-length string as its bytes. In a terminated buffer only the value
+/// and the terminator after it are certain (the padding can be anything),
+/// so those are the key: `"PING"` in a `char[8]` is `PING\0`.
 fn binary_key(
     field: &Field,
     family: &Family,
@@ -136,16 +138,29 @@ fn binary_key(
     offset: Option<u64>,
 ) -> Option<(KeyId, KeyValue)> {
     let offset = offset?;
-    if let (ScalarType::String, Scalar::Str(text), Some(ByteLength::Fixed { bytes })) =
+    if let (ScalarType::String, Scalar::Str(text), Some(ByteLength::Fixed { bytes, terminator })) =
         (field.ty, value, &field.length)
     {
-        let encoded = text::encode(text, field.text)?;
-        let fits = offset.is_multiple_of(8) && encoded.len() == *bytes as usize;
+        let mut certain = text::encode(text, field.text)?;
+        let size = *bytes as usize;
+        // A value that doesn't fit is reported by check_text_value.
+        let fits = match terminator {
+            None => certain.len() == size,
+            Some(byte) => certain.len() <= size && !certain.contains(byte),
+        };
+        if !fits || !offset.is_multiple_of(8) {
+            return None;
+        }
+        if let Some(byte) = terminator
+            && certain.len() < size
+        {
+            certain.push(*byte);
+        }
         let key = KeyId::Bytes {
             offset,
-            length: *bytes,
+            length: u32::try_from(certain.len()).ok()?,
         };
-        return fits.then_some((key, KeyValue::Bytes(encoded)));
+        return Some((key, KeyValue::Bytes(certain)));
     }
     let size = field.size_bits.filter(|size| (1..=64).contains(size))?;
     if !matches!(
@@ -625,7 +640,10 @@ fn check_text_value(field: &Field, value: &str, place: &Place, report: &mut Repo
         return;
     };
     match &field.length {
-        Some(ByteLength::Fixed { bytes }) if encoded.len() != *bytes as usize => report.error(
+        Some(ByteLength::Fixed {
+            bytes,
+            terminator: None,
+        }) if encoded.len() != *bytes as usize => report.error(
             Code::ValueRange,
             place,
             format!(
@@ -634,7 +652,25 @@ fn check_text_value(field: &Field, value: &str, place: &Place, report: &mut Repo
                 field.name
             ),
         ),
-        Some(ByteLength::Terminator { byte }) if encoded.contains(byte) => report.error(
+        Some(ByteLength::Fixed {
+            bytes,
+            terminator: Some(_),
+        }) if encoded.len() > *bytes as usize => report.error(
+            Code::ValueRange,
+            place,
+            format!(
+                "{value:?} is {} bytes, and field {} holds at most {bytes}",
+                encoded.len(),
+                field.name
+            ),
+        ),
+        Some(
+            ByteLength::Terminator { byte }
+            | ByteLength::Fixed {
+                terminator: Some(byte),
+                ..
+            },
+        ) if encoded.contains(byte) => report.error(
             Code::ValueRange,
             place,
             format!(

@@ -72,6 +72,8 @@ and commands in one pass.
       but compatible unit is converted automatically (mV → V, Cel → K)
 - [x] Byte order per value, for a little-endian payload behind a
       big-endian header
+- [x] Terminated values in fixed-size buffers (a C `char[16]`): the value
+      ends at the terminator, the entry takes the whole buffer
 
 ## Phase 4: frontends
 
