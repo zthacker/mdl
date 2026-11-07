@@ -73,16 +73,18 @@ and commands in one pass.
 
 ## Phase 4: frontends
 
-Each frontend is its own crate, so the `mdl` core takes on no format
-dependencies. An import is honest: anything the source has that MDL can't
+A frontend that needs a format library is its own crate, so the `mdl`
+core takes on no format dependencies; JSON, the IR's own format, is in the
+core. An import is honest: anything the source has that MDL can't
 represent is a diagnostic naming the construct and where it is, never a
-silent drop.
+silent drop ([spec/frontends.md](spec/frontends.md)).
 
-- [ ] Frontend crates and source-located diagnostics (file, line, column)
-- [ ] TOML (MDL's own authoring format), with examples, including mixed
-      versions on one link
-- [ ] JSON: the IR itself, documented as a frontend
-- [ ] XTCE import: telemetry and commands (SpaceSystem, parameter and
+- [x] Source-located diagnostics (file, line, column), shared by every
+      frontend
+- [ ] TOML (MDL's own authoring format), its own crate, with examples,
+      including mixed versions on one link
+- [x] JSON: the IR itself, in the core, documented as a frontend
+- [ ] XTCE import, its own crate: telemetry and commands (SpaceSystem, parameter and
       argument types with encodings and calibrators, sequence containers
       with base containers and restriction criteria, MetaCommands); the
       supported subset documented

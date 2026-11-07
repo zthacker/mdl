@@ -48,12 +48,15 @@ pub enum ReadError {
     #[error(transparent)]
     Canonical(#[from] CanonicalError),
     #[error("an MDL document is a JSON object, not {found}")]
+    #[non_exhaustive]
     NotAnObject { found: &'static str },
     #[error("the document has no \"mdl_version\"; MDL documents start with one, like \"2.0\"")]
     MissingVersion,
     #[error("mdl_version: {message}")]
+    #[non_exhaustive]
     BadVersion { message: String },
     #[error("{}", unsupported(*needed, *reader))]
+    #[non_exhaustive]
     UnsupportedVersion {
         needed: IrVersion,
         reader: IrVersion,
@@ -63,6 +66,7 @@ pub enum ReadError {
     /// document. Paths stop at the nearest tagged object (an entry, a
     /// condition): the message then names the field inside it.
     #[error("{}", at(path, message))]
+    #[non_exhaustive]
     Shape { path: String, message: String },
     /// An artifact spelled differently from its normal form (a `null`, an
     /// empty optional list): its digest would differ from the same value
@@ -72,6 +76,7 @@ pub enum ReadError {
         at(path, &format!("{detail} (artifacts are written in normal form: absent values and \
                             empty optional lists are omitted)"))
     )]
+    #[non_exhaustive]
     NotNormalForm { path: String, detail: String },
 }
 
@@ -85,6 +90,53 @@ impl ReadError {
             ReadError::BadVersion { .. } => "invalid_version",
             ReadError::UnsupportedVersion { .. } => "unsupported_version",
             ReadError::NotNormalForm { .. } => "not_normal_form",
+        }
+    }
+
+    /// The JSON Pointer the error is at; empty for the whole document.
+    pub fn path(&self) -> &str {
+        match self {
+            ReadError::Canonical(
+                CanonicalError::InexactInteger { path, .. }
+                | CanonicalError::OutOfRange { path, .. },
+            )
+            | ReadError::Shape { path, .. }
+            | ReadError::NotNormalForm { path, .. } => path,
+            ReadError::BadVersion { .. } | ReadError::UnsupportedVersion { .. } => "/mdl_version",
+            ReadError::Canonical(_) | ReadError::NotAnObject { .. } | ReadError::MissingVersion => {
+                ""
+            }
+        }
+    }
+
+    /// The message without the path, for output that shows where the
+    /// error is some other way (a file, line and column).
+    pub fn detail(&self) -> String {
+        match self {
+            ReadError::Canonical(CanonicalError::InexactInteger {
+                value, canonical, ..
+            }) => format!(
+                "integer {value} changes in canonical JSON (as a double it's written \
+                 {canonical}); write it as a string"
+            ),
+            ReadError::Canonical(CanonicalError::OutOfRange { value, .. }) => {
+                format!("number {value} is outside the range of an IEEE 754 double")
+            }
+            ReadError::Canonical(CanonicalError::DuplicateKey { detail, .. }) => {
+                format!("duplicate key: {detail}")
+            }
+            ReadError::Canonical(CanonicalError::InvalidJson { detail, .. }) => {
+                format!("invalid JSON: {detail}")
+            }
+            ReadError::Shape { message, .. } => message.clone(),
+            ReadError::NotNormalForm { detail, .. } => format!(
+                "{detail} (artifacts are written in normal form: absent values and empty \
+                 optional lists are omitted)"
+            ),
+            ReadError::NotAnObject { .. }
+            | ReadError::MissingVersion
+            | ReadError::BadVersion { .. }
+            | ReadError::UnsupportedVersion { .. } => self.to_string(),
         }
     }
 }
@@ -165,7 +217,18 @@ pub fn read_artifact(bytes: &[u8]) -> Result<Loaded<Artifact>, ReadError> {
 
 /// Read a bundle, the document frontends produce.
 pub fn read_bundle(bytes: &[u8]) -> Result<Loaded<Bundle>, ReadError> {
-    let (value, canonical) = parse(bytes)?;
+    let parsed = canonical::parse_strict(bytes)?;
+    read_bundle_value(&parsed)
+}
+
+/// Read a bundle a frontend built in memory instead of parsing JSON text:
+/// every check [`read_bundle`] makes after the strict parse (the number
+/// rules, canonical form, version, typed reading), with the same errors
+/// and paths. Frontends go through this rather than building IR values
+/// themselves, so each one reads exactly as the JSON contract says.
+pub fn read_bundle_value(value: &Value) -> Result<Loaded<Bundle>, ReadError> {
+    canonical::check_numbers(value)?;
+    let (value, canonical) = canonical_value(value)?;
     let bundle = typed(&value)?;
     Ok(Loaded {
         value: bundle,
@@ -209,7 +272,13 @@ struct SetDoc {
 /// as a value, and the version check.
 fn parse(bytes: &[u8]) -> Result<(Value, String), ReadError> {
     let parsed = canonical::parse_strict(bytes)?;
-    let canonical = canonical::to_canonical_string(&parsed)?;
+    canonical_value(&parsed)
+}
+
+/// Steps 2 and 3, for a value that passed the strict parse or was built in
+/// memory.
+fn canonical_value(parsed: &Value) -> Result<(Value, String), ReadError> {
+    let canonical = canonical::to_canonical_string(parsed)?;
     let value = value_from_canonical(&canonical)?;
     check_version(&value)?;
     Ok((value, canonical))
@@ -219,9 +288,7 @@ fn parse(bytes: &[u8]) -> Result<(Value, String), ReadError> {
 /// digest covers: `16.0` arrives as the integer 16.
 pub(crate) fn value_from_canonical(canonical: &str) -> Result<Value, ReadError> {
     let mut value: Value =
-        serde_json::from_str(canonical).map_err(|err| CanonicalError::InvalidJson {
-            detail: err.to_string(),
-        })?;
+        serde_json::from_str(canonical).map_err(|err| CanonicalError::invalid_json(&err))?;
     doubles_beyond_64_bits(&mut value);
     Ok(value)
 }
@@ -466,6 +533,63 @@ mod tests {
         assert!(matches!(
             read_bundle(inexact),
             Err(ReadError::Canonical(CanonicalError::InexactInteger { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_value_built_in_memory_reads_as_its_json_text_would() {
+        let value: Value = serde_json::from_str(FULL_BUNDLE).unwrap();
+        let from_value = read_bundle_value(&value).unwrap();
+        let from_text = read_bundle(FULL_BUNDLE.as_bytes()).unwrap();
+        assert_eq!(from_value, from_text);
+
+        // The number rules hold for values that never were text.
+        let mut wide = value.clone();
+        wide["sets"][0]["version"] = Value::from(9_007_199_254_740_993u64);
+        let err = read_bundle_value(&wide).unwrap_err();
+        assert_eq!(err.code(), "inexact_integer");
+        assert_eq!(err.path(), "/sets/0/version");
+        assert_eq!(
+            err.detail(),
+            "integer 9007199254740993 changes in canonical JSON (as a double it's written \
+             9007199254740992); write it as a string"
+        );
+        assert_eq!(
+            err.to_string(),
+            "integer 9007199254740993 at /sets/0/version changes in canonical JSON (as a \
+             double it's written 9007199254740992); write it as a string"
+        );
+    }
+
+    #[test]
+    fn errors_give_their_path_and_message_apart() {
+        let shape =
+            read_bundle(&bundle_with(|v| v["sets"][0]["colour"] = "red".into())).unwrap_err();
+        assert_eq!(shape.path(), "/sets/0/colour");
+        assert!(shape.detail().starts_with("unknown field `colour`"));
+        assert_eq!(
+            shape.to_string(),
+            format!("/sets/0/colour: {}", shape.detail())
+        );
+
+        let version = read_bundle(br#"{"mdl_version":"3.0","catalog":{}}"#).unwrap_err();
+        assert_eq!(version.path(), "/mdl_version");
+        assert_eq!(version.detail(), version.to_string());
+
+        let syntax = read_bundle(b"{\n  \"mdl_version\": x}").unwrap_err();
+        assert_eq!(syntax.path(), "");
+        assert_eq!(syntax.detail(), "invalid JSON: expected value");
+        assert_eq!(
+            syntax.to_string(),
+            "invalid JSON: expected value at line 2 column 18"
+        );
+        assert!(matches!(
+            syntax,
+            ReadError::Canonical(CanonicalError::InvalidJson {
+                line: 2,
+                column: 18,
+                ..
+            })
         ));
     }
 
