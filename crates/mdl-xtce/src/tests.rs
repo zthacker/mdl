@@ -438,8 +438,11 @@ fn conditions_compare_earlier_fields_by_raw_value() {
         )
     );
     assert_eq!(
-        one_problem(&text("<BooleanExpression/>")).1,
-        "inclusion by a boolean expression isn't supported yet"
+        one_problem(&text("<BooleanExpression/>")),
+        (
+            "xtce.invalid".into(),
+            "BooleanExpression holds conditions".into()
+        )
     );
 }
 
@@ -617,7 +620,6 @@ fn what_doesnt_change_values_is_a_warning() {
             "unit \"units:Becquerel\" isn't a UCUM code MDL knows, so it isn't imported; the \
              value is unchanged",
             "IntegerDataEncoding's changeThreshold isn't imported: MDL has no change thresholds",
-            "FloatParameterType Temp's DefaultAlarm isn't imported: alarms aren't imported",
             "type Flag's labels (ON, OFF) aren't imported: MDL booleans are true and false",
             "parameter /Sat/Unused is in no packet, so it isn't imported",
             "aliases in ops aren't imported: MDL reads only the MDL namespace",
@@ -1460,6 +1462,329 @@ fn qualified_naming_names_everything_by_its_spacesystem() {
     let packet = serde_json::to_value(&parsed.bundle.sets[0].packets[0]).unwrap();
     assert_eq!(packet["name"], "EPS_HK");
     assert_eq!(packet["entries"][0]["name"], "EPS_Status");
+}
+
+/// An XTCE Condition: a parameter, an operator and a value.
+fn condition(parameter: &str, op: &str, value: &str) -> String {
+    format!(
+        r#"<Condition><ParameterInstanceRef parameterRef="{parameter}"/><ComparisonOperator>{op}</ComparisonOperator><Value>{value}</Value></Condition>"#
+    )
+}
+
+#[test]
+fn boolean_expressions_are_nested_conditions() {
+    let mode = r#"<EnumeratedParameterType name="Mode"><IntegerDataEncoding sizeInBits="8"/><EnumerationList>
+        <Enumeration value="0" label="OFF"/><Enumeration value="5" label="ON"/></EnumerationList></EnumeratedParameterType>"#;
+    let params = format!(
+        "{}{}{}",
+        param("M", "Mode"),
+        param("N", "U8"),
+        param("X", "U8")
+    );
+    let text = |expression: &str| {
+        let conditional = format!(
+            r#"<ParameterRefEntry parameterRef="X"><IncludeCondition><BooleanExpression>{expression}</BooleanExpression></IncludeCondition></ParameterRefEntry>"#
+        );
+        doc(&telemetry(
+            &format!("{mode}{U8}"),
+            &params,
+            &container("P", &format!("{}{}{conditional}", entry("M"), entry("N"))),
+        ))
+    };
+    let expression = format!(
+        "<ANDedConditions>{}<ORedConditions>{}{}</ORedConditions></ANDedConditions>",
+        condition("M", "==", "ON"),
+        condition("N", "&gt;=", "16"),
+        condition("N", "==", "1")
+    );
+    let compare = |field: &str, op: &str, value: i64| json!({ "kind": "compare", "field": field, "op": op, "value": value });
+    let (packets, _) = valid(&text(&expression));
+    assert_eq!(
+        packets[0]["entries"][2]["when"],
+        json!({ "kind": "all", "conditions": [
+            compare("M", "eq", 5),
+            { "kind": "any", "conditions": [compare("N", "ge", 16), compare("N", "eq", 1)] }
+        ] })
+    );
+    // MDL compares a field with a value, not with another field.
+    let two = r#"<Condition><ParameterInstanceRef parameterRef="N"/><ComparisonOperator>==</ComparisonOperator><ParameterInstanceRef parameterRef="M"/></Condition>"#;
+    assert_eq!(
+        one_problem(&text(two)).1,
+        "a comparison of two parameters isn't supported: MDL compares a field with a value"
+    );
+}
+
+#[test]
+fn a_boolean_expression_identifies_by_what_it_ands() {
+    let params = format!("{}{}", param("Kind", "U8"), param("Sub", "U8"));
+    let text = |expression: &str| {
+        doc(&telemetry(
+            U8,
+            &params,
+            &format!(
+                r#"<SequenceContainer name="Base" abstract="true"><EntryList>{}{}</EntryList></SequenceContainer>
+                   <SequenceContainer name="P"><EntryList/><BaseContainer containerRef="Base"><RestrictionCriteria>
+                   <BooleanExpression>{expression}</BooleanExpression></RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+                entry("Kind"),
+                entry("Sub")
+            ),
+        ))
+    };
+    let anded = format!(
+        "<ANDedConditions>{}{}</ANDedConditions>",
+        condition("Kind", "==", "3"),
+        condition("Sub", "==", "4")
+    );
+    let (packets, _) = valid(&text(&anded));
+    assert_eq!(packets[0]["identify"], json!({ "Kind": 3, "Sub": 4 }));
+    let ored = format!(
+        "<ORedConditions>{}{}</ORedConditions>",
+        condition("Kind", "==", "3"),
+        condition("Kind", "==", "4")
+    );
+    assert_eq!(
+        one_problem(&text(&ored)),
+        (
+            "xtce.unsupported".into(),
+            "identification by an OR isn't supported: MDL identifies a packet by values that \
+             must all match"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn criteria_hold_one_comparison_list_or_expression() {
+    let params = format!("{}{}", param("K", "U8"), param("J", "U8"));
+    let identified = |criteria: &str| {
+        doc(&telemetry(
+            U8,
+            &params,
+            &format!(
+                r#"<SequenceContainer name="Head" abstract="true"><EntryList>{}{}</EntryList></SequenceContainer>
+                   <SequenceContainer name="P"><EntryList/><BaseContainer containerRef="Head"><RestrictionCriteria>
+                   {criteria}</RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+                entry("K"),
+                entry("J")
+            ),
+        ))
+    };
+    let k = r#"<Comparison parameterRef="K" value="1"/>"#;
+    let j = r#"<Comparison parameterRef="J" value="2"/>"#;
+    let one = (
+        "xtce.invalid".to_string(),
+        "RestrictionCriteria holds one Comparison, ComparisonList or BooleanExpression".to_string(),
+    );
+    assert_eq!(one_problem(&identified(&format!("{k}{j}"))), one);
+    assert_eq!(
+        one_problem(&identified(&format!(
+            "{k}<ComparisonList>{j}</ComparisonList>"
+        ))),
+        one
+    );
+    // An empty expression or list would identify by nothing.
+    let invalid = |message: &str| ("xtce.invalid".to_string(), message.to_string());
+    assert_eq!(
+        one_problem(&identified("<BooleanExpression/>")),
+        invalid("BooleanExpression holds conditions")
+    );
+    assert_eq!(
+        one_problem(&identified(
+            "<BooleanExpression><ANDedConditions/></BooleanExpression>"
+        )),
+        invalid("ANDedConditions holds conditions")
+    );
+    assert_eq!(
+        one_problem(&identified("<ComparisonList/>")),
+        invalid("a ComparisonList holds comparisons")
+    );
+    let beside = format!(
+        "<BooleanExpression>{}<ANDedConditions>{}</ANDedConditions></BooleanExpression>",
+        condition("K", "==", "1"),
+        condition("J", "==", "2")
+    );
+    assert_eq!(
+        one_problem(&identified(&beside)),
+        invalid("a BooleanExpression holds one Condition, ANDedConditions or ORedConditions")
+    );
+    // An OR of one condition is that condition.
+    let lone = format!(
+        "<BooleanExpression><ANDedConditions>{}<ORedConditions>{}</ORedConditions></ANDedConditions></BooleanExpression>",
+        condition("K", "==", "1"),
+        condition("J", "==", "2")
+    );
+    let (packets, _) = valid(&identified(&lone));
+    assert_eq!(packets[0]["identify"], json!({ "K": 1, "J": 2 }));
+    // An IncludeCondition is read the same way.
+    let included = |criteria: &str| {
+        let conditional = format!(
+            r#"<ParameterRefEntry parameterRef="X"><IncludeCondition>{criteria}</IncludeCondition></ParameterRefEntry>"#
+        );
+        doc(&telemetry(
+            U8,
+            &format!("{params}{}", param("X", "U8")),
+            &container("P", &format!("{}{}{conditional}", entry("K"), entry("J"))),
+        ))
+    };
+    assert_eq!(
+        one_problem(&included(&format!("{k}{j}"))),
+        invalid("IncludeCondition holds one Comparison, ComparisonList or BooleanExpression")
+    );
+    assert_eq!(
+        one_problem(&included("<ComparisonList/>")),
+        invalid("a ComparisonList holds comparisons")
+    );
+}
+
+#[test]
+fn alarm_ranges_are_limits() {
+    let float = |alarm: &str| {
+        format!(
+            r#"<FloatParameterType name="T"><UnitSet><Unit>V</Unit></UnitSet><IntegerDataEncoding sizeInBits="16"/>
+               <DefaultAlarm>{alarm}</DefaultAlarm></FloatParameterType>"#
+        )
+    };
+    let text = |alarm: &str| {
+        doc(&telemetry(
+            &float(alarm),
+            &param("X", "T"),
+            &container("P", &entry("X")),
+        ))
+    };
+    let ranges = r#"<StaticAlarmRanges>
+        <WarningRange minInclusive="24" maxInclusive="32"/>
+        <CriticalRange minInclusive="20" maxInclusive="36"/>
+      </StaticAlarmRanges>"#;
+    let (sources, result) = import_all(&[("sat.xml", &text(ranges))]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let catalog = serde_json::to_value(&parsed.bundle.catalog).unwrap();
+    assert_eq!(
+        catalog["params"]["sat.x"]["limits"],
+        json!({ "red_low": 20.0, "yellow_low": 24.0, "yellow_high": 32.0, "red_high": 36.0 })
+    );
+    validate(parsed.bundle).unwrap();
+    // What MDL's two levels and thresholds don't hold is a warning.
+    let messages = |alarm: &str| -> Vec<String> {
+        let (sources, result) = import_all(&[("sat.xml", &text(alarm))]);
+        let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+        shown(&sources, &parsed.warnings)
+            .into_iter()
+            .map(|(_, _, _, message)| message)
+            .collect()
+    };
+    assert_eq!(
+        messages(
+            r#"<StaticAlarmRanges><WatchRange maxInclusive="30"/><WarningRange maxExclusive="32"/></StaticAlarmRanges>"#
+        ),
+        [
+            "StaticAlarmRanges's WatchRange isn't imported: MDL limits have two levels, yellow and \
+             red (XTCE's warning and critical)",
+            "maxExclusive is imported as a limit, but not as exclusive: MDL limits don't say \
+             whether a value at the limit is in alarm",
+        ]
+    );
+    assert_eq!(
+        messages(
+            r#"<StaticAlarmRanges rangeForm="inside"><WarningRange maxInclusive="32"/></StaticAlarmRanges>"#
+        ),
+        [
+            "alarm ranges that are in alarm inside them aren't imported: MDL limits are thresholds a \
+          value goes beyond"
+        ]
+    );
+}
+
+#[test]
+fn a_relative_time_is_a_number_of_its_unit() {
+    let relative = |encoding: &str, units: &str| {
+        format!(
+            r#"<RelativeTimeParameterType name="T"><Encoding {units}>{encoding}</Encoding></RelativeTimeParameterType>"#
+        )
+    };
+    let text = |ty: String| {
+        doc(&telemetry(
+            &ty,
+            &param("X", "T"),
+            &container("P", &entry("X")),
+        ))
+    };
+    let sixteen = r#"<IntegerDataEncoding sizeInBits="16"/>"#;
+    let (packets, _) = valid(&text(relative(sixteen, r#"scale="0.001""#)));
+    assert_eq!(
+        packets[0]["entries"][0],
+        json!({ "kind": "field", "name": "X", "type": "uint", "size_bits": 16,
+                "conversion": { "kind": "linear", "scale": 0.001, "offset": 0.0 },
+                "unit": "s", "canonical": "sat.x" })
+    );
+    let (packets, _) = valid(&text(relative(sixteen, r#"units="days""#)));
+    assert_eq!(packets[0]["entries"][0]["unit"], "d");
+    assert_eq!(packets[0]["entries"][0].get("conversion"), None);
+    let (code, message) = one_problem(&text(relative(sixteen, r#"units="months""#)));
+    assert_eq!(code, "xtce.ignored");
+    assert!(
+        message.starts_with("a duration in months isn't imported with a unit"),
+        "{message}"
+    );
+    let referenced = r#"<RelativeTimeParameterType name="T"><Encoding><IntegerDataEncoding sizeInBits="16"/></Encoding>
+        <ReferenceTime><Epoch>TAI</Epoch></ReferenceTime></RelativeTimeParameterType>"#;
+    assert_eq!(
+        one_problem(&text(referenced.to_string())).0,
+        "xtce.unsupported"
+    );
+}
+
+#[test]
+fn deep_boolean_expressions_are_refused_not_overflowed() {
+    // ANDs inside ORs inside ANDs, thousands deep.
+    let depth = 5_000;
+    let mut expression = condition("A", "==", "1");
+    for level in 0..depth {
+        let (kind, other) = if level % 2 == 0 {
+            ("ANDedConditions", condition("A", "==", "2"))
+        } else {
+            ("ORedConditions", condition("A", "==", "3"))
+        };
+        expression = format!("<{kind}>{expression}{other}</{kind}>");
+    }
+    let conditional = format!(
+        r#"<ParameterRefEntry parameterRef="B"><IncludeCondition><BooleanExpression>{expression}</BooleanExpression></IncludeCondition></ParameterRefEntry>"#
+    );
+    let params = format!("{}{}", param("A", "U8"), param("B", "U8"));
+    let text = doc(&telemetry(
+        U8,
+        &params,
+        &container("P", &(entry("A") + &conditional)),
+    ));
+    let (code, message) = one_problem(&text);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("conditions nested more than 32 deep"),
+        "{message}"
+    );
+    // ANDs only, as identification reads them.
+    let mut anded = condition("A", "==", "1");
+    for _ in 0..depth {
+        anded = format!(
+            "<ANDedConditions>{anded}{}</ANDedConditions>",
+            condition("A", "==", "1")
+        );
+    }
+    let identify = doc(&telemetry(
+        U8,
+        &param("A", "U8"),
+        &format!(
+            r#"<SequenceContainer name="Base" abstract="true"><EntryList>{}</EntryList></SequenceContainer>
+               <SequenceContainer name="P"><EntryList/><BaseContainer containerRef="Base"><RestrictionCriteria>
+               <BooleanExpression>{anded}</BooleanExpression></RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+            entry("A")
+        ),
+    ));
+    let (code, message) = one_problem(&identify);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("conditions nested more than 32 deep"),
+        "{message}"
+    );
 }
 
 #[test]

@@ -84,6 +84,20 @@ fn param_object(param: &Param<'_>) -> Object {
         }
         object.put_list("states", states);
     }
+    if let Some(limits) = &scalar.limits {
+        let mut object_limits = Object::at(limits.span);
+        for (key, value) in [
+            ("red_low", limits.red_low),
+            ("yellow_low", limits.yellow_low),
+            ("yellow_high", limits.yellow_high),
+            ("red_high", limits.red_high),
+        ] {
+            if let Some((value, span)) = value {
+                object_limits.put(key, value, Some(span));
+            }
+        }
+        object.put_object("limits", object_limits);
+    }
     if let Some((text, span)) = &param.description {
         object.put("description", text.as_str(), Some(*span));
     }

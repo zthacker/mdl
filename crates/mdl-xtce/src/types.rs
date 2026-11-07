@@ -135,6 +135,18 @@ pub(crate) struct Scalar<'d> {
     pub(crate) states: Vec<(String, Span)>,
     /// How a comparison's engineering value becomes a raw value.
     pub(crate) raw: Raw,
+    /// A number type's alarm ranges, as the param's limits.
+    pub(crate) limits: Option<Limits>,
+}
+
+/// Alarm ranges as MDL's limits, each with where it came from.
+#[derive(Debug, Clone)]
+pub(crate) struct Limits {
+    pub(crate) span: Span,
+    pub(crate) red_low: Option<(f64, Span)>,
+    pub(crate) yellow_low: Option<(f64, Span)>,
+    pub(crate) yellow_high: Option<(f64, Span)>,
+    pub(crate) red_high: Option<(f64, Span)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -372,14 +384,7 @@ impl<'d> Types<'d> {
                 );
                 None
             }
-            "RelativeTimeParameterType" => {
-                report.error(
-                    Code::Unsupported,
-                    el.span(),
-                    format!("{} isn't supported yet", el.name()),
-                );
-                None
-            }
+            "RelativeTimeParameterType" => relative_time(el, report),
             other => {
                 report.error(
                     Code::Invalid,
@@ -549,6 +554,7 @@ fn integer<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         param: if signed.unwrap_or(true) { "i64" } else { "u64" },
         raw: Raw::Integer,
         unit,
+        limits: limits(el, report),
         ..encoding.scalar(el)
     })
 }
@@ -573,7 +579,252 @@ fn float<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
     } else {
         Raw::Integer
     };
+    scalar.limits = limits(el, report);
     Some(scalar)
+}
+
+/// A relative time: a duration, as a number of its unit. The encoding's
+/// scale and offset are a linear conversion.
+fn relative_time<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
+    el.check(
+        &Expect {
+            attrs: &["name", "baseType"],
+            children: &["Encoding", "ReferenceTime"],
+            ignored: &[
+                "shortDescription",
+                "LongDescription",
+                "AliasSet",
+                "AncillaryDataSet",
+                "initialValue",
+                "DefaultAlarm",
+                "ContextAlarmList",
+            ],
+            text: false,
+        },
+        report,
+    );
+    if let Some(reference) = el.child("ReferenceTime") {
+        report.error(
+            Code::Unsupported,
+            reference.span(),
+            "a relative time measured from an epoch or another parameter isn't supported",
+        );
+        return None;
+    }
+    let Some(encoding) = el.child("Encoding") else {
+        report.error(
+            Code::Invalid,
+            el.span(),
+            format!(
+                "relative time type {} has no Encoding, so it can't be read from a packet",
+                el.item_name().unwrap_or_default()
+            ),
+        );
+        return None;
+    };
+    encoding.check(
+        &Expect {
+            attrs: &["units", "scale", "offset"],
+            children: ENCODINGS,
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let unit = match encoding.attr("units") {
+        None => Some(("s".to_string(), encoding.span())),
+        Some(attr) => match attr.value.trim() {
+            "seconds" => Some(("s".to_string(), attr.span)),
+            "picoSeconds" => Some(("ps".to_string(), attr.span)),
+            "days" => Some(("d".to_string(), attr.span)),
+            other => {
+                report.warning(
+                    Code::Ignored,
+                    attr.span,
+                    format!(
+                        "a duration in {other} isn't imported with a unit, since their lengths \
+                         vary; the value is unchanged"
+                    ),
+                );
+                None
+            }
+        },
+    };
+    let scale = match encoding.attr("scale") {
+        Some(attr) => (xml::double(attr, report)?, attr.span),
+        None => (1.0, encoding.span()),
+    };
+    let offset = match encoding.attr("offset") {
+        Some(attr) => (xml::double(attr, report)?, attr.span),
+        None => (0.0, encoding.span()),
+    };
+    let data = only_encoding(
+        encoding,
+        &["IntegerDataEncoding", "FloatDataEncoding"],
+        report,
+    )?;
+    let mut scalar = if data.name() == "FloatDataEncoding" {
+        float_encoding(data, report)?.scalar(el)
+    } else {
+        integer_encoding(data, report)?.scalar(el)
+    };
+    if (scale.0, offset.0) != (1.0, 0.0) {
+        if scalar.conversion.is_some() {
+            report.error(
+                Code::Unsupported,
+                encoding.span(),
+                "a relative time with both a calibrator and a scale or offset isn't supported",
+            );
+            return None;
+        }
+        let mut conversion = Object::at(encoding.span());
+        conversion.put("kind", "linear", None);
+        conversion.put("scale", scale.0, Some(scale.1));
+        conversion.put("offset", offset.0, Some(offset.1));
+        scalar.conversion = Some(conversion);
+    }
+    scalar.raw = if scalar.conversion.is_none() && scalar.ty.0 != "float" {
+        Raw::Integer
+    } else {
+        Raw::Other
+    };
+    scalar.unit = unit;
+    Some(scalar)
+}
+
+/// A number type's DefaultAlarm as MDL limits: the warning range's ends
+/// are yellow and the critical range's red. What MDL's limits don't hold
+/// is left out, each a warning, since alarms don't change values.
+fn limits(el: El<'_>, report: &mut Report) -> Option<Limits> {
+    let alarm = el.child("DefaultAlarm")?;
+    alarm.check(
+        &Expect {
+            attrs: &["minViolations"],
+            children: &["StaticAlarmRanges"],
+            ignored: &[
+                "name",
+                "shortDescription",
+                "minConformance",
+                "AncillaryDataSet",
+                "ChangeAlarmRanges",
+                "AlarmMultiRanges",
+                "AlarmConditions",
+                "CustomAlarm",
+            ],
+            text: false,
+        },
+        report,
+    );
+    if let Some(attr) = alarm.attr("minViolations")
+        && attr.value.trim() != "1"
+    {
+        report.warning(
+            Code::Ignored,
+            attr.span,
+            "an alarm after several violations isn't imported as such: MDL limits apply to each \
+             value",
+        );
+    }
+    let ranges = alarm.child("StaticAlarmRanges")?;
+    ranges.check(
+        &Expect {
+            attrs: &["rangeForm"],
+            children: &["WarningRange", "CriticalRange"],
+            ignored: &[
+                "name",
+                "shortDescription",
+                "AncillaryDataSet",
+                "WatchRange",
+                "DistressRange",
+                "SevereRange",
+            ],
+            text: false,
+        },
+        report,
+    );
+    if let Some(form) = ranges.attr("rangeForm")
+        && form.value.trim() == "inside"
+    {
+        report.warning(
+            Code::Ignored,
+            form.span,
+            "alarm ranges that are in alarm inside them aren't imported: MDL limits are \
+             thresholds a value goes beyond",
+        );
+        return None;
+    }
+    let mut limits = Limits {
+        span: alarm.span(),
+        red_low: None,
+        yellow_low: None,
+        yellow_high: None,
+        red_high: None,
+    };
+    if let Some(warning) = ranges.child("WarningRange") {
+        (limits.yellow_low, limits.yellow_high) = alarm_range(warning, report)?;
+    }
+    if let Some(critical) = ranges.child("CriticalRange") {
+        (limits.red_low, limits.red_high) = alarm_range(critical, report)?;
+    }
+    let any = [
+        limits.red_low,
+        limits.yellow_low,
+        limits.yellow_high,
+        limits.red_high,
+    ]
+    .iter()
+    .any(Option::is_some);
+    any.then_some(limits)
+}
+
+/// One end of an alarm range, and where it came from.
+type End = Option<(f64, Span)>;
+
+/// A range's low and high ends: the values beyond which it's in alarm.
+fn alarm_range(el: El<'_>, report: &mut Report) -> Option<(End, End)> {
+    el.check(
+        &Expect {
+            attrs: &[
+                "minInclusive",
+                "minExclusive",
+                "maxInclusive",
+                "maxExclusive",
+            ],
+            children: &[],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let end = |inclusive: &str, exclusive: &str, report: &mut Report| match (
+        el.attr(inclusive),
+        el.attr(exclusive),
+    ) {
+        (Some(attr), None) => Some(Some((xml::double(attr, report)?, attr.span))),
+        (None, Some(attr)) => {
+            report.warning(
+                Code::Ignored,
+                attr.span,
+                format!(
+                    "{exclusive} is imported as a limit, but not as exclusive: MDL limits \
+                         don't say whether a value at the limit is in alarm"
+                ),
+            );
+            Some(Some((xml::double(attr, report)?, attr.span)))
+        }
+        (None, None) => Some(None),
+        (Some(_), Some(attr)) => {
+            report.error(
+                Code::Invalid,
+                attr.span,
+                format!("a range has {inclusive} or {exclusive}, not both"),
+            );
+            None
+        }
+    };
+    let low = end("minInclusive", "minExclusive", report)?;
+    let high = end("maxInclusive", "maxExclusive", report)?;
+    Some((low, high))
 }
 
 fn enumerated<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
@@ -822,6 +1073,7 @@ fn string<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d
         param: "str",
         states: Vec::new(),
         raw: Raw::Other,
+        limits: None,
     })
 }
 
@@ -1337,6 +1589,7 @@ fn binary<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d
         param: "bytes",
         states: Vec::new(),
         raw: Raw::Other,
+        limits: None,
     })
 }
 
@@ -1364,6 +1617,7 @@ fn numeric_expect<'s>(attrs: &'s [&'s str]) -> Expect<'s> {
     Expect {
         attrs,
         children: &[
+            "DefaultAlarm",
             "UnitSet",
             "IntegerDataEncoding",
             "FloatDataEncoding",
@@ -1379,7 +1633,6 @@ fn numeric_expect<'s>(attrs: &'s [&'s str]) -> Expect<'s> {
             "ToString",
             "ValidRange",
             "validRangeAppliesToCalibrated",
-            "DefaultAlarm",
             "ContextAlarmList",
         ],
         text: false,
@@ -1441,6 +1694,7 @@ impl<'d> Encoding<'d> {
             param: "f64",
             states: Vec::new(),
             raw: Raw::Other,
+            limits: None,
         }
     }
 }
