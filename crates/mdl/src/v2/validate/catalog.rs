@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use super::rules::{
     MAX_SAFE_INTEGER, check_finite, check_integer_spelling, check_not_empty, check_scalar,
-    integer_value, is_canonical_name, is_identifier,
+    check_unit_code, integer_value, is_canonical_name, is_identifier,
 };
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
@@ -35,7 +35,7 @@ fn check_param(name: &str, param: &Param, place: &Place, report: &mut Report) {
         );
     }
     if let Some(unit) = &param.unit {
-        check_not_empty(unit, "unit", &place.key("unit"), report);
+        check_unit_code(unit, &place.key("unit"), report);
     }
     if let Some(description) = &param.description {
         check_not_empty(
@@ -179,7 +179,7 @@ fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
         );
     }
     if let Some(unit) = &argument.unit {
-        check_not_empty(unit, "unit", &place.key("unit"), report);
+        check_unit_code(unit, &place.key("unit"), report);
     }
     if let Some(description) = &argument.description {
         check_not_empty(

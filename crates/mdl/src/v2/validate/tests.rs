@@ -1283,10 +1283,18 @@ fn canonical_mapping_matches_the_catalog() {
         ),
         vec![(Code::CanonicalType, canonical.clone())]
     );
+    // Millivolts convert to the param's volts; amperes don't.
     assert_eq!(
         mapped(
             json!({ "kind": "field", "name": "v", "type": "uint", "size_bits": 16,
             "canonical": "eps.bus_voltage", "unit": "mV" })
+        ),
+        vec![]
+    );
+    assert_eq!(
+        mapped(
+            json!({ "kind": "field", "name": "v", "type": "uint", "size_bits": 16,
+            "canonical": "eps.bus_voltage", "unit": "A" })
         ),
         vec![(Code::UnitMismatch, entry(0, "/unit"))]
     );
@@ -2202,8 +2210,18 @@ fn an_argument_fits_the_field_that_encodes_it() {
         set_mode_packet(v)["entries"][2]["conversion"] =
             json!({ "kind": "linear", "scale": 0.1, "offset": 0.0 });
     });
-    assert_one(Code::UnitMismatch, &format!("{delay}/unit"), |v| {
+    // Seconds convert to minutes (3600 s is 60 min, raw 600, which fits);
+    // into milliseconds they'd be past the u16; seconds and metres don't
+    // convert at all.
+    assert_eq!(
+        problems(|v| set_mode_packet(v)["entries"][2]["unit"] = json!("min")),
+        vec![]
+    );
+    assert_one(Code::ValueRange, &format!("{delay}/argument"), |v| {
         set_mode_packet(v)["entries"][2]["unit"] = json!("ms");
+    });
+    assert_one(Code::UnitMismatch, &format!("{delay}/unit"), |v| {
+        set_mode_packet(v)["entries"][2]["unit"] = json!("m");
     });
     assert_one(
         Code::CanonicalType,
@@ -2422,7 +2440,7 @@ fn a_target_field_holds_the_id_as_it_is() {
     });
     assert_one(Code::CommandShape, &at("/unit"), |v| {
         let mut field = target_field("uint");
-        field["unit"] = json!("count");
+        field["unit"] = json!("{count}");
         insert_target(v, field);
     });
     assert_one(Code::CommandShape, &at(""), |v| {
@@ -2832,6 +2850,44 @@ fn a_spline_with_an_infinite_slope_is_refused() {
             thermal(v)["entries"][1]["conversion"]["points"] = json!([
                 { "raw": 0, "value": 0 }, { "raw": 1e-300, "value": 1e9 }, { "raw": 2, "value": 0 }
             ]);
+        },
+    );
+}
+
+#[test]
+fn units_are_ones_mdl_knows_and_convert_only_where_they_can() {
+    assert_one(
+        Code::UnknownUnit,
+        "/catalog/params/eps.bus_voltage/unit",
+        |v| v["catalog"]["params"]["eps.bus_voltage"]["unit"] = json!("volts"),
+    );
+    assert_one(
+        Code::UnknownUnit,
+        "/sets/0/commands/1/entries/2/unit",
+        |v| {
+            set_mode_packet(v)["entries"][2]["unit"] = json!("dB");
+        },
+    );
+    assert_one(
+        Code::UnknownUnit,
+        "/catalog/commands/eps.set_mode/arguments/1/unit",
+        |v| command(v, "eps.set_mode")["arguments"][1]["unit"] = json!("sec"),
+    );
+    // Annotations name a kind of count, and must match.
+    assert_one(
+        Code::UnitMismatch,
+        "/sets/0/commands/1/entries/2/unit",
+        |v| {
+            set_mode_packet(v)["entries"][2]["unit"] = json!("{ticks}");
+        },
+    );
+    // An integer argument doesn't convert, even between compatible units.
+    assert_one(
+        Code::UnitMismatch,
+        "/sets/0/commands/0/entries/1/unit",
+        |v| {
+            command(v, "eps.load_table")["arguments"][1]["unit"] = json!("s");
+            load_table_packet(v)["entries"][1]["unit"] = json!("ms");
         },
     );
 }

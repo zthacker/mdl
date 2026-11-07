@@ -18,6 +18,7 @@ use crate::v2::ir::{
     ParamType, Scalar, ScalarType, Set,
 };
 use crate::v2::text;
+use crate::v2::units::convert_between;
 
 /// Every command packet of a set: names, the command it encodes, link
 /// metadata, and its fields. Positions and references are checked with
@@ -777,6 +778,7 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
             field.unit.as_deref(),
             argument.unit.as_deref(),
             &argument.name,
+            argument.ty == ParamType::F64,
             &place.key("unit"),
             report,
         );
@@ -841,8 +843,14 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
         );
         return false;
     };
-    for end in [min, max] {
-        if inverse(field, end) == Converted::Outside {
+    // The range in the field's unit; units that don't convert are reported
+    // on their own.
+    let to_field = |x: f64| convert_between(x, argument.unit.as_deref(), field.unit.as_deref());
+    let (Some(field_min), Some(field_max)) = (to_field(min), to_field(max)) else {
+        return false;
+    };
+    for (end, field_end) in [(min, field_min), (max, field_max)] {
+        if inverse(field, field_end) == Converted::Outside {
             report.error(
                 Code::ValueRange,
                 &place.key("argument"),
@@ -857,7 +865,9 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
     }
     // A table that inverts exactly is monotonic by construction.
     if let Some(explicit) = &field.inverse
-        && !monotonic_over(explicit, min, max, field, argument, place, report)
+        && !monotonic_over(
+            explicit, field_min, field_max, field, argument, place, report,
+        )
     {
         return false;
     }
@@ -869,7 +879,7 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
         // A field has a size only in a binary payload.
         let binary = field.size_bits.is_some();
         for end in [min, max] {
-            let Some(raw) = raw_unchecked(field, end, binary) else {
+            let Some(raw) = raw_unchecked(field, end, argument.unit.as_deref(), binary) else {
                 return false;
             };
             if !(first <= raw && raw <= last) {
@@ -994,8 +1004,11 @@ fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mu
         Some(Conversion::Linear { scale, .. }) if *scale == 0.0 => return,
         Some(Conversion::States { .. }) => return,
         Some(_) => {
-            let (Some(a), Some(b)) = (inverse(field, low).number(), inverse(field, high).number())
-            else {
+            let through = |x: f64| {
+                convert_between(x, argument.unit.as_deref(), field.unit.as_deref())
+                    .and_then(|x| inverse(field, x).number())
+            };
+            let (Some(a), Some(b)) = (through(low), through(high)) else {
                 return;
             };
             (a.min(b), a.max(b))

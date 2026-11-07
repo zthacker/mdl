@@ -379,21 +379,24 @@ is `{param, value, path, index, time_offset, quality}`:
   | `unknown_state` | no state matches the raw integer, or a string isn't one of the param's states |
   | `out_of_calibration` | the raw value is outside a table's or spline's points, and it doesn't extrapolate |
   | `out_of_range` | the param's type can't hold the raw value (a JSON integer past an i64 param) |
-  | `non_finite` | NaN or an infinity, read or produced by a conversion |
+  | `non_finite` | NaN or an infinity, read or produced by a conversion or a unit conversion |
   | `invalid` | a sentinel (§7.2) |
 
   The first that applies, from the bottom up, is the quality. Any quality
   added later takes its place in this order.
 - `value` is the param's value when the quality is `good`, and the raw
   value otherwise. By param type: `f64`, the number through its
-  conversion; `i64` and `u64`, the integer; `bool`, a bool, or
+  conversion, then from the field's unit into the param's (`units.md`
+  §4); `i64` and `u64`, the integer; `bool`, a bool, or
   an integer that isn't 0; `str` and `bytes`, as read; `enum`, the state
   name from a `states` conversion, or a string field's text.
 
 ### 7.4 Composites
 
 A composite gives one `vec3` (x, y, z) or `quat` (w, x, y, z) sample from
-its members, numbers through their conversions, in the composite's frame.
+its members, numbers through their conversions and then into the param's
+unit (a geodetic position's latitude and longitude into `deg`), in the
+composite's frame.
 If any member is absent (a conditional or optional entry, an array index
 past a JSON array's end, a `null` element), there is no sample. Its
 quality is that of its least trustworthy member; if that isn't `good`,
@@ -404,7 +407,8 @@ by `,`.
 
 Any field or scalar element, mapped or not, has an engineering value: its
 raw value through its conversion (a state name for `states`), with a
-quality by the same rules, or its raw value if it has no conversion.
+quality by the same rules, or its raw value if it has no conversion. It
+is in the field's own unit, not a param's.
 Implementations SHOULD compute these on request, not while decoding.
 
 ## 8. Event time

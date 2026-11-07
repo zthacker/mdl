@@ -2,11 +2,12 @@
 //! and canonical samples.
 
 use crate::v2::convert::{Converted, convert};
+use crate::v2::units::convert_between;
 use std::collections::BTreeMap;
 
 use super::{Problem, Record, Value};
 use crate::v2::ir::{
-    Catalog, Composite, Conversion, Element, Entry, Frame, Packet, Param, ParamType, Scalar,
+    Catalog, Composite, Conversion, Element, Entry, Field, Frame, Packet, Param, ParamType, Scalar,
     ScalarElement, StructType,
 };
 use crate::v2::validate::rules::integer_value;
@@ -110,6 +111,8 @@ pub struct Engineering {
 pub(super) struct ScalarMeaning<'a> {
     conversion: Option<&'a Conversion>,
     invalid: &'a [Scalar],
+    /// The unit after conversion.
+    unit: Option<&'a str>,
 }
 
 impl<'a> ScalarMeaning<'a> {
@@ -117,15 +120,21 @@ impl<'a> ScalarMeaning<'a> {
         ScalarMeaning {
             conversion: element.conversion.as_ref(),
             invalid: &element.invalid,
+            unit: element.unit.as_deref(),
+        }
+    }
+
+    fn of_field(field: &'a Field) -> Self {
+        ScalarMeaning {
+            conversion: field.conversion.as_ref(),
+            invalid: &field.invalid,
+            unit: field.unit.as_deref(),
         }
     }
 
     fn of_entry(entry: &'a Entry) -> Option<Self> {
         match entry {
-            Entry::Field(field) => Some(ScalarMeaning {
-                conversion: field.conversion.as_ref(),
-                invalid: &field.invalid,
-            }),
+            Entry::Field(field) => Some(ScalarMeaning::of_field(field)),
             _ => None,
         }
     }
@@ -162,10 +171,7 @@ pub(super) fn visit<'a, 'v, E>(
                 index,
                 time_offset_ns: None,
                 canonical: field.canonical.as_deref(),
-                meaning: ScalarMeaning {
-                    conversion: field.conversion.as_ref(),
-                    invalid: &field.invalid,
-                },
+                meaning: ScalarMeaning::of_field(field),
                 value,
             })?,
             (Entry::Array(array), Value::Array(items)) => {
@@ -283,6 +289,9 @@ pub(super) fn sample_value(
                 Some(Converted::NotNumeric) => return Err(mismatch),
                 None => x,
             };
+            // Into the param's unit, which validation found compatible.
+            let converted = convert_between(converted, meaning.unit, param.unit.as_deref())
+                .ok_or(Problem::Layout("a unit that converts to its param's"))?;
             match numeric_quality(x, converted) {
                 Quality::Good => good(SampleValue::F64(converted)),
                 quality => Ok((raw, quality)),
@@ -504,6 +513,7 @@ struct Member {
     parts: Vec<Part>,
     conversion: Option<Conversion>,
     invalid: Vec<Scalar>,
+    unit: Option<String>,
 }
 
 impl CompiledComposite {
@@ -523,6 +533,7 @@ impl CompiledComposite {
                 Some(Member {
                     conversion: meaning.conversion.cloned(),
                     invalid: meaning.invalid.to_vec(),
+                    unit: meaning.unit.map(str::to_string),
                     parts,
                 })
             })
@@ -543,13 +554,25 @@ impl CompiledComposite {
     ) -> Result<Option<Sample<'a>>, Problem> {
         let mut values = Vec::with_capacity(self.members.len());
         let mut quality = Quality::Good;
-        for member in &self.members {
+        let param_unit = catalog
+            .params
+            .get(&self.param)
+            .and_then(|param| param.unit.as_deref());
+        for (index, member) in self.members.iter().enumerate() {
             let Some(value) = value_at(&member.parts, record).filter(|v| **v != Value::Null) else {
                 return Ok(None);
             };
             let meaning = ScalarMeaning {
                 conversion: member.conversion.as_ref(),
                 invalid: &member.invalid,
+                unit: member.unit.as_deref(),
+            };
+            // Geodetic positions are latitude and longitude in degrees,
+            // then altitude in the param's unit, as validation checks.
+            let target = if self.frame == Frame::Geodetic && index < 2 {
+                Some("deg")
+            } else {
+                param_unit
             };
             let raw =
                 number(value).ok_or(Problem::Layout("a composite member that isn't a number"))?;
@@ -561,8 +584,12 @@ impl CompiledComposite {
                 }
                 None => (raw, numeric_quality(raw, raw)),
             };
+            let converted = convert_between(converted, meaning.unit, target)
+                .ok_or(Problem::Layout("a unit that converts to its param's"))?;
             let member_quality = if is_sentinel(meaning.invalid, value) {
                 Quality::Invalid
+            } else if member_quality == Quality::Good {
+                numeric_quality(raw, converted)
             } else {
                 member_quality
             };
