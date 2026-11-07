@@ -1,0 +1,182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its APID.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_ID_Type">
+        <MemberList>
+          <Member name="Version" typeRef="CCSDS_Version_Type"/>
+          <Member name="Type" typeRef="CCSDS_Type_Type"/>
+          <Member name="SecHdrFlag" typeRef="CCSDS_Sec_Hdr_Flag_Type"/>
+          <Member name="APID" typeRef="CCSDS_APID_Type"/>
+        </MemberList>
+      </AggregateParameterType>
+      <EnumeratedParameterType name="CCSDS_Group_Flags_Type">
+        <IntegerDataEncoding sizeInBits="2"/>
+        <EnumerationList>
+          <Enumeration value="0" label="Continuation"/>
+          <Enumeration value="1" label="First"/>
+          <Enumeration value="2" label="Last"/>
+          <Enumeration value="3" label="Standalone"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+      <IntegerParameterType name="CCSDS_Count_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="14"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_Sequence_Type">
+        <MemberList>
+          <Member name="GroupFlags" typeRef="CCSDS_Group_Flags_Type"/>
+          <Member name="Count" typeRef="CCSDS_Count_Type"/>
+        </MemberList>
+      </AggregateParameterType>
+      <IntegerParameterType name="CCSDS_Length_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="CCSDS_Packet_ID" parameterTypeRef="CCSDS_Packet_ID_Type"/>
+      <Parameter name="CCSDS_Packet_Sequence" parameterTypeRef="CCSDS_Packet_Sequence_Type"/>
+      <Parameter name="CCSDS_Packet_Length" parameterTypeRef="CCSDS_Length_Type"/>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer name="CCSDSPacket" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="CCSDS_Packet_ID"/>
+          <ParameterRefEntry parameterRef="CCSDS_Packet_Sequence"/>
+          <ParameterRefEntry parameterRef="CCSDS_Packet_Length"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+
+  <SpaceSystem name="EPS" shortDescription="Electrical power">
+    <TelemetryMetaData>
+      <ParameterTypeSet>
+        <EnumeratedParameterType name="ModeType">
+          <IntegerDataEncoding sizeInBits="4"/>
+          <EnumerationList>
+            <Enumeration value="0" label="OFF"/>
+            <Enumeration value="1" label="SAFE"/>
+            <Enumeration value="2" label="NOMINAL"/>
+          </EnumerationList>
+        </EnumeratedParameterType>
+        <FloatParameterType name="TemperatureType">
+          <UnitSet><Unit>degC</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="12" encoding="twosComplement">
+            <DefaultCalibrator>
+              <SplineCalibrator extrapolate="true">
+                <SplinePoint raw="-2000" calibrated="-50"/>
+                <SplinePoint raw="2000" calibrated="50"/>
+              </SplineCalibrator>
+            </DefaultCalibrator>
+          </IntegerDataEncoding>
+        </FloatParameterType>
+        <FloatParameterType name="VoltageType">
+          <UnitSet><Unit>V</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16">
+            <DefaultCalibrator>
+              <PolynomialCalibrator>
+                <Term coefficient="0" exponent="0"/>
+                <Term coefficient="0.001" exponent="1"/>
+              </PolynomialCalibrator>
+            </DefaultCalibrator>
+          </IntegerDataEncoding>
+        </FloatParameterType>
+        <!-- The flight computer writes its own counters little-endian. -->
+        <IntegerParameterType name="UptimeType" signed="false">
+          <UnitSet><Unit>s</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="32" byteOrder="leastSignificantByteFirst"/>
+        </IntegerParameterType>
+        <BooleanParameterType name="HeaterType">
+          <IntegerDataEncoding sizeInBits="8"/>
+        </BooleanParameterType>
+      </ParameterTypeSet>
+      <ParameterSet>
+        <Parameter name="Mode" parameterTypeRef="ModeType"/>
+        <Parameter name="BattTemp" parameterTypeRef="TemperatureType"
+                   shortDescription="Battery temperature">
+          <AliasSet><Alias nameSpace="MDL" alias="eps.batt_temp"/></AliasSet>
+        </Parameter>
+        <Parameter name="BusVoltage" parameterTypeRef="VoltageType"
+                   shortDescription="Main bus voltage">
+          <AliasSet><Alias nameSpace="MDL" alias="eps.bus_voltage"/></AliasSet>
+        </Parameter>
+        <Parameter name="Uptime" parameterTypeRef="UptimeType"/>
+        <Parameter name="Heater" parameterTypeRef="HeaterType"/>
+      </ParameterSet>
+      <ContainerSet>
+        <SequenceContainer name="EPS_HK">
+          <EntryList>
+            <ParameterRefEntry parameterRef="Mode"/>
+            <ParameterRefEntry parameterRef="BattTemp"/>
+            <ParameterRefEntry parameterRef="BusVoltage"/>
+            <ParameterRefEntry parameterRef="Uptime"/>
+            <!-- The heater reports only in NOMINAL mode. -->
+            <ParameterRefEntry parameterRef="Heater">
+              <IncludeCondition>
+                <Comparison parameterRef="Mode" value="NOMINAL"/>
+              </IncludeCondition>
+            </ParameterRefEntry>
+          </EntryList>
+          <BaseContainer containerRef="/DemoSat/CCSDSPacket">
+            <RestrictionCriteria>
+              <ComparisonList>
+                <Comparison parameterRef="CCSDS_Packet_ID.Type" value="false"/>
+                <Comparison parameterRef="CCSDS_Packet_ID/APID" value="100"/>
+              </ComparisonList>
+            </RestrictionCriteria>
+          </BaseContainer>
+        </SequenceContainer>
+      </ContainerSet>
+    </TelemetryMetaData>
+  </SpaceSystem>
+
+  <SpaceSystem name="ADCS" shortDescription="Attitude determination and control">
+    <TelemetryMetaData>
+      <ParameterTypeSet>
+        <FloatParameterType name="RateType">
+          <UnitSet><Unit>rad/s</Unit></UnitSet>
+          <FloatDataEncoding sizeInBits="32"/>
+        </FloatParameterType>
+        <AggregateParameterType name="Vector3Type">
+          <MemberList>
+            <Member name="x" typeRef="RateType"/>
+            <Member name="y" typeRef="RateType"/>
+            <Member name="z" typeRef="RateType"/>
+          </MemberList>
+        </AggregateParameterType>
+      </ParameterTypeSet>
+      <ParameterSet>
+        <Parameter name="Rate" parameterTypeRef="Vector3Type"/>
+      </ParameterSet>
+      <ContainerSet>
+        <SequenceContainer name="ADCS_HK">
+          <EntryList>
+            <ParameterRefEntry parameterRef="Rate"/>
+          </EntryList>
+          <BaseContainer containerRef="../CCSDSPacket">
+            <RestrictionCriteria>
+              <Comparison parameterRef="CCSDS_Packet_ID/APID" value="101"/>
+            </RestrictionCriteria>
+          </BaseContainer>
+        </SequenceContainer>
+      </ContainerSet>
+    </TelemetryMetaData>
+  </SpaceSystem>
+</SpaceSystem>

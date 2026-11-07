@@ -37,10 +37,12 @@ Requires Rust 1.88 or later and [`just`](https://github.com/casey/just).
 | --- | --- |
 | `crates/mdl` | the library: IR, frontends, validation, plans, interpreter |
 | `crates/mdl-toml` | the TOML frontend: definitions written as the IR spelled in TOML |
+| `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the compiler CLI |
 | `examples/definitions` | a worked example (a CCSDS satellite, a JSON satellite, a MAVLink drone) and, for now, the schema reference |
 | `examples/toml` | the same kind of fleet, and mixed versions on one link, in the v2 TOML format |
-| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [frontends](spec/frontends.md), [TOML](spec/toml.md) |
+| `examples/xtce` | a CCSDS satellite described in XTCE, imported and decoded |
+| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md) |
 
 ## License
 
