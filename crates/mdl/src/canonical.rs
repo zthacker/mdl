@@ -47,24 +47,76 @@ pub const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum CanonicalError {
+    /// `path` is a JSON Pointer (RFC 6901), empty for the whole document.
     #[error(
-        "integer {value} at {path} changes in canonical JSON (as a double it's written \
-         {canonical}); write it as a string"
+        "integer {value} at {} changes in canonical JSON (as a double it's written \
+         {canonical}); write it as a string",
+        display_path(path)
     )]
+    #[non_exhaustive]
     InexactInteger {
         path: String,
         value: String,
         canonical: String,
     },
-    #[error("duplicate key: {detail}")]
-    DuplicateKey { detail: String },
-    #[error("invalid JSON: {detail}")]
-    InvalidJson { detail: String },
+    /// `line` and `column` are where the parser stopped, as serde_json
+    /// counts them: from 1, with the column in bytes.
+    #[error("duplicate key: {detail}{}", position(*line, *column))]
+    #[non_exhaustive]
+    DuplicateKey {
+        detail: String,
+        line: usize,
+        column: usize,
+    },
+    /// `line` and `column` as for [`CanonicalError::DuplicateKey`]; 0 when
+    /// the parser gave no position.
+    #[error("invalid JSON: {detail}{}", position(*line, *column))]
+    #[non_exhaustive]
+    InvalidJson {
+        detail: String,
+        line: usize,
+        column: usize,
+    },
+    /// A number beyond the range of a double. `path` is a JSON Pointer.
     /// Only reachable if serde_json's `arbitrary_precision` feature is on
-    /// somewhere in the dependency graph (features unify across crates),
-    /// letting a number exceed what an f64 can hold.
-    #[error("number {value} at {path} is outside the range of an IEEE 754 double")]
+    /// somewhere in the dependency graph (features unify across crates);
+    /// otherwise serde_json refuses the number itself, as invalid JSON.
+    #[error(
+        "number {value} at {} is outside the range of an IEEE 754 double",
+        display_path(path)
+    )]
+    #[non_exhaustive]
     OutOfRange { path: String, value: String },
+}
+
+fn position(line: usize, column: usize) -> String {
+    if line == 0 {
+        String::new()
+    } else {
+        format!(" at line {line} column {column}")
+    }
+}
+
+/// serde_json's message without the position it appends, and the position.
+fn syntax_error(err: &serde_json::Error) -> (String, usize, usize) {
+    let text = err.to_string();
+    let suffix = position(err.line(), err.column());
+    let detail = match text.strip_suffix(&suffix) {
+        Some(detail) if !suffix.is_empty() => detail.to_string(),
+        _ => text,
+    };
+    (detail, err.line(), err.column())
+}
+
+impl CanonicalError {
+    pub(crate) fn invalid_json(err: &serde_json::Error) -> CanonicalError {
+        let (detail, line, column) = syntax_error(err);
+        CanonicalError::InvalidJson {
+            detail,
+            line,
+            column,
+        }
+    }
 }
 
 impl CanonicalError {
@@ -103,12 +155,7 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
     // (numbers must be finite doubles). Under default features serde_json
     // already refuses `1e400`; with `arbitrary_precision` it doesn't, and
     // this check catches it.
-    check_numbers(&value, &mut String::new()).map_err(|err| match err {
-        CanonicalError::OutOfRange { .. } => CanonicalError::InvalidJson {
-            detail: err.to_string(),
-        },
-        other => other,
-    })?;
+    check_numbers(&value)?;
     Ok(value)
 }
 
@@ -122,18 +169,22 @@ pub fn parse_strict(bytes: &[u8]) -> Result<Value, CanonicalError> {
 /// `arbitrary_precision` feature is on (features unify across a build).
 pub fn parse_without_duplicates(bytes: &[u8]) -> Result<Value, CanonicalError> {
     serde_json::from_slice::<NoDuplicates>(bytes).map_err(|err| {
-        let detail = err.to_string();
         // The checker's only error is a duplicate key, and serde_json files
         // errors raised by visitors under `Category::Data`. Everything else
         // (syntax, UTF-8, surrogates, number range, depth) is `Syntax`/`Eof`.
         match err.classify() {
-            Category::Data => CanonicalError::DuplicateKey { detail },
-            _ => CanonicalError::InvalidJson { detail },
+            Category::Data => {
+                let (detail, line, column) = syntax_error(&err);
+                CanonicalError::DuplicateKey {
+                    detail,
+                    line,
+                    column,
+                }
+            }
+            _ => CanonicalError::invalid_json(&err),
         }
     })?;
-    let value = serde_json::from_slice(bytes).map_err(|err| CanonicalError::InvalidJson {
-        detail: err.to_string(),
-    })?;
+    let value = serde_json::from_slice(bytes).map_err(|err| CanonicalError::invalid_json(&err))?;
     check_finite(&value, &mut String::new())?;
     Ok(value)
 }
@@ -148,10 +199,9 @@ fn check_finite(value: &Value, path: &mut String) -> Result<(), CanonicalError> 
             if finite {
                 Ok(())
             } else {
-                Err(CanonicalError::InvalidJson {
-                    detail: format!(
-                        "number {number} at {path} is outside the range of an IEEE 754 double"
-                    ),
+                Err(CanonicalError::OutOfRange {
+                    path: path.clone(),
+                    value: number.to_string(),
                 })
             }
         }
@@ -334,7 +384,7 @@ fn canonical_number(number: &Number, path: &str) -> Result<String, CanonicalErro
                 Ok(digits)
             } else {
                 Err(CanonicalError::InexactInteger {
-                    path: display_path(path),
+                    path: path.to_string(),
                     value: digits,
                     canonical,
                 })
@@ -343,7 +393,7 @@ fn canonical_number(number: &Number, path: &str) -> Result<String, CanonicalErro
         None => match number.as_f64() {
             Some(n) if n.is_finite() => Ok(format_double(n)),
             _ => Err(CanonicalError::OutOfRange {
-                path: display_path(path),
+                path: path.to_string(),
                 value: number.to_string(),
             }),
         },
@@ -351,16 +401,23 @@ fn canonical_number(number: &Number, path: &str) -> Result<String, CanonicalErro
 }
 
 /// Apply the number rules to every number in `value`. `parse_strict` uses
-/// this so a reader never builds typed values from input the spec rejects.
-fn check_numbers(value: &Value, path: &mut String) -> Result<(), CanonicalError> {
+/// this so a reader never builds typed values from input the spec rejects,
+/// and so does reading a value a frontend built in memory.
+pub(crate) fn check_numbers(value: &Value) -> Result<(), CanonicalError> {
+    check_numbers_at(value, &mut String::new())
+}
+
+fn check_numbers_at(value: &Value, path: &mut String) -> Result<(), CanonicalError> {
     match value {
         Value::Number(number) => canonical_number(number, path).map(|_| ()),
         Value::Array(items) => items.iter().enumerate().try_for_each(|(index, item)| {
-            with_segment(path, &index.to_string(), |path| check_numbers(item, path))
+            with_segment(path, &index.to_string(), |path| {
+                check_numbers_at(item, path)
+            })
         }),
-        Value::Object(members) => members
-            .iter()
-            .try_for_each(|(key, item)| with_segment(path, key, |path| check_numbers(item, path))),
+        Value::Object(members) => members.iter().try_for_each(|(key, item)| {
+            with_segment(path, key, |path| check_numbers_at(item, path))
+        }),
         Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
     }
 }
@@ -597,11 +654,10 @@ mod tests {
             ("byte order mark", b"\xef\xbb\xbf{}".to_vec()),
         ];
         for (what, bytes) in cases {
+            // A number beyond a double is `OutOfRange` when serde_json's
+            // `arbitrary_precision` lets it through, with the same code.
             let error = parse_strict(&bytes).unwrap_err();
-            assert!(
-                matches!(error, CanonicalError::InvalidJson { .. }),
-                "{what}: {error}"
-            );
+            assert_eq!(error.code(), "invalid_json", "{what}: {error}");
         }
     }
 
