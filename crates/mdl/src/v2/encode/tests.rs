@@ -758,6 +758,40 @@ fn decode_code<T: fmt::Debug>(result: Result<T, CommandDecodeError>) -> &'static
 }
 
 #[test]
+fn a_field_is_written_and_read_in_its_own_byte_order() {
+    // lab is big-endian; PUMP's opcode is too, but its rate isn't.
+    let mut bundle = lab();
+    bundle["sets"].as_array_mut().unwrap().push(json!({
+        "name": "lab_le", "family": "lab", "commands": [{
+            "name": "PUMP", "canonical": "lab.pump", "entries": [
+                { "kind": "field", "name": "op", "type": "uint", "size_bits": 16,
+                  "value": 0x0A0B },
+                { "kind": "field", "name": "rate", "type": "uint", "size_bits": 16,
+                  "byte_order": "little",
+                  "conversion": { "kind": "linear", "scale": 0.01, "offset": 0.0 },
+                  "argument": "rate" }
+            ]
+        }]
+    }));
+    let sets = sets_of(&bundle, "lab");
+    let request = CommandRequest::new("lab_le", "lab.pump").with_argument("rate", 2.58);
+    let encoded = sets.encode(&request).unwrap();
+    assert_eq!(encoded.payload, [0x0A, 0x0B, 0x02, 0x01]);
+    let decoded = sets
+        .decode_command("lab_le", &binary(&encoded.payload))
+        .unwrap();
+    assert_eq!(
+        arguments(&decoded),
+        vec![("rate".to_string(), ArgumentValue::Float(2.58))]
+    );
+    // The opcode is a big-endian key: swapped, it's no command of the set.
+    assert_eq!(
+        decode_code(sets.decode_command("lab_le", &binary(&[0x0B, 0x0A, 0x02, 0x01]))),
+        "no_packet"
+    );
+}
+
+#[test]
 fn a_command_payload_decodes_to_its_command_and_arguments() {
     let sets = sets_of(&fixture(), "vendor_x");
     let decoded = sets

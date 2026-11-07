@@ -15,9 +15,9 @@ use crate::v2::checksum;
 use crate::v2::convert::spline_is_finite;
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
-    ArrayEntry, Bundle, Catalog, Checksum, ChecksumEntry, Condition, Conversion, Element, Encoding,
-    Entry, Family, Field, Interpolation, Locator, Packet, Point, Scalar, ScalarElement, ScalarType,
-    Set, StructType, TextEncoding, Time,
+    ArrayEntry, Bundle, ByteOrder, Catalog, Checksum, ChecksumEntry, Condition, Conversion,
+    Element, Encoding, Entry, Family, Field, Interpolation, Locator, Packet, Point, Scalar,
+    ScalarElement, ScalarType, Set, StructType, TextEncoding, Time,
 };
 use crate::v2::time::Timestamp;
 
@@ -652,11 +652,13 @@ fn check_packets(
 pub(crate) enum KeyId {
     Metadata(String),
     Pointer(String),
-    /// A field at a known position (byte order is the family's, shared).
+    /// A field at a known position, read in `order`: the same bits read in
+    /// the other order are another key.
     Bits {
         offset: u64,
         size: u32,
         signed: bool,
+        order: ByteOrder,
     },
     /// Whole bytes at a known byte-aligned position: a fixed-length string
     /// constant of a command packet, as the bytes it writes.
@@ -812,6 +814,7 @@ impl PacketKeys<'_> {
                         offset,
                         size,
                         signed: field.ty == ScalarType::Int,
+                        order: key_order(field, family, offset, size),
                     },
                     _ => {
                         unplaced.push(key.to_string());
@@ -846,6 +849,22 @@ impl PacketKeys<'_> {
             }
         }
     }
+}
+
+/// The byte order an identify key at these bits is read in: the field's
+/// own, else its family's. Inside one byte both orders read the same, so
+/// such a key is the same key whichever order its field names. Layout
+/// validation already refuses a `byte_order` there; this keeps a refused
+/// definition from adding an ambiguity error on top.
+pub(super) fn key_order(field: &Field, family: &Family, offset: u64, size: u32) -> ByteOrder {
+    if offset % 8 + u64::from(size) <= 8 {
+        return ByteOrder::Big;
+    }
+    // A binary family without one is reported; big keeps the checks going.
+    field
+        .byte_order
+        .or(family.byte_order)
+        .unwrap_or(ByteOrder::Big)
 }
 
 /// An identify value for a field key: an integer the field can hold.

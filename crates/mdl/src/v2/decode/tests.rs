@@ -108,6 +108,19 @@ fn bundle() -> Json {
                 ]
             },
             {
+                "name": "MIXED",
+                "identify": { "kind": 9, "word": 0x0102 },
+                "entries": [
+                    field("kind"),
+                    { "kind": "field", "name": "word", "type": "uint", "size_bits": 16,
+                      "byte_order": "little" },
+                    { "kind": "field", "name": "big", "type": "uint", "size_bits": 16 },
+                    { "kind": "array", "name": "pair", "count": { "kind": "fixed", "count": 2 },
+                      "element": { "kind": "scalar", "type": "int", "size_bits": 16,
+                                   "byte_order": "little" } }
+                ]
+            },
+            {
                 "name": "NESTED",
                 "identify": { "kind": 5 },
                 "entries": [
@@ -475,6 +488,65 @@ fn a_little_endian_packet_with_an_exact_length() {
     assert_eq!(code(decode(&payload[..11])), "too_short");
 }
 
+#[test]
+fn a_big_endian_header_in_a_little_endian_family() {
+    // A CCSDS-like header (its APID straddles bytes) before a
+    // little-endian counter, in legacy_v1.
+    let mut bundle = bundle();
+    let packet = &mut bundle["sets"][2]["packets"][0];
+    let uint = |name: &str, bits: u32| json!({ "kind": "field", "name": name, "type": "uint", "size_bits": bits });
+    let mut apid = uint("apid", 11);
+    apid["byte_order"] = json!("big");
+    packet["entries"] = json!([
+        uint("version", 3),
+        uint("type", 1),
+        uint("sec", 1),
+        apid,
+        uint("count", 16)
+    ]);
+    for key in ["length", "time_field"] {
+        packet.as_object_mut().unwrap().remove(key);
+    }
+    bundle["sets"][2].as_object_mut().unwrap().remove("time");
+    let artifacts = artifacts_of(&bundle);
+    let sets = family_sets(&artifacts, "legacy");
+    let payload = [0x08, 0x64, 0x34, 0x12];
+    let decoded = sets
+        .decode(&Message::new(Payload::Binary(&payload), now()), &registry())
+        .unwrap();
+    assert_eq!(
+        shown(&decoded.record),
+        pairs(&[
+            ("version", "0"),
+            ("type", "0"),
+            ("sec", "1"),
+            ("apid", "100"),
+            ("count", "4660")
+        ])
+    );
+}
+
+#[test]
+fn values_and_keys_are_read_in_their_own_byte_order() {
+    // MIXED's word and pair are little-endian, in a big-endian family.
+    let payload = [9, 0x02, 0x01, 0x12, 0x34, 0xFF, 0xFF, 0x02, 0x00];
+    assert_eq!(
+        identified(&payload).unwrap(),
+        (
+            "MIXED".to_string(),
+            pairs(&[
+                ("kind", "9"),
+                ("word", "258"),
+                ("big", "4660"),
+                ("pair", "[-1, 2]")
+            ])
+        )
+    );
+    // The key is read little-endian too: `01 02` is 0x0201, not MIXED's.
+    let swapped = [9, 0x01, 0x02, 0x12, 0x34, 0xFF, 0xFF, 0x02, 0x00];
+    assert_eq!(identified(&swapped).unwrap().0, "GENERIC");
+}
+
 fn identified(payload: &[u8]) -> Result<(String, Vec<(String, String)>), DecodeError> {
     identified_in(&bundle(), payload)
 }
@@ -550,6 +622,7 @@ fn a_cheap_key_that_matches_nothing_skips_trial_decodes() {
                         offset: 0,
                         size: 8,
                         signed: false,
+                        order: ByteOrder::Big,
                     },
                     KeyValue::Int(packet as i128),
                 ),
@@ -1039,6 +1112,12 @@ fn the_iso_checksum_is_verified_first_byte_first_in_either_byte_order() {
     let mut little = bundle();
     let families = little["families"].as_array_mut().unwrap();
     families.last_mut().unwrap()["byte_order"] = json!("little");
+    // MIXED's little-endian values would name the family's order.
+    let ident = little["sets"].as_array_mut().unwrap().last_mut().unwrap();
+    ident["packets"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|packet| packet["name"] != "MIXED");
     for bundle in [bundle(), little] {
         // The last test vector of ECSS-E-70-41A, A.2.5, with 0x14 as the kind.
         let payload = [0x14, 0x56, 0xF8, 0x9A, 0x00, 0x01, 0x24, 0xDC];

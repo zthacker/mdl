@@ -18,7 +18,12 @@
 //! - **Alignment.** Strings, bytes, little-endian values wider than a byte
 //!   and struct types containing any of those start on a byte for every
 //!   possible start; a little-endian value narrower than a byte fits inside
-//!   one byte.
+//!   one byte. A value is little-endian by its own `byte_order`, else its
+//!   family's. A `byte_order` on a value that lies inside one byte wherever
+//!   it can start changes nothing, so it's refused. A struct type holding
+//!   a value whose rules depend on where it starts within a byte starts on
+//!   a byte itself, so positions checked inside the type are the ones it's
+//!   read at.
 //! - **References.** Counts, lengths and conditions use fields decoded
 //!   before them, always present, of a type that suits the use.
 //!
@@ -123,6 +128,10 @@ pub(super) struct Shape {
     size_residues: Residues,
     /// It holds something that must start on a byte, so it does too.
     needs_byte: bool,
+    /// It holds a value narrower than a byte whose place within a byte
+    /// matters, so it starts on a byte: positions checked inside it are
+    /// then the positions it's read at.
+    holds_narrow: bool,
 }
 
 /// What every container in one set shares.
@@ -141,8 +150,14 @@ struct Facts {
     size_residues: Residues,
     /// Must start on a byte.
     needs_byte: bool,
+    /// A struct (or an array of them) whose type holds narrow values, so it
+    /// starts on a byte.
+    holds_narrow: bool,
     /// A little-endian value narrower than a byte: must fit inside one.
     narrow_le: Option<u64>,
+    /// A value of at most 8 bits that names its own byte order: the order
+    /// only matters if it can straddle a byte boundary.
+    own_narrow: Option<u64>,
     /// For an array: what each element needs where it starts.
     element: Option<ElementFacts>,
 }
@@ -153,7 +168,9 @@ struct ElementFacts {
     /// The element size modulo 8: element k starts k steps after the first.
     step: Residues,
     needs_byte: bool,
+    holds_narrow: bool,
     narrow_le: Option<u64>,
+    own_narrow: Option<u64>,
     /// At most this many elements; `None` when unbounded.
     max_count: Option<u64>,
 }
@@ -164,9 +181,31 @@ impl Facts {
             size,
             size_residues,
             needs_byte: false,
+            holds_narrow: false,
             narrow_le: None,
+            own_narrow: None,
             element: None,
         }
+    }
+
+    /// Facts of a struct entry or element, from its type's shape.
+    fn of_struct(shape: &Shape) -> Facts {
+        Facts {
+            needs_byte: shape.needs_byte,
+            holds_narrow: shape.holds_narrow,
+            ..Facts::plain(shape.size, shape.size_residues)
+        }
+    }
+
+    /// Whether this entry is, or holds, a value narrower than a byte whose
+    /// place within a byte matters: a struct holding it starts on a byte.
+    fn is_narrow(&self) -> bool {
+        self.holds_narrow
+            || self.narrow_le.is_some()
+            || self.own_narrow.is_some()
+            || self
+                .element
+                .is_some_and(|e| e.holds_narrow || e.narrow_le.is_some() || e.own_narrow.is_some())
     }
 }
 
@@ -284,6 +323,7 @@ impl<'a> Layout<'a> {
         let mut min_end = 0_u64;
         let mut known = true;
         let mut needs_byte = false;
+        let mut holds_narrow = false;
         let mut to_the_end: Option<&str> = None;
         let mut extents: Vec<Extent> = Vec::new();
         for (index, entry) in entries.iter().enumerate() {
@@ -324,7 +364,8 @@ impl<'a> Layout<'a> {
                 continue;
             }
             let conditional = entry_condition(entry).is_some();
-            needs_byte |= facts.needs_byte || facts.narrow_le.is_some();
+            needs_byte |= facts.needs_byte;
+            holds_narrow |= facts.is_narrow();
             self.check_alignment(name, &facts, start_residues, &entry_place, report);
             let end = start
                 .1
@@ -402,6 +443,7 @@ impl<'a> Layout<'a> {
             size,
             size_residues,
             needs_byte,
+            holds_narrow,
         })
     }
 
@@ -460,11 +502,7 @@ impl<'a> Layout<'a> {
                         "binary entries are located with offset_bits, not pointer",
                     );
                 }
-                let shape = self.types.get(entry.struct_type.as_str())?;
-                Facts {
-                    needs_byte: shape.needs_byte,
-                    ..Facts::plain(shape.size, shape.size_residues)
-                }
+                Facts::of_struct(self.types.get(entry.struct_type.as_str())?)
             }
         };
         Some(match entry_condition(entry) {
@@ -507,13 +545,7 @@ impl<'a> Layout<'a> {
                 );
                 self.element_facts(element, &element_place, report)?
             }
-            Element::Struct { name } => {
-                let shape = self.types.get(name.as_str())?;
-                Facts {
-                    needs_byte: shape.needs_byte,
-                    ..Facts::plain(shape.size, shape.size_residues)
-                }
-            }
+            Element::Struct { name } => Facts::of_struct(self.types.get(name.as_str())?),
         };
         let count_place = place.key("count");
         let (size, max_count) = match &array.count {
@@ -571,12 +603,16 @@ impl<'a> Layout<'a> {
             size,
             size_residues,
             needs_byte: element.needs_byte,
+            holds_narrow: false,
             narrow_le: None,
+            own_narrow: None,
             element: Some(ElementFacts {
                 size: element.size,
                 step,
                 needs_byte: element.needs_byte,
+                holds_narrow: element.holds_narrow,
                 narrow_le: element.narrow_le,
+                own_narrow: element.own_narrow,
                 max_count,
             }),
         })
@@ -622,9 +658,36 @@ impl<'a> Layout<'a> {
         let ScalarShape {
             ty,
             size_bits,
+            byte_order,
             length,
             text,
         } = shape;
+        // The value's own order, when it validly names one.
+        let mut own_order = None;
+        if let Some(order) = byte_order {
+            let order_place = place.key("byte_order");
+            if !matches!(ty, ScalarType::Uint | ScalarType::Int | ScalarType::Float) {
+                report.error(
+                    Code::ByteOrder,
+                    &order_place,
+                    format!(
+                        "only uint, int and float values have a byte order; this one is {}",
+                        type_name(ty)
+                    ),
+                );
+            } else if Some(order) == self.byte_order {
+                report.error(
+                    Code::ExplicitDefault,
+                    &order_place,
+                    format!(
+                        "{} is the family's byte order, the default; omit byte_order",
+                        order_name(order)
+                    ),
+                );
+            } else {
+                own_order = Some(order);
+            }
+        }
         if text.is_some() && ty != ScalarType::String {
             report.error(
                 Code::FieldSize,
@@ -691,7 +754,7 @@ impl<'a> Layout<'a> {
                 return None;
             }
         };
-        let little = self.byte_order == Some(ByteOrder::Little);
+        let little = byte_order.or(self.byte_order) == Some(ByteOrder::Little);
         let whole_bytes = bits % 8 == 0;
         if little && bits > 8 && !whole_bytes {
             report.error(
@@ -705,6 +768,7 @@ impl<'a> Layout<'a> {
         Some(Facts {
             needs_byte: little && whole_bytes,
             narrow_le: (little && bits < 8).then_some(bits),
+            own_narrow: (own_order.is_some() && bits <= 8).then_some(bits),
             ..Facts::plain(Size::fixed(bits), Residues::at(bits))
         })
     }
@@ -732,6 +796,19 @@ impl<'a> Layout<'a> {
             );
             return;
         }
+        if facts.holds_narrow && !start.aligned() {
+            report.error(
+                Code::Alignment,
+                place,
+                format!(
+                    "{name} holds a value narrower than a byte whose place within a byte matters \
+                     (a little-endian one, or one with its own byte_order), so it starts on a \
+                     byte, but it can start at bit {} of a byte",
+                    start.iter().find(|r| *r != 0).unwrap_or(0)
+                ),
+            );
+            return;
+        }
         if let Some(bits) = facts.narrow_le
             && let Some(r) = start.iter().find(|r| r + bits > 8)
         {
@@ -745,6 +822,19 @@ impl<'a> Layout<'a> {
             );
             return;
         }
+        if let Some(bits) = facts.own_narrow
+            && start.iter().all(|r| r + bits <= 8)
+        {
+            report.error(
+                Code::ByteOrder,
+                &place.key("byte_order"),
+                format!(
+                    "{name} always fits inside one byte, where byte order doesn't apply; omit \
+                     byte_order"
+                ),
+            );
+            return;
+        }
         if let Some(element) = facts.element {
             // Element k starts at the array's start plus k element sizes,
             // for k below the count (eight steps reach every residue).
@@ -754,7 +844,7 @@ impl<'a> Layout<'a> {
                 element_starts = element_starts.union(element_starts.plus(element.step));
             }
             let size = element.size;
-            if element.needs_byte && !element_starts.aligned() {
+            if (element.needs_byte || element.holds_narrow) && !element_starts.aligned() {
                 report.error(
                     Code::Alignment,
                     place,
@@ -776,6 +866,17 @@ impl<'a> Layout<'a> {
                          byte, but one can start at bit {r} of a byte"
                     ),
                 );
+            } else if let Some(bits) = element.own_narrow
+                && element_starts.iter().all(|r| r + bits <= 8)
+            {
+                report.error(
+                    Code::ByteOrder,
+                    &place.key("element").key("byte_order"),
+                    format!(
+                        "{name}'s elements always fit inside one byte, where byte order doesn't \
+                         apply; omit byte_order"
+                    ),
+                );
             }
         }
     }
@@ -785,7 +886,7 @@ impl<'a> Layout<'a> {
             report.error(Code::WrongEncoding, &place.key(key), message.to_string());
         };
         let binary_only = "self-describing entries are located with pointer; offset_bits, \
-                           size_bits, length and count only apply to binary payloads";
+                           size_bits, byte_order, length and count only apply to binary payloads";
         let needs_pointer = "self-describing entries say where they are: pointer";
         match entry {
             Entry::Padding(_) => report.error(
@@ -805,6 +906,7 @@ impl<'a> Layout<'a> {
                 for (present, key) in [
                     (field.offset_bits.is_some(), "offset_bits"),
                     (field.size_bits.is_some(), "size_bits"),
+                    (field.byte_order.is_some(), "byte_order"),
                     (field.length.is_some(), "length"),
                 ] {
                     if present {
@@ -842,7 +944,10 @@ impl<'a> Layout<'a> {
                 }
                 if let Element::Scalar(element) = &array.element {
                     let element_place = place.key("element");
-                    if element.size_bits.is_some() || element.length.is_some() {
+                    if element.size_bits.is_some()
+                        || element.byte_order.is_some()
+                        || element.length.is_some()
+                    {
                         report.error(Code::WrongEncoding, &element_place, binary_only);
                     }
                     if element.ty == ScalarType::Bytes {
@@ -882,6 +987,7 @@ impl<'a> Layout<'a> {
 struct ScalarShape<'a> {
     ty: ScalarType,
     size_bits: Option<u32>,
+    byte_order: Option<ByteOrder>,
     length: Option<&'a ByteLength>,
     text: Option<TextEncoding>,
 }
@@ -891,6 +997,7 @@ impl<'a> ScalarShape<'a> {
         ScalarShape {
             ty: field.ty,
             size_bits: field.size_bits,
+            byte_order: field.byte_order,
             length: field.length.as_ref(),
             text: field.text,
         }
@@ -900,6 +1007,7 @@ impl<'a> ScalarShape<'a> {
         ScalarShape {
             ty: element.ty,
             size_bits: element.size_bits,
+            byte_order: element.byte_order,
             length: element.length.as_ref(),
             text: element.text,
         }
@@ -1003,6 +1111,13 @@ pub(super) fn type_name(ty: ScalarType) -> &'static str {
         ScalarType::Bool => "bool",
         ScalarType::String => "string",
         ScalarType::Bytes => "bytes",
+    }
+}
+
+fn order_name(order: ByteOrder) -> &'static str {
+    match order {
+        ByteOrder::Big => "big",
+        ByteOrder::Little => "little",
     }
 }
 

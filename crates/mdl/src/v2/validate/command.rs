@@ -9,7 +9,7 @@ use super::mapping::check_unit;
 use super::rules::{
     check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
 };
-use super::set::{KeyId, KeyValue, by_value, exact};
+use super::set::{KeyId, KeyValue, by_value, exact, key_order};
 use crate::v2::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::encode::raw_unchecked;
@@ -111,7 +111,8 @@ pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<Key
                 };
                 let key = match family.encoding {
                     Encoding::Binary => {
-                        binary_key(field, value, offsets.get(index).copied().flatten())
+                        let offset = offsets.get(index).copied().flatten();
+                        binary_key(field, family, value, offset)
                     }
                     _ => json_key(field, value),
                 };
@@ -128,7 +129,12 @@ pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<Key
 /// an integer or bool as its raw unsigned bits (an int8 -1 and a uint8 255
 /// are the same key and value, an int8 -1 and a uint8 1 differ), a
 /// fixed-length string as its bytes.
-fn binary_key(field: &Field, value: &Scalar, offset: Option<u64>) -> Option<(KeyId, KeyValue)> {
+fn binary_key(
+    field: &Field,
+    family: &Family,
+    value: &Scalar,
+    offset: Option<u64>,
+) -> Option<(KeyId, KeyValue)> {
     let offset = offset?;
     if let (ScalarType::String, Scalar::Str(text), Some(ByteLength::Fixed { bytes })) =
         (field.ty, value, &field.length)
@@ -156,6 +162,7 @@ fn binary_key(field: &Field, value: &Scalar, offset: Option<u64>) -> Option<(Key
             offset,
             size,
             signed: false,
+            order: key_order(field, family, offset, size),
         },
         KeyValue::Int(raw),
     ))

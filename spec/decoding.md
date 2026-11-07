@@ -40,6 +40,15 @@ byte 1. A value of 1 to 64 bits at bit `o` is read as an unsigned integer:
   byte first, or, for a value inside one byte, as big-endian (byte order
   doesn't apply within a byte).
 
+A field or scalar array element is read in its own `byte_order` when it
+has one, and in its family's otherwise; the rules above apply by that
+order. This describes, for example, a little-endian payload behind a
+big-endian header. Only `uint`, `int` and `float` values have a byte
+order. Each layout has one spelling: a value's `byte_order` MUST NOT be
+its family's, and MUST NOT be given on a value that lies inside one byte
+at every start residue it has (§5.2). `bits` locators (§3.1) and
+checksums (§5.6) always use the family's order, or the algorithm's own.
+
 A signed (`int`) value is the unsigned value read as two's complement in
 its size. A `float` is IEEE 754 binary32 or binary64. A `bool` is one bit,
 true if set. A read past the end of the packet is `past_end`.
@@ -80,7 +89,7 @@ A family's alias and version locators read one value from the message:
 
 | Locator | Reads |
 | --- | --- |
-| `bits` | an unsigned integer at its position (§2.1), in the family's byte order |
+| `bits` | an unsigned integer at its position (§2.1), in the family's byte order, so in a little-endian family it is whole bytes on byte boundaries or inside one byte |
 | `metadata` | the named metadata value; a name given more than once can't be read |
 | `path` | the JSON value at its pointer: a string, or a number that is an integer (§2.3) |
 | `fixed` | its text |
@@ -125,6 +134,12 @@ Each packet's identify keys resolve as validation resolves them: a JSON
 Pointer; a metadata name the family declares; or a top-level integer or
 bool field of the packet, by its static position (§5.2) if it has one.
 Values compare as in §3.2: pointers exactly, metadata and fields by value.
+
+A field key at a static position is its position, size, signedness and
+byte order (§2.1), whatever the field is named: two packets whose keys
+read the same bits in the same way share a key. Read in different byte
+orders, the same bits are different keys, except inside one byte, where
+both orders read the same.
 
 - A message matches a packet when every key's value in the message equals
   the packet's. Validation guarantees that the packets one message can
@@ -182,6 +197,29 @@ struct).
   has a static position and an exact size; its size is then the furthest
   end of its entries. Identification (§4) and checksums (§5.6) depend on
   static positions, so every decoder MUST compute them this way.
+- **Starts within a byte.** The alignment rules of §2.1 and §2.2, and
+  whether a narrow value's `byte_order` can matter, depend on the bits
+  within a byte (0 to 7) where an entry can start: its *start residues*.
+  They decide which definitions are valid, so every validator MUST
+  compute them this way:
+  - an entry with `offset_bits` starts at `offset_bits mod 8`; a
+    container's first sequential entry at 0; any other sequential entry at
+    every `(s + z) mod 8`, for a start residue `s` and a size residue `z`
+    of the entry before it;
+  - an entry's size residues are: for a field or padding of `n` bits,
+    `n mod 8`; for strings, bytes and checksums, 0; for an array, 0 if its
+    element size is whole bytes, else `c × e mod 8` for a `fixed` count
+    `c` of elements of exact size `e`, every `k × e mod 8` for `k` from 0
+    up to its largest count when the count varies, and every residue when
+    the element size varies; for a struct, its type's exact size `mod 8`,
+    else every residue where its last entry can end (where any of its
+    entries can end, if one has `offset_bits`). An entry with `when` adds
+    0 to its size residues;
+  - a struct type's entries are computed from residue 0, so a struct MUST
+    start on a byte when its type holds (directly, in an array or in a
+    nested struct) a string, bytes, a little-endian value of whole bytes,
+    a little-endian value narrower than a byte, or a value of at most 8
+    bits that names its own `byte_order`.
 - **Fields** read a value (§2.1, §2.2). A string or bytes field's length
   is `fixed`, taken from a field (§5.4), up to a `terminator` byte (which
   ends the value but isn't part of it; none before the packet's end is
@@ -239,7 +277,8 @@ payload.
 
 A `checksum` entry sits at a packet's top level, starts on a byte
 boundary, and holds an unsigned integer of its algorithm's width, in the
-family's byte order unless the algorithm fixes its own. It covers the
+family's byte order unless the algorithm fixes its own, whatever byte
+order the packet's fields name. It covers the
 packet's bytes from `from_bits` (default 0, a byte boundary) up to its own
 start. A decoder computes the checksum of those bytes; if the stored value
 isn't one the algorithm accepts for it (the computed value, for all but

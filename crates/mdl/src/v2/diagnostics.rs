@@ -25,7 +25,8 @@ pub enum Code {
     UnknownCanonical,
     /// Struct types that contain themselves.
     TypeCycle,
-    /// `byte_order` missing for a binary family, or present for another.
+    /// `byte_order` missing for a binary family, or present for another;
+    /// or on a value that has no byte order.
     ByteOrder,
     /// A locator, time source or identify key that the encoding can't use.
     WrongEncoding,

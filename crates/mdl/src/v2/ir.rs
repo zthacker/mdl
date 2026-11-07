@@ -795,7 +795,7 @@ pub enum Encoding {
     Json,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ByteOrder {
     Big,
@@ -1198,9 +1198,9 @@ impl StructType {
 /// start of its container; one without starts where the previous entry
 /// ended. Bits are numbered from the most significant bit of the first
 /// byte, in both byte orders: bit 0 is the top bit of byte 0, bit 8 the top
-/// bit of byte 1. The byte order decides how the bytes of a multi-byte
-/// value combine. Self-describing payloads use `pointer`, relative to the
-/// container.
+/// bit of byte 1. The byte order (the value's own, else the family's)
+/// decides how the bytes of a multi-byte value combine. Self-describing
+/// payloads use `pointer`, relative to the container.
 ///
 /// Rules a decoder follows:
 ///
@@ -1240,6 +1240,12 @@ pub struct Field {
     /// Binary numbers and booleans.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bits: Option<u32>,
+    /// Binary integers and floats whose byte order isn't the family's
+    /// (a little-endian payload behind a big-endian header). Absent means
+    /// the family's; naming the family's own order is an error, so each
+    /// layout has one spelling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_order: Option<ByteOrder>,
     /// Binary strings and bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<ByteLength>,
@@ -1297,6 +1303,7 @@ impl Field {
             offset_bits: None,
             pointer: None,
             size_bits: None,
+            byte_order: None,
             length: None,
             text: None,
             conversion: None,
@@ -1522,6 +1529,10 @@ pub struct ScalarElement {
     pub ty: ScalarType,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_bits: Option<u32>,
+    /// As for a field: the elements' byte order, when it isn't the
+    /// family's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byte_order: Option<ByteOrder>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<ByteLength>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1543,6 +1554,7 @@ impl ScalarElement {
         ScalarElement {
             ty,
             size_bits: None,
+            byte_order: None,
             length: None,
             text: None,
             conversion: None,

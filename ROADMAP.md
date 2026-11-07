@@ -70,6 +70,8 @@ and commands in one pass.
       scales (utc, tai, gps) with the leap-second table
 - [x] Units: UCUM subset with dimensional analysis; a field in a different
       but compatible unit is converted automatically (mV → V, Cel → K)
+- [x] Byte order per value, for a little-endian payload behind a
+      big-endian header
 
 ## Phase 4: frontends
 
