@@ -148,13 +148,13 @@ fn a_duplicate_key_points_at_the_second_and_names_the_first() {
     let (error, location) = error_at(&text);
     assert_eq!(error.code, "duplicate_key");
     assert_eq!(error.path, "/sets/0/packets/0/name");
-    let first = place_of(&text, "\"name\": \"HK\"");
+    assert_eq!(error.message, "duplicate key \"name\" in one object");
+    let mut sources = Sources::new();
+    let id = sources.add("bundle.json", text.as_str());
+    let first = error.first.map(|span| Span::new(id, span.start, span.end));
     assert_eq!(
-        error.message,
-        format!(
-            "duplicate key \"name\"; the object has it already, at line {}, column {}",
-            first.line, first.column
-        )
+        first.and_then(|span| sources.location(span)),
+        Some(place_of(&text, "\"name\": \"HK\""))
     );
     assert_eq!(location, Some(place_of(&text, "\"name\": \"HK2\"")));
 }

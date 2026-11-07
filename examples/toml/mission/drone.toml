@@ -1,0 +1,76 @@
+# A drone speaking MAVLink 2. The link checks the CRC, zero-extends
+# truncated payloads, and provides msgid and sysid as metadata. Offsets are
+# bits into the payload, little-endian. Timestamps are milliseconds since
+# boot, tied to UTC by SYSTEM_TIME, which carries both clocks.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "drone"
+encoding   = "binary"
+byte_order = "little"
+alias      = { kind = "metadata", name = "sysid" }
+metadata   = ["msgid", "sysid"]
+
+[[sets]]
+name   = "drone_v1"
+family = "drone"
+
+[sets.time]
+kind = "boot"
+unit = "ms"
+
+[sets.time.correlate]
+packet      = "SYSTEM_TIME"
+clock_field = "time_unix_usec"
+clock_unit  = "us"
+epoch       = 1970-01-01T00:00:00Z
+scale       = "utc"
+boot_field  = "time_boot_ms"
+
+# ---- SYS_STATUS (msgid 1): no time of its own, so ground time ---------------
+
+[[sets.packets]]
+name     = "SYS_STATUS"
+identify = { msgid = 1 }
+length   = { kind = "exact", bytes = 31 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "voltage_battery"
+type        = "uint"
+offset_bits = 112
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+invalid     = [0xFFFF]
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "battery_remaining"
+type        = "int"
+offset_bits = 240
+size_bits   = 8
+unit        = "%"
+canonical   = "eps.batt_remaining"
+invalid     = [-1]
+
+# ---- SYSTEM_TIME (msgid 2): both clocks ------------------------------------
+
+[[sets.packets]]
+name       = "SYSTEM_TIME"
+identify   = { msgid = 2 }
+length     = { kind = "exact", bytes = 12 }
+time_field = "time_boot_ms"
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "time_unix_usec"
+type      = "uint"
+size_bits = 64
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "time_boot_ms"
+type      = "uint"
+size_bits = 32

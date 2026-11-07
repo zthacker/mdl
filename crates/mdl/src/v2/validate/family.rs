@@ -18,13 +18,11 @@ pub(super) fn check_all<'a>(
         let place = root.item("families", index, "family", &family.name);
         check(family, &place, report);
         if let Some((first, _)) = by_name.get(family.name.as_str()) {
-            report.error(
+            report.duplicate(
                 Code::DuplicateName,
                 &place,
-                format!(
-                    "family {} is already defined at families[{first}]",
-                    family.name
-                ),
+                &root.at("families", *first),
+                format!("family {} is defined twice", family.name),
             );
         } else {
             by_name.insert(&family.name, (index, family));

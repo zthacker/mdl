@@ -221,14 +221,25 @@ impl SourceMap {
     }
 
     /// A validation diagnostic, at the span its path leads to.
+    /// A duplicate's first definition is located by its exact pointer;
+    /// one the map doesn't have is named in the message instead.
     pub fn locate(&self, diagnostic: &Diagnostic) -> SourceDiagnostic {
+        let mut message = diagnostic.message.clone();
+        let first = diagnostic.first.as_deref().and_then(|first| {
+            let span = self.get(first);
+            if span.is_none() {
+                message.push_str(&format!("; the first is at {first}"));
+            }
+            span
+        });
         SourceDiagnostic {
             severity: Severity::Error,
             code: diagnostic.code.as_str(),
-            message: diagnostic.message.clone(),
+            message,
             context: diagnostic.context.clone(),
             path: diagnostic.path.clone(),
             span: self.find(&diagnostic.path),
+            first,
         }
     }
 
@@ -247,6 +258,7 @@ impl SourceMap {
             context: String::new(),
             path: path.to_string(),
             span: self.find(path),
+            first: None,
         }
     }
 }
@@ -312,6 +324,9 @@ pub struct SourceDiagnostic {
     /// syntax error) or about all of it.
     pub path: String,
     pub span: Option<Span>,
+    /// For something defined twice, where the first one is; `span` is
+    /// the second.
+    pub first: Option<Span>,
 }
 
 impl SourceDiagnostic {
@@ -331,6 +346,7 @@ impl SourceDiagnostic {
             context: String::new(),
             path: String::new(),
             span: None,
+            first: None,
         }
     }
 
@@ -349,6 +365,11 @@ impl SourceDiagnostic {
         self
     }
 
+    pub fn with_first(mut self, first: Span) -> Self {
+        self.first = Some(first);
+        self
+    }
+
     /// The diagnostic with its file, line and column, the line itself, and
     /// the span underlined:
     ///
@@ -360,6 +381,9 @@ impl SourceDiagnostic {
     ///    |                     ^^^
     ///    = set vendor_x_v2, packet HK, entry bus_counts
     /// ```
+    ///
+    /// Something defined twice ends with where the first one is:
+    /// `= the first is at catalog.toml:3:1`.
     ///
     /// A line longer than 120 columns is shown as a window around the span,
     /// with `...` where it's cut. Tabs are shown as four spaces and other
@@ -440,6 +464,17 @@ impl fmt::Display for Rendered<'_> {
             writeln!(f, "{:gutter$}= {}", "", d.context)?;
         } else if shown.is_none() && !d.path.is_empty() {
             writeln!(f, "{:gutter$}= at {}", "", d.path)?;
+        }
+        let first = d.first.and_then(|span| {
+            let file = self.sources.get(span.source)?;
+            Some((file.name(), file.location(span.start)))
+        });
+        if let Some((name, location)) = first {
+            writeln!(
+                f,
+                "{:gutter$}= the first is at {name}:{}:{}",
+                "", location.line, location.column
+            )?;
         }
         Ok(())
     }

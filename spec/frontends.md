@@ -12,6 +12,7 @@ the same thing produce the same artifacts.
 | Frontend | Where | Reads |
 | --- | --- | --- |
 | JSON | `mdl::v2::json` | a bundle written as the IR itself (§5) |
+| TOML | `mdl-toml` | the IR spelled in TOML, in any number of files (`toml.md`) |
 
 ## 1. What a frontend produces
 
@@ -55,7 +56,11 @@ A diagnostic has:
   mode");
 - a **path**, the JSON Pointer (RFC 6901) into the bundle, when the
   problem is in the bundle;
-- a **span**, the source file and byte range, when one is known.
+- a **span**, the source file and byte range, when one is known;
+- for something defined twice, a **first location**: where the first
+  definition is, the diagnostic's own span being the second. Validation gives it as a
+  JSON Pointer and the source map turns it into a span; a frontend's own
+  duplicates give the span directly.
 
 A frontend records a *source map*: for each JSON Pointer into the bundle,
 the span of source text its value came from. It SHOULD record one for
@@ -75,11 +80,13 @@ A frontend that builds one bundle from several files (TOML does):
 - takes the files in the order it's given them, which decides which of two
   definitions comes first;
 - MUST report anything that two files would put at the same JSON Pointer
-  (one param in two catalog files, one family twice) as an error at the
-  later one, with a message naming the earlier one's file, line and
-  column. It MUST NOT keep either silently. List items never collide, since
-  each file's are appended: two sets with one name reach validation, which
-  reports them (`duplicate_name`) as it would from one file;
+  (one param in two catalog files, a `catalog` key other than `params` and
+  `commands` in two files) as an error at the later one, with the earlier
+  one as its first location (§3). It MUST NOT keep either silently. List
+  items never collide, since each file's are appended: two families or two
+  sets with one name reach validation, which reports them
+  (`duplicate_name`) at the later one, with the earlier one as its first
+  location, as it would in one file;
 - gives a list or map assembled from several files (the bundle's `sets`,
   the catalog's `params`) no span of its own. A diagnostic about one is
   reported with its path and no position;
@@ -100,5 +107,5 @@ The JSON frontend reads one bundle document: `{ "mdl_version", "catalog",
   couldn't accept or, when the text ends early, at its last character (at
   the very end, an empty span, if the last character is a line break). A
   file that starts with a byte order mark is refused at the mark, saying
-  so. A duplicate key is reported at its second appearance, and the
-  message names the line and column of the first.
+  so. A duplicate key is reported at its second appearance, with the first
+  as its first location (§3).

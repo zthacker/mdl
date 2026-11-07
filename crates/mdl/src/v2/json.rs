@@ -50,7 +50,7 @@ fn parse_error(source: SourceFile<'_>, err: CanonicalError) -> SourceDiagnostic 
     match read {
         ReadError::Canonical(CanonicalError::DuplicateKey { line, column, .. }) => {
             match scan(source) {
-                Err(Stop::Duplicate(duplicate)) => duplicate_key(source, duplicate),
+                Err(Stop::Duplicate(duplicate)) => duplicate_key(duplicate),
                 _ => at_position(diagnostic, source, line, column),
             }
         }
@@ -72,17 +72,14 @@ fn parse_error(source: SourceFile<'_>, err: CanonicalError) -> SourceDiagnostic 
     }
 }
 
-fn duplicate_key(source: SourceFile<'_>, duplicate: Duplicate) -> SourceDiagnostic {
-    let first = source.location(duplicate.first.start);
+fn duplicate_key(duplicate: Duplicate) -> SourceDiagnostic {
     SourceDiagnostic::error(
         "duplicate_key",
-        format!(
-            "duplicate key {:?}; the object has it already, at line {}, column {}",
-            duplicate.key, first.line, first.column
-        ),
+        format!("duplicate key {:?} in one object", duplicate.key),
     )
     .with_path(duplicate.pointer)
     .with_span(duplicate.second)
+    .with_first(duplicate.first)
 }
 
 /// A diagnostic at a line and byte column as serde_json reports them.

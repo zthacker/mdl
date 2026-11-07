@@ -1,0 +1,97 @@
+# A satellite sending CCSDS space packets. The link strips the 6-byte
+# primary header and hands over the APID as metadata, so offsets here are
+# bits from the start of the data field: a CUC time code (4 + 2 bytes),
+# then the spacecraft id, then the packet's own data.
+#
+#   bits 0-47  CUC time    bits 48-63  spacecraft id    bits 64-  data
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "ccsds_sat"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 48, size_bits = 16 }
+metadata   = ["apid"]
+
+[[sets]]
+name   = "ccsds_sat_v1"
+family = "ccsds_sat"
+# A TOML datetime works wherever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = 2000-01-01T00:00:00Z, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 ------------------------------------------
+
+[[sets.packets]]
+name     = "EPS_HK"
+identify = { apid = 0x064 }
+length   = { kind = "exact", bytes = 13 }
+
+# Millivolts on the wire, volts in the catalog: decoding converts.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 64
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+invalid     = [0xFFFF]
+
+# A thermistor, calibrated by a table of counts to degrees Celsius.
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp_counts"
+type       = "uint"
+size_bits  = 16
+conversion = { kind = "table", points = [
+    { raw = 0, value = -40.0 },
+    { raw = 1000, value = 0.0 },
+    { raw = 3000, value = 60.0 },
+] }
+unit       = "Cel"
+canonical  = "eps.batt_temp"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, name = "PAYLOAD" },
+] }
+canonical  = "eps.mode"
+
+# ---- Commands, APID 0x0C8 --------------------------------------------------
+
+[[sets.commands]]
+name      = "SET_MODE"
+canonical = "eps.set_mode"
+metadata  = { apid = 0x0C8 }
+
+[[sets.commands.entries]]
+kind      = "field"
+name      = "opcode"
+type      = "uint"
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, name = "PAYLOAD" },
+] }
+argument   = "mode"
+
+# CRC-16/CCITT-FALSE over everything before it.
+[[sets.commands.entries]]
+kind      = "checksum"
+name      = "crc"
+algorithm = { kind = "crc", width = 16, poly = 0x1021, init = 0xFFFF, reflect_in = false, reflect_out = false, xor_out = 0 }

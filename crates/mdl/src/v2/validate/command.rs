@@ -42,11 +42,12 @@ pub(super) fn check_packets(
             );
         }
         if let Some(first) = names.get(packet.name.as_str()) {
-            report.error(
+            report.duplicate(
                 Code::DuplicateName,
                 &packet_place,
+                &place.at("commands", *first),
                 format!(
-                    "command packet {} is already defined at commands/{first}",
+                    "command packet {} is defined twice in this set",
                     packet.name
                 ),
             );
@@ -56,12 +57,13 @@ pub(super) fn check_packets(
         check_metadata(packet, family, &packet_place, report);
         // The encoder looks a packet up by command, so there's one.
         if let Some(first) = commands.get(packet.canonical.as_str()) {
-            report.error(
+            report.duplicate(
                 Code::DuplicateMapping,
                 &packet_place.key("canonical"),
+                &place.at("commands", *first),
                 format!(
-                    "command {} is already encoded by commands/{first}; a set encodes each \
-                     command once",
+                    "command {} is encoded by two command packets; a set encodes each command \
+                     once",
                     packet.canonical
                 ),
             );

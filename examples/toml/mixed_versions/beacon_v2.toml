@@ -1,0 +1,32 @@
+# Firmware 2: bus voltage in centivolts, and a battery temperature. The
+# canonical params are the same, so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset = 0.0 }
+unit       = "Cel"
+canonical  = "eps.batt_temp"

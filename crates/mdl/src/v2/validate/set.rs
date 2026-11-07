@@ -45,10 +45,11 @@ pub(super) fn check_all(
             );
         }
         if let Some(first) = names.get(set.name.as_str()) {
-            report.error(
+            report.duplicate(
                 Code::DuplicateName,
                 &place,
-                format!("set {} is already defined at sets/{first}", set.name),
+                &root.at("sets", *first),
+                format!("set {} is defined twice", set.name),
             );
         } else {
             names.insert(&set.name, index);
@@ -550,13 +551,11 @@ fn check_packets(
             );
         }
         if let Some(first) = names.get(packet.name.as_str()) {
-            report.error(
+            report.duplicate(
                 Code::DuplicateName,
                 &packet_place,
-                format!(
-                    "packet {} is already defined at packets/{first}",
-                    packet.name
-                ),
+                &place.at("packets", *first),
+                format!("packet {} is defined twice in this set", packet.name),
             );
         } else {
             names.insert(&packet.name, index);
@@ -1011,10 +1010,11 @@ fn check_entries(
                 );
             }
             if let Some(first) = names.get(name) {
-                report.error(
+                report.duplicate(
                     Code::DuplicateName,
                     &place,
-                    format!("entry {name} is already defined at entries/{first}"),
+                    &container.at("entries", *first),
+                    format!("entry {name} is defined twice here"),
                 );
             } else {
                 names.insert(name, index);
