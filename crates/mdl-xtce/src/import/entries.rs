@@ -907,6 +907,7 @@ fn size_tag<'d>(
         param: "u64",
         states: Vec::new(),
         raw: Raw::Integer,
+        limits: None,
     }
 }
 

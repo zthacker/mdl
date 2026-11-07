@@ -120,6 +120,7 @@ An import produces one family and one set:
 | `BinaryParameterType` | `bytes`, a fixed size in whole bytes, or a size another parameter gives | `bytes` |
 | `AggregateParameterType` | one field per member, depth first | one per member |
 | `ArrayParameterType` | an array of one dimension: scalar elements, or a struct type of an aggregate's members | the elements' param, or one per member, each element a sample with its index |
+| `RelativeTimeParameterType` | its `Encoding`'s integer or float encoding; a `scale` or `offset` other than 1 and 0 is a `linear` conversion | `f64`, in `s` (`seconds`, the default), `ps` (`picoSeconds`) or `d` (`days`); a duration in `months` or `years` has no unit, since their lengths vary [`xtce.ignored`] |
 
 The unit, for integer and float types, is the type's one `Unit` without a
 `power`, a `factor` or a `form` other than `calibrated`. Text that is a
@@ -170,7 +171,20 @@ Encodings:
   other than the three encodings above, binary transform algorithms,
   enumerations over a range of values (`maxValue`), type inheritance
   (`baseType`), absolute time parameters (an MDL field holds a number, not
-  an instant), and, in this version, relative time types.
+  an instant), a relative time with a `ReferenceTime`, and a relative time
+  with both a calibrator and a scale or offset.
+
+Limits: an integer or float type's `DefaultAlarm` gives its params'
+limits. Its `StaticAlarmRanges` hold the normal ranges: the
+`WarningRange`'s ends are `yellow_low` and `yellow_high`, and the
+`CriticalRange`'s `red_low` and `red_high`. What MDL's limits don't
+hold, which doesn't change a decoded value, is left out, each a warning
+[`xtce.ignored`]: an exclusive end (it's imported as the limit, since MDL
+limits don't say whether a value at the limit is in alarm), the watch,
+distress and severe levels (MDL has two), ranges in alarm inside them
+(`rangeForm="inside"`), change alarms, alarm conditions, custom alarms, a
+`minViolations` other than 1, `minConformance`, context alarms, and the
+alarms of other types, relative time types included.
 
 Sizes:
 
@@ -258,18 +272,30 @@ that inherits from itself is an error [`xtce.invalid`].
   unsupported.
 - **Conditions.** An `IncludeCondition` holding a `Comparison` or a
   `ComparisonList` is the entry's `when`: a `compare`, or `all` of them.
-  Each compares a field decoded earlier in the packet. XTCE leaves an
-  absent entry unplaced, so the next one follows the entry before it,
+  A `BooleanExpression` is the same nested: `ANDedConditions` is `all`,
+  `ORedConditions` is `any`, and a `Condition` (its ParameterInstanceRef,
+  ComparisonOperator and Value written as elements) is a `compare`; a
+  `Condition` comparing two parameters is unsupported, as are expressions
+  nested more than 32 deep, MDL's bound on condition nesting. Each
+  comparison compares a field decoded earlier in the packet. A condition
+  holds one `Comparison`, `ComparisonList` or `BooleanExpression`; a list
+  holds at least one comparison, a `BooleanExpression` one member, and an
+  `ANDedConditions` or `ORedConditions` at least one. Anything else is an
+  error [`xtce.invalid`]: read in part, it would compare something other
+  than what the document says. XTCE leaves an absent entry unplaced, so the next one follows the entry before it,
   where MDL starts it at the absent entry's place; the two agree unless
   an entry with a condition and a `containerStart` location is followed
   by one placed after it, which is unsupported.
 - **Identification.** The restriction criteria of a container's
-  `BaseContainer`, a `Comparison` or a `ComparisonList`, are identify keys
-  of that container and every packet built on it. Each compares, for
-  equality, a field of the containers above, as XTCE evaluates criteria
-  before the container's own entries are read. Criteria that require one
-  field to have two values are an error [`xtce.invalid`]. Other operators,
-  `NextContainer`, `BooleanExpression` and algorithms are unsupported.
+  `BaseContainer`, a `Comparison`, a `ComparisonList`, or a
+  `BooleanExpression` that ANDs its conditions, are identify keys of that
+  container and every packet built on it. Each compares, for equality, a
+  field of the containers above, as XTCE evaluates criteria before the
+  container's own entries are read. Criteria that require one field to
+  have two values are an error [`xtce.invalid`]. Other operators, an
+  `ORedConditions` of two or more conditions (one is that condition),
+  `NextContainer` and algorithms are unsupported. What criteria hold is
+  checked as a condition's is.
 - **Values compared.** MDL compares raw values. With `useCalibratedValue`
   (the default), the value is an enumeration's label, a boolean's labels
   or `true` and `false`, or the integer of an integer field without a
@@ -294,10 +320,10 @@ These don't change a decoded value. Each is a warning where it is
 
 - descriptions of anything but parameters and aggregate members;
 - aliases outside the `MDL` namespace, and ancillary data;
-- initial values, change thresholds, alarms, valid ranges, display
-  formats (`ToString`), and parameter properties other than time
-  associations, validity conditions included (they set a value's
-  quality, not the value);
+- initial values, change thresholds, what alarms say beyond MDL's limits
+  (§4), valid ranges, display formats (`ToString`), and parameter
+  properties other than time associations, validity conditions included
+  (they set a value's quality, not the value);
 - expected rates and idle patterns;
 - the document `Header`, algorithms, streams, services and operational
   status;

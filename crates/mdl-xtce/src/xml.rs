@@ -344,6 +344,11 @@ fn ignored(owner: &str, name: &str) -> String {
         "initialValue" => "MDL has no initial values",
         "changeThreshold" => "MDL has no change thresholds",
         "DefaultAlarm" | "ContextAlarmList" => "alarms aren't imported",
+        "WatchRange" | "DistressRange" | "SevereRange" => {
+            "MDL limits have two levels, yellow and red (XTCE's warning and critical)"
+        }
+        "ChangeAlarmRanges" => "MDL limits are on values, not their changes",
+        "minConformance" => "MDL limits apply to each value",
         "ValidRange" | "validRangeAppliesToCalibrated" => "MDL has no valid ranges",
         "ToString" => "MDL has no display formats",
         "dataSource" | "readOnly" | "persistence" | "SystemName" | "PhysicalAddressSet" => {
