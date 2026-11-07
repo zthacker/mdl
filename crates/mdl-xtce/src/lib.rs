@@ -138,6 +138,21 @@ impl Code {
     }
 }
 
+/// How packet, field and struct type names are made from XTCE names.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Naming {
+    /// A name as XTCE has it, qualified by its SpaceSystems only where
+    /// items in different ones share it (`HK`, or `EPS_HK` and
+    /// `ADCS_HK`). Adding a second `HK` elsewhere renames the first.
+    #[default]
+    Short,
+    /// Every name qualified by its SpaceSystems below the root (`EPS_HK`
+    /// even when it's the only `HK`), so names don't change as documents
+    /// grow.
+    Qualified,
+}
+
 /// What XTCE doesn't say about the bundle.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -150,6 +165,7 @@ pub struct Options {
     /// Where the asset's own id is. By default, a fixed value: the first
     /// root SpaceSystem's name.
     pub alias: Option<Locator>,
+    pub naming: Naming,
 }
 
 impl Options {
@@ -169,6 +185,11 @@ impl Options {
 
     pub fn with_alias(mut self, alias: Locator) -> Self {
         self.alias = Some(alias);
+        self
+    }
+
+    pub fn with_naming(mut self, naming: Naming) -> Self {
+        self.naming = naming;
         self
     }
 }
@@ -200,7 +221,7 @@ pub fn read<'a>(
         .map(|(file, document)| El::new(document.root_element(), *file))
         .collect();
     let tree = Tree::build(&roots, &mut report);
-    let built = Import::new(&tree, &mut report).bundle(options);
+    let built = Import::new(&tree, &mut report, options).bundle(options);
     match built {
         Some((value, map)) if !report.has_errors() => match read_bundle_value(&value) {
             Ok(loaded) => {

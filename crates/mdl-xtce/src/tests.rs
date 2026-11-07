@@ -557,20 +557,10 @@ fn what_mdl_cant_represent_is_an_error() {
             "{ty}"
         );
     }
-    let entries = [
-        (
-            r#"<ContainerRefEntry containerRef="P"/>"#,
-            "ContainerRefEntry isn't supported yet",
-        ),
-        (
-            r#"<ParameterRefEntry parameterRef="X"><RepeatEntry><Count><FixedValue>2</FixedValue></Count></RepeatEntry></ParameterRefEntry>"#,
-            "repeated entries aren't supported yet",
-        ),
-        (
-            r#"<xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="more.xml"/>"#,
-            "XInclude isn't supported; give the importer the included files instead",
-        ),
-    ];
+    let entries = [(
+        r#"<xi:include xmlns:xi="http://www.w3.org/2001/XInclude" href="more.xml"/>"#,
+        "XInclude isn't supported; give the importer the included files instead",
+    )];
     for (entry, message) in entries {
         let text = doc(&telemetry(U8, &param("X", "U8"), &container("P", entry)));
         assert_eq!(
@@ -784,7 +774,7 @@ fn a_parameter_is_in_a_packet_once() {
         one_problem(&text),
         (
             "xtce.unsupported".into(),
-            "/Sat/A is in this packet twice, and MDL maps a param from one field per packet".into()
+            "/Sat/A is in this packet twice, and MDL maps a param from one entry per packet".into()
         )
     );
 }
@@ -1018,7 +1008,7 @@ fn deep_nesting_is_refused_not_overflowed() {
     let (code, message) = one_problem(&using(depth - 1));
     assert_eq!(code, "xtce.unsupported");
     assert!(
-        message.starts_with("aggregates nested more than 32 deep"),
+        message.starts_with("aggregates and arrays nested more than 32 deep"),
         "{message}"
     );
     // 32 aggregates around a scalar are as deep as MDL goes; 33 aren't.
@@ -1049,6 +1039,427 @@ fn options_name_the_family_and_set() {
         json!({ "kind": "metadata", "name": "scid" })
     );
     assert_eq!(bundle["sets"][0]["name"], "vendor_x_v1");
+}
+
+/// The packets of a document that imports without a warning and
+/// validates, with the set's struct types.
+fn valid(text: &str) -> (Value, Value) {
+    let (sources, result) = import_all(&[("sat.xml", text)]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    assert!(
+        parsed.warnings.is_empty(),
+        "{:#?}",
+        shown(&sources, &parsed.warnings)
+    );
+    let json = serde_json::to_value(&parsed.bundle).unwrap();
+    if let Err(diagnostics) = validate(parsed.bundle) {
+        panic!(
+            "{:#?}",
+            shown(&sources, &parsed.map.locate_all(&diagnostics))
+        );
+    }
+    (
+        json["sets"][0]["packets"].clone(),
+        json["sets"][0]["types"].clone(),
+    )
+}
+
+const N: &str = r#"<Parameter name="N" parameterTypeRef="U8"/>"#;
+
+fn array_type(name: &str, element: &str, ending: &str) -> String {
+    format!(
+        r#"<ArrayParameterType name="{name}" arrayTypeRef="{element}"><DimensionList><Dimension>
+           <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+           <EndingIndex>{ending}</EndingIndex></Dimension></DimensionList></ArrayParameterType>"#
+    )
+}
+
+const BY_N: &str = r#"<DynamicValue><ParameterInstanceRef parameterRef="N"/><LinearAdjustment intercept="-1"/></DynamicValue>"#;
+
+#[test]
+fn arrays_count_their_elements_fixed_or_from_a_field() {
+    let types = format!(
+        "{U8}{U16}{}{}",
+        array_type("Four", "U16", "<FixedValue>3</FixedValue>"),
+        array_type("Some", "U16", BY_N)
+    );
+    let params = format!("{N}{}{}", param("A", "Four"), param("B", "Some"));
+    let (packets, _) = valid(&doc(&telemetry(
+        &types,
+        &params,
+        &container("P", &(entry("N") + &entry("A") + &entry("B"))),
+    )));
+    let element = json!({ "kind": "scalar", "type": "uint", "size_bits": 16 });
+    assert_eq!(
+        packets[0]["entries"][1],
+        json!({ "kind": "array", "name": "A", "count": { "kind": "fixed", "count": 4 },
+                "element": element, "canonical": "sat.a" })
+    );
+    // EndingIndex N - 1 from StartingIndex 0: N elements.
+    assert_eq!(
+        packets[0]["entries"][2]["count"],
+        json!({ "kind": "field", "field": "N" })
+    );
+}
+
+#[test]
+fn an_array_of_aggregates_has_a_struct_type_for_its_elements() {
+    let types = format!(
+        r#"{U8}{U16}<AggregateParameterType name="Pair"><MemberList>
+             <Member name="id" typeRef="U8"/><Member name="range" typeRef="U16"/>
+           </MemberList></AggregateParameterType>{}"#,
+        array_type("Targets", "Pair", BY_N)
+    );
+    let params = format!("{N}{}", param("T", "Targets"));
+    let (packets, types) = valid(&doc(&telemetry(
+        &types,
+        &params,
+        &container("P", &(entry("N") + &entry("T"))),
+    )));
+    assert_eq!(
+        packets[0]["entries"][1]["element"],
+        json!({ "kind": "struct", "name": "T_element" })
+    );
+    assert_eq!(
+        types["T_element"]["entries"],
+        json!([
+            { "kind": "field", "name": "id", "type": "uint", "size_bits": 8,
+              "canonical": "sat.t.id" },
+            { "kind": "field", "name": "range", "type": "uint", "size_bits": 16,
+              "canonical": "sat.t.range" }
+        ])
+    );
+}
+
+#[test]
+fn an_xtce_1_1_array_takes_its_size_from_its_entry() {
+    let types =
+        format!(r#"{U8}<ArrayParameterType name="Old" arrayTypeRef="U8" numberOfDimensions="1"/>"#);
+    let dimensioned = r#"<ArrayParameterRefEntry parameterRef="A"><DimensionList><Dimension>
+        <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+        <EndingIndex><FixedValue>1</FixedValue></EndingIndex></Dimension></DimensionList>
+        </ArrayParameterRefEntry>"#;
+    let text = |entries: &str| {
+        doc(&telemetry(
+            &types,
+            &param("A", "Old"),
+            &container("P", entries),
+        ))
+    };
+    let (packets, _) = valid(&text(dimensioned));
+    assert_eq!(
+        packets[0]["entries"][0]["count"],
+        json!({ "kind": "fixed", "count": 2 })
+    );
+    assert_eq!(one_problem(&text(&entry("A"))).0, "xtce.invalid");
+    // Two dimensions, and a slice of an array, aren't MDL arrays.
+    let square = format!(
+        r#"{U8}<ArrayParameterType name="Square" arrayTypeRef="U8"><DimensionList>
+           <Dimension><StartingIndex><FixedValue>0</FixedValue></StartingIndex><EndingIndex><FixedValue>1</FixedValue></EndingIndex></Dimension>
+           <Dimension><StartingIndex><FixedValue>0</FixedValue></StartingIndex><EndingIndex><FixedValue>1</FixedValue></EndingIndex></Dimension>
+           </DimensionList></ArrayParameterType>"#
+    );
+    let (code, message) = one_problem(&doc(&telemetry(
+        &square,
+        &param("A", "Square"),
+        &container("P", &entry("A")),
+    )));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(message.starts_with("an array of 2 dimensions"), "{message}");
+}
+
+#[test]
+fn a_repeated_parameter_is_an_array_of_its_samples() {
+    let repeat = |count: &str, offset: &str| {
+        format!(
+            r#"<ParameterRefEntry parameterRef="V"><RepeatEntry><Count>{count}</Count>{offset}</RepeatEntry></ParameterRefEntry>"#
+        )
+    };
+    let params = format!("{N}{}", param("V", "U16"));
+    let text = |entry: String| {
+        doc(&telemetry(
+            &format!("{U8}{U16}"),
+            &params,
+            &container("P", &(super::tests::entry("N") + &entry)),
+        ))
+    };
+    let (packets, _) = valid(&text(repeat("<FixedValue>3</FixedValue>", "")));
+    assert_eq!(
+        packets[0]["entries"][1],
+        json!({ "kind": "array", "name": "V", "count": { "kind": "fixed", "count": 3 },
+                "element": { "kind": "scalar", "type": "uint", "size_bits": 16 },
+                "canonical": "sat.v" })
+    );
+    let dynamic = r#"<DynamicValue><ParameterInstanceRef parameterRef="N"/></DynamicValue>"#;
+    let offset = "<Offset><FixedValue>8</FixedValue></Offset>";
+    let (packets, types) = valid(&text(repeat(dynamic, offset)));
+    assert_eq!(
+        packets[0]["entries"][1]["count"],
+        json!({ "kind": "field", "field": "N" })
+    );
+    // The gap after each sample is padding in a struct element, named for
+    // its gap.
+    assert_eq!(
+        types["V_element_gap8"]["entries"],
+        json!([
+            { "kind": "field", "name": "value", "type": "uint", "size_bits": 16,
+              "canonical": "sat.v" },
+            { "kind": "padding", "size_bits": 8 }
+        ])
+    );
+}
+
+#[test]
+fn an_embedded_container_is_a_struct_of_its_type() {
+    // A secondary header present when the flag says so, as the CCSDS green
+    // book writes one.
+    let containers = format!(
+        r#"<SequenceContainer name="Secondary" abstract="true"><EntryList>{}</EntryList></SequenceContainer>
+           <SequenceContainer name="P"><EntryList>{}
+             <ContainerRefEntry containerRef="Secondary">
+               <IncludeCondition><Comparison parameterRef="Flag" value="1"/></IncludeCondition>
+             </ContainerRefEntry>{}</EntryList></SequenceContainer>"#,
+        entry("Time"),
+        entry("Flag"),
+        entry("Data")
+    );
+    let params = format!(
+        "{}{}{}",
+        param("Flag", "U8"),
+        param("Time", "U16"),
+        param("Data", "U8")
+    );
+    let (packets, types) = valid(&doc(&telemetry(
+        &format!("{U8}{U16}"),
+        &params,
+        &containers,
+    )));
+    let p = packets
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["name"] == "P")
+        .unwrap();
+    assert_eq!(
+        p["entries"][1],
+        json!({ "kind": "struct", "name": "Secondary", "struct": "Secondary",
+                "when": { "kind": "compare", "field": "Flag", "op": "eq", "value": 1 } })
+    );
+    assert_eq!(types["Secondary"]["entries"][0]["canonical"], "sat.time");
+}
+
+#[test]
+fn an_embedded_container_that_isnt_abstract_is_still_not_a_packet() {
+    let text = doc(&telemetry(
+        U8,
+        &param("A", "U8"),
+        &format!(
+            r#"<SequenceContainer name="Inner">{}</SequenceContainer>
+               <SequenceContainer name="P"><EntryList><ContainerRefEntry containerRef="Inner"/></EntryList></SequenceContainer>"#,
+            format_args!("<EntryList>{}</EntryList>", entry("A"))
+        ),
+    ));
+    assert_eq!(
+        one_problem(&text),
+        (
+            "xtce.ignored".into(),
+            "container /Sat/Inner isn't a packet: /Sat/P embeds it, so it's a structure; mark it \
+             abstract to say so"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn containers_embed_up_to_mdls_struct_nesting() {
+    // C0 embeds C1 embeds ... embeds the last, which holds a field.
+    let nested = |depth: usize| {
+        let mut containers = String::new();
+        for level in 0..depth {
+            let inner = if level + 1 == depth {
+                entry("A")
+            } else {
+                format!(r#"<ContainerRefEntry containerRef="C{}"/>"#, level + 1)
+            };
+            containers.push_str(&format!(
+                r#"<SequenceContainer name="C{level}" abstract="true"><EntryList>{inner}</EntryList></SequenceContainer>"#
+            ));
+        }
+        containers.push_str(
+            r#"<SequenceContainer name="P"><EntryList><ContainerRefEntry containerRef="C0"/></EntryList></SequenceContainer>"#,
+        );
+        doc(&telemetry(U8, &param("A", "U8"), &containers))
+    };
+    valid(&nested(32));
+    let (code, message) = one_problem(&nested(33));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("containers embedded more than 32 deep"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_parameter_repeated_with_different_gaps_has_a_type_for_each() {
+    let repeat = |gap: u32| {
+        format!(
+            r#"<ParameterRefEntry parameterRef="V"><RepeatEntry><Count><FixedValue>2</FixedValue></Count>
+               <Offset><FixedValue>{gap}</FixedValue></Offset></RepeatEntry></ParameterRefEntry>"#
+        )
+    };
+    let containers = format!(
+        r#"<SequenceContainer name="Base" abstract="true"><EntryList>{}</EntryList></SequenceContainer>
+           <SequenceContainer name="A"><EntryList>{}</EntryList><BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="Kind" value="1"/></RestrictionCriteria></BaseContainer></SequenceContainer>
+           <SequenceContainer name="B"><EntryList>{}</EntryList><BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="Kind" value="2"/></RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+        entry("Kind"),
+        repeat(8),
+        repeat(16)
+    );
+    let params = format!("{}{}", param("Kind", "U8"), param("V", "U8"));
+    let (packets, types) = valid(&doc(&telemetry(U8, &params, &containers)));
+    assert_eq!(
+        packets[0]["entries"][1]["element"]["name"],
+        "V_element_gap8"
+    );
+    assert_eq!(
+        packets[1]["entries"][1]["element"]["name"],
+        "V_element_gap16"
+    );
+    assert_eq!(types["V_element_gap16"]["entries"][1]["size_bits"], 16);
+}
+
+#[test]
+fn an_embedded_container_keeps_to_its_own_fields() {
+    let text = |inner: &str, outer: &str| {
+        doc(&telemetry(
+            U8,
+            &format!("{}{}", param("A", "U8"), param("B", "U8")),
+            &format!(
+                r#"<SequenceContainer name="Inner" abstract="true"><EntryList>{inner}</EntryList></SequenceContainer>
+                   <SequenceContainer name="Base" abstract="true"><EntryList/></SequenceContainer>
+                   <SequenceContainer name="P"><EntryList>{outer}</EntryList></SequenceContainer>"#
+            ),
+        ))
+    };
+    let embed = r#"<ContainerRefEntry containerRef="Inner"/>"#;
+    // A condition inside on a field outside.
+    let conditional = r#"<ParameterRefEntry parameterRef="B"><IncludeCondition><Comparison parameterRef="A" value="1"/></IncludeCondition></ParameterRefEntry>"#;
+    let (code, message) = one_problem(&text(conditional, &format!("{}{embed}", entry("A"))));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("A isn't a field decoded earlier"),
+        "{message}"
+    );
+    // The same container embedded twice maps its parameters twice.
+    let (code, message) = one_problem(&text(&entry("A"), &format!("{embed}{embed}")));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("/Sat/A is in this packet twice"),
+        "{message}"
+    );
+}
+
+#[test]
+fn sizes_come_from_earlier_fields_in_whole_bytes() {
+    let binary = |adjustment: &str| {
+        format!(
+            r#"<BinaryParameterType name="Blob"><BinaryDataEncoding><SizeInBits><DynamicValue>
+               <ParameterInstanceRef parameterRef="N"/>{adjustment}</DynamicValue></SizeInBits>
+               </BinaryDataEncoding></BinaryParameterType>"#
+        )
+    };
+    let text = |ty: String, entries: String| {
+        doc(&telemetry(
+            &format!("{U8}{ty}"),
+            &format!("{N}{}", param("B", "Blob")),
+            &container("P", &entries),
+        ))
+    };
+    // N counts bytes: eight bits each.
+    let (packets, _) = valid(&text(
+        binary(r#"<LinearAdjustment slope="8"/>"#),
+        entry("N") + &entry("B"),
+    ));
+    assert_eq!(
+        packets[0]["entries"][1]["length"],
+        json!({ "kind": "field", "field": "N" })
+    );
+    // N counting bits can't be a whole number of bytes.
+    let (code, message) = one_problem(&text(binary(""), entry("N") + &entry("B")));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(message.contains("isn't whole bytes"), "{message}");
+    // The size must come first.
+    let (code, message) = one_problem(&text(
+        binary(r#"<LinearAdjustment slope="8"/>"#),
+        entry("B") + &entry("N"),
+    ));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("N isn't a field decoded earlier"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_pascal_string_has_a_size_tag_before_it() {
+    let string = |variable: &str| {
+        format!(
+            r#"<StringParameterType name="Text"><StringDataEncoding><Variable maxSizeInBits="2048">{variable}</Variable></StringDataEncoding></StringParameterType>"#
+        )
+    };
+    let text = |variable: &str| {
+        doc(&telemetry(
+            &format!("{U8}{}", string(variable)),
+            &param("S", "Text"),
+            &container("P", &entry("S")),
+        ))
+    };
+    let leading = r#"<DynamicValue><ParameterInstanceRef parameterRef="_yamcs_ignore"/></DynamicValue><LeadingSize sizeInBitsOfSizeTag="8"/>"#;
+    let (sources, result) = import_all(&[("sat.xml", &text(leading))]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let packet = serde_json::to_value(&parsed.bundle.sets[0].packets[0]).unwrap();
+    assert_eq!(
+        packet["entries"],
+        json!([
+            { "kind": "field", "name": "S_size", "type": "uint", "size_bits": 8 },
+            { "kind": "field", "name": "S", "type": "string",
+              "length": { "kind": "field", "field": "S_size" }, "canonical": "sat.s" }
+        ])
+    );
+    validate(parsed.bundle).unwrap();
+    // _yamcs_ignore with a terminator is a terminated string.
+    let terminated = r#"<DynamicValue><ParameterInstanceRef parameterRef="_yamcs_ignore"/></DynamicValue><TerminationChar>00</TerminationChar>"#;
+    let (sources, result) = import_all(&[("sat.xml", &text(terminated))]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let packet = serde_json::to_value(&parsed.bundle.sets[0].packets[0]).unwrap();
+    assert_eq!(
+        packet["entries"][0]["length"],
+        json!({ "kind": "terminator", "byte": 0 })
+    );
+}
+
+#[test]
+fn qualified_naming_names_everything_by_its_spacesystem() {
+    let sub = format!(
+        r#"<SpaceSystem name="EPS">{}</SpaceSystem>"#,
+        telemetry(
+            U8,
+            &param("Status", "U8"),
+            &container("HK", &entry("Status"))
+        )
+    );
+    let mut sources = Sources::new();
+    sources.add("sat.xml", doc(&sub));
+    let options = Options::new().with_naming(crate::Naming::Qualified);
+    let parsed = read(sources.iter(), &options).unwrap();
+    assert!(
+        parsed.warnings.is_empty(),
+        "{:#?}",
+        shown(&sources, &parsed.warnings)
+    );
+    let packet = serde_json::to_value(&parsed.bundle.sets[0].packets[0]).unwrap();
+    assert_eq!(packet["name"], "EPS_HK");
+    assert_eq!(packet["entries"][0]["name"], "EPS_Status");
 }
 
 #[test]

@@ -360,7 +360,7 @@ fn ignored(owner: &str, name: &str) -> String {
         "ServiceSet" => "MDL has no services",
         "operationalStatus" => "MDL has no operational status",
         "oneStringValue" | "zeroStringValue" => "MDL booleans are true and false",
-        "maxSizeInBits" => "MDL doesn't bound terminated strings",
+        "maxSizeInBits" => "MDL doesn't bound a variable string's size",
         "description" | "power" | "factor" | "form" => "it's part of a unit",
         "name" => "MDL doesn't name calibrators",
         _ => "it doesn't change decoded values",

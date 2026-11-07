@@ -13,11 +13,98 @@ use crate::space::{Kind, Tree};
 use crate::units::{Ucum, ucum};
 use crate::xml::{self, Attr, El, Expect};
 
-/// What a parameter of a type is: one value, or an aggregate's members.
+/// What a parameter of a type is: one value, an aggregate's members, or
+/// an array of elements.
 #[derive(Clone)]
 pub(crate) enum Shape<'d> {
     Scalar(Box<Scalar<'d>>),
     Aggregate(Vec<Member<'d>>),
+    Array(Box<ArrayShape<'d>>),
+}
+
+/// An array type: its elements, and how many there are.
+#[derive(Clone)]
+pub(crate) struct ArrayShape<'d> {
+    pub(crate) el: El<'d>,
+    pub(crate) element: Shape<'d>,
+    /// `None` for an XTCE 1.1 array, whose container entry gives its size.
+    pub(crate) count: Option<Count<'d>>,
+}
+
+/// How many elements an array has.
+#[derive(Clone)]
+pub(crate) enum Count<'d> {
+    Fixed(u32, Span),
+    /// From a dimension whose ending index another parameter gives.
+    Counted {
+        dynamic: Dynamic<'d>,
+        start: i64,
+    },
+}
+
+/// A value's length, before the fields around it are known.
+#[derive(Clone)]
+pub(crate) enum Length<'d> {
+    /// As the IR writes it: fixed, terminated, or both.
+    Written(Value, Span),
+    /// A size in bits another parameter gives.
+    Counted(Dynamic<'d>),
+    /// A Pascal string: a size tag of this many bits, in the encoding's
+    /// byte order, then that many bytes.
+    Leading {
+        bits: u32,
+        order: Option<(Order, Span)>,
+        span: Span,
+    },
+}
+
+/// XTCE's DynamicValue: another parameter's value, times `slope`, plus
+/// `intercept`. The reference is resolved where the value is used, since
+/// only the container around it says whether that parameter is there.
+#[derive(Debug, Clone)]
+pub(crate) struct Dynamic<'d> {
+    /// The SpaceSystem the reference is made from.
+    pub(crate) space: usize,
+    pub(crate) reference: &'d str,
+    pub(crate) span: Span,
+    pub(crate) calibrated: bool,
+    pub(crate) slope: i64,
+    pub(crate) intercept: i64,
+}
+
+impl Dynamic<'_> {
+    /// A size in bits as MDL's `raw × multiply + add` bytes.
+    pub(crate) fn bytes(&self) -> Result<(u32, i64), String> {
+        if self.slope % 8 != 0 || self.intercept % 8 != 0 {
+            return Err(format!(
+                "a size of {} × {} + {} bits isn't whole bytes for every value, and MDL's lengths \
+                 are bytes",
+                self.reference, self.slope, self.intercept
+            ));
+        }
+        linear(self.slope / 8, self.intercept / 8)
+    }
+
+    /// A count of elements from an ending index, the first index being
+    /// `start`: `raw × slope + intercept − start + 1`.
+    pub(crate) fn count(&self, start: i64) -> Result<(u32, i64), String> {
+        let add = self
+            .intercept
+            .checked_sub(start)
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| "a count out of range".to_string())?;
+        linear(self.slope, add)
+    }
+}
+
+fn linear(multiply: i64, add: i64) -> Result<(u32, i64), String> {
+    match u32::try_from(multiply) {
+        Ok(multiply) if multiply > 0 => Ok((multiply, add)),
+        _ => Err(format!(
+            "a slope of {multiply} isn't supported: MDL takes a size from a field times a \
+             positive whole number"
+        )),
+    }
 }
 
 #[derive(Clone)]
@@ -38,7 +125,7 @@ pub(crate) struct Scalar<'d> {
     pub(crate) size_bits: Option<(u32, Span)>,
     /// The encoding's byte order, for numbers wider than a byte.
     pub(crate) order: Option<(Order, Span)>,
-    pub(crate) length: Option<(Value, Span)>,
+    pub(crate) length: Option<Length<'d>>,
     pub(crate) text: Option<(&'static str, Span)>,
     pub(crate) conversion: Option<Object>,
     pub(crate) unit: Option<(String, Span)>,
@@ -219,14 +306,15 @@ impl<'d> Types<'d> {
         if let Some(shape) = self.shapes.get(&key) {
             return shape.clone();
         }
-        // Only aggregates contain types, so only they can nest or loop.
-        let aggregate = el.name() == "AggregateParameterType";
-        if aggregate {
+        // Only aggregates and arrays contain types, so only they can nest
+        // or loop.
+        let container = matches!(el.name(), "AggregateParameterType" | "ArrayParameterType");
+        if container {
             if self.open.contains(&key) {
                 report.error(
                     Code::Invalid,
                     el.span(),
-                    format!("aggregate type {} contains itself", key.1),
+                    format!("type {} contains itself", key.1),
                 );
                 return None;
             }
@@ -235,8 +323,8 @@ impl<'d> Types<'d> {
                     Code::Unsupported,
                     el.span(),
                     format!(
-                        "aggregates nested more than {MAX_NESTING} deep aren't supported: MDL \
-                         bounds nesting there, as for structs"
+                        "aggregates and arrays nested more than {MAX_NESTING} deep aren't \
+                         supported: MDL bounds nesting there, as for structs"
                     ),
                 );
                 return None;
@@ -244,7 +332,7 @@ impl<'d> Types<'d> {
             self.open.insert(key);
         }
         let shape = self.convert(tree, space, el, report);
-        if aggregate {
+        if container {
             self.open.remove(&key);
         }
         self.shapes.insert(key, shape.clone());
@@ -271,9 +359,10 @@ impl<'d> Types<'d> {
             "FloatParameterType" => float(el, report),
             "EnumeratedParameterType" => enumerated(el, report),
             "BooleanParameterType" => boolean(el, report),
-            "StringParameterType" => string(el, report),
-            "BinaryParameterType" => binary(el, report),
+            "StringParameterType" => string(el, space, report),
+            "BinaryParameterType" => binary(el, space, report),
             "AggregateParameterType" => return self.aggregate(tree, space, el, report),
+            "ArrayParameterType" => return self.array(tree, space, el, report),
             "AbsoluteTimeParameterType" => {
                 report.error(
                     Code::Unsupported,
@@ -283,7 +372,7 @@ impl<'d> Types<'d> {
                 );
                 None
             }
-            "RelativeTimeParameterType" | "ArrayParameterType" => {
+            "RelativeTimeParameterType" => {
                 report.error(
                     Code::Unsupported,
                     el.span(),
@@ -301,6 +390,60 @@ impl<'d> Types<'d> {
             }
         };
         scalar.map(|scalar| Shape::Scalar(Box::new(scalar)))
+    }
+
+    fn array(
+        &mut self,
+        tree: &Tree<'d>,
+        space: usize,
+        el: El<'d>,
+        report: &mut Report,
+    ) -> Option<Shape<'d>> {
+        el.check(
+            &Expect {
+                attrs: &["name", "arrayTypeRef", "numberOfDimensions"],
+                children: &["DimensionList"],
+                ignored: DESCRIBED,
+                text: false,
+            },
+            report,
+        );
+        let type_ref = el.required("arrayTypeRef", report)?;
+        let element = match tree.resolve(space, type_ref.value, Kind::ParameterType) {
+            Ok(found) => self.shape(tree, found.space, found.el, report)?,
+            Err(message) => {
+                report.error(Code::Reference, type_ref.span, message);
+                return None;
+            }
+        };
+        if matches!(element, Shape::Array(_)) {
+            report.error(
+                Code::Unsupported,
+                type_ref.span,
+                "an array of arrays (a multidimensional array) isn't supported yet: MDL arrays \
+                 have one dimension",
+            );
+            return None;
+        }
+        let count = match el.child("DimensionList") {
+            Some(list) => Some(dimensions(list, space, report)?),
+            // XTCE 1.1: the container entry gives the size.
+            None => {
+                if let Some(attr) = el.attr("numberOfDimensions")
+                    && xml::long(attr, report)? != 1
+                {
+                    report.error(
+                        Code::Unsupported,
+                        attr.span,
+                        "an array of more than one dimension isn't supported yet: MDL arrays \
+                         have one",
+                    );
+                    return None;
+                }
+                None
+            }
+        };
+        Some(Shape::Array(Box::new(ArrayShape { el, element, count })))
     }
 
     fn aggregate(
@@ -606,7 +749,7 @@ fn boolean<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
     Some(scalar)
 }
 
-fn string<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
+fn string<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d>> {
     el.check(
         &Expect {
             attrs: &["name", "baseType"],
@@ -644,6 +787,10 @@ fn string<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         report,
     );
     msb_first(encoding, report)?;
+    let order = match encoding.attr("byteOrder") {
+        Some(attr) => Some((attribute_order(attr, report)?, attr.span)),
+        None => None,
+    };
     let text = match encoding.attr("encoding") {
         None => None,
         Some(attr) => match attr.value.trim() {
@@ -662,7 +809,7 @@ fn string<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
             }
         },
     };
-    let length = string_length(encoding, report)?;
+    let length = string_length(encoding, space, order, report)?;
     Some(Scalar {
         el,
         ty: ("string", encoding.span()),
@@ -678,8 +825,14 @@ fn string<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
     })
 }
 
-/// A string's length: fixed, or up to a terminator.
-fn string_length(encoding: El<'_>, report: &mut Report) -> Option<(Value, Span)> {
+/// A string's length: fixed, up to a terminator, both, a leading size,
+/// or a size another parameter gives.
+fn string_length<'d>(
+    encoding: El<'d>,
+    space: usize,
+    order: Option<(Order, Span)>,
+    report: &mut Report,
+) -> Option<Length<'d>> {
     if let Some(size) = encoding.child("SizeInBits") {
         size.check(
             &Expect {
@@ -690,26 +843,33 @@ fn string_length(encoding: El<'_>, report: &mut Report) -> Option<(Value, Span)>
             },
             report,
         );
+        let fixed = size.child("Fixed");
         if let Some(leading) = size.child("LeadingSize") {
-            report.error(
-                Code::Unsupported,
-                leading.span(),
-                "strings with a leading size aren't supported yet",
-            );
-            return None;
+            if fixed.is_some() {
+                report.error(
+                    Code::Unsupported,
+                    leading.span(),
+                    "a leading size inside a fixed-size buffer isn't supported",
+                );
+                return None;
+            }
+            return leading_size(leading, order, report);
         }
         let terminator = size.child("TerminationChar");
-        return match (size.child("Fixed"), terminator) {
+        return match (fixed, terminator) {
             (Some(fixed), None) => {
                 let (bytes, span) = fixed_bytes(fixed, report)?;
-                Some((json!({ "kind": "fixed", "bytes": bytes }), span))
+                Some(Length::Written(
+                    json!({ "kind": "fixed", "bytes": bytes }),
+                    span,
+                ))
             }
             (None, Some(terminator)) => terminated(terminator, report),
             // A fixed-size buffer whose value ends at the terminator.
             (Some(fixed), Some(terminator)) => {
                 let (bytes, span) = fixed_bytes(fixed, report)?;
                 let (byte, _) = terminator_byte(terminator, report)?;
-                Some((
+                Some(Length::Written(
                     json!({ "kind": "fixed", "bytes": bytes, "terminator": byte }),
                     span,
                 ))
@@ -739,13 +899,41 @@ fn string_length(encoding: El<'_>, report: &mut Report) -> Option<(Value, Span)>
             },
             report,
         );
-        return match variable.child("TerminationChar") {
-            Some(terminator) => terminated(terminator, report),
-            None => {
+        if let Some(lookup) = variable.child("DiscreteLookupList") {
+            report.error(
+                Code::Unsupported,
+                lookup.span(),
+                "a size chosen from a lookup list isn't supported",
+            );
+            return None;
+        }
+        let buffer = match variable.child("DynamicValue") {
+            Some(value) => dynamic(value, space, report)?,
+            None => None,
+        };
+        // XTCE: with a LeadingSize, a TerminationChar has no meaning.
+        let leading = variable.child("LeadingSize");
+        let terminator = variable
+            .child("TerminationChar")
+            .filter(|_| leading.is_none());
+        return match (buffer, leading, terminator) {
+            (None, Some(leading), _) => leading_size(leading, order, report),
+            (None, None, Some(terminator)) => terminated(terminator, report),
+            (Some(buffer), None, None) => Some(Length::Counted(buffer)),
+            (Some(buffer), ..) => {
                 report.error(
                     Code::Unsupported,
+                    buffer.span,
+                    "a string ended by a terminator or a leading size inside a buffer whose size \
+                     another parameter gives isn't supported",
+                );
+                None
+            }
+            (None, None, None) => {
+                report.error(
+                    Code::Invalid,
                     variable.span(),
-                    "variable strings are supported only up to a TerminationChar yet",
+                    "a variable string has a DynamicValue, a LeadingSize or a TerminationChar",
                 );
                 None
             }
@@ -777,9 +965,271 @@ fn fixed_bytes(fixed: El<'_>, report: &mut Report) -> Option<(u32, Span)> {
     Some((whole_bytes(value, report)?, value.span()))
 }
 
-fn terminated(terminator: El<'_>, report: &mut Report) -> Option<(Value, Span)> {
+fn terminated<'d>(terminator: El<'_>, report: &mut Report) -> Option<Length<'d>> {
     let (byte, span) = terminator_byte(terminator, report)?;
-    Some((json!({ "kind": "terminator", "byte": byte }), span))
+    Some(Length::Written(
+        json!({ "kind": "terminator", "byte": byte }),
+        span,
+    ))
+}
+
+/// A LeadingSize: a size tag of this many bits before the string.
+fn leading_size<'d>(
+    leading: El<'_>,
+    order: Option<(Order, Span)>,
+    report: &mut Report,
+) -> Option<Length<'d>> {
+    leading.check(
+        &Expect {
+            attrs: &["sizeInBitsOfSizeTag"],
+            children: &[],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let (bits, span) = match leading.attr("sizeInBitsOfSizeTag") {
+        Some(attr) => (xml::long(attr, report)?, attr.span),
+        None => (16, leading.span()),
+    };
+    match u32::try_from(bits) {
+        Ok(bits) if (1..=64).contains(&bits) => Some(Length::Leading { bits, order, span }),
+        _ => {
+            report.error(
+                Code::Unsupported,
+                span,
+                format!("a {bits}-bit size tag isn't supported: MDL reads 1 to 64 bits"),
+            );
+            None
+        }
+    }
+}
+
+/// A DynamicValue, or `None` for Yamcs's `_yamcs_ignore`, which says the
+/// size comes from elsewhere (a terminator, a leading size).
+pub(crate) fn dynamic<'d>(
+    el: El<'d>,
+    space: usize,
+    report: &mut Report,
+) -> Option<Option<Dynamic<'d>>> {
+    el.check(
+        &Expect {
+            attrs: &[],
+            children: &["ParameterInstanceRef", "LinearAdjustment"],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let Some(instance) = el.child("ParameterInstanceRef") else {
+        report.error(
+            Code::Unsupported,
+            el.span(),
+            "a DynamicValue reads a parameter (an argument is for commands)",
+        );
+        return None;
+    };
+    instance.check(
+        &Expect {
+            attrs: &["parameterRef", "instance", "useCalibratedValue"],
+            children: &[],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let reference = instance.required("parameterRef", report)?;
+    if reference.value == "_yamcs_ignore" {
+        return Some(None);
+    }
+    if let Some(attr) = instance.attr("instance")
+        && xml::long(attr, report)? != 0
+    {
+        report.error(
+            Code::Unsupported,
+            attr.span,
+            "a size from an earlier instance of a parameter isn't supported",
+        );
+        return None;
+    }
+    let calibrated = match instance.attr("useCalibratedValue") {
+        Some(attr) => xml::boolean(attr, report)?,
+        None => true,
+    };
+    let (slope, intercept) = match el.child("LinearAdjustment") {
+        Some(adjustment) => {
+            adjustment.check(
+                &Expect {
+                    attrs: &["slope", "intercept"],
+                    children: &[],
+                    ignored: &[],
+                    text: false,
+                },
+                report,
+            );
+            let slope = match adjustment.attr("slope") {
+                Some(attr) => whole(attr, report)?,
+                None => 1,
+            };
+            let intercept = match adjustment.attr("intercept") {
+                Some(attr) => whole(attr, report)?,
+                None => 0,
+            };
+            (slope, intercept)
+        }
+        None => (1, 0),
+    };
+    Some(Some(Dynamic {
+        space,
+        reference: reference.value,
+        span: reference.span,
+        calibrated,
+        slope,
+        intercept,
+    }))
+}
+
+/// A double that is a whole number, as MDL's counts and lengths are.
+fn whole(attr: Attr<'_>, report: &mut Report) -> Option<i64> {
+    let value = xml::double(attr, report)?;
+    // Within ±2^53, where every whole double is exact.
+    if value.fract() == 0.0 && value.abs() <= 9_007_199_254_740_991.0 {
+        return Some(value as i64);
+    }
+    report.error(
+        Code::Unsupported,
+        attr.span,
+        format!(
+            "{} {value} isn't a whole number, and MDL counts in whole numbers",
+            attr.name
+        ),
+    );
+    None
+}
+
+/// An array's one dimension, as a count of elements.
+pub(crate) fn dimensions<'d>(list: El<'d>, space: usize, report: &mut Report) -> Option<Count<'d>> {
+    list.check(
+        &Expect {
+            attrs: &[],
+            children: &["Dimension"],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let all: Vec<El<'d>> = list.all("Dimension").collect();
+    let [dimension] = all.as_slice() else {
+        report.error(
+            Code::Unsupported,
+            list.span(),
+            format!(
+                "an array of {} dimensions isn't supported yet: MDL arrays have one",
+                all.len()
+            ),
+        );
+        return None;
+    };
+    dimension.check(
+        &Expect {
+            attrs: &[],
+            children: &["StartingIndex", "EndingIndex"],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let (Some(starting), Some(ending)) = (
+        dimension.child("StartingIndex"),
+        dimension.child("EndingIndex"),
+    ) else {
+        report.error(
+            Code::Invalid,
+            dimension.span(),
+            "a Dimension has a StartingIndex and an EndingIndex",
+        );
+        return None;
+    };
+    let start = match integer_value(starting, space, report)? {
+        IntegerValue::Fixed(start, _) => start,
+        IntegerValue::Dynamic(dynamic) => {
+            report.error(
+                Code::Unsupported,
+                dynamic.span,
+                "a starting index another parameter gives isn't supported",
+            );
+            return None;
+        }
+    };
+    match integer_value(ending, space, report)? {
+        IntegerValue::Fixed(end, span) => {
+            match end
+                .checked_sub(start)
+                .and_then(|n| n.checked_add(1))
+                .map(u32::try_from)
+            {
+                Some(Ok(count)) => Some(Count::Fixed(count, span)),
+                _ => {
+                    report.error(
+                        Code::Invalid,
+                        span,
+                        format!("indexes {start} to {end} aren't a count of elements"),
+                    );
+                    None
+                }
+            }
+        }
+        IntegerValue::Dynamic(dynamic) => Some(Count::Counted { dynamic, start }),
+    }
+}
+
+/// An IntegerValueType: a fixed value, or a parameter's.
+pub(crate) enum IntegerValue<'d> {
+    Fixed(i64, Span),
+    Dynamic(Dynamic<'d>),
+}
+
+/// An IntegerValueType whose dynamic references are made from `space`.
+pub(crate) fn integer_value<'d>(
+    el: El<'d>,
+    space: usize,
+    report: &mut Report,
+) -> Option<IntegerValue<'d>> {
+    el.check(
+        &Expect {
+            attrs: &[],
+            children: &["FixedValue", "DynamicValue", "DiscreteLookupList"],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    if let Some(value) = el.child("FixedValue") {
+        let (text, span) = value.text();
+        return Some(IntegerValue::Fixed(
+            xml::long_text(&text, "FixedValue", span, report)?,
+            span,
+        ));
+    }
+    if let Some(value) = el.child("DynamicValue") {
+        return match dynamic(value, space, report)? {
+            Some(dynamic) => Some(IntegerValue::Dynamic(dynamic)),
+            None => {
+                report.error(
+                    Code::Unsupported,
+                    value.span(),
+                    "_yamcs_ignore gives no value here",
+                );
+                None
+            }
+        };
+    }
+    report.error(
+        Code::Unsupported,
+        el.span(),
+        format!("{} chosen from a lookup list isn't supported", el.name()),
+    );
+    None
 }
 
 /// A TerminationChar: one byte, in hexadecimal.
@@ -798,7 +1248,7 @@ fn terminator_byte(terminator: El<'_>, report: &mut Report) -> Option<(u8, Span)
     }
 }
 
-fn binary<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
+fn binary<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d>> {
     el.check(
         &Expect {
             attrs: &["name", "baseType"],
@@ -856,30 +1306,31 @@ fn binary<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         );
         return None;
     };
-    size.check(
-        &Expect {
-            attrs: &[],
-            children: &["FixedValue", "DynamicValue", "DiscreteLookupList"],
-            ignored: &[],
-            text: false,
+    let length = match size.child("FixedValue") {
+        Some(value) => {
+            size.check(
+                &Expect {
+                    attrs: &[],
+                    children: &["FixedValue"],
+                    ignored: &[],
+                    text: false,
+                },
+                report,
+            );
+            let bytes = whole_bytes(value, report)?;
+            Length::Written(json!({ "kind": "fixed", "bytes": bytes }), value.span())
+        }
+        None => match integer_value(size, space, report)? {
+            IntegerValue::Dynamic(dynamic) => Length::Counted(dynamic),
+            IntegerValue::Fixed(..) => return None,
         },
-        report,
-    );
-    let Some(value) = size.child("FixedValue") else {
-        report.error(
-            Code::Unsupported,
-            size.span(),
-            "binary values of a dynamic size aren't supported yet",
-        );
-        return None;
     };
-    let bytes = whole_bytes(value, report)?;
     Some(Scalar {
         el,
         ty: ("bytes", encoding.span()),
         size_bits: None,
         order: None,
-        length: Some((json!({ "kind": "fixed", "bytes": bytes }), value.span())),
+        length: Some(length),
         text: None,
         conversion: None,
         unit: None,
