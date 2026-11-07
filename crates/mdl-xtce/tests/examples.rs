@@ -180,3 +180,124 @@ effective_from = "2026-01-01T00:00:00Z"
     assert_eq!(number(&decoded, "demosat.adcs.rate.y"), -0.25);
     assert_eq!(number(&decoded, "demosat.adcs.rate.z"), 1.0);
 }
+
+/// Every good sample of `param`, by index.
+fn samples(decoded: &Decoded<'_>, param: &str) -> Vec<(Option<u64>, SampleValue)> {
+    decoded
+        .samples
+        .iter()
+        .filter(|s| s.param == param)
+        .map(|s| {
+            assert_eq!(s.quality, Quality::Good, "{param}");
+            (s.index, s.value.clone())
+        })
+        .collect()
+}
+
+#[test]
+fn imager_decodes_sizes_the_data_gives() {
+    let (artifacts, warnings) = example("imager.xml");
+    assert_eq!(
+        warnings,
+        [
+            "48:21 Variable's maxSizeInBits isn't imported: MDL doesn't bound a variable string's size"
+        ]
+    );
+    let registry = Bindings::from_toml(
+        r#"
+mdl_version = "2.0"
+
+[[binding]]
+family = "imager"
+native_id = "Imager"
+asset = "CAM-1"
+set = "imager"
+effective_from = "2026-01-01T00:00:00Z"
+"#,
+    )
+    .unwrap();
+    let ground: Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
+    let imager = family_sets(&artifacts, "imager");
+    let decode = |bytes: &[u8]| {
+        imager
+            .decode(&Message::new(Payload::Binary(bytes), ground), &registry)
+            .unwrap()
+    };
+
+    // A frame without the secondary header: three pixels, then "STAR" in a
+    // Pascal string.
+    let mut frame = vec![1, 0, 3];
+    for raw in [10_u16, 20, 4000] {
+        frame.extend_from_slice(&raw.to_be_bytes());
+    }
+    frame.push(4);
+    frame.extend_from_slice(b"STAR");
+    let decoded = decode(&frame);
+    assert_eq!(decoded.packet.name, "Frame");
+    assert_eq!(
+        samples(&decoded, "imager.pixel"),
+        [
+            (Some(0), SampleValue::F64(5.0)),
+            (Some(1), SampleValue::F64(10.0)),
+            (Some(2), SampleValue::F64(2000.0))
+        ]
+    );
+    assert_eq!(
+        value(&decoded, "imager.name"),
+        SampleValue::Str("STAR".into())
+    );
+    assert!(samples(&decoded, "imager.time").is_empty());
+
+    // The same with the secondary header: the time, then one pixel.
+    let mut timed = vec![1, 1];
+    timed.extend_from_slice(&1_000_u32.to_be_bytes());
+    timed.extend_from_slice(&[1, 0, 2, 0]);
+    let decoded = decode(&timed);
+    assert_eq!(value(&decoded, "imager.time"), SampleValue::U64(1_000));
+    assert_eq!(
+        samples(&decoded, "imager.pixel"),
+        [(Some(0), SampleValue::F64(1.0))]
+    );
+    assert_eq!(
+        value(&decoded, "imager.name"),
+        SampleValue::Str(String::new())
+    );
+
+    // Two targets, then three temperatures, each followed by a spare byte.
+    let mut report = vec![2, 0, 2];
+    report.push(7);
+    report.extend_from_slice(&1_500_u16.to_be_bytes());
+    report.push(9);
+    report.extend_from_slice(&250_u16.to_be_bytes());
+    for temperature in [-5_i8, 0, 21] {
+        report.push(temperature as u8);
+        report.push(0xEE);
+    }
+    report.push(3);
+    let decoded = decode(&report);
+    assert_eq!(decoded.packet.name, "TargetReport");
+    assert_eq!(
+        samples(&decoded, "imager.targets.id"),
+        [
+            (Some(0), SampleValue::U64(7)),
+            (Some(1), SampleValue::U64(9))
+        ]
+    );
+    assert_eq!(
+        samples(&decoded, "imager.targets.range"),
+        [
+            (Some(0), SampleValue::F64(1500.0)),
+            (Some(1), SampleValue::F64(250.0))
+        ]
+    );
+    assert_eq!(
+        samples(&decoded, "imager.detector"),
+        [
+            (Some(0), SampleValue::F64(-5.0)),
+            (Some(1), SampleValue::F64(0.0)),
+            (Some(2), SampleValue::F64(21.0))
+        ]
+    );
+    // The mode follows the last spare byte.
+    assert_eq!(value(&decoded, "imager.mode"), SampleValue::U64(3));
+}

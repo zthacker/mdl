@@ -75,7 +75,9 @@ An import produces one family and one set:
   as it is. Its alias is the option, or a fixed value: the first root
   SpaceSystem's name.
 - **Set.** Its name is the option, or the family's. It has one packet for
-  each concrete sequence container, in document order (§5).
+  each concrete sequence container, in document order, and a struct type
+  for each embedded container and each array element that isn't a scalar
+  (§5).
 - **Catalog.** Each parameter a packet holds is a param; an aggregate
   parameter is one param per member. A param's name is the parameter's
   alias in the `MDL` namespace (`<Alias nameSpace="MDL"
@@ -96,10 +98,15 @@ An import produces one family and one set:
   (`/Sat/EPS/Status` and `/Sat/ADCS/Status` are fields `EPS_Status` and
   `ADCS_Status`), whether or not they share a packet, so a field has one
   name in every packet; containers that share a name are qualified the
-  same way (`EPS_HK`, `ADCS_HK`). Each change is reported
-  [`xtce.renamed`]. Two fields of one packet, or two packets, that still
-  share a name are an error at the later, with the earlier as its first
-  location [`xtce.name`].
+  same way (`EPS_HK`, `ADCS_HK`), and so are embedded containers' struct
+  types. Each change is reported [`xtce.renamed`]. With the importer's
+  qualified naming, every field, packet and struct type name carries its
+  SpaceSystems below the root (`EPS_HK` even when it's the only `HK`, and
+  the root too where two roots would give one name), so names don't
+  change as documents grow; those changes aren't reported. Two entries
+  of one packet or struct type, two packets, or two struct types that
+  still share a name are an error at the later, with the earlier as its
+  first location [`xtce.name`].
 
 ## 4. Parameter types
 
@@ -110,8 +117,9 @@ An import produces one family and one set:
 | `EnumeratedParameterType` | an integer encoding with a `states` conversion from its `EnumerationList` | `enum`, its labels in order, each once |
 | `BooleanParameterType` | `bool` for one bit, else `uint` | `bool`: nonzero is true |
 | `StringParameterType` | `string`, `utf8` (the default), `ascii` (`US-ASCII`) or `latin1` (`ISO-8859-1`); a `Fixed` size in whole bytes, up to a one-byte `TerminationChar`, or both: a fixed-size buffer whose value ends at the terminator | `str` |
-| `BinaryParameterType` | `bytes`, a fixed size in whole bytes | `bytes` |
+| `BinaryParameterType` | `bytes`, a fixed size in whole bytes, or a size another parameter gives | `bytes` |
 | `AggregateParameterType` | one field per member, depth first | one per member |
+| `ArrayParameterType` | an array of one dimension: scalar elements, or a struct type of an aggregate's members | the elements' param, or one per member, each element a sample with its index |
 
 The unit, for integer and float types, is the type's one `Unit` without a
 `power`, a `factor` or a `form` other than `calibrated`. Text that is a
@@ -159,27 +167,87 @@ Encodings:
   name different orders, a calibrator on an integer, enumerated or boolean
   type (MDL's calibrations give floats), sign-magnitude, ones' complement
   and BCD integers, floats other than IEEE 754 binary32 and binary64, text
-  other than the three encodings above, leading sizes,
-  dynamic sizes, binary transform algorithms, enumerations over a range of
-  values (`maxValue`), type inheritance (`baseType`), absolute time
-  parameters (an MDL field holds a number, not an instant), and, in this
-  version, relative time and array types.
+  other than the three encodings above, binary transform algorithms,
+  enumerations over a range of values (`maxValue`), type inheritance
+  (`baseType`), absolute time parameters (an MDL field holds a number, not
+  an instant), and, in this version, relative time types.
+
+Sizes:
+
+- **From another parameter.** A `DynamicValue` gives a size in bits: the
+  parameter's value times `slope` (1 by default) plus `intercept` (0).
+  MDL lengths are bytes, so slope and intercept MUST be multiples of 8
+  (`slope="8"` for a parameter counting bytes); a parameter counting bits
+  is unsupported. The parameter MUST be an unsigned integer field decoded
+  earlier in the same MDL container (the packet, or the embedded
+  container), whose raw value is its value (no calibrator, or
+  `useCalibratedValue="false"`); it becomes MDL's `{kind: field}` length
+  or count. Yamcs's `_yamcs_ignore` reference means no size, so a
+  `Variable` string with it ends at its terminator or leading size.
+- **Strings.** A `Variable` string is a `DynamicValue` size, up to a
+  `TerminationChar`, or a `LeadingSize`; `maxSizeInBits` is left out
+  [`xtce.ignored`]. A `LeadingSize` (a Pascal string) is a size tag of
+  `sizeInBitsOfSizeTag` bits, in the encoding's byte order, then that many
+  bytes: the importer adds the tag as a field named for the string with
+  `_size` (a field already named that way is `xtce.name`). A string ended
+  by a terminator or a leading size inside a
+  buffer whose size another parameter gives, a leading size inside a
+  `Fixed` buffer, and a size chosen from a `DiscreteLookupList` are
+  unsupported.
+- **Arrays.** A `DimensionList` has one `Dimension`, whose fixed
+  `StartingIndex` and `EndingIndex` (fixed or from a parameter) give the
+  count: `end − start + 1`. Several dimensions, arrays of arrays, a
+  `StartingIndex` from a parameter, and elements whose size another value
+  gives are unsupported. An XTCE 1.1 array type has no `DimensionList`
+  and takes its size from its `ArrayParameterRefEntry`.
+
+Aggregates and arrays nest at most 32 deep, MDL's bound on struct
+nesting.
 
 ## 5. Containers
 
-Each sequence container that isn't `abstract` is a packet. Its entries
-are those of every container it inherits from (`BaseContainer`), root
-first, then its own. A container that inherits from itself is an error
-[`xtce.invalid`].
+Each sequence container that isn't `abstract`, and that no
+`ContainerRefEntry` embeds, is a packet; an embedded container is a
+structure, as the CCSDS green book's secondary header is, whether or not
+it's abstract. One that isn't abstract is reported, naming a container
+that embeds it [`xtce.ignored`]. A packet's entries are those of every container it
+inherits from (`BaseContainer`), root first, then its own. A container
+that inherits from itself is an error [`xtce.invalid`].
 
-- **Entries.** A `ParameterRefEntry` is a field, or one per member of an
-  aggregate. A parameter, or member, is in a packet at most once, since
-  MDL maps a param from one field per packet. `ContainerRefEntry`,
-  `ArrayParameterRefEntry` and `RepeatEntry` are unsupported in this
-  version; segment, stream and indirect entries, a container's own
-  `BinaryEncoding`, and a `TimeAssociation` on an entry or a parameter
-  (it times the value by another parameter, and an MDL sample takes its
-  packet's time) are unsupported.
+- **Entries.** A `ParameterRefEntry` is a field, one per member of an
+  aggregate, or an array. An `ArrayParameterRefEntry` is an array; its
+  `DimensionList` gives an XTCE 1.1 array its size, and MUST otherwise be
+  its type's (a subset of an array is unsupported, as is an array split
+  across entries). A parameter, or member, is mapped at most once in a
+  packet, counting the struct types of its struct entries, since MDL maps
+  a param from one entry per packet. Segment, stream and indirect
+  entries, a container's own `BinaryEncoding`, and a `TimeAssociation` on
+  an entry or a parameter (it times the value by another parameter, and
+  an MDL sample takes its packet's time) are unsupported.
+- **Embedded containers.** A `ContainerRefEntry` is a struct entry, named
+  for the container, of a struct type holding the container's entries.
+  Positions in it are from its own start, and its conditions, sizes and
+  counts compare only its own fields, as MDL's struct types do. An
+  embedded container that inherits from another, or has no entries, is
+  unsupported; one that contains itself is an error [`xtce.invalid`]; and
+  containers embed at most 32 deep.
+- **Repeated entries.** A `RepeatEntry` makes the entry an array of its
+  parameter's values, each a sample with its index, or of an embedded
+  container's struct type. Its `Count` is fixed or from a parameter (as
+  sizes are, but a count). An `Offset` is padding after each repetition,
+  the last one included, as Yamcs reads it (XTCE's wording puts it only
+  between repetitions), so an entry placed after the repeat is where
+  Yamcs reads it. The elements are then a struct type of the value (a
+  field named `value`, or the aggregate's members) and the padding. An
+  `Offset` on a repeated container, and a repeated array, are
+  unsupported.
+- **Element struct types.** An array's elements that aren't one scalar
+  are a struct type named for the field with `_element` (and
+  `_gap` and the padding's bits, for a repeat with an `Offset`:
+  `V_element_gap8`), whose fields are
+  named for the members below the element (`id`, `pos_x`); they map to
+  the parameter's catalog names, so each element's values are samples
+  with its index.
 - **Positions.** Entries follow one another from the start of the packet.
   `LocationInContainerInBits` with `containerStart` places an entry that
   many bits from the start of the packet, for an inherited container's

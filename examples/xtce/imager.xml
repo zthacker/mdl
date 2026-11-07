@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Imager: a payload whose packets have sizes the data gives. A small
+  header names the packet and says whether a secondary header follows;
+  a frame carries a row of pixels counted by the packet and a label in a
+  Pascal string; a target list carries records counted by the packet, and
+  three temperatures with a spare byte after each, then a mode.
+-->
+<SpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="U8" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="U16" signed="false">
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="Seconds" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="32"/>
+      </IntegerParameterType>
+      <FloatParameterType name="Intensity">
+        <IntegerDataEncoding sizeInBits="16">
+          <DefaultCalibrator>
+            <PolynomialCalibrator>
+              <Term coefficient="0" exponent="0"/>
+              <Term coefficient="0.5" exponent="1"/>
+            </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType>
+      <ArrayParameterType name="Row" arrayTypeRef="Intensity">
+        <DimensionList>
+          <Dimension>
+            <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+            <!-- The last index is the pixel count less one. -->
+            <EndingIndex>
+              <DynamicValue>
+                <ParameterInstanceRef parameterRef="Pixels"/>
+                <LinearAdjustment intercept="-1"/>
+              </DynamicValue>
+            </EndingIndex>
+          </Dimension>
+        </DimensionList>
+      </ArrayParameterType>
+      <StringParameterType name="Label">
+        <StringDataEncoding encoding="US-ASCII">
+          <Variable maxSizeInBits="2048">
+            <DynamicValue>
+              <ParameterInstanceRef parameterRef="_yamcs_ignore"/>
+            </DynamicValue>
+            <LeadingSize sizeInBitsOfSizeTag="8"/>
+          </Variable>
+        </StringDataEncoding>
+      </StringParameterType>
+      <FloatParameterType name="Meters">
+        <UnitSet><Unit>m</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="16"/>
+      </FloatParameterType>
+      <AggregateParameterType name="Target">
+        <MemberList>
+          <Member name="Id" typeRef="U8"/>
+          <Member name="Range" typeRef="Meters"/>
+        </MemberList>
+      </AggregateParameterType>
+      <ArrayParameterType name="TargetList" arrayTypeRef="Target">
+        <DimensionList>
+          <Dimension>
+            <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+            <EndingIndex>
+              <DynamicValue>
+                <ParameterInstanceRef parameterRef="Found"/>
+                <LinearAdjustment intercept="-1"/>
+              </DynamicValue>
+            </EndingIndex>
+          </Dimension>
+        </DimensionList>
+      </ArrayParameterType>
+      <FloatParameterType name="Temperature">
+        <UnitSet><Unit>degC</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="8" encoding="twosComplement"/>
+      </FloatParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Kind" parameterTypeRef="U8"/>
+      <Parameter name="HasTime" parameterTypeRef="U8"/>
+      <Parameter name="Time" parameterTypeRef="Seconds"/>
+      <Parameter name="Pixels" parameterTypeRef="U8"/>
+      <Parameter name="Pixel" parameterTypeRef="Row"/>
+      <Parameter name="Name" parameterTypeRef="Label"/>
+      <Parameter name="Found" parameterTypeRef="U8"/>
+      <Parameter name="Targets" parameterTypeRef="TargetList"/>
+      <Parameter name="Detector" parameterTypeRef="Temperature"/>
+      <Parameter name="Mode" parameterTypeRef="U8"/>
+    </ParameterSet>
+    <ContainerSet>
+      <!-- Embedded where the flag says so; not a packet of its own. -->
+      <SequenceContainer name="Timing" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Time"/>
+        </EntryList>
+      </SequenceContainer>
+      <SequenceContainer name="Header" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Kind"/>
+          <ParameterRefEntry parameterRef="HasTime"/>
+          <ContainerRefEntry containerRef="Timing">
+            <IncludeCondition>
+              <Comparison parameterRef="HasTime" value="1"/>
+            </IncludeCondition>
+          </ContainerRefEntry>
+        </EntryList>
+      </SequenceContainer>
+      <SequenceContainer name="Frame">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Pixels"/>
+          <ParameterRefEntry parameterRef="Pixel"/>
+          <ParameterRefEntry parameterRef="Name"/>
+        </EntryList>
+        <BaseContainer containerRef="Header">
+          <RestrictionCriteria>
+            <Comparison parameterRef="Kind" value="1"/>
+          </RestrictionCriteria>
+        </BaseContainer>
+      </SequenceContainer>
+      <SequenceContainer name="TargetReport">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Found"/>
+          <ParameterRefEntry parameterRef="Targets"/>
+          <!-- Three samples, each followed by a spare byte. -->
+          <ParameterRefEntry parameterRef="Detector">
+            <RepeatEntry>
+              <Count><FixedValue>3</FixedValue></Count>
+              <Offset><FixedValue>8</FixedValue></Offset>
+            </RepeatEntry>
+          </ParameterRefEntry>
+          <!-- After the third spare byte, as Yamcs reads an Offset. -->
+          <ParameterRefEntry parameterRef="Mode"/>
+        </EntryList>
+        <BaseContainer containerRef="Header">
+          <RestrictionCriteria>
+            <Comparison parameterRef="Kind" value="2"/>
+          </RestrictionCriteria>
+        </BaseContainer>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

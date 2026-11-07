@@ -40,9 +40,30 @@ pub(crate) fn identifier(name: &str) -> (String, bool) {
 /// MDL names for items that share a name in different SpaceSystems, as
 /// `(name, SpaceSystem names from the root down)`: each qualified by as
 /// many of its SpaceSystems' names, nearest first, as it takes to tell
-/// them apart (`EPS_HK`, `ADCS_HK`). One item keeps its own name.
-pub(crate) fn qualified(items: &[(&str, Vec<&str>)]) -> Vec<String> {
+/// them apart (`EPS_HK`, `ADCS_HK`). One item keeps its own name, unless
+/// `always`: then every name has its SpaceSystems below the root, and the
+/// root too where that leaves two alike.
+pub(crate) fn qualified(items: &[(&str, Vec<&str>)], always: bool) -> Vec<String> {
     let own = |name: &str| identifier(name).0;
+    let with = |skip: usize| -> Vec<String> {
+        items
+            .iter()
+            .map(|(name, path)| {
+                let mut parts = path.get(skip..).unwrap_or_default().to_vec();
+                parts.push(name);
+                own(&parts.join("_"))
+            })
+            .collect()
+    };
+    if always {
+        let below = with(1);
+        let distinct: BTreeSet<&String> = below.iter().collect();
+        return if distinct.len() == below.len() {
+            below
+        } else {
+            with(0)
+        };
+    }
     if items.len() < 2 {
         return items.iter().map(|(name, _)| own(name)).collect();
     }
@@ -101,23 +122,35 @@ mod tests {
 
     #[test]
     fn shared_names_take_as_much_of_their_paths_as_they_need() {
-        assert_eq!(qualified(&[("HK", vec!["Sat", "EPS"])]), ["HK"]);
+        let short = |items: &[(&str, Vec<&str>)]| qualified(items, false);
+        assert_eq!(short(&[("HK", vec!["Sat", "EPS"])]), ["HK"]);
         assert_eq!(
-            qualified(&[("HK", vec!["Sat", "EPS"]), ("HK", vec!["Sat", "ADCS"])]),
+            short(&[("HK", vec!["Sat", "EPS"]), ("HK", vec!["Sat", "ADCS"])]),
             ["EPS_HK", "ADCS_HK"]
         );
         assert_eq!(
-            qualified(&[("HK", vec!["Sat"]), ("HK", vec!["Sat", "EPS"])]),
+            short(&[("HK", vec!["Sat"]), ("HK", vec!["Sat", "EPS"])]),
             ["Sat_HK", "EPS_HK"]
         );
         assert_eq!(
-            qualified(&[("T", vec!["Sat", "A", "X"]), ("T", vec!["Sat", "B", "X"])]),
+            short(&[("T", vec!["Sat", "A", "X"]), ("T", vec!["Sat", "B", "X"])]),
             ["A_X_T", "B_X_T"]
         );
         // Names that only become one as identifiers are shared too.
         assert_eq!(
-            qualified(&[("Bus-V", vec!["Sat", "A"]), ("Bus_V", vec!["Sat", "B"])]),
+            short(&[("Bus-V", vec!["Sat", "A"]), ("Bus_V", vec!["Sat", "B"])]),
             ["A_Bus_V", "B_Bus_V"]
+        );
+    }
+
+    #[test]
+    fn always_qualified_names_carry_their_path_below_the_root() {
+        assert_eq!(qualified(&[("HK", vec!["Sat", "EPS"])], true), ["EPS_HK"]);
+        assert_eq!(qualified(&[("HK", vec!["Sat"])], true), ["HK"]);
+        // Two roots with an HK each: the roots tell them apart.
+        assert_eq!(
+            qualified(&[("HK", vec!["A"]), ("HK", vec!["B"])], true),
+            ["A_HK", "B_HK"]
         );
     }
 
