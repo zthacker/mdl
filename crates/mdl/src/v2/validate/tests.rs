@@ -2999,3 +2999,72 @@ fn checksums_sit_at_a_binary_packets_top_level() {
         vec![]
     );
 }
+
+#[test]
+fn a_duplicate_points_at_its_first_definition() {
+    let firsts = |edit: &dyn Fn(&mut Value)| -> Vec<(String, Option<String>)> {
+        let mut value = fixture();
+        edit(&mut value);
+        validate(bundle(value))
+            .unwrap_err()
+            .iter()
+            .filter(|d| matches!(d.code, Code::DuplicateName | Code::DuplicateMapping))
+            .map(|d| (d.path.clone(), d.first.clone()))
+            .collect()
+    };
+    let pair = |path: &str, first: &str| vec![(path.to_string(), Some(first.to_string()))];
+
+    let family = fixture()["families"][1].clone();
+    assert_eq!(
+        firsts(&|v| v["families"].as_array_mut().unwrap().push(family.clone())),
+        pair("/families/3", "/families/1")
+    );
+    let set = fixture()["sets"][0].clone();
+    let mut renamed = set.clone();
+    renamed["version"] = json!(3);
+    assert_eq!(
+        firsts(&|v| v["sets"].as_array_mut().unwrap().push(renamed.clone())),
+        pair("/sets/5", "/sets/0")
+    );
+    let packet = hk(&mut fixture()).clone();
+    let mut same_name = packet.clone();
+    same_name["identify"] = json!({ "apid": 999 });
+    assert_eq!(
+        firsts(&|v| set_x(v)["packets"]
+            .as_array_mut()
+            .unwrap()
+            .push(same_name.clone())),
+        pair("/sets/0/packets/1", "/sets/0/packets/0")
+    );
+    assert_eq!(
+        firsts(&|v| {
+            let entries = hk(v)["entries"].as_array_mut().unwrap();
+            entries
+                .push(json!({ "kind": "field", "name": "flags", "type": "uint", "size_bits": 8 }));
+        }),
+        pair(
+            "/sets/0/packets/0/entries/10",
+            "/sets/0/packets/0/entries/3"
+        )
+    );
+    let command = fixture()["sets"][0]["commands"][1].clone();
+    let found = firsts(&|v| {
+        set_x(v)["commands"]
+            .as_array_mut()
+            .unwrap()
+            .push(command.clone())
+    });
+    assert_eq!(
+        found,
+        vec![
+            (
+                "/sets/0/commands/2".to_string(),
+                Some("/sets/0/commands/1".to_string())
+            ),
+            (
+                "/sets/0/commands/2/canonical".to_string(),
+                Some("/sets/0/commands/1".to_string())
+            ),
+        ]
+    );
+}

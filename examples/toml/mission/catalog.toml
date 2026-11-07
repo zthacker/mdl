@@ -1,0 +1,32 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible with its param's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+limits      = { red_low = -10.0, yellow_low = 0.0, yellow_high = 35.0, red_high = 45.0 }
+description = "Battery temperature"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states      = ["SAFE", "NOMINAL", "PAYLOAD"]
+description = "Power mode, as the asset reports it"
+
+[catalog.params."eps.batt_remaining"]
+type        = "f64"
+unit        = "%"
+limits      = { red_low = 15.0, yellow_low = 30.0 }
+description = "Battery charge remaining"
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power mode"
+arguments   = [{ name = "mode", type = "enum", states = ["SAFE", "NOMINAL", "PAYLOAD"] }]

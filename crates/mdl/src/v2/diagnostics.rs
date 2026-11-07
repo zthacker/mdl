@@ -241,15 +241,21 @@ pub struct Diagnostic {
     /// Where, for people: "set vendor_x_v2, packet HK, entry mode".
     pub context: String,
     pub message: String,
+    /// For something defined twice, where the first one is, as a JSON
+    /// Pointer; the diagnostic's own path is the second.
+    pub first: Option<String>,
 }
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if self.context.is_empty() {
-            write!(f, "{} [{}]", self.message, self.code)
-        } else {
-            write!(f, "{}: {} [{}]", self.context, self.message, self.code)
+        if !self.context.is_empty() {
+            write!(f, "{}: ", self.context)?;
         }
+        write!(f, "{}", self.message)?;
+        if let Some(first) = &self.first {
+            write!(f, "; the first is at {first}")?;
+        }
+        write!(f, " [{}]", self.code)
     }
 }
 
@@ -334,7 +340,7 @@ fn pointer(segments: &[Segment]) -> String {
 }
 
 /// RFC 6901: `~` is written `~0` and `/` is written `~1` inside a token.
-pub(crate) fn escape_pointer_token(token: &str) -> String {
+pub fn escape_pointer_token(token: &str) -> String {
     token.replace('~', "~0").replace('/', "~1")
 }
 
@@ -417,8 +423,23 @@ impl Report {
             path: pointer(&place.segments),
             context: place.context.clone(),
             message: message.into(),
+            first: None,
         };
         self.diagnostics.push((place.segments.clone(), diagnostic));
+    }
+
+    /// Something at `place` that was already defined at `first`.
+    pub(crate) fn duplicate(
+        &mut self,
+        code: Code,
+        place: &Place,
+        first: &Place,
+        message: impl Into<String>,
+    ) {
+        self.error(code, place, message);
+        if let Some((_, diagnostic)) = self.diagnostics.last_mut() {
+            diagnostic.first = Some(pointer(&first.segments));
+        }
     }
 
     /// Whether anything at or under `place` was reported, so a later check

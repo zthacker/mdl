@@ -227,6 +227,14 @@ pub fn read_bundle(bytes: &[u8]) -> Result<Loaded<Bundle>, ReadError> {
 /// and paths. Frontends go through this rather than building IR values
 /// themselves, so each one reads exactly as the JSON contract says.
 pub fn read_bundle_value(value: &Value) -> Result<Loaded<Bundle>, ReadError> {
+    // A value built in memory can be nested without the bound the parser
+    // puts on text, and every later step recurses.
+    if let Some(path) = deeper_than(value, MAX_DEPTH, &mut String::new()) {
+        return Err(ReadError::Shape {
+            path,
+            message: format!("nested deeper than {MAX_DEPTH} levels, as no IR document is"),
+        });
+    }
     canonical::check_numbers(value)?;
     let (value, canonical) = canonical_value(value)?;
     let bundle = typed(&value)?;
@@ -266,6 +274,43 @@ struct SetDoc {
     catalog: Digest,
     family: Digest,
     set: Set,
+}
+
+/// The deepest nesting a document may have, its root included: serde_json's
+/// limit for text.
+const MAX_DEPTH: usize = 127;
+
+/// The path of the first value more than `limit` levels down, if any.
+/// Recurses at most `limit + 1` deep, so it's safe on any value.
+fn deeper_than(value: &Value, limit: usize, path: &mut String) -> Option<String> {
+    let children: Box<dyn Iterator<Item = (String, &Value)>> = match value {
+        Value::Array(items) => Box::new(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (index.to_string(), item)),
+        ),
+        Value::Object(members) => Box::new(
+            members
+                .iter()
+                .map(|(key, item)| (escape_pointer_token(key), item)),
+        ),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return None,
+    };
+    if limit == 0 {
+        return Some(path.clone());
+    }
+    for (token, child) in children {
+        let parent = path.len();
+        path.push('/');
+        path.push_str(&token);
+        let found = deeper_than(child, limit - 1, path);
+        path.truncate(parent);
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
 }
 
 /// Steps 1 to 3: strict parse, canonical form, the canonical text read back
@@ -559,6 +604,37 @@ mod tests {
             "integer 9007199254740993 at /sets/0/version changes in canonical JSON (as a \
              double it's written 9007199254740992); write it as a string"
         );
+    }
+
+    #[test]
+    fn a_value_nested_too_deep_is_refused_without_recursing_through_it() {
+        let mut deep = Value::from(1);
+        for _ in 0..100_000 {
+            deep = Value::Array(vec![deep]);
+        }
+        let mut value: Value = serde_json::from_str(FULL_BUNDLE).unwrap();
+        value["catalog"]["x"] = deep;
+        let result = read_bundle_value(&value);
+        // serde_json drops a Value recursively, so take this one apart
+        // before anything can panic and drop it.
+        let mut rest = value["catalog"]["x"].take();
+        while let Value::Array(mut items) = rest {
+            rest = items.pop().unwrap_or(Value::Null);
+        }
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), "wrong_shape");
+        assert!(err.path().starts_with("/catalog/x/0/0/"));
+        // The root is the first level.
+        assert_eq!(err.path().matches('/').count(), MAX_DEPTH);
+
+        // As deep as text may be: on to typed reading, which refuses `x`.
+        let mut deep = Value::from(1);
+        for _ in 0..MAX_DEPTH - 2 {
+            deep = Value::Array(vec![deep]);
+        }
+        let mut value: Value = serde_json::from_str(FULL_BUNDLE).unwrap();
+        value["catalog"]["x"] = deep;
+        assert_eq!(read_bundle_value(&value).unwrap_err().path(), "/catalog/x");
     }
 
     #[test]

@@ -1,0 +1,665 @@
+# crates/mdl/tests/fixtures/v2/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands."eps.set_mode".arguments]]
+name = "mode"
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[[catalog.commands."eps.set_mode".arguments]]
+default = 0
+name = "delay_s"
+type = "f64"
+unit = "s"
+
+[catalog.commands."eps.set_mode".arguments.range]
+max = 3600
+min = 0
+
+[catalog.params."eps.bus_current"]
+description = "Bus current, sampled at 10 Hz"
+type = "f64"
+unit = "A"
+
+[catalog.params."eps.bus_voltage"]
+description = "Main bus voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.bus_voltage".limits]
+red_high = 8.5
+red_low = 6.2
+
+[catalog.params."eps.mode"]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[catalog.params."eps.old_voltage"]
+deprecated = "use eps.bus_voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."nav.pos_ecef"]
+frame = "ECEF"
+type = "vec3"
+unit = "m"
+
+[[families]]
+byte_order = "big"
+encoding = "binary"
+metadata = [
+    "apid",
+    "fmt",
+]
+name = "vendor_x"
+
+[families.alias]
+kind = "bits"
+offset_bits = 48
+size_bits = 16
+
+[families.version]
+kind = "metadata"
+name = "fmt"
+
+[[families]]
+encoding = "json"
+name = "vendor_j"
+
+[families.alias]
+kind = "path"
+pointer = "/sat"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+name = "legacy"
+
+[families.alias]
+kind = "fixed"
+value = "box-1"
+
+[[sets]]
+family = "vendor_x"
+name = "vendor_x_v2"
+version = 2
+
+[[sets.commands]]
+canonical = "eps.load_table"
+name = "LOAD_TABLE"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "opcode"
+size_bits = 8
+type = "uint"
+value = 3
+
+[[sets.commands.entries]]
+argument = "slot"
+kind = "field"
+name = "slot"
+size_bits = 8
+type = "uint"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "len"
+size_bits = 16
+type = "uint"
+
+[[sets.commands.entries]]
+argument = "table"
+kind = "field"
+name = "table"
+type = "bytes"
+
+[sets.commands.entries.length]
+field = "len"
+kind = "field"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "crc"
+
+[sets.commands.entries.algorithm]
+init = 65535
+kind = "crc"
+poly = 4129
+reflect_in = false
+reflect_out = false
+width = 16
+xor_out = 0
+
+[sets.commands.metadata]
+apid = 300
+
+[[sets.commands]]
+canonical = "eps.set_mode"
+name = "SET_MODE"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "opcode"
+size_bits = 8
+type = "uint"
+value = 26
+
+[[sets.commands.entries]]
+argument = "mode"
+kind = "field"
+name = "mode"
+size_bits = 8
+type = "uint"
+
+[sets.commands.entries.conversion]
+kind = "states"
+
+[[sets.commands.entries.conversion.states]]
+name = "SAFE"
+raw = 0
+
+[[sets.commands.entries.conversion.states]]
+name = "NOMINAL"
+raw = 1
+
+[[sets.commands.entries]]
+argument = "delay_s"
+kind = "field"
+name = "delay"
+size_bits = 16
+type = "uint"
+unit = "s"
+
+[sets.commands.entries.conversion]
+coefficients = [
+    0,
+    0.1,
+]
+kind = "poly"
+
+[sets.commands.entries.inverse]
+coefficients = [
+    0,
+    10,
+]
+kind = "poly"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "check"
+
+[sets.commands.entries.algorithm]
+kind = "iso8473"
+
+[sets.commands.metadata]
+apid = 300
+
+[[sets.packets]]
+name = "HK"
+
+[[sets.packets.composites]]
+canonical = "nav.pos_ecef"
+frame = "ECI_J2000"
+members = [
+    "pos.x",
+    "pos.y",
+    "pos.z",
+]
+
+[[sets.packets.entries]]
+canonical = "eps.bus_voltage"
+invalid = [65535]
+kind = "field"
+name = "bus_counts"
+offset_bits = 64
+size_bits = 16
+type = "uint"
+unit = "V"
+
+[sets.packets.entries.conversion]
+kind = "linear"
+offset = 0.0
+scale = 0.01
+
+[[sets.packets.entries]]
+kind = "padding"
+size_bits = 6
+
+[[sets.packets.entries]]
+canonical = "eps.mode"
+kind = "field"
+name = "mode"
+size_bits = 2
+type = "uint"
+
+[sets.packets.entries.conversion]
+kind = "states"
+
+[[sets.packets.entries.conversion.states]]
+name = "SAFE"
+raw = 0
+
+[[sets.packets.entries.conversion.states]]
+name = "NOMINAL"
+raw = 1
+
+[[sets.packets.entries]]
+kind = "field"
+name = "flags"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "n"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+canonical = "eps.bus_current"
+kind = "array"
+name = "samples"
+sample_interval_ms = 100.0
+
+[sets.packets.entries.count]
+field = "n"
+kind = "field"
+
+[sets.packets.entries.element]
+kind = "scalar"
+size_bits = 16
+type = "int"
+unit = "A"
+
+[sets.packets.entries.element.conversion]
+coefficients = [
+    0.0,
+    0.001,
+]
+kind = "poly"
+
+[[sets.packets.entries]]
+kind = "struct"
+name = "pos"
+struct = "vec3_i32"
+
+[sets.packets.entries.when]
+field = "flags"
+kind = "compare"
+op = "mask_any"
+value = 1
+
+[[sets.packets.entries]]
+kind = "field"
+name = "label_len"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "label"
+text = "ascii"
+type = "string"
+
+[sets.packets.entries.length]
+field = "label_len"
+kind = "field"
+
+[sets.packets.entries.when]
+kind = "all"
+
+[[sets.packets.entries.when.conditions]]
+field = "flags"
+kind = "in"
+values = [
+    2,
+    3,
+]
+
+[[sets.packets.entries.when.conditions]]
+kind = "not"
+
+[sets.packets.entries.when.conditions.condition]
+field = "n"
+kind = "compare"
+op = "eq"
+value = 0
+
+[[sets.packets.entries]]
+kind = "array"
+name = "blobs"
+
+[sets.packets.entries.count]
+kind = "remaining"
+
+[sets.packets.entries.element]
+kind = "scalar"
+type = "bytes"
+
+[sets.packets.entries.element.length]
+byte = 0
+kind = "terminator"
+
+[sets.packets.identify]
+apid = 100
+
+[sets.packets.length]
+bytes = 12
+kind = "at_least"
+
+[sets.time]
+coarse_bytes = 4
+epoch = "2000-01-01T00:00:00Z"
+fine_bytes = 2
+kind = "cuc"
+offset_bits = 0
+scale = "utc"
+
+[[sets.types.vec3_i32.entries]]
+kind = "field"
+name = "x"
+size_bits = 32
+type = "int"
+unit = "m"
+
+[[sets.types.vec3_i32.entries]]
+kind = "field"
+name = "y"
+size_bits = 32
+type = "int"
+unit = "m"
+
+[[sets.types.vec3_i32.entries]]
+kind = "field"
+name = "z"
+size_bits = 32
+type = "int"
+unit = "m"
+
+[[sets]]
+family = "vendor_j"
+name = "vendor_j_v1"
+
+[[sets.commands]]
+canonical = "eps.set_mode"
+name = "SET_MODE"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "op"
+pointer = "/op"
+type = "string"
+value = "set_mode"
+
+[[sets.commands.entries]]
+argument = "mode"
+kind = "field"
+name = "mode"
+pointer = "/args/mode"
+type = "string"
+
+[[sets.commands.entries]]
+argument = "delay_s"
+kind = "field"
+name = "delay"
+pointer = "/args/delay"
+type = "float"
+unit = "s"
+
+[[sets.packets]]
+name = "BUS"
+
+[[sets.packets.entries]]
+canonical = "eps.bus_voltage"
+kind = "field"
+name = "v"
+pointer = "/v"
+type = "int"
+unit = "V"
+
+[sets.packets.entries.conversion]
+kind = "linear"
+offset = 0.0
+scale = 0.001
+
+[[sets.packets.entries]]
+kind = "array"
+name = "cells"
+pointer = "/cells"
+
+[sets.packets.entries.element]
+kind = "struct"
+name = "cell"
+
+[sets.packets.identify]
+"/ch" = "PWR.BUS.V"
+
+[[sets.packets]]
+name = "THERMAL"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "heater"
+pointer = "/heater"
+type = "uint"
+
+[sets.packets.entries.conversion]
+extrapolate = true
+interpolation = "step"
+kind = "table"
+
+[[sets.packets.entries.conversion.points]]
+raw = 0
+value = -40
+
+[[sets.packets.entries.conversion.points]]
+raw = 100
+value = 0
+
+[[sets.packets.entries.conversion.points]]
+raw = 300
+value = 60
+
+[[sets.packets.entries]]
+kind = "field"
+name = "flow"
+pointer = "/flow"
+type = "float"
+
+[sets.packets.entries.conversion]
+kind = "spline"
+
+[[sets.packets.entries.conversion.points]]
+raw = 0
+value = 0
+
+[[sets.packets.entries.conversion.points]]
+raw = 1
+value = 1
+
+[[sets.packets.entries.conversion.points]]
+raw = 2
+value = 0
+
+[sets.packets.identify]
+"/ch" = "THM"
+
+[sets.time]
+kind = "iso8601"
+pointer = "/t"
+
+[[sets.types.cell.entries]]
+kind = "field"
+name = "volts"
+pointer = "/v"
+type = "float"
+unit = "V"
+
+[[sets.types.cell.entries]]
+kind = "field"
+name = "ok"
+pointer = "/ok"
+type = "bool"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v1"
+
+[[sets.commands]]
+canonical = "eps.set_mode"
+name = "SET_MODE"
+
+[[sets.commands.entries]]
+argument = "mode"
+kind = "field"
+name = "mode"
+size_bits = 8
+type = "uint"
+
+[sets.commands.entries.conversion]
+kind = "states"
+
+[[sets.commands.entries.conversion.states]]
+name = "SAFE"
+raw = 0
+
+[[sets.commands.entries.conversion.states]]
+name = "NOMINAL"
+raw = 1
+
+[[sets.commands.entries]]
+kind = "field"
+name = "unit"
+target = true
+text = "ascii"
+type = "string"
+
+[sets.commands.entries.length]
+byte = 0
+kind = "terminator"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "parity"
+
+[sets.commands.entries.algorithm]
+kind = "xor"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "sum"
+
+[sets.commands.entries.algorithm]
+kind = "sum"
+width = 16
+
+[[sets.packets]]
+name = "TIME"
+time_field = "boot_ms"
+
+[[sets.packets.entries]]
+invalid = ["18446744073709551615"]
+kind = "field"
+name = "unix_us"
+size_bits = 64
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "boot_ms"
+size_bits = 32
+type = "uint"
+
+[sets.packets.length]
+bytes = 12
+kind = "exact"
+
+[sets.time]
+kind = "boot"
+unit = "ms"
+
+[sets.time.correlate]
+boot_field = "boot_ms"
+clock_field = "unix_us"
+clock_unit = "us"
+epoch = "1970-01-01T00:00:00Z"
+packet = "TIME"
+scale = "utc"
+
+[[sets]]
+family = "vendor_j"
+name = "vendor_j_v2"
+
+[[sets.packets]]
+name = "PING"
+time_field = "t_ms"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t_ms"
+pointer = "/t_ms"
+type = "uint"
+
+[sets.time]
+epoch = "1970-01-01T00:00:00Z"
+kind = "elapsed"
+scale = "utc"
+unit = "ms"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v2"
+
+[[sets.packets]]
+name = "NAV"
+time_field = "tow"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "week"
+size_bits = 16
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "tow"
+size_bits = 32
+type = "uint"
+
+[sets.packets.length]
+bytes = 6
+kind = "exact"
+
+[sets.time]
+kind = "gps"
+unit = "ms"
+week_bits = 10
+week_field = "week"

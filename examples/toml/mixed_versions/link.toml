@@ -1,0 +1,17 @@
+# Sensor nodes on one link, some still on firmware 1 and some on firmware 2.
+# Every beacon starts the same way in both, which is what lets them share a
+# link: a node id, then a format byte that says which layout follows.
+#
+#   bits 0-15  node id    bits 16-23  format    bits 24-  the format's layout
+#
+# The family says where those are. Each set says which format it decodes,
+# so a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }

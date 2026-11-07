@@ -36,9 +36,11 @@ Requires Rust 1.88 or later and [`just`](https://github.com/casey/just).
 | Path | What |
 | --- | --- |
 | `crates/mdl` | the library: IR, frontends, validation, plans, interpreter |
+| `crates/mdl-toml` | the TOML frontend: definitions written as the IR spelled in TOML |
 | `crates/morphc` | the compiler CLI |
 | `examples/definitions` | a worked example (a CCSDS satellite, a JSON satellite, a MAVLink drone) and, for now, the schema reference |
-| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [frontends](spec/frontends.md) |
+| `examples/toml` | the same kind of fleet, and mixed versions on one link, in the v2 TOML format |
+| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [frontends](spec/frontends.md), [TOML](spec/toml.md) |
 
 ## License
 

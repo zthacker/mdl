@@ -127,6 +127,7 @@ fn validation_diagnostics_keep_their_code_message_and_context() {
         path: "/sets/0/packets/0".to_string(),
         context: "set s".to_string(),
         message: "m".to_string(),
+        first: None,
     };
     let located = map.locate(&diagnostic);
     assert_eq!(located.code, "unit_mismatch");
@@ -219,4 +220,46 @@ fn control_characters_in_the_source_are_printed_as_spaces() {
     assert!(!rendered.contains('\r') && !rendered.contains('\u{1b}'));
     assert!(rendered.contains("1 | a b [2Jc = 1\n"), "{rendered}");
     assert!(rendered.contains("  |        ^\n"), "{rendered}");
+}
+
+#[test]
+fn a_duplicate_names_where_the_first_one_is() {
+    let mut sources = Sources::new();
+    let a = sources.add("a.toml", "[[families]]\nname = \"x\"\n");
+    let b = sources.add("b.toml", "\n[[families]]\nname = \"x\"\n");
+    let mut map = SourceMap::new();
+    map.insert("/families/0", Span::new(a, 0, 12));
+    map.insert("/families/1", Span::new(b, 1, 13));
+    let diagnostic = Diagnostic {
+        code: Code::DuplicateName,
+        path: "/families/1".to_string(),
+        context: "family x".to_string(),
+        message: "family x is defined twice".to_string(),
+        first: Some("/families/0".to_string()),
+    };
+    assert_eq!(
+        diagnostic.to_string(),
+        "family x: family x is defined twice; the first is at /families/0 [duplicate_name]"
+    );
+    let located = map.locate(&diagnostic);
+    assert_eq!(located.first, Some(Span::new(a, 0, 12)));
+    assert_eq!(located.message, "family x is defined twice");
+    assert_eq!(
+        located.display(&sources).to_string(),
+        "error[duplicate_name]: family x is defined twice\n \
+         --> b.toml:2:1\n  \
+         |\n\
+         2 | [[families]]\n  \
+         | ^^^^^^^^^^^^\n  \
+         = family x\n  \
+         = the first is at a.toml:1:1\n"
+    );
+
+    // A first the map doesn't have is named in the message.
+    let unmapped = SourceMap::new().locate(&diagnostic);
+    assert_eq!(unmapped.first, None);
+    assert_eq!(
+        unmapped.message,
+        "family x is defined twice; the first is at /families/0"
+    );
 }

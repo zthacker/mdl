@@ -1,0 +1,42 @@
+# A satellite sending JSON lines, one channel per object:
+#
+#   {"sat":"PX-7","ch":"PWR.BUS.V","v":28410,"t":"2026-06-01T12:00:30.25Z"}
+#
+# Each packet is one channel, identified by its "ch" value.
+
+mdl_version = "2.0"
+
+[[families]]
+name     = "json_sat"
+encoding = "json"
+alias    = { kind = "path", pointer = "/sat" }
+
+[[sets]]
+name   = "json_sat_v1"
+family = "json_sat"
+time   = { kind = "iso8601", pointer = "/t" }
+
+[[sets.packets]]
+name     = "PWR_BUS_V"
+identify = { "/ch" = "PWR.BUS.V" }
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "v"
+type      = "int"
+pointer   = "/v"
+unit      = "mV"
+canonical = "eps.bus_voltage"
+
+# This vendor reports temperatures in Fahrenheit.
+[[sets.packets]]
+name     = "BATT_T"
+identify = { "/ch" = "BATT.T" }
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "v"
+type      = "float"
+pointer   = "/v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"

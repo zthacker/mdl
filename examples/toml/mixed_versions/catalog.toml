@@ -1,0 +1,9 @@
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.batt_temp"]
+type = "f64"
+unit = "Cel"
