@@ -281,7 +281,10 @@ fn errors_name_the_command_and_what_went_wrong() {
 /// conversions whose inverse doesn't undo them exactly, and a negative
 /// scale (lab_v7); a linear table read backwards (lab_v8); a spline with an
 /// inverse table (lab_v9); an argument in Celsius for a field in kelvin
-/// (lab_v10). Family `web`: a JSON command with no fields.
+/// (lab_v10); terminated buffers (lab_v11, lab_v12); list arguments: two
+/// arrays sharing a count, records of three lists and a constant, and
+/// one-bit flags and names read to the end (lab_v13). Family `web`: a JSON
+/// command with no fields (web_v1), and the lists as JSON arrays (web_v2).
 fn lab() -> Json {
     let bytes = |name: &str| json!({ "arguments": [{ "name": name, "type": "bytes" }] });
     // A command's name in a NUL-terminated eight-byte buffer.
@@ -327,6 +330,24 @@ fn lab() -> Json {
             ] },
             "lab.pump": { "arguments": [
                 { "name": "rate", "type": "f64", "range": { "min": 0, "max": 12 } }
+            ] },
+            "lab.burst": { "arguments": [
+                { "name": "samples", "type": "i64", "range": { "min": -100, "max": 100 },
+                  "list": { "max": 6 } },
+                { "name": "weights", "type": "f64", "range": { "min": 0, "max": 100 },
+                  "list": { "max": 6 } }
+            ] },
+            "lab.route": { "arguments": [
+                { "name": "lat", "type": "f64", "range": { "min": -90, "max": 90 },
+                  "list": { "min": 1, "max": 4 } },
+                { "name": "lon", "type": "f64", "range": { "min": -180, "max": 180 },
+                  "list": { "min": 1, "max": 4 } },
+                { "name": "alt", "type": "u64", "range": { "max": 1000 },
+                  "list": { "min": 1, "max": 4 } }
+            ] },
+            "lab.mask": { "arguments": [
+                { "name": "flags", "type": "bool", "list": { "min": 4, "max": 4 } },
+                { "name": "names", "type": "str", "list": { "max": 3 } }
             ] },
             "lab.drift": { "arguments": [
                 { "name": "temp", "type": "f64", "range": { "min": -100, "max": 100 } },
@@ -454,8 +475,75 @@ fn lab() -> Json {
                 { "name": "PING", "canonical": "lab.ping", "entries": [padded_tag("PING")] },
                 { "name": "PONG", "canonical": "lab.pong", "entries": [padded_tag("PONG")] }
             ] },
+            { "name": "lab_v13", "family": "lab",
+              "types": { "waypoint": { "entries": [
+                  { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8, "value": 7 },
+                  { "kind": "field", "name": "lat", "type": "int", "size_bits": 32,
+                    "conversion": { "kind": "linear", "scale": 1e-7, "offset": 0.0 },
+                    "argument": "lat" },
+                  { "kind": "field", "name": "lon", "type": "int", "size_bits": 32,
+                    "conversion": { "kind": "linear", "scale": 1e-7, "offset": 0.0 },
+                    "argument": "lon" },
+                  { "kind": "field", "name": "alt", "type": "uint", "size_bits": 16,
+                    "argument": "alt" }
+              ] } },
+              "commands": [
+                { "name": "BURST", "canonical": "lab.burst", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 21 },
+                    { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+                    { "kind": "array", "name": "samples", "count": { "kind": "field", "field": "n" },
+                      "element": { "kind": "scalar", "type": "int", "size_bits": 16 },
+                      "argument": "samples" },
+                    { "kind": "array", "name": "weights", "count": { "kind": "field", "field": "n" },
+                      "element": { "kind": "scalar", "type": "uint", "size_bits": 8,
+                          "conversion": { "kind": "linear", "scale": 0.5, "offset": 0.0 } },
+                      "argument": "weights" }
+                ] },
+                { "name": "ROUTE", "canonical": "lab.route", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 22 },
+                    { "kind": "field", "name": "count", "type": "uint", "size_bits": 8 },
+                    { "kind": "array", "name": "waypoints",
+                      "count": { "kind": "field", "field": "count" },
+                      "element": { "kind": "struct", "name": "waypoint" } },
+                    { "kind": "field", "name": "end", "type": "uint", "size_bits": 8, "value": 238 }
+                ] },
+                { "name": "MASK", "canonical": "lab.mask", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 23 },
+                    { "kind": "array", "name": "flags", "count": { "kind": "fixed", "count": 4 },
+                      "element": { "kind": "scalar", "type": "bool", "size_bits": 1 },
+                      "argument": "flags" },
+                    { "kind": "padding", "size_bits": 4 },
+                    { "kind": "array", "name": "names", "count": { "kind": "remaining" },
+                      "element": { "kind": "scalar", "type": "string", "text": "ascii",
+                          "length": { "kind": "fixed", "bytes": 4, "terminator": 0 } },
+                      "argument": "names" }
+                ] }
+            ] },
             { "name": "web_v1", "family": "web", "commands": [
                 { "name": "PING", "canonical": "lab.ping" }
+            ] },
+            { "name": "web_v2", "family": "web",
+              "types": { "waypoint": { "entries": [
+                  { "kind": "field", "name": "lat", "type": "float", "pointer": "/lat",
+                    "argument": "lat" },
+                  { "kind": "field", "name": "lon", "type": "float", "pointer": "/lon",
+                    "argument": "lon" },
+                  { "kind": "field", "name": "alt", "type": "uint", "pointer": "/alt",
+                    "argument": "alt" }
+              ] } },
+              "commands": [
+                { "name": "BURST", "canonical": "lab.burst", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "pointer": "/op", "value": 21 },
+                    { "kind": "array", "name": "samples", "pointer": "/s",
+                      "element": { "kind": "scalar", "type": "int" }, "argument": "samples" },
+                    { "kind": "array", "name": "weights", "pointer": "/w",
+                      "element": { "kind": "scalar", "type": "float" }, "argument": "weights" }
+                ] },
+                { "name": "ROUTE", "canonical": "lab.route", "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "pointer": "/op", "value": 22 },
+                    { "kind": "array", "name": "waypoints", "pointer": "/wps",
+                      "element": { "kind": "struct", "name": "waypoint" } }
+                ] }
             ] }
         ]
     })
@@ -808,7 +896,10 @@ fn json_values_are_written_as_rfc_8785_writes_them_with_exact_integers() {
 // ---- Decoding commands ----
 
 use crate::v2::decode::{CommandDecodeError, DecodedCommand};
-use crate::v2::ir::{Argument, Bundle, ByteLength, Field, ParamType, ScalarType, TextEncoding};
+use crate::v2::ir::{
+    Argument, Bundle, ByteLength, CommandPacket, Count, Element, Field, ParamType, ScalarType,
+    StructType, TextEncoding,
+};
 use crate::v2::message::{Message, MetaValue, Payload};
 use crate::v2::time::Timestamp;
 
@@ -1192,10 +1283,15 @@ fn command_cases() -> Vec<(Json, &'static str, &'static str, &'static str, bool)
         ("lab_v11", "lab.blob", true),
         ("lab_v12", "lab.ping", true),
         ("lab_v12", "lab.pong", true),
+        ("lab_v13", "lab.burst", true),
+        ("lab_v13", "lab.route", false),
+        ("lab_v13", "lab.mask", true),
     ] {
         cases.push((lab(), "lab", set, command, exact));
     }
     cases.push((lab(), "web", "web_v1", "lab.ping", true));
+    cases.push((lab(), "web", "web_v2", "lab.burst", true));
+    cases.push((lab(), "web", "web_v2", "lab.route", true));
     cases
 }
 
@@ -1252,20 +1348,131 @@ fn valid_requests(bundle: &Json, set: &str, command: &str) -> BoxedStrategy<Comm
                 .boxed(),
         );
     }
+    let types = ir
+        .sets
+        .iter()
+        .find(|s| s.name == set)
+        .map(|s| s.types.clone())
+        .unwrap_or_default();
+    let lists = list_strategies(&ir.catalog.commands[command].arguments, &packet, &types);
     let target = fields
         .iter()
         .find(|field| field.target == Some(true))
         .map(|field| target_strategy(field, byte_lengths(&packet.entries, field, binary)));
     let set = set.to_string();
     let command = command.to_string();
-    (strategies, target.unwrap_or_else(|| Just(None).boxed()))
-        .prop_map(move |(arguments, target)| {
+    (
+        strategies,
+        lists,
+        target.unwrap_or_else(|| Just(None).boxed()),
+    )
+        .prop_map(move |(arguments, lists, target)| {
             let mut request = CommandRequest::new(set.as_str(), command.as_str());
             request.arguments = arguments;
+            request.arguments.extend(lists.into_iter().flatten());
             request.target = target;
             request
         })
         .boxed()
+}
+
+/// Arrays that get one length: one array, or those sharing a count field.
+struct Group {
+    count_field: Option<String>,
+    /// Each list argument the arrays encode, and its element as a field.
+    members: Vec<(Argument, Field)>,
+    least: usize,
+    most: usize,
+}
+
+/// Values for the list arguments a packet's arrays encode. Arrays that
+/// share a count field, and the lists of one array's records, get one
+/// length: up to six values, within the catalog's bounds and the array's
+/// count.
+fn list_strategies(
+    arguments: &[Argument],
+    packet: &CommandPacket,
+    types: &BTreeMap<String, StructType>,
+) -> Vec<BoxedStrategy<Vec<(String, ArgumentValue)>>> {
+    let mut groups: Vec<Group> = Vec::new();
+    for entry in &packet.entries {
+        let Entry::Array(array) = entry else {
+            continue;
+        };
+        let encoders: Vec<(&str, Field)> = match &array.element {
+            Element::Scalar(element) => array
+                .argument
+                .iter()
+                .map(|name| (name.as_str(), element.as_field(&array.name)))
+                .collect(),
+            Element::Struct { name } => types[name]
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    Entry::Field(field) => Some((field.argument.as_deref()?, field.clone())),
+                    _ => None,
+                })
+                .collect(),
+        };
+        let members: Vec<(Argument, Field)> = encoders
+            .into_iter()
+            .filter_map(|(name, field)| {
+                let argument = arguments.iter().find(|a| a.name == name)?.clone();
+                Some((argument, field))
+            })
+            .collect();
+        let (mut least, mut most) = match &array.count {
+            Some(Count::Fixed { count }) => (*count as usize, *count as usize),
+            _ => (0, 6),
+        };
+        for (argument, _) in &members {
+            let list = argument.list.unwrap_or_default();
+            least = least.max(list.min.unwrap_or(0) as usize);
+            most = most.min(list.max.map_or(usize::MAX, |max| max as usize));
+        }
+        let count_field = match &array.count {
+            Some(Count::Field(from)) => Some(from.field.clone()),
+            _ => None,
+        };
+        let shared = groups
+            .iter_mut()
+            .find(|group| count_field.is_some() && group.count_field == count_field);
+        match shared {
+            Some(group) => {
+                group.members.extend(members);
+                group.least = group.least.max(least);
+                group.most = group.most.min(most);
+            }
+            None => groups.push(Group {
+                count_field,
+                members,
+                least,
+                most,
+            }),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|group| {
+            let members = group.members;
+            (group.least..=group.most)
+                .prop_flat_map(move |length| {
+                    members
+                        .iter()
+                        .map(|(argument, field)| {
+                            let name = argument.name.clone();
+                            proptest::collection::vec(
+                                value_strategy(argument, field, byte_lengths(&[], field, true)),
+                                length,
+                            )
+                            .prop_map(move |values| (name.clone(), ArgumentValue::List(values)))
+                            .boxed()
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .boxed()
+        })
+        .collect()
 }
 
 /// The byte lengths a binary string or bytes field can have: its fixed
@@ -1452,15 +1659,19 @@ fn target_strategy(
     }
 }
 
-/// Two argument values are the same value: numbers by value.
+/// Two argument values are the same value: numbers by value, lists value
+/// by value.
 fn same(a: &ArgumentValue, b: &ArgumentValue) -> bool {
     let integer = |value: &ArgumentValue| match value {
         ArgumentValue::Int(n) => Some(i128::from(*n)),
         ArgumentValue::Uint(n) => Some(i128::from(*n)),
         _ => None,
     };
-    match (integer(a), integer(b)) {
-        (Some(x), Some(y)) => x == y,
+    match (a, b, integer(a), integer(b)) {
+        (_, _, Some(x), Some(y)) => x == y,
+        (ArgumentValue::List(x), ArgumentValue::List(y), _, _) => {
+            x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y))
+        }
         _ => a == b,
     }
 }
@@ -1564,4 +1775,247 @@ proptest! {
             Err(error) => prop_assert_ne!(error.code(), "invalid_layout", "{}", error),
         }
     }
+}
+
+// ---- List arguments ----
+
+fn ints(values: &[i64]) -> ArgumentValue {
+    ArgumentValue::List(values.iter().map(|v| ArgumentValue::Int(*v)).collect())
+}
+
+fn floats(values: &[f64]) -> ArgumentValue {
+    ArgumentValue::List(values.iter().map(|v| ArgumentValue::Float(*v)).collect())
+}
+
+fn burst(samples: &[i64], weights: &[f64]) -> CommandRequest {
+    CommandRequest::new("lab_v13", "lab.burst")
+        .with_argument("samples", ints(samples))
+        .with_argument("weights", floats(weights))
+}
+
+fn route(lat: &[f64], lon: &[f64], alt: &[i64]) -> CommandRequest {
+    CommandRequest::new("lab_v13", "lab.route")
+        .with_argument("lat", floats(lat))
+        .with_argument("lon", floats(lon))
+        .with_argument("alt", ints(alt))
+}
+
+#[test]
+fn arrays_sharing_a_count_hold_one_list_each() {
+    let sets = sets_of(&lab(), "lab");
+    let encoded = sets
+        .encode(&burst(&[1, -2, 3], &[0.5, 1.0, 100.0]))
+        .unwrap();
+    // The count once, then each array's elements: int16s, then halves.
+    assert_eq!(encoded.payload, [21, 3, 0, 1, 0xFF, 0xFE, 0, 3, 1, 2, 200]);
+    assert_eq!(
+        encoded.record.get("samples"),
+        Some(&Value::Array(vec![
+            Value::Int(1),
+            Value::Int(-2),
+            Value::Int(3)
+        ]))
+    );
+    let empty = sets.encode(&burst(&[], &[])).unwrap();
+    assert_eq!(empty.payload, [21, 0]);
+    let error = sets.encode(&burst(&[1, 2], &[1.0, 2.0, 3.0])).unwrap_err();
+    assert_eq!(error.code(), "bad_count");
+    assert_eq!(
+        error.to_string(),
+        "command packet BURST, weights: an array of 3 values doesn't fit: n counts array samples too, which \
+         gives it 2, and this array gives it 3; arrays that share a count hold as many values"
+    );
+}
+
+#[test]
+fn list_values_are_checked_one_by_one_and_by_number() {
+    let sets = sets_of(&lab(), "lab");
+    let refused = |request: CommandRequest| {
+        let error = sets.encode(&request).unwrap_err();
+        (error.code(), error.to_string())
+    };
+    assert_eq!(
+        refused(burst(&[1, 500], &[1.0, 1.0])),
+        (
+            "out_of_range",
+            "command lab.burst, argument samples: value 1: 500 is outside its range, -100 to 100"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        refused(burst(&[0; 7], &[0.0; 7])),
+        (
+            "list_length",
+            "command lab.burst, argument samples: a list of 7 values doesn't fit: it takes at \
+             most 6"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        refused(
+            CommandRequest::new("lab_v13", "lab.burst")
+                .with_argument("samples", 1_i64)
+                .with_argument("weights", floats(&[]))
+        )
+        .0,
+        "wrong_type"
+    );
+    // A list for a single value is a wrong type too.
+    assert_eq!(
+        refused(tune("PING").with_argument("gain", floats(&[1.0]))).0,
+        "wrong_type"
+    );
+    let nested = ArgumentValue::List(vec![ints(&[1])]);
+    assert_eq!(
+        refused(
+            CommandRequest::new("lab_v13", "lab.burst")
+                .with_argument("samples", nested)
+                .with_argument("weights", floats(&[1.0]))
+        )
+        .1,
+        "command lab.burst, argument samples: value 0: a list of 1 value isn't an integer"
+    );
+}
+
+#[test]
+fn records_interleave_the_lists_their_fields_take() {
+    let sets = sets_of(&lab(), "lab");
+    let encoded = sets
+        .encode(&route(&[1.5, -2.25], &[10.0, 20.0], &[100, 200]))
+        .unwrap();
+    let mut expected = vec![22, 2];
+    for (lat, lon, alt) in [
+        (15_000_000_i32, 100_000_000_i32, 100_u16),
+        (-22_500_000, 200_000_000, 200),
+    ] {
+        expected.push(7);
+        expected.extend(lat.to_be_bytes());
+        expected.extend(lon.to_be_bytes());
+        expected.extend(alt.to_be_bytes());
+    }
+    expected.push(238);
+    assert_eq!(encoded.payload, expected);
+    let decoded = sets
+        .decode_command("lab_v13", &binary(&encoded.payload))
+        .unwrap();
+    assert_eq!(decoded.command(), "lab.route");
+    assert_eq!(
+        arguments(&decoded),
+        [
+            ("lat".to_string(), floats(&[1.5, -2.25])),
+            ("lon".to_string(), floats(&[10.0, 20.0])),
+            (
+                "alt".to_string(),
+                ArgumentValue::List(vec![ArgumentValue::Uint(100), ArgumentValue::Uint(200)])
+            ),
+        ]
+    );
+    let error = sets
+        .encode(&route(&[1.0, 2.0], &[1.0], &[1, 2]))
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "command packet ROUTE, waypoints: an array of 1 value doesn't fit: list lon has 1 value \
+         and list lat 2, and lists that fill the same records have the same length"
+    );
+    // A record's constant is checked in every record.
+    let mut corrupt = encoded.payload.clone();
+    corrupt[13] = 8;
+    assert_eq!(
+        decode_code(sets.decode_command("lab_v13", &binary(&corrupt))),
+        "wrong_constant"
+    );
+}
+
+#[test]
+fn fixed_counts_pack_bits_and_remaining_counts_run_to_the_end() {
+    let sets = sets_of(&lab(), "lab");
+    let bools = |values: &[bool]| {
+        ArgumentValue::List(values.iter().map(|v| ArgumentValue::Bool(*v)).collect())
+    };
+    let texts = |values: &[&str]| {
+        ArgumentValue::List(values.iter().map(|v| ArgumentValue::from(*v)).collect())
+    };
+    let mask = |flags: &[bool], names: &[&str]| {
+        CommandRequest::new("lab_v13", "lab.mask")
+            .with_argument("flags", bools(flags))
+            .with_argument("names", texts(names))
+    };
+    let encoded = sets
+        .encode(&mask(&[true, false, true, true], &["ab", "cdef"]))
+        .unwrap();
+    assert_eq!(
+        encoded.payload,
+        [23, 0b1011_0000, b'a', b'b', 0, 0, b'c', b'd', b'e', b'f']
+    );
+    let decoded = sets
+        .decode_command("lab_v13", &binary(&encoded.payload))
+        .unwrap();
+    assert_eq!(arguments(&decoded)[1].1, texts(&["ab", "cdef"]));
+    // The catalog takes exactly the four flags the layout holds.
+    let error = sets.encode(&mask(&[true], &[])).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "command lab.mask, argument flags: a list of 1 value doesn't fit: it takes exactly 4"
+    );
+    // An element's problem names the element.
+    let error = sets
+        .encode(&mask(&[true; 4], &["ok", "toolong"]))
+        .unwrap_err();
+    assert_eq!(error.code(), "bad_length");
+    assert_eq!(
+        error.to_string(),
+        "command packet MASK, names: element 1: a value of 7 bytes doesn't fit: the field holds \
+         at most 4 bytes"
+    );
+}
+
+#[test]
+fn json_lists_are_arrays_and_records_objects() {
+    let sets = sets_of(&lab(), "web");
+    let encoded = sets
+        .encode(
+            &CommandRequest::new("web_v2", "lab.route")
+                .with_argument("lat", floats(&[1.5, -2.0]))
+                .with_argument("lon", floats(&[10.0, 0.25]))
+                .with_argument("alt", ints(&[100, 0])),
+        )
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(encoded.payload.clone()).unwrap(),
+        r#"{"op":22,"wps":[{"alt":100,"lat":1.5,"lon":10},{"alt":0,"lat":-2,"lon":0.25}]}"#
+    );
+    let message = Message::new(Payload::Json(&encoded.payload), Timestamp::UNIX_EPOCH);
+    let decoded = sets.decode_command("web_v2", &message).unwrap();
+    assert_eq!(decoded.record, encoded.record);
+    let burst = sets
+        .encode(
+            &CommandRequest::new("web_v2", "lab.burst")
+                .with_argument("samples", ints(&[]))
+                .with_argument("weights", floats(&[0.5])),
+        )
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(burst.payload).unwrap(),
+        r#"{"op":21,"s":[],"w":[0.5]}"#
+    );
+}
+
+#[test]
+fn a_decoded_list_has_a_length_and_values_the_catalog_allows() {
+    let sets = sets_of(&lab(), "lab");
+    // Seven samples and weights, one more than the catalog takes.
+    let mut seven = vec![21, 7];
+    seven.extend([0_u8; 14]);
+    seven.extend([0_u8; 7]);
+    let error = sets.decode_command("lab_v13", &binary(&seven)).unwrap_err();
+    assert_eq!(error.code(), "list_length");
+    // 500 is past the samples' range.
+    let error = sets
+        .decode_command("lab_v13", &binary(&[21, 2, 0, 1, 0x01, 0xF4, 0, 0]))
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "command lab.burst, argument samples: value 1: 500 is outside its range, -100 to 100"
+    );
 }

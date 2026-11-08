@@ -2,6 +2,8 @@
 //! arguments, as `spec/encoding.md` §7 describes. What a simulated asset
 //! does with a command it receives, and what command history records.
 
+use std::collections::BTreeMap;
+
 use thiserror::Error;
 
 use super::{DecodeError, Problem, Record, Value};
@@ -10,11 +12,12 @@ use crate::v2::convert::{Converted, convert};
 use std::cmp::Ordering;
 
 use crate::v2::encode::{
-    ArgumentProblem, ArgumentValue, CommandRequest, allowed, compare, default_of, raw_unchecked,
+    ArgumentProblem, ArgumentValue, CommandRequest, allowed, allowed_count, compare, default_of,
+    raw_unchecked,
 };
 use crate::v2::ir::{
-    Argument, ArgumentRange, CommandPacket, Conversion, Digest, Entry, Field, ParamType, Scalar,
-    Set,
+    Argument, ArgumentRange, ArrayEntry, CommandPacket, Conversion, Digest, Element, Entry, Field,
+    ParamType, Scalar, ScalarElement, Set, StructType,
 };
 use crate::v2::message::Message;
 use crate::v2::route::FamilySets;
@@ -124,7 +127,7 @@ impl FamilySets {
         let (packet, record) = found.ok_or_else(|| CommandDecodeError::NoPacket {
             set: set.to_string(),
         })?;
-        check_constants(packet, &record)?;
+        check_constants(packet, &loaded.set.types, &record)?;
         let invalid = |reason| {
             CommandDecodeError::Decode(DecodeError::Entry {
                 packet: packet.name.clone(),
@@ -146,12 +149,38 @@ impl FamilySets {
                 argument: argument.name.clone(),
                 problem,
             };
-            let value = match argument_field(packet, &argument.name) {
-                Some(field) => {
+            let value = match encoder(packet, &loaded.set.types, &argument.name) {
+                Some(Encoder::Field(field)) => {
                     let raw = record
                         .get(&field.name)
                         .ok_or_else(|| invalid("a value for every field"))?;
                     argument_value(field, argument, raw, binary).map_err(refused)?
+                }
+                Some(Encoder::Elements(array, element)) => {
+                    let field = element.as_field(&array.name);
+                    let items = elements(&record, array).ok_or_else(|| invalid("an array"))?;
+                    list_value(argument, items, |raw| {
+                        argument_value(&field, argument, raw, binary)
+                    })
+                    .map_err(refused)?
+                }
+                Some(Encoder::Records(array, field)) => {
+                    let items = elements(&record, array).ok_or_else(|| invalid("an array"))?;
+                    list_value(argument, items, |item| match item {
+                        Value::Record(fields) => {
+                            let raw =
+                                fields.get(&field.name).ok_or(ArgumentProblem::WrongType {
+                                    given: show(item),
+                                    expected: "a record with every field",
+                                })?;
+                            argument_value(field, argument, raw, binary)
+                        }
+                        _ => Err(ArgumentProblem::WrongType {
+                            given: show(item),
+                            expected: "a record",
+                        }),
+                    })
+                    .map_err(refused)?
                 }
                 None => {
                     defaulted.push(argument.name.as_str());
@@ -174,45 +203,140 @@ impl FamilySets {
     }
 }
 
-/// The field that encodes an argument, if the packet has one.
-fn argument_field<'p>(packet: &'p CommandPacket, argument: &str) -> Option<&'p Field> {
+/// What encodes an argument in a packet.
+enum Encoder<'p> {
+    Field(&'p Field),
+    /// An array whose scalar elements are the argument's values.
+    Elements(&'p ArrayEntry, &'p ScalarElement),
+    /// An array of records whose field holds the argument's values.
+    Records(&'p ArrayEntry, &'p Field),
+}
+
+/// What encodes an argument, if the packet does.
+fn encoder<'p>(
+    packet: &'p CommandPacket,
+    types: &'p BTreeMap<String, StructType>,
+    argument: &str,
+) -> Option<Encoder<'p>> {
+    let named = |name: &Option<String>| name.as_deref() == Some(argument);
     packet.entries.iter().find_map(|entry| match entry {
-        Entry::Field(field) if field.argument.as_deref() == Some(argument) => Some(field),
+        Entry::Field(field) if named(&field.argument) => Some(Encoder::Field(field)),
+        Entry::Array(array) => match &array.element {
+            Element::Scalar(element) if named(&array.argument) => {
+                Some(Encoder::Elements(array, element))
+            }
+            Element::Struct { name } => {
+                types
+                    .get(name)?
+                    .entries
+                    .iter()
+                    .find_map(|entry| match entry {
+                        Entry::Field(field) if named(&field.argument) => {
+                            Some(Encoder::Records(array, field))
+                        }
+                        _ => None,
+                    })
+            }
+            Element::Scalar(_) => None,
+        },
         _ => None,
     })
 }
 
+/// An array's decoded elements.
+fn elements<'r>(record: &'r Record<'_>, array: &ArrayEntry) -> Option<&'r [Value<'r>]> {
+    match record.get(&array.name)? {
+        Value::Array(items) => Some(items),
+        _ => None,
+    }
+}
+
+/// A list argument from its elements: a length the list allows, then each
+/// element through `one`, named by its index when refused.
+fn list_value<'v>(
+    argument: &Argument,
+    items: &'v [Value<'v>],
+    one: impl Fn(&'v Value<'v>) -> Result<ArgumentValue, ArgumentProblem>,
+) -> Result<ArgumentValue, ArgumentProblem> {
+    allowed_count(argument, items.len())?;
+    let mut values = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let value = one(item).map_err(|problem| ArgumentProblem::Item {
+            index,
+            problem: Box::new(problem),
+        })?;
+        values.push(value);
+    }
+    Ok(ArgumentValue::List(values))
+}
+
 /// Every constant field holds its value, those that identified the packet
-/// and those that didn't (after a value of varying length, say).
-fn check_constants(packet: &CommandPacket, record: &Record<'_>) -> Result<(), CommandDecodeError> {
+/// and those that didn't (after a value of varying length, say), and in
+/// every record of an array.
+fn check_constants(
+    packet: &CommandPacket,
+    types: &BTreeMap<String, StructType>,
+    record: &Record<'_>,
+) -> Result<(), CommandDecodeError> {
+    let wrong = |field: &Field, found: Option<&Value<'_>>, expected: &Scalar| {
+        CommandDecodeError::Constant {
+            packet: packet.name.clone(),
+            field: field.name.clone(),
+            expected: match expected {
+                Scalar::Int(n) => n.to_string(),
+                Scalar::Str(text) => format!("{text:?}"),
+            },
+            found: found.map_or_else(|| "nothing".to_string(), show),
+        }
+    };
     for entry in &packet.entries {
-        let Entry::Field(field) = entry else {
-            continue;
-        };
-        let Some(constant) = &field.value else {
-            continue;
-        };
-        let found = record.get(&field.name);
-        let holds = match (found, constant) {
-            (Some(Value::Str(text)), Scalar::Str(expected)) => text == expected,
-            (Some(Value::Uint(n)), _) => integer_value(constant) == Some(i128::from(*n)),
-            (Some(Value::Int(n)), _) => integer_value(constant) == Some(i128::from(*n)),
-            (Some(Value::Bool(b)), _) => integer_value(constant) == Some(i128::from(*b)),
-            _ => false,
-        };
-        if !holds {
-            return Err(CommandDecodeError::Constant {
-                packet: packet.name.clone(),
-                field: field.name.clone(),
-                expected: match constant {
-                    Scalar::Int(n) => n.to_string(),
-                    Scalar::Str(text) => format!("{text:?}"),
-                },
-                found: found.map_or_else(|| "nothing".to_string(), show),
-            });
+        match entry {
+            Entry::Field(field) => {
+                if let Some(constant) = &field.value
+                    && !holds(record.get(&field.name), constant)
+                {
+                    return Err(wrong(field, record.get(&field.name), constant));
+                }
+            }
+            Entry::Array(ArrayEntry {
+                name,
+                element: Element::Struct { name: type_name },
+                ..
+            }) => {
+                let fields = types.get(type_name).map_or(&[][..], |t| &t.entries);
+                let items = match record.get(name) {
+                    Some(Value::Array(items)) => items.as_slice(),
+                    _ => &[],
+                };
+                for item in items {
+                    let Value::Record(values) = item else {
+                        continue;
+                    };
+                    for entry in fields {
+                        if let Entry::Field(field) = entry
+                            && let Some(constant) = &field.value
+                            && !holds(values.get(&field.name), constant)
+                        {
+                            return Err(wrong(field, values.get(&field.name), constant));
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
+}
+
+/// A decoded value is a constant's.
+fn holds(found: Option<&Value<'_>>, constant: &Scalar) -> bool {
+    match (found, constant) {
+        (Some(Value::Str(text)), Scalar::Str(expected)) => text == expected,
+        (Some(Value::Uint(n)), _) => integer_value(constant) == Some(i128::from(*n)),
+        (Some(Value::Int(n)), _) => integer_value(constant) == Some(i128::from(*n)),
+        (Some(Value::Bool(b)), _) => integer_value(constant) == Some(i128::from(*b)),
+        _ => false,
+    }
 }
 
 /// An argument from its field's raw value: through the field's conversion,

@@ -392,9 +392,8 @@ impl Program {
             .iter()
             .map(|packet| packet_checksums(&packet.entries, &type_sizes))
             .collect();
-        // Command packets hold no struct types.
         let commands = CommandProgram {
-            index: Index::new(command_identities(set, family)),
+            index: Index::new(command_identities(set, family, &type_sizes)),
             names: set
                 .commands
                 .iter()
@@ -403,7 +402,7 @@ impl Program {
             checksums: set
                 .commands
                 .iter()
-                .map(|packet| packet_checksums(&packet.entries, &BTreeMap::new()))
+                .map(|packet| packet_checksums(&packet.entries, &type_sizes))
                 .collect(),
         };
         Program {

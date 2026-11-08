@@ -20,8 +20,9 @@ use crate::v2::bindings::NativeId;
 use crate::v2::convert::inverse;
 use crate::v2::decode::{Record, Value};
 use crate::v2::ir::{
-    Argument, ArgumentRange, ByteLength, Command, CommandPacket, Conversion, Digest, Entry, Field,
-    FromField, Literal, ParamType, Scalar, ScalarType, Set,
+    Argument, ArgumentRange, ArrayEntry, ByteLength, Command, CommandPacket, Conversion, Count,
+    Digest, Element, Entry, Field, FromField, Literal, ParamType, Scalar, ScalarType, Set,
+    StructType,
 };
 use crate::v2::message::MetaValue;
 use crate::v2::route::FamilySets;
@@ -41,6 +42,8 @@ pub enum ArgumentValue {
     /// A string, or the name of one of an enum argument's states.
     Text(String),
     Bytes(Vec<u8>),
+    /// A list argument's values.
+    List(Vec<ArgumentValue>),
 }
 
 impl From<bool> for ArgumentValue {
@@ -103,6 +106,12 @@ impl From<Vec<u8>> for ArgumentValue {
     }
 }
 
+impl From<Vec<ArgumentValue>> for ArgumentValue {
+    fn from(values: Vec<ArgumentValue>) -> Self {
+        ArgumentValue::List(values)
+    }
+}
+
 impl fmt::Display for ArgumentValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -112,6 +121,7 @@ impl fmt::Display for ArgumentValue {
             ArgumentValue::Float(value) => write!(f, "{value}"),
             ArgumentValue::Text(value) => write!(f, "{value:?}"),
             ArgumentValue::Bytes(value) => write!(f, "{} bytes", value.len()),
+            ArgumentValue::List(values) => write!(f, "a list of {}", count_of(values.len())),
         }
     }
 }
@@ -265,6 +275,14 @@ pub enum ArgumentProblem {
     OutsideCalibration { raw: String },
     #[error("the set doesn't encode it, so it can only be its default, {default}")]
     NotDefault { default: String },
+    #[error("a list of {} doesn't fit: it takes {bounds}", count_of(*count))]
+    ListLength { count: usize, bounds: String },
+    /// One value of a list argument.
+    #[error("value {index}: {problem}")]
+    Item {
+        index: usize,
+        problem: Box<ArgumentProblem>,
+    },
 }
 
 impl ArgumentProblem {
@@ -282,6 +300,8 @@ impl ArgumentProblem {
             | ArgumentProblem::RawOutOfRange { .. }
             | ArgumentProblem::OutsideCalibration { .. } => "out_of_range",
             ArgumentProblem::NotDefault { .. } => "not_default",
+            ArgumentProblem::ListLength { .. } => "list_length",
+            ArgumentProblem::Item { problem, .. } => problem.code(),
         }
     }
 }
@@ -294,6 +314,15 @@ pub enum FieldProblem {
     RawRange { raw: String, holds: String },
     #[error("a value of {length} bytes doesn't fit: {reason}")]
     BadLength { length: usize, reason: String },
+    #[error("an array of {} doesn't fit: {reason}", count_of(*count))]
+    BadCount { count: usize, reason: String },
+    /// One element of an array, or one field of an element's record.
+    #[error("{}", element_text(*index, field.as_deref(), problem))]
+    Element {
+        index: usize,
+        field: Option<String>,
+        problem: Box<FieldProblem>,
+    },
     #[error("the text can't be written as {encoding}")]
     InvalidText { encoding: &'static str },
     #[error("the value contains its terminator byte {byte:#04x}")]
@@ -312,12 +341,29 @@ impl FieldProblem {
         match self {
             FieldProblem::RawRange { .. } => "raw_range",
             FieldProblem::BadLength { .. } => "bad_length",
+            FieldProblem::BadCount { .. } => "bad_count",
+            FieldProblem::Element { problem, .. } => problem.code(),
             FieldProblem::InvalidText { .. } => "invalid_text",
             FieldProblem::ContainsTerminator { .. } => "contains_terminator",
             FieldProblem::MissingTarget => "missing_target",
             FieldProblem::TargetType { .. } => "target_type",
             FieldProblem::Layout(_) => "invalid_layout",
         }
+    }
+}
+
+/// `count` values, in words.
+fn count_of(count: usize) -> String {
+    match count {
+        1 => "1 value".to_string(),
+        _ => format!("{count} values"),
+    }
+}
+
+fn element_text(index: usize, field: Option<&str>, problem: &FieldProblem) -> String {
+    match field {
+        Some(field) => format!("element {index}, field {field}: {problem}"),
+        None => format!("element {index}: {problem}"),
     }
 }
 
@@ -346,12 +392,19 @@ impl FamilySets {
             .commands
             .get(&request.command)
             .ok_or_else(unknown)?;
-        let (arguments, defaulted) = check_arguments(&request.command, command, packet, request)?;
+        let (arguments, defaulted) =
+            check_arguments(&request.command, command, packet, &set.types, request)?;
         let order = self.byte_order();
-        let raws = raw_values(packet, &arguments, request.target.as_ref(), order.is_some())?;
+        let slots = raw_values(
+            packet,
+            &set.types,
+            &arguments,
+            request.target.as_ref(),
+            order.is_some(),
+        )?;
         let (payload, record) = match order {
-            Some(order) => write::binary(packet, raws, order)?,
-            None => write::json(packet, raws)?,
+            Some(order) => write::binary(packet, &set.types, slots, order)?,
+            None => write::json(packet, &set.types, slots)?,
         };
         Ok(Encoded {
             set,
@@ -376,6 +429,8 @@ enum Checked {
     /// A str argument, or an enum argument's state.
     Text(String),
     Bytes(Vec<u8>),
+    /// A list argument's values.
+    List(Vec<Checked>),
 }
 
 /// Each argument's checked value and unit, by name.
@@ -387,6 +442,7 @@ fn check_arguments<'a>(
     name: &str,
     command: &'a Command,
     packet: &CommandPacket,
+    types: &BTreeMap<String, StructType>,
     request: &CommandRequest,
 ) -> Result<(Arguments<'a>, Vec<&'a str>), EncodeError> {
     let error = |argument: &str, problem| EncodeError::Argument {
@@ -407,14 +463,7 @@ fn check_arguments<'a>(
             return Err(error(argument, ArgumentProblem::Duplicate));
         }
     }
-    let encoded: BTreeSet<&str> = packet
-        .entries
-        .iter()
-        .filter_map(|entry| match entry {
-            Entry::Field(field) => field.argument.as_deref(),
-            _ => None,
-        })
-        .collect();
+    let encoded = encoded_arguments(packet, types);
     let mut checked = BTreeMap::new();
     let mut defaulted = Vec::new();
     for argument in &command.arguments {
@@ -422,13 +471,13 @@ fn check_arguments<'a>(
             .default
             .as_ref()
             .map(|literal| {
-                from_literal(argument, literal).and_then(|value| check(argument, &value))
+                from_literal(argument, literal).and_then(|value| check_given(argument, &value))
             })
             .transpose()
             .map_err(|problem| error(&argument.name, problem))?;
         let value = match (given.get(argument.name.as_str()), &default) {
             (Some(value), _) => {
-                check(argument, value).map_err(|problem| error(&argument.name, problem))?
+                check_given(argument, value).map_err(|problem| error(&argument.name, problem))?
             }
             (None, Some(default)) => {
                 defaulted.push(argument.name.as_str());
@@ -453,10 +502,85 @@ fn check_arguments<'a>(
     Ok((checked, defaulted))
 }
 
-/// Whether the catalog allows `value` for `argument`: its type, states and
-/// range, as encoding checks them.
+/// The arguments a packet encodes: by its fields, its arrays, and the
+/// fields of its arrays' records.
+pub(crate) fn encoded_arguments<'p>(
+    packet: &'p CommandPacket,
+    types: &'p BTreeMap<String, StructType>,
+) -> BTreeSet<&'p str> {
+    let mut encoded = BTreeSet::new();
+    for entry in &packet.entries {
+        match entry {
+            Entry::Field(field) => encoded.extend(field.argument.as_deref()),
+            Entry::Array(array) => {
+                encoded.extend(array.argument.as_deref());
+                if let Element::Struct { name } = &array.element {
+                    let record = types.get(name).map_or(&[][..], |t| t.entries.as_slice());
+                    for entry in record {
+                        if let Entry::Field(field) = entry {
+                            encoded.extend(field.argument.as_deref());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    encoded
+}
+
+/// Whether the catalog allows `value` as one value of `argument`: its type,
+/// states and range, as encoding checks them (each of a list argument's
+/// values is one).
 pub(crate) fn allowed(argument: &Argument, value: &ArgumentValue) -> Result<(), ArgumentProblem> {
     check(argument, value).map(|_| ())
+}
+
+/// Whether a list argument takes `count` values.
+pub(crate) fn allowed_count(argument: &Argument, count: usize) -> Result<(), ArgumentProblem> {
+    let Some(list) = argument.list else {
+        return Ok(());
+    };
+    let fits = |bound: Option<u32>, keep: fn(usize, usize) -> bool| {
+        bound.is_none_or(|bound| usize::try_from(bound).is_ok_and(|bound| keep(count, bound)))
+    };
+    if fits(list.min, |count, min| count >= min) && fits(list.max, |count, max| count <= max) {
+        return Ok(());
+    }
+    let bounds = match (list.min, list.max) {
+        (Some(min), Some(max)) if min == max => format!("exactly {min}"),
+        (Some(min), Some(max)) => format!("{min} to {max}"),
+        (Some(min), None) => format!("at least {min}"),
+        (None, Some(max)) => format!("at most {max}"),
+        (None, None) => "any number".to_string(),
+    };
+    Err(ArgumentProblem::ListLength { count, bounds })
+}
+
+/// A given value checked against its argument: a single value, or for a
+/// list argument a list of them, each checked and named by its index.
+fn check_given(argument: &Argument, value: &ArgumentValue) -> Result<Checked, ArgumentProblem> {
+    let wrong = |expected| ArgumentProblem::WrongType {
+        given: value.to_string(),
+        expected,
+    };
+    match (argument.list, value) {
+        (None, ArgumentValue::List(_)) => Err(wrong("a single value")),
+        (None, _) => check(argument, value),
+        (Some(_), ArgumentValue::List(values)) => {
+            allowed_count(argument, values.len())?;
+            let mut checked = Vec::with_capacity(values.len());
+            for (index, value) in values.iter().enumerate() {
+                let one = check(argument, value).map_err(|problem| ArgumentProblem::Item {
+                    index,
+                    problem: Box::new(problem),
+                })?;
+                checked.push(one);
+            }
+            Ok(Checked::List(checked))
+        }
+        (Some(_), _) => Err(wrong("a list")),
+    }
 }
 
 /// An argument's default as a value, if it has one.
@@ -656,61 +780,210 @@ struct Raw {
     bytes: Vec<u8>,
 }
 
-/// Each entry's raw value, by entry index; padding and checksums have none
-/// yet.
+/// What one entry writes, once worked out.
+#[derive(Debug, Clone, Default)]
+enum Slot {
+    /// Padding, or a value worked out later: a length, a count, a checksum.
+    #[default]
+    Empty,
+    /// A field's or checksum's raw value.
+    Value(Raw),
+    /// An array's elements: a scalar element's `Value`, a record's `Record`.
+    Elements(Vec<Slot>),
+    /// A record's entries, by its struct type's entry index.
+    Record(Vec<Slot>),
+}
+
+impl Slot {
+    fn raw(&self) -> Option<&Raw> {
+        match self {
+            Slot::Value(raw) => Some(raw),
+            _ => None,
+        }
+    }
+}
+
+/// Where a field's raw value comes from.
+enum Source<'a> {
+    /// One argument value, in the argument's unit.
+    Argument(&'a Checked, Option<&'a str>),
+    Constant(&'a Scalar),
+    Target(Option<&'a NativeId>),
+}
+
+/// Each entry's raw values, by entry index; padding and checksums have
+/// none yet.
 fn raw_values(
     packet: &CommandPacket,
+    types: &BTreeMap<String, StructType>,
     arguments: &Arguments<'_>,
     target: Option<&NativeId>,
     binary: bool,
-) -> Result<Vec<Option<Raw>>, EncodeError> {
-    let fail = |field: &Field, problem| EncodeError::Field {
+) -> Result<Vec<Slot>, EncodeError> {
+    let fail = |name: &str, problem| EncodeError::Field {
         packet: packet.name.clone(),
-        field: field.name.clone(),
+        field: name.to_string(),
         problem,
     };
-    let mut raws: Vec<Option<Raw>> = Vec::with_capacity(packet.entries.len());
+    let mut slots = Vec::with_capacity(packet.entries.len());
     for entry in &packet.entries {
-        let Entry::Field(field) = entry else {
-            raws.push(None);
-            continue;
+        let slot = match entry {
+            Entry::Field(field) => {
+                let source = if let Some(name) = &field.argument {
+                    let (checked, unit) = arguments
+                        .get(name.as_str())
+                        .ok_or_else(|| fail(&field.name, LAYOUT_ARGUMENT))?;
+                    Source::Argument(checked, *unit)
+                } else if let Some(value) = &field.value {
+                    Source::Constant(value)
+                } else if field.target == Some(true) {
+                    Source::Target(target)
+                } else {
+                    // A length or a count, filled in below from what it
+                    // measures.
+                    slots.push(Slot::Empty);
+                    continue;
+                };
+                let raw = scalar_raw(field, source, binary)
+                    .map_err(|problem| fail(&field.name, problem))?;
+                Slot::Value(raw)
+            }
+            Entry::Array(array) => array_slot(array, types, arguments, binary)
+                .map_err(|problem| fail(&array.name, problem))?,
+            _ => Slot::Empty,
         };
-        let value = if let Some(name) = &field.argument {
-            let checked = arguments
-                .get(name.as_str())
-                .ok_or(FieldProblem::Layout("an argument the command doesn't have"));
-            checked.and_then(|(checked, unit)| from_argument(field, checked, *unit, binary))
-        } else if let Some(value) = &field.value {
-            constant(field, value, binary)
-        } else if field.target == Some(true) {
-            target
-                .ok_or(FieldProblem::MissingTarget)
-                .and_then(|id| target_value(field, id, binary))
-        } else {
-            // A length, filled in below from the field that takes it.
-            raws.push(None);
-            continue;
-        };
-        let value = value.map_err(|problem| fail(field, problem))?;
-        let bytes = if binary {
-            run_bytes(field, &value).map_err(|problem| fail(field, problem))?
-        } else {
-            Vec::new()
-        };
-        raws.push(Some(Raw { value, bytes }));
+        slots.push(slot);
     }
     if binary {
-        fill_lengths(packet, &mut raws).map_err(|(field, problem)| fail(field, problem))?;
+        fill_lengths(packet, &mut slots).map_err(|(name, problem)| fail(name, problem))?;
+        fill_counts(packet, &mut slots).map_err(|(name, problem)| fail(name, problem))?;
     }
-    Ok(raws)
+    Ok(slots)
+}
+
+const LAYOUT_ARGUMENT: FieldProblem = FieldProblem::Layout("an argument the command doesn't have");
+
+/// A field's raw value from its source, and in a binary payload the bytes
+/// a string or bytes value writes.
+fn scalar_raw(field: &Field, source: Source<'_>, binary: bool) -> Result<Raw, FieldProblem> {
+    let value = match source {
+        Source::Argument(checked, unit) => from_argument(field, checked, unit, binary)?,
+        Source::Constant(value) => constant(field, value, binary)?,
+        Source::Target(id) => target_value(field, id.ok_or(FieldProblem::MissingTarget)?, binary)?,
+    };
+    let bytes = if binary {
+        run_bytes(field, &value)?
+    } else {
+        Vec::new()
+    };
+    Ok(Raw { value, bytes })
+}
+
+/// An array's elements: one per value of its list argument, or one record
+/// per value of the list arguments its records' fields take, which have
+/// the same length.
+fn array_slot(
+    array: &ArrayEntry,
+    types: &BTreeMap<String, StructType>,
+    arguments: &Arguments<'_>,
+    binary: bool,
+) -> Result<Slot, FieldProblem> {
+    let list = |name: &str| match arguments.get(name) {
+        Some((Checked::List(values), unit)) => Ok((values.as_slice(), *unit)),
+        _ => Err(FieldProblem::Layout("a list argument")),
+    };
+    let mut elements = Vec::new();
+    match &array.element {
+        Element::Scalar(element) => {
+            let name = array.argument.as_deref().ok_or(FieldProblem::Layout(
+                "an array that encodes a list argument",
+            ))?;
+            let (values, unit) = list(name)?;
+            let field = element.as_field(&array.name);
+            for (index, value) in values.iter().enumerate() {
+                let raw = scalar_raw(&field, Source::Argument(value, unit), binary)
+                    .map_err(|problem| in_element(index, None, problem))?;
+                elements.push(Slot::Value(raw));
+            }
+        }
+        Element::Struct { name } => {
+            let record = types
+                .get(name)
+                .ok_or(FieldProblem::Layout("a struct type the set has"))?;
+            let mut lists: Vec<(&str, &[Checked], Option<&str>)> = Vec::new();
+            for entry in &record.entries {
+                if let Entry::Field(Field {
+                    argument: Some(argument),
+                    ..
+                }) = entry
+                {
+                    let (values, unit) = list(argument)?;
+                    lists.push((argument, values, unit));
+                }
+            }
+            let Some(&(first, first_values, _)) = lists.first() else {
+                return Err(FieldProblem::Layout("records that take a list argument"));
+            };
+            let count = first_values.len();
+            if let Some((other, values, _)) = lists.iter().find(|(_, v, _)| v.len() != count) {
+                return Err(FieldProblem::BadCount {
+                    count: values.len(),
+                    reason: format!(
+                        "list {other} has {} and list {first} {count}, and lists that fill the \
+                         same records have the same length",
+                        count_of(values.len())
+                    ),
+                });
+            }
+            for index in 0..count {
+                let mut slots = Vec::with_capacity(record.entries.len());
+                for entry in &record.entries {
+                    let Entry::Field(field) = entry else {
+                        slots.push(Slot::Empty);
+                        continue;
+                    };
+                    let source = match (&field.argument, &field.value) {
+                        (Some(argument), _) => {
+                            let (_, values, unit) = lists
+                                .iter()
+                                .find(|(name, _, _)| name == argument)
+                                .ok_or(FieldProblem::Layout("a list argument"))?;
+                            let value = values
+                                .get(index)
+                                .ok_or(FieldProblem::Layout("lists of one length"))?;
+                            Source::Argument(value, *unit)
+                        }
+                        (None, Some(value)) => Source::Constant(value),
+                        (None, None) => {
+                            return Err(FieldProblem::Layout("a record field with a value"));
+                        }
+                    };
+                    let raw = scalar_raw(field, source, binary)
+                        .map_err(|problem| in_element(index, Some(&field.name), problem))?;
+                    slots.push(Slot::Value(raw));
+                }
+                elements.push(Slot::Record(slots));
+            }
+        }
+    }
+    Ok(Slot::Elements(elements))
+}
+
+/// A problem with one element of an array, or one field of its record.
+fn in_element(index: usize, field: Option<&str>, problem: FieldProblem) -> FieldProblem {
+    FieldProblem::Element {
+        index,
+        field: field.map(str::to_string),
+        problem: Box::new(problem),
+    }
 }
 
 /// Each length field's raw value, from the field that takes its length:
 /// `(length - add) / multiply`, which must be a whole number of at least 0.
 fn fill_lengths<'p>(
     packet: &'p CommandPacket,
-    raws: &mut [Option<Raw>],
-) -> Result<(), (&'p Field, FieldProblem)> {
+    slots: &mut [Slot],
+) -> Result<(), (&'p str, FieldProblem)> {
     for (data, entry) in packet.entries.iter().enumerate() {
         let Entry::Field(field) = entry else {
             continue;
@@ -718,20 +991,85 @@ fn fill_lengths<'p>(
         let Some(ByteLength::Field(from)) = &field.length else {
             continue;
         };
-        let length = raws
+        let length = slots
             .get(data)
-            .and_then(Option::as_ref)
+            .and_then(Slot::raw)
             .map_or(0, |raw| raw.bytes.len());
         let (length_at, value) =
-            length_raw(packet, from, length).map_err(|problem| (field, problem))?;
-        if let Some(slot) = raws.get_mut(length_at) {
-            *slot = Some(Raw {
+            length_raw(packet, from, length).map_err(|problem| (field.name.as_str(), problem))?;
+        if let Some(slot) = slots.get_mut(length_at) {
+            *slot = Slot::Value(Raw {
                 value,
                 bytes: Vec::new(),
             });
         }
     }
     Ok(())
+}
+
+/// Each array's count: exactly its fixed count, or its count field's raw
+/// value `(count - add) / multiply`, which every array it counts must give
+/// the same.
+fn fill_counts<'p>(
+    packet: &'p CommandPacket,
+    slots: &mut [Slot],
+) -> Result<(), (&'p str, FieldProblem)> {
+    let mut given: BTreeMap<usize, (&str, Value<'static>)> = BTreeMap::new();
+    for (index, entry) in packet.entries.iter().enumerate() {
+        let Entry::Array(array) = entry else {
+            continue;
+        };
+        let count = match slots.get(index) {
+            Some(Slot::Elements(elements)) => elements.len(),
+            _ => 0,
+        };
+        let fail = |problem| (array.name.as_str(), problem);
+        match &array.count {
+            Some(Count::Fixed { count: fixed }) if usize::try_from(*fixed) != Ok(count) => {
+                return Err(fail(FieldProblem::BadCount {
+                    count,
+                    reason: format!("the array holds exactly {fixed}"),
+                }));
+            }
+            Some(Count::Field(from)) => {
+                let (at, value) = count_raw(packet, from, count).map_err(fail)?;
+                match given.get(&at) {
+                    Some((first, earlier)) if *earlier != value => {
+                        return Err(fail(FieldProblem::BadCount {
+                            count,
+                            reason: format!(
+                                "{} counts array {first} too, which gives it {}, and this array \
+                                 gives it {}; arrays that share a count hold as many values",
+                                from.field,
+                                show_value(earlier),
+                                show_value(&value)
+                            ),
+                        }));
+                    }
+                    Some(_) => {}
+                    None => {
+                        given.insert(at, (array.name.as_str(), value.clone()));
+                        if let Some(slot) = slots.get_mut(at) {
+                            *slot = Slot::Value(Raw {
+                                value,
+                                bytes: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn show_value(value: &Value<'_>) -> String {
+    match value {
+        Value::Uint(n) => n.to_string(),
+        Value::Int(n) => n.to_string(),
+        _ => "a value".to_string(),
+    }
 }
 
 /// The raw value of the length field `from` names, for a value of `length`
@@ -741,6 +1079,33 @@ pub(crate) fn length_raw(
     from: &FromField,
     length: usize,
 ) -> Result<(usize, Value<'static>), FieldProblem> {
+    measure(packet, from, length, "length", |reason| {
+        FieldProblem::BadLength { length, reason }
+    })
+}
+
+/// The raw value of the count field `from` names, for an array of `count`
+/// elements, and that field's entry index.
+fn count_raw(
+    packet: &CommandPacket,
+    from: &FromField,
+    count: usize,
+) -> Result<(usize, Value<'static>), FieldProblem> {
+    measure(packet, from, count, "count", |reason| {
+        FieldProblem::BadCount { count, reason }
+    })
+}
+
+/// The raw value `(n - add) / multiply` of the field `from` names, which
+/// must be a whole number of at least 0 that fits it, and that field's
+/// entry index. `noun` is what `n` is; `bad` says why it doesn't fit.
+fn measure(
+    packet: &CommandPacket,
+    from: &FromField,
+    n: usize,
+    noun: &str,
+    bad: impl Fn(String) -> FieldProblem,
+) -> Result<(usize, Value<'static>), FieldProblem> {
     let found = packet
         .entries
         .iter()
@@ -749,21 +1114,22 @@ pub(crate) fn length_raw(
             Entry::Field(field) if field.name == from.field => Some((at, field)),
             _ => None,
         });
-    let Some((at, length_field)) = found else {
-        return Err(FieldProblem::Layout("a length from a field the packet has"));
+    let Some((at, measuring)) = found else {
+        return Err(FieldProblem::Layout(
+            "a length or count from a field the packet has",
+        ));
     };
     let multiply = i128::from(from.multiply.unwrap_or(1));
     if multiply < 1 {
-        return Err(FieldProblem::Layout("a length multiply of at least 1"));
+        return Err(FieldProblem::Layout("a multiply of at least 1"));
     }
     let add = i128::from(from.add.unwrap_or(0));
-    let stored = i128::try_from(length).map_or(-1, |length| length - add);
-    let bad = |reason: String| FieldProblem::BadLength { length, reason };
+    let stored = i128::try_from(n).map_or(-1, |n| n - add);
     if stored < 0 || stored % multiply != 0 {
         let base = match add.cmp(&0) {
-            Ordering::Greater => format!("(length - {add})"),
-            Ordering::Less => format!("(length + {})", -add),
-            Ordering::Equal => "length".to_string(),
+            Ordering::Greater => format!("({noun} - {add})"),
+            Ordering::Less => format!("({noun} + {})", -add),
+            Ordering::Equal => noun.to_string(),
         };
         let formula = if multiply == 1 {
             base
@@ -776,7 +1142,7 @@ pub(crate) fn length_raw(
         )));
     }
     let value =
-        integer_raw(length_field, stored / multiply, true).map_err(|problem| match problem {
+        integer_raw(measuring, stored / multiply, true).map_err(|problem| match problem {
             FieldProblem::RawRange { holds, .. } => bad(format!("{} holds {holds}", from.field)),
             problem => problem,
         })?;

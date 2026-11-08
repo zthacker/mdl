@@ -74,6 +74,10 @@ and commands in one pass.
       big-endian header
 - [x] Terminated values in fixed-size buffers (a C `char[16]`): the value
       ends at the terminator, the entry takes the whole buffer
+- [x] List arguments: a command argument that takes a list of values,
+      encoded by an array of values, or of records whose fields take one
+      list each; counts fixed, from a field (shared by arrays) or to the
+      end
 
 ## Phase 4: frontends
 

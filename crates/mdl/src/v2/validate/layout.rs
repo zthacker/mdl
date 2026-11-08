@@ -547,6 +547,15 @@ impl<'a> Layout<'a> {
             }
             Element::Struct { name } => Facts::of_struct(self.types.get(name.as_str())?),
         };
+        if element.size.max == Some(0) {
+            report.error(
+                Code::FieldSize,
+                &place.key("element"),
+                "an array element takes at least one bit; decoding refuses an empty one \
+                 (empty_element), so an array of them could never be read",
+            );
+            return None;
+        }
         let count_place = place.key("count");
         let (size, max_count) = match &array.count {
             None => {

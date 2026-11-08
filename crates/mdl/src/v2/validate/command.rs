@@ -9,13 +9,13 @@ use super::mapping::check_unit;
 use super::rules::{
     check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
 };
-use super::set::{KeyId, KeyValue, by_value, exact, key_order};
+use super::set::{KeyId, KeyValue, by_value, exact, key_order, used_types};
 use crate::v2::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::encode::raw_unchecked;
 use crate::v2::ir::{
-    Argument, ByteLength, Catalog, CommandPacket, Conversion, Encoding, Entry, Family, Field,
-    ParamType, Scalar, ScalarType, Set,
+    Argument, ArrayEntry, ByteLength, Catalog, CommandPacket, Conversion, Count, Element, Encoding,
+    Entry, Family, Field, ParamType, Scalar, ScalarElement, ScalarType, Set, StructType,
 };
 use crate::v2::text;
 use crate::v2::units::convert_between;
@@ -79,7 +79,15 @@ pub(super) fn check_packets(
             );
         }
         let arguments = command.map(|command| command.arguments.as_slice());
-        check_entries(packet, arguments, &packet_place, report);
+        let mut sources = Sources {
+            packet,
+            arguments,
+            types: &set.types,
+            set_place: place,
+            computed: computed_fields(packet, &packet_place, report),
+            encoded: BTreeMap::new(),
+        };
+        sources.check_entries(&packet_place, report);
     }
 }
 
@@ -88,7 +96,11 @@ pub(super) fn check_packets(
 /// decoding anything else. In a binary family those are integer and bool
 /// fields and fixed-length strings at static positions; in a JSON family,
 /// integer and string fields. Decoding a command reads exactly these.
-pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<KeyId, KeyValue>> {
+pub(crate) fn command_identities(
+    set: &Set,
+    family: &Family,
+    type_sizes: &BTreeMap<&str, u64>,
+) -> Vec<BTreeMap<KeyId, KeyValue>> {
     set.commands
         .iter()
         .map(|packet| {
@@ -97,9 +109,8 @@ pub(crate) fn command_identities(set: &Set, family: &Family) -> Vec<BTreeMap<Key
                 .iter()
                 .map(|(name, value)| (KeyId::Metadata(name.clone()), by_value(value)))
                 .collect();
-            // Command packets hold no struct types.
             let offsets = match family.encoding {
-                Encoding::Binary => static_offsets(&packet.entries, &BTreeMap::new()),
+                Encoding::Binary => static_offsets(&packet.entries, type_sizes),
                 _ => Vec::new(),
             };
             for (index, entry) in packet.entries.iter().enumerate() {
@@ -199,8 +210,14 @@ fn json_key(field: &Field, value: &Scalar) -> Option<(KeyId, KeyValue)> {
 /// payload matches at most one of them. Runs after every other check of
 /// the set: a packet with problems of its own is left out, since a key it
 /// lost to them would only echo them here.
-pub(super) fn check_distinct(set: &Set, family: &Family, place: &Place, report: &mut Report) {
-    let identities = command_identities(set, family);
+pub(super) fn check_distinct(
+    set: &Set,
+    family: &Family,
+    type_sizes: &BTreeMap<&str, u64>,
+    place: &Place,
+    report: &mut Report,
+) {
+    let identities = command_identities(set, family, type_sizes);
     let places: Vec<Place> = set
         .commands
         .iter()
@@ -267,224 +284,597 @@ fn check_metadata(
     }
 }
 
-/// What a command packet holds, and where each field's value comes from.
-/// `arguments` is `None` when the command is unknown (reported already).
-fn check_entries(
-    packet: &CommandPacket,
-    arguments: Option<&[Argument]>,
+/// Fields whose value comes from the data: each gives one later field's
+/// length, or the count of later arrays (several, which then share it).
+fn computed_fields<'p>(
+    packet: &'p CommandPacket,
     place: &Place,
     report: &mut Report,
-) {
-    // Fields a later entry takes a length from get their value from the
-    // data; one data field per length field, so the length has one answer.
-    let mut computed: BTreeSet<&str> = BTreeSet::new();
+) -> BTreeSet<&'p str> {
+    let mut lengths: BTreeSet<&str> = BTreeSet::new();
+    let mut counts: BTreeSet<&str> = BTreeSet::new();
     for (index, entry) in packet.entries.iter().enumerate() {
-        if let Entry::Field(Field {
-            name,
-            length: Some(ByteLength::Field(from)),
-            ..
-        }) = entry
-            && !computed.insert(from.field.as_str())
-        {
-            report.error(
-                Code::CommandShape,
-                &place
-                    .item("entries", index, "field", name)
-                    .key("length")
-                    .key("field"),
-                format!(
-                    "another field already takes its length from {}; in a command packet a \
-                     length field gives the length of one field",
-                    from.field
-                ),
-            );
-        }
-    }
-    let mut encoded: BTreeMap<&str, usize> = BTreeMap::new();
-    let mut target: Option<usize> = None;
-    for (index, entry) in packet.entries.iter().enumerate() {
-        let condition = match entry {
-            Entry::Field(field) => field
-                .when
-                .is_some()
-                .then_some(("field", field.name.as_str())),
-            Entry::Padding(padding) => padding.when.is_some().then_some(("padding", "")),
+        let (from, at, is_length) = match entry {
+            Entry::Field(Field {
+                name,
+                length: Some(ByteLength::Field(from)),
+                ..
+            }) => (
+                from,
+                place.item("entries", index, "field", name).key("length"),
+                true,
+            ),
+            Entry::Array(ArrayEntry {
+                name,
+                count: Some(Count::Field(from)),
+                ..
+            }) => (
+                from,
+                place.item("entries", index, "array", name).key("count"),
+                false,
+            ),
+            _ => continue,
+        };
+        let field = from.field.as_str();
+        let problem = match (is_length, lengths.contains(field), counts.contains(field)) {
+            (true, true, _) => Some(format!(
+                "another field already takes its length from {field}; in a command packet a \
+                 length field gives the length of one field"
+            )),
+            (true, _, true) | (false, true, _) => Some(format!(
+                "{field} gives {}; in a command packet a field gives one length, or the count \
+                 of arrays",
+                if is_length {
+                    "the count of an array"
+                } else {
+                    "a length"
+                }
+            )),
             _ => None,
         };
-        if let Some((label, name)) = condition {
-            report.error(
-                Code::CommandShape,
-                &place.item("entries", index, label, name).key("when"),
-                "every entry of a command packet is written; a condition could silently drop an \
-                 argument",
-            );
+        match problem {
+            Some(problem) => report.error(Code::CommandShape, &at.key("field"), problem),
+            None if is_length => {
+                lengths.insert(field);
+            }
+            None => {
+                counts.insert(field);
+            }
         }
-        let field = match entry {
-            Entry::Field(field) => field,
-            Entry::Padding(_) | Entry::Checksum(_) => continue,
-            Entry::Array(array) => {
-                let entry_place = place.item("entries", index, "array", &array.name);
+    }
+    lengths.union(&counts).copied().collect()
+}
+
+/// Where a command packet's values come from, as its entries are checked.
+struct Sources<'a> {
+    packet: &'a CommandPacket,
+    /// `None` when the command is unknown (reported already).
+    arguments: Option<&'a [Argument]>,
+    types: &'a BTreeMap<String, StructType>,
+    set_place: &'a Place,
+    /// Fields whose value comes from the data: a length or a count.
+    computed: BTreeSet<&'a str>,
+    /// Each argument encoded so far, and what encodes it.
+    encoded: BTreeMap<&'a str, String>,
+}
+
+/// Where a field is: at the top of the packet, or in the records of an
+/// array.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Level {
+    Top,
+    Record,
+}
+
+impl<'a> Sources<'a> {
+    /// What the packet holds, and where each value comes from.
+    fn check_entries(&mut self, place: &Place, report: &mut Report) {
+        let packet = self.packet;
+        let mut target: Option<usize> = None;
+        for (index, entry) in packet.entries.iter().enumerate() {
+            check_written(entry, &entry_place(place, index, entry), report);
+            match entry {
+                Entry::Padding(_) | Entry::Checksum(_) => {}
+                Entry::Struct(inner) => report.error(
+                    Code::CommandShape,
+                    &place.item("entries", index, "struct", &inner.name),
+                    "a command packet holds fields, arrays, padding and checksums",
+                ),
+                Entry::Array(array) => {
+                    let array_place = place.item("entries", index, "array", &array.name);
+                    self.check_array(array, &array_place, report);
+                }
+                Entry::Field(field) => {
+                    let field_place = place.item("entries", index, "field", &field.name);
+                    let at = format!("entries/{index}");
+                    self.check_field(field, Level::Top, at, false, &field_place, report);
+                    // One target field, so a payload can't hold two ids that
+                    // disagree.
+                    if field.target == Some(true) {
+                        match target {
+                            Some(first) => report.error(
+                                Code::CommandShape,
+                                &field_place.key("target"),
+                                format!(
+                                    "entries/{first} already holds the target's native id; a \
+                                     command packet holds it once"
+                                ),
+                            ),
+                            None => target = Some(index),
+                        }
+                    }
+                }
+            }
+        }
+        check_pointers(&packet.entries, place, report);
+        // A set may leave out an argument with a default (an older layout,
+        // from before the argument was added); the encoder then accepts only
+        // the default for it.
+        for argument in self.arguments.into_iter().flatten() {
+            if !self.encoded.contains_key(argument.name.as_str()) && argument.default.is_none() {
+                report.error(
+                    Code::UnmappedArgument,
+                    &place.key("canonical"),
+                    format!(
+                        "no field or array encodes argument {} of command {}",
+                        argument.name, packet.canonical
+                    ),
+                );
+            }
+        }
+    }
+
+    /// A field's one source of value, and the argument it encodes. `at`
+    /// names it for a later field that encodes the same argument;
+    /// `measured` says another field of its record takes a length from it,
+    /// which is refused there.
+    fn check_field(
+        &mut self,
+        field: &'a Field,
+        level: Level,
+        at: String,
+        measured: bool,
+        place: &Place,
+        report: &mut Report,
+    ) {
+        check_telemetry_keys(field, place, report);
+        if level == Level::Record {
+            if field.target.is_some() {
                 report.error(
                     Code::CommandShape,
-                    &entry_place,
-                    "a command packet holds fields, padding and checksums",
+                    &place.key("target"),
+                    "the target's native id is written once, at the top of a command packet, \
+                     not in each record of an array",
                 );
-                continue;
             }
-            Entry::Struct(inner) => {
-                let entry_place = place.item("entries", index, "struct", &inner.name);
+            if let Some(ByteLength::Field(_)) = field.length {
                 report.error(
                     Code::CommandShape,
-                    &entry_place,
-                    "a command packet holds fields, padding and checksums",
+                    &place.key("length"),
+                    "a field of a command record doesn't take its length from another field",
                 );
-                continue;
             }
-        };
-        let field_place = place.item("entries", index, "field", &field.name);
-        check_telemetry_keys(field, &field_place, report);
+        }
+        let computed = level == Level::Top && self.computed.contains(field.name.as_str());
+        // A record's target, or a length taken from the field, is reported
+        // already; it isn't echoed as no value.
+        let echo = level == Level::Record && (field.target.is_some() || measured);
         let sources = [
             field.value.is_some(),
             field.argument.is_some(),
-            field.target == Some(true),
-            computed.contains(field.name.as_str()),
+            field.target == Some(true) && level == Level::Top,
+            computed,
         ];
         match sources.iter().filter(|&&source| source).count() {
-            0 => report.error(
+            0 if !echo => report.error(
                 Code::NoValue,
-                &field_place,
-                format!(
-                    "field {} gets no value: give it a value, an argument or the target, or let \
-                     a later entry's length come from it",
-                    field.name
-                ),
+                place,
+                match level {
+                    Level::Top => format!(
+                        "field {} gets no value: give it a value, an argument or the target, or \
+                         let a later entry's length or count come from it",
+                        field.name
+                    ),
+                    Level::Record => format!(
+                        "field {} gets no value: give it a value or a list argument",
+                        field.name
+                    ),
+                },
             ),
-            1 => {}
+            0 | 1 => {}
             _ => report.error(
                 Code::CommandShape,
-                &field_place,
+                place,
                 format!(
                     "field {} gets its value from more than one place (a value, an argument, \
-                     the target, a later entry's length)",
+                     the target, a later entry's length or count)",
                     field.name
                 ),
             ),
         }
         if let Some(value) = &field.value {
-            check_value(field, value, &field_place.key("value"), report);
+            check_value(field, value, &place.key("value"), report);
         }
-        if let Some(is_target) = field.target {
-            check_target(field, is_target, &field_place, report);
+        if let (Some(is_target), Level::Top) = (field.target, level) {
+            check_target(field, is_target, place, report);
         }
-        // One target field, so a payload can't hold two ids that disagree.
-        if field.target == Some(true) {
-            match target {
-                Some(first) => report.error(
-                    Code::CommandShape,
-                    &field_place.key("target"),
-                    format!(
-                        "entries/{first} already holds the target's native id; a command packet \
-                         holds it once"
-                    ),
-                ),
-                None => target = Some(index),
+        check_inverse_keys(field, place, report);
+        if field.argument.is_none() && field.inverse.is_some() {
+            report.error(
+                Code::ConversionType,
+                &place.key("inverse"),
+                "an inverse converts an argument, and this field encodes none",
+            );
+        }
+        if let Some(name) = &field.argument {
+            let encoder = Encoder {
+                field,
+                what: format!("field {}", field.name),
+                argument: place.key("argument"),
+                own: place.clone(),
+            };
+            self.check_encoded(name, &encoder, level == Level::Record, at, report);
+        }
+    }
+
+    /// An array of a list argument's values, or of records whose fields
+    /// each take a list argument's values.
+    fn check_array(&mut self, array: &'a ArrayEntry, place: &Place, report: &mut Report) {
+        for (present, key, why) in [
+            (
+                array.canonical.is_some(),
+                "canonical",
+                "canonical maps telemetry to a param; a command array encodes a list argument",
+            ),
+            (
+                array.sample_interval_ms.is_some(),
+                "sample_interval_ms",
+                "sample_interval_ms spaces out telemetry samples; a command array has none",
+            ),
+            (
+                array.optional.is_some(),
+                "optional",
+                "optional is for telemetry members that may be missing; a command array is \
+                 always written",
+            ),
+        ] {
+            if present {
+                report.error(Code::CommandShape, &place.key(key), why);
             }
         }
-        let needs_inverse = field
-            .conversion
-            .as_ref()
-            .is_some_and(|c| !inverts_exactly(c));
-        if field.inverse.is_some() && !needs_inverse {
-            report.error(
-                Code::ConversionType,
-                &field_place.key("inverse"),
-                "an inverse is for a conversion that doesn't invert exactly (a polynomial, a \
-                 spline, a step table, a table whose values rise and fall); this field's does, or \
-                 it has none",
-            );
-        }
-        if let Some(inverse) = &field.inverse
-            && !matches!(
-                inverse,
-                Conversion::Linear { .. } | Conversion::Poly { .. } | Conversion::Table { .. }
-            )
-        {
-            report.error(
-                Code::ConversionType,
-                &field_place.key("inverse"),
-                "an inverse is a linear, polynomial or table conversion, engineering value to raw",
-            );
-        }
-        let (Some(name), Some(arguments)) = (&field.argument, arguments) else {
-            if field.argument.is_none() && field.inverse.is_some() {
-                report.error(
-                    Code::ConversionType,
-                    &field_place.key("inverse"),
-                    "an inverse converts an argument, and this field encodes none",
+        match &array.element {
+            Element::Scalar(element) => {
+                let element_place = place.key("element");
+                if !element.invalid.is_empty() {
+                    report.error(
+                        Code::CommandShape,
+                        &element_place.key("invalid"),
+                        "sentinels mark telemetry that has no reading; a command element always \
+                         has a value",
+                    );
+                }
+                let field = element.as_field(&array.name);
+                check_inverse_keys(&field, &element_place, report);
+                let Some(name) = &array.argument else {
+                    report.error(
+                        Code::NoValue,
+                        place,
+                        format!(
+                            "array {} gets no values: give it a list argument",
+                            array.name
+                        ),
+                    );
+                    return;
+                };
+                let encoder = Encoder {
+                    field: &field,
+                    what: format!("array {}'s elements", array.name),
+                    argument: place.key("argument"),
+                    own: element_place,
+                };
+                self.check_encoded(
+                    name,
+                    &encoder,
+                    true,
+                    format!("array {}", array.name),
+                    report,
                 );
+                self.check_list_fits(array, name, place, report);
             }
-            continue;
+            Element::Struct { name } => {
+                if array.argument.is_some() {
+                    report.error(
+                        Code::CommandShape,
+                        &place.key("argument"),
+                        format!(
+                            "array {}'s elements are records, whose fields name their own list \
+                             arguments; the array names none",
+                            array.name
+                        ),
+                    );
+                }
+                // An unknown type is reported with the set's references.
+                let Some(record) = self.types.get(name) else {
+                    return;
+                };
+                let takes_list = record
+                    .entries
+                    .iter()
+                    .any(|entry| matches!(entry, Entry::Field(field) if field.argument.is_some()));
+                if !takes_list {
+                    report.error(
+                        Code::NoValue,
+                        place,
+                        format!(
+                            "array {} gets no values: a field of its records takes a list \
+                             argument, whose length is the number of records",
+                            array.name
+                        ),
+                    );
+                }
+                let type_place = self.set_place.map_item("types", name, "type");
+                let measured: BTreeSet<&str> = record
+                    .entries
+                    .iter()
+                    .filter_map(|entry| match entry {
+                        Entry::Field(Field {
+                            length: Some(ByteLength::Field(from)),
+                            ..
+                        }) => Some(from.field.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                for (index, entry) in record.entries.iter().enumerate() {
+                    let entry_place = entry_place(&type_place, index, entry);
+                    check_written(entry, &entry_place, report);
+                    match entry {
+                        Entry::Padding(_) => {}
+                        Entry::Field(field) => {
+                            let at = format!("struct type {name}'s field {}", field.name);
+                            let from = measured.contains(field.name.as_str());
+                            self.check_field(field, Level::Record, at, from, &entry_place, report);
+                        }
+                        Entry::Array(_) | Entry::Struct(_) | Entry::Checksum(_) => report.error(
+                            Code::CommandShape,
+                            &entry_place,
+                            format!(
+                                "struct type {name} holds the records of command array {}, and a \
+                                 command record holds fields and padding",
+                                array.name
+                            ),
+                        ),
+                    }
+                }
+                check_pointers(&record.entries, &type_place, report);
+                for entry in &record.entries {
+                    if let Entry::Field(Field {
+                        argument: Some(name),
+                        ..
+                    }) = entry
+                    {
+                        self.check_list_fits(array, name, place, report);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every list the catalog lets a caller give fits the array's count:
+    /// exactly its fixed count, or no more than its count field holds and
+    /// no fewer than the field's `add` (below which the field would be
+    /// negative). A `multiply` that needs a length it divides is left to
+    /// encoding.
+    fn check_list_fits(&self, array: &ArrayEntry, name: &str, place: &Place, report: &mut Report) {
+        let Some(argument) = self
+            .arguments
+            .into_iter()
+            .flatten()
+            .find(|argument| argument.name == name)
+        else {
+            return;
         };
-        let argument_place = field_place.key("argument");
-        let Some(argument) = arguments.iter().find(|argument| &argument.name == name) else {
+        let Some(list) = argument.list else {
+            return;
+        };
+        let least = list.min.unwrap_or(0);
+        let problem = match &array.count {
+            Some(Count::Fixed { count }) if least != *count || list.max != Some(*count) => {
+                Some(format!("array {} holds exactly {count}", array.name))
+            }
+            Some(Count::Field(from)) => {
+                // A count field that isn't an unsigned integer with a size
+                // is reported with the layout.
+                let Some(max_raw) = self.count_field_max(&from.field) else {
+                    return;
+                };
+                // Past u64, the field holds any count a list can have.
+                let most = from.max_value(max_raw);
+                let add = from.add.unwrap_or(0);
+                match (list.max, most) {
+                    (None, Some(most)) => Some(format!("{} counts at most {most}", from.field)),
+                    (Some(max), Some(most)) if u64::from(max) > most => {
+                        Some(format!("{} counts at most {most}", from.field))
+                    }
+                    _ if add > 0 && i64::from(least) < add => Some(format!(
+                        "{} holds the count less {add}, so array {} holds at least {add}",
+                        from.field, array.name
+                    )),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let Some(problem) = problem else {
+            return;
+        };
+        let promise = match (list.min, list.max) {
+            (Some(min), Some(max)) if min == max => format!("exactly {min} values"),
+            (Some(min), Some(max)) => format!("{min} to {max} values"),
+            (Some(min), None) => format!("at least {min} values"),
+            (None, Some(max)) => format!("up to {max} values"),
+            (None, None) => "any number of values".to_string(),
+        };
+        report.error(
+            Code::ValueRange,
+            &place.key("count"),
+            format!(
+                "argument {name} takes {promise}, but {problem}; give the list bounds the array \
+                 can hold"
+            ),
+        );
+    }
+
+    /// The largest raw value of the packet's field `name`, if it's an
+    /// unsigned integer with a size.
+    fn count_field_max(&self, name: &str) -> Option<u64> {
+        self.packet.entries.iter().find_map(|entry| match entry {
+            Entry::Field(field) if field.name == name && field.ty == ScalarType::Uint => {
+                let size = field.size_bits.filter(|size| (1..=64).contains(size))?;
+                Some(if size == 64 {
+                    u64::MAX
+                } else {
+                    (1 << size) - 1
+                })
+            }
+            _ => None,
+        })
+    }
+
+    /// The argument an encoder names: the command has it, nothing else
+    /// encodes it, it's a list exactly when the encoder is an array's, and
+    /// its type fits the encoder.
+    fn check_encoded(
+        &mut self,
+        name: &'a str,
+        encoder: &Encoder<'_>,
+        in_array: bool,
+        at: String,
+        report: &mut Report,
+    ) {
+        let Some(arguments) = self.arguments else {
+            return;
+        };
+        let Some(argument) = arguments.iter().find(|argument| argument.name == name) else {
             report.error(
                 Code::UnknownArgument,
-                &argument_place,
-                format!("command {} has no argument {name}", packet.canonical),
+                &encoder.argument,
+                format!("command {} has no argument {name}", self.packet.canonical),
             );
-            continue;
+            return;
         };
-        if let Some(first) = encoded.get(name.as_str()) {
+        if let Some(first) = self.encoded.get(name) {
             report.error(
                 Code::DuplicateMapping,
-                &argument_place,
-                format!("argument {name} is already encoded by entries/{first}"),
+                &encoder.argument,
+                format!("argument {name} is already encoded by {first}"),
             );
         } else {
-            encoded.insert(name, index);
+            self.encoded.insert(name, at);
         }
-        check_argument_field(field, argument, &field_place, report);
-    }
-    check_pointers(packet, place, report);
-    // A set may leave out an argument with a default (an older layout, from
-    // before the argument was added); the encoder then accepts only the
-    // default for it.
-    for argument in arguments.into_iter().flatten() {
-        if !encoded.contains_key(argument.name.as_str()) && argument.default.is_none() {
+        let problem = match (argument.list.is_some(), in_array) {
+            (true, false) => Some("a list, so an array encodes it, not a field"),
+            (false, true) => {
+                Some("a single value, so a field at the top of the packet encodes it, not an array")
+            }
+            _ => None,
+        };
+        if let Some(problem) = problem {
             report.error(
-                Code::UnmappedArgument,
-                &place.key("canonical"),
-                format!(
-                    "no field encodes argument {} of command {}",
-                    argument.name, packet.canonical
-                ),
+                Code::CanonicalType,
+                &encoder.argument,
+                format!("argument {name} is {problem}"),
             );
+            return;
         }
+        check_argument_field(encoder, argument, report);
     }
 }
 
-/// Each field of a JSON command packet is written at its own place inside
-/// the payload's object: no pointer is empty (the whole document), and none
-/// equals another or leads into it (`/a` and `/a/b`).
-fn check_pointers(packet: &CommandPacket, place: &Place, report: &mut Report) {
+/// Every entry of a command packet is written, so none has a condition.
+fn check_written(entry: &Entry, place: &Place, report: &mut Report) {
+    let when = match entry {
+        Entry::Field(field) => field.when.is_some(),
+        Entry::Array(array) => array.when.is_some(),
+        Entry::Padding(padding) => padding.when.is_some(),
+        Entry::Struct(inner) => inner.when.is_some(),
+        Entry::Checksum(_) => false,
+    };
+    if when {
+        report.error(
+            Code::CommandShape,
+            &place.key("when"),
+            "every entry of a command packet is written; a condition could silently drop an \
+             argument",
+        );
+    }
+}
+
+/// An inverse is for a field that encodes an argument through a conversion
+/// that doesn't invert exactly, and is itself a linear, polynomial or table
+/// conversion.
+fn check_inverse_keys(field: &Field, place: &Place, report: &mut Report) {
+    let Some(explicit) = &field.inverse else {
+        return;
+    };
+    let needs_inverse = field
+        .conversion
+        .as_ref()
+        .is_some_and(|c| !inverts_exactly(c));
+    if !needs_inverse {
+        report.error(
+            Code::ConversionType,
+            &place.key("inverse"),
+            "an inverse is for a conversion that doesn't invert exactly (a polynomial, a \
+             spline, a step table, a table whose values rise and fall); this one does, or there \
+             is none",
+        );
+    }
+    if !matches!(
+        explicit,
+        Conversion::Linear { .. } | Conversion::Poly { .. } | Conversion::Table { .. }
+    ) {
+        report.error(
+            Code::ConversionType,
+            &place.key("inverse"),
+            "an inverse is a linear, polynomial or table conversion, engineering value to raw",
+        );
+    }
+}
+
+fn entry_place(container: &Place, index: usize, entry: &Entry) -> Place {
+    let (label, name) = match entry {
+        Entry::Field(field) => ("field", field.name.as_str()),
+        Entry::Array(array) => ("array", array.name.as_str()),
+        Entry::Struct(inner) => ("struct", inner.name.as_str()),
+        Entry::Checksum(checksum) => ("checksum", checksum.name.as_str()),
+        Entry::Padding(_) => ("padding", ""),
+    };
+    container.item("entries", index, label, name)
+}
+
+/// Each field and array of a JSON command packet, or of a record, is
+/// written at its own place inside its object: no pointer is empty (the
+/// whole object), and none equals another or leads into it (`/a` and
+/// `/a/b`).
+fn check_pointers(entries: &[Entry], place: &Place, report: &mut Report) {
     let mut written: Vec<(Vec<String>, &str)> = Vec::new();
-    for (index, entry) in packet.entries.iter().enumerate() {
-        let Entry::Field(field) = entry else {
+    for (index, entry) in entries.iter().enumerate() {
+        let (label, name, pointer) = match entry {
+            Entry::Field(field) => ("field", &field.name, &field.pointer),
+            Entry::Array(array) => ("array", &array.name, &array.pointer),
+            _ => continue,
+        };
+        let Some(tokens) = pointer.as_deref().and_then(pointer_tokens) else {
             continue;
         };
-        let Some(tokens) = field.pointer.as_deref().and_then(pointer_tokens) else {
-            continue;
-        };
+        let pointer_place = place.item("entries", index, label, name).key("pointer");
         if tokens.is_empty() {
             report.error(
                 Code::CommandShape,
-                &place
-                    .item("entries", index, "field", &field.name)
-                    .key("pointer"),
+                &pointer_place,
                 format!(
-                    "a command payload is a JSON object, so field {} is written under a key, not \
-                     at the empty pointer",
-                    field.name
+                    "a command payload and its records are JSON objects, so {name} is written \
+                     under a key, not at the empty pointer"
                 ),
             );
             continue;
@@ -495,18 +885,15 @@ fn check_pointers(packet: &CommandPacket, place: &Place, report: &mut Report) {
         {
             report.error(
                 Code::Overlap,
-                &place
-                    .item("entries", index, "field", &field.name)
-                    .key("pointer"),
+                &pointer_place,
                 format!(
-                    "{} and {other} would be written to the same place: one pointer equals or \
-                     leads into the other",
-                    field.name
+                    "{name} and {other} would be written to the same place: one pointer equals \
+                     or leads into the other"
                 ),
             );
             continue;
         }
-        written.push((tokens, &field.name));
+        written.push((tokens, name));
     }
 }
 
@@ -699,9 +1086,22 @@ fn integer_range(field: &Field) -> Option<(i128, i128)> {
     }
 }
 
+/// A field, or an array's element taken as a field, that encodes an
+/// argument, with where its keys are reported.
+struct Encoder<'a> {
+    field: &'a Field,
+    /// How messages name it: `field x`, `array x's elements`.
+    what: String,
+    /// Where it names the argument.
+    argument: Place,
+    /// Where its own keys are: conversion, inverse, unit.
+    own: Place,
+}
+
 /// An argument's type fits the field that encodes it, through the
 /// field's conversion, in the field's unit.
-fn check_argument_field(field: &Field, argument: &Argument, place: &Place, report: &mut Report) {
+fn check_argument_field(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) {
+    let field = encoder.field;
     let states = matches!(field.conversion, Some(Conversion::States { .. }));
     let plain = field.conversion.is_none();
     let numeric = matches!(
@@ -731,10 +1131,10 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
     if !fits {
         report.error(
             Code::CanonicalType,
-            &place.key("argument"),
+            &encoder.argument,
             format!(
-                "field {} can't encode argument {}, which is {}",
-                field.name,
+                "{} can't encode argument {}, which is {}",
+                encoder.what,
                 argument.name,
                 requirement(argument.ty)
             ),
@@ -747,7 +1147,7 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
     {
         report.error(
             Code::ConversionType,
-            &place.key("conversion"),
+            &encoder.own.key("conversion"),
             format!(
                 "{} doesn't invert exactly, so a field that encodes an argument through it needs \
                  an inverse (engineering value to raw)",
@@ -757,13 +1157,13 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
     }
     // Coverage is checked at the range's ends, which bound the raw values
     // only once the inverse is known to be monotonic over the range.
-    let monotonic = check_inverse(field, argument, place, report);
+    let monotonic = check_inverse(encoder, argument, report);
     if let Some(Conversion::Linear { scale, .. }) = field.conversion
         && scale == 0.0
     {
         report.error(
             Code::ConversionType,
-            &place.key("conversion").key("scale"),
+            &encoder.own.key("conversion").key("scale"),
             "a linear conversion with scale 0 has no inverse, so it can't encode an argument",
         );
     }
@@ -773,7 +1173,7 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
         let mut seen = BTreeSet::new();
         let mut misspelled = false;
         for (index, state) in states.iter().enumerate() {
-            let state_place = place.key("conversion").at("states", index);
+            let state_place = encoder.own.key("conversion").at("states", index);
             if !argument.states.contains(&state.name) {
                 misspelled = true;
                 report.error(
@@ -802,7 +1202,7 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
             if !states.iter().any(|listed| &listed.name == state) {
                 report.error(
                     Code::CanonicalType,
-                    &place.key("conversion"),
+                    &encoder.own.key("conversion"),
                     format!(
                         "argument {}'s state {state:?} has no raw value here, so it couldn't be \
                          sent",
@@ -813,7 +1213,7 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
         }
     }
     if monotonic {
-        check_coverage(field, argument, place, report);
+        check_coverage(encoder, argument, report);
     }
     if matches!(
         argument.ty,
@@ -824,7 +1224,7 @@ fn check_argument_field(field: &Field, argument: &Argument, place: &Place, repor
             argument.unit.as_deref(),
             &argument.name,
             argument.ty == ParamType::F64,
-            &place.key("unit"),
+            &encoder.own.key("unit"),
             report,
         );
     }
@@ -854,7 +1254,8 @@ fn conversion_name(conversion: &Conversion) -> &'static str {
 /// and an explicit inverse must only rise or only fall across the range,
 /// which decoding relies on. Whether coverage can then be checked at the
 /// ends.
-fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut Report) -> bool {
+fn check_inverse(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) -> bool {
+    let field = encoder.field;
     let Some(conversion) = &field.conversion else {
         return true;
     };
@@ -865,6 +1266,14 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
         return true;
     }
     if !inverts_exactly(conversion) && field.inverse.is_none() {
+        return false;
+    }
+    // A malformed inverse is reported with the set's conversions.
+    if field
+        .inverse
+        .as_ref()
+        .is_some_and(|explicit| !well_formed(explicit))
+    {
         return false;
     }
     let range = argument.range.unwrap_or_default();
@@ -878,7 +1287,7 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
         }
         report.error(
             Code::ValueRange,
-            &place.key("argument"),
+            &encoder.argument,
             format!(
                 "argument {} is encoded through {}, so it needs a range with both ends to check \
                  the conversion over",
@@ -898,11 +1307,11 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
         if inverse(field, field_end) == Converted::Outside {
             report.error(
                 Code::ValueRange,
-                &place.key("argument"),
+                &encoder.argument,
                 format!(
-                    "argument {}'s range reaches {end}, past the points field {} encodes it \
-                     through; keep the range inside them, or let the conversion extrapolate",
-                    argument.name, field.name
+                    "argument {}'s range reaches {end}, past the points of {}; keep the range \
+                     inside them, or let the conversion extrapolate",
+                    argument.name, encoder.what
                 ),
             );
             return false;
@@ -910,9 +1319,7 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
     }
     // A table that inverts exactly is monotonic by construction.
     if let Some(explicit) = &field.inverse
-        && !monotonic_over(
-            explicit, field_min, field_max, field, argument, place, report,
-        )
+        && !monotonic_over(explicit, field_min, field_max, encoder, argument, report)
     {
         return false;
     }
@@ -930,12 +1337,12 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
             if !(first <= raw && raw <= last) {
                 report.error(
                     Code::ValueRange,
-                    &place.key("argument"),
+                    &encoder.argument,
                     format!(
-                        "argument {}'s range end {end} encodes to raw {raw}, outside field {}'s \
-                         points ({first} to {last}), so decoding couldn't read it back; narrow \
+                        "argument {}'s range end {end} encodes to raw {raw}, outside the points \
+                         of {} ({first} to {last}), so decoding couldn't read it back; narrow \
                          the range, widen the points, or let the conversion extrapolate",
-                        argument.name, field.name
+                        argument.name, encoder.what
                     ),
                 );
                 return false;
@@ -943,6 +1350,18 @@ fn check_inverse(field: &Field, argument: &Argument, place: &Place, report: &mut
         }
     }
     true
+}
+
+/// A conversion that can be evaluated: a polynomial with a coefficient, a
+/// table with at least two points in strictly increasing raw order.
+fn well_formed(conversion: &Conversion) -> bool {
+    match conversion {
+        Conversion::Poly { coefficients } => !coefficients.is_empty(),
+        Conversion::Table { points, .. } | Conversion::Spline { points, .. } => {
+            points.len() >= 2 && points.windows(2).all(|pair| pair[0].raw < pair[1].raw)
+        }
+        Conversion::Linear { .. } | Conversion::States { .. } => true,
+    }
 }
 
 /// The raw values a table's or spline's points span, when it doesn't
@@ -975,9 +1394,8 @@ fn monotonic_over(
     explicit: &Conversion,
     min: f64,
     max: f64,
-    field: &Field,
+    encoder: &Encoder<'_>,
     argument: &Argument,
-    place: &Place,
     report: &mut Report,
 ) -> bool {
     let inputs: Vec<f64> = match explicit {
@@ -1009,12 +1427,12 @@ fn monotonic_over(
         if rising && falling {
             report.error(
                 Code::ConversionType,
-                &place.key("inverse"),
+                &encoder.own.key("inverse"),
                 format!(
-                    "field {}'s inverse rises and falls over argument {}'s range (it turns near \
+                    "the inverse of {} rises and falls over argument {}'s range (it turns near \
                      {x}), so a raw value can't be traced back; give an inverse that only rises \
                      or only falls from {min} to {max}",
-                    field.name, argument.name
+                    encoder.what, argument.name
                 ),
             );
             return false;
@@ -1028,7 +1446,8 @@ fn monotonic_over(
 /// the range's ends through the encoder's inverse (which bound every value
 /// in range: `check_inverse` makes sure the inverse is monotonic). An
 /// argument without a range promises every value of its type.
-fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mut Report) {
+fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) {
+    let field = encoder.field;
     let Some((field_low, field_high)) =
         integer_range(field).filter(|_| field.ty != ScalarType::Bool)
     else {
@@ -1074,11 +1493,11 @@ fn check_coverage(field: &Field, argument: &Argument, place: &Place, report: &mu
     };
     report.error(
         Code::ValueRange,
-        &place.key("argument"),
+        &encoder.argument,
         format!(
-            "argument {} {promise}, but field {} holds raw {field_low} to {field_high}; give the \
-             argument a range the field can hold",
-            argument.name, field.name
+            "argument {} {promise}, but {} holds raw {field_low} to {field_high}; give the \
+             argument a range it can hold",
+            argument.name, encoder.what
         ),
     );
 }
@@ -1107,7 +1526,33 @@ fn requirement(ty: ParamType) -> &'static str {
 /// Telemetry fields don't take command-only keys: a field in a packet or
 /// struct type has no constant value, argument, inverse or target.
 pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &mut Report) {
+    let command_only = |key: &str, at: &Place, report: &mut Report| {
+        report.error(
+            Code::CommandOnly,
+            at,
+            format!(
+                "{key} belongs to command packets; a telemetry entry's value is read from the \
+                 message"
+            ),
+        );
+    };
     for (index, entry) in entries.iter().enumerate() {
+        if let Entry::Array(array) = entry {
+            let array_place = place.item("entries", index, "array", &array.name);
+            if array.argument.is_some() {
+                command_only("argument", &array_place.key("argument"), report);
+            }
+            if let Element::Scalar(ScalarElement {
+                inverse: Some(_), ..
+            }) = &array.element
+            {
+                command_only(
+                    "inverse",
+                    &array_place.key("element").key("inverse"),
+                    report,
+                );
+            }
+        }
         let Entry::Field(field) = entry else {
             continue;
         };
@@ -1119,12 +1564,49 @@ pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &
             (field.target.is_some(), "target"),
         ] {
             if present {
+                command_only(key, &field_place.key(key), report);
+            }
+        }
+    }
+}
+
+/// The struct types command arrays hold records of.
+pub(super) fn record_types(set: &Set) -> BTreeSet<&str> {
+    set.commands
+        .iter()
+        .flat_map(|packet| &packet.entries)
+        .filter_map(|entry| match entry {
+            Entry::Array(ArrayEntry {
+                element: Element::Struct { name },
+                ..
+            }) => Some(name.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A struct type holds command records or telemetry, not both: a record's
+/// fields take arguments and constants, which telemetry can't.
+pub(super) fn check_record_uses(set: &Set, place: &Place, report: &mut Report) {
+    let records = record_types(set);
+    let packets = set
+        .packets
+        .iter()
+        .map(|packet| (format!("telemetry packet {}", packet.name), &packet.entries));
+    let types = set
+        .types
+        .iter()
+        .map(|(name, struct_type)| (format!("struct type {name}"), &struct_type.entries));
+    let mut reported = BTreeSet::new();
+    for (user, entries) in packets.chain(types) {
+        for used in used_types(entries) {
+            if records.contains(used) && reported.insert(used) {
                 report.error(
-                    Code::CommandOnly,
-                    &field_place.key(key),
+                    Code::CommandShape,
+                    &place.map_item("types", used, "type"),
                     format!(
-                        "{key} belongs to command packets; a telemetry field's value is read \
-                         from the message"
+                        "struct type {used} holds the records of a command array, and {user} \
+                         uses it too; a struct type holds command records or telemetry, not both"
                     ),
                 );
             }
