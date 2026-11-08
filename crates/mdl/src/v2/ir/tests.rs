@@ -30,6 +30,31 @@ fn a_bundle_round_trips_to_the_same_canonical_text() {
 }
 
 #[test]
+fn a_list_argument_says_how_many_values_it_takes() {
+    let mut argument = Argument::new("lat", ParamType::F64);
+    argument.list = Some(ListBounds::new(Some(1), Some(4)));
+    let text = canonical(&argument);
+    assert_eq!(
+        text,
+        r#"{"list":{"max":4,"min":1},"name":"lat","type":"f64"}"#
+    );
+    let back: Argument = serde_json::from_str(&text).unwrap();
+    assert_eq!(back, argument);
+    // Open ends are left out; an argument without a list has none.
+    argument.list = Some(ListBounds::default());
+    assert_eq!(
+        canonical(&argument),
+        r#"{"list":{},"name":"lat","type":"f64"}"#
+    );
+    argument.list = None;
+    assert_eq!(canonical(&argument), r#"{"name":"lat","type":"f64"}"#);
+    assert!(
+        rejects::<Argument>(json!({ "name": "a", "type": "f64", "list": { "most": 2 } }))
+            .contains("unknown field")
+    );
+}
+
+#[test]
 fn absent_values_are_omitted_not_written_as_null() {
     let mut field = Field::new("bus_mv", ScalarType::Uint);
     field.size_bits = Some(16);
@@ -527,14 +552,17 @@ mod properties {
                 name(),
                 prop::option::of(count),
                 (scalar_type(), prop::option::of(byte_order())),
-                prop::option::of(1.0_f64..1000.0)
+                prop::option::of(1.0_f64..1000.0),
+                (prop::option::of(name()), prop::option::of(conversion()))
             )
-                .prop_map(|(n, count, (ty, order), interval)| {
+                .prop_map(|(n, count, (ty, order), interval, (argument, inverse))| {
                     let mut element = ScalarElement::new(ty);
                     element.byte_order = order;
+                    element.inverse = inverse;
                     let mut a = ArrayEntry::new(n, Element::Scalar(element));
                     a.count = count;
                     a.sample_interval_ms = interval;
+                    a.argument = argument;
                     Entry::Array(a)
                 }),
         ]

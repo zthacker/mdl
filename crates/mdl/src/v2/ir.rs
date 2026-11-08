@@ -590,6 +590,11 @@ pub struct Argument {
     /// Numeric arguments: the values a caller may give, inclusive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<ArgumentRange>,
+    /// A list argument: the caller gives a list of values of `type`, each
+    /// with the argument's unit, states and range, and an array entry
+    /// encodes them. How many values it takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ListBounds>,
     /// The value used when a caller leaves the argument out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Literal>,
@@ -605,6 +610,7 @@ impl Argument {
             unit: None,
             states: Vec::new(),
             range: None,
+            list: None,
             default: None,
             description: None,
         }
@@ -634,6 +640,24 @@ pub struct ArgumentRange {
 impl ArgumentRange {
     pub fn new(min: Option<f64>, max: Option<f64>) -> Self {
         ArgumentRange { min, max }
+    }
+}
+
+/// How many values a list argument takes, inclusive; either end may be
+/// open.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct ListBounds {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<u32>,
+}
+
+impl ListBounds {
+    pub fn new(min: Option<u32>, max: Option<u32>) -> Self {
+        ListBounds { min, max }
     }
 }
 
@@ -1419,6 +1443,11 @@ pub struct ArrayEntry {
     /// Numeric scalar elements: the catalog param each element maps to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical: Option<String>,
+    /// Command packets, scalar elements: the list argument the elements
+    /// encode, element *i* its value *i*. A struct element's fields name
+    /// their own list arguments.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument: Option<String>,
     /// With `canonical`: element *i* is a sample at packet time + *i* ×
     /// this interval (a high-rate block). Without it, every element is a
     /// sample at packet time, with its index recorded.
@@ -1447,6 +1476,7 @@ impl ArrayEntry {
             count: None,
             element,
             canonical: None,
+            argument: None,
             sample_interval_ms: None,
             when: None,
             optional: None,
@@ -1565,6 +1595,10 @@ pub struct ScalarElement {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub invalid: Vec<Scalar>,
+    /// Command packets: as a field's `inverse`, for elements that encode a
+    /// list argument through a conversion that doesn't invert exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inverse: Option<Conversion>,
 }
 
 impl ScalarElement {
@@ -1578,7 +1612,23 @@ impl ScalarElement {
             conversion: None,
             unit: None,
             invalid: Vec::new(),
+            inverse: None,
         }
+    }
+
+    /// The element as a field named `name`: what it is, without a
+    /// position, so the rules for fields apply to it.
+    pub(crate) fn as_field(&self, name: &str) -> Field {
+        let mut field = Field::new(name, self.ty);
+        field.size_bits = self.size_bits;
+        field.byte_order = self.byte_order;
+        field.length = self.length.clone();
+        field.text = self.text;
+        field.conversion = self.conversion.clone();
+        field.unit = self.unit.clone();
+        field.invalid = self.invalid.clone();
+        field.inverse = self.inverse.clone();
+        field
     }
 }
 

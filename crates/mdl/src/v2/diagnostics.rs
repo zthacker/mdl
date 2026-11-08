@@ -7,6 +7,7 @@
 //! suite lists the codes an invalid document produces, while the wording of
 //! messages is free.
 
+use std::collections::BTreeSet;
 use std::fmt;
 
 /// What kind of problem a diagnostic reports. Stable once released: a code
@@ -415,18 +416,13 @@ impl Place {
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     diagnostics: Vec<(Vec<Segment>, Diagnostic)>,
+    /// What's been reported: code, path, message and first definition.
+    seen: BTreeSet<(Code, String, String, Option<String>)>,
 }
 
 impl Report {
     pub(crate) fn error(&mut self, code: Code, place: &Place, message: impl Into<String>) {
-        let diagnostic = Diagnostic {
-            code,
-            path: pointer(&place.segments),
-            context: place.context.clone(),
-            message: message.into(),
-            first: None,
-        };
-        self.diagnostics.push((place.segments.clone(), diagnostic));
+        self.push(code, place, message.into(), None);
     }
 
     /// Something at `place` that was already defined at `first`.
@@ -437,10 +433,26 @@ impl Report {
         first: &Place,
         message: impl Into<String>,
     ) {
-        self.error(code, place, message);
-        if let Some((_, diagnostic)) = self.diagnostics.last_mut() {
-            diagnostic.first = Some(pointer(&first.segments));
+        self.push(code, place, message.into(), Some(pointer(&first.segments)));
+    }
+
+    /// Adds a diagnostic unless the same one is there already: a check that
+    /// runs for each use of a shared part (a struct type two command
+    /// packets use) finds the same problem each time.
+    fn push(&mut self, code: Code, place: &Place, message: String, first: Option<String>) {
+        let path = pointer(&place.segments);
+        let key = (code, path.clone(), message.clone(), first.clone());
+        if !self.seen.insert(key) {
+            return;
         }
+        let diagnostic = Diagnostic {
+            code,
+            path,
+            context: place.context.clone(),
+            message,
+            first,
+        };
+        self.diagnostics.push((place.segments.clone(), diagnostic));
     }
 
     /// Whether anything at or under `place` was reported, so a later check

@@ -74,6 +74,7 @@ pub(super) fn check_all(
         let type_sizes = exact_type_sizes(&set.types, &heights);
         check_packets(set, family, &scope, &type_sizes, &place, report);
         command::check_packets(set, family, &bundle.catalog, &place, report);
+        command::check_record_uses(set, &place, report);
         for (index, packet) in set.commands.iter().enumerate() {
             let packet_place = place.item("commands", index, "command", &packet.name);
             check_entries(
@@ -86,7 +87,7 @@ pub(super) fn check_all(
         }
         if let Some(family) = family {
             check_layout(set, family, &bundle.catalog, &heights, &place, report);
-            command::check_distinct(set, family, &place, report);
+            command::check_distinct(set, family, &type_sizes, &place, report);
         }
     }
 }
@@ -108,6 +109,7 @@ fn check_layout(
     // A type's size is known before anything that uses it is checked.
     let mut order: Vec<(&String, &StructType)> = set.types.iter().collect();
     order.sort_by_key(|(name, _)| heights.get(name.as_str()).copied().unwrap_or(0));
+    let records = command::record_types(set);
     for (name, struct_type) in order {
         let type_place = place.map_item("types", name, "type");
         let shape = layout.check_container(
@@ -118,7 +120,10 @@ fn check_layout(
             report,
         );
         mapping::check_entries(&struct_type.entries, catalog, &type_place, report);
-        command::check_telemetry_fields(&struct_type.entries, &type_place, report);
+        // A command record's fields are checked with its command packets.
+        if !records.contains(name.as_str()) {
+            command::check_telemetry_fields(&struct_type.entries, &type_place, report);
+        }
         if let Some(shape) = shape {
             layout.types.insert(name, shape);
         }
@@ -1041,7 +1046,7 @@ fn check_entries(
         }
         match entry {
             Entry::Field(field) => check_field(field, kind, scope, &place, report),
-            Entry::Array(array) => check_array(array, scope, &place, report),
+            Entry::Array(array) => check_array(array, kind, scope, &place, report),
             Entry::Struct(entry) => {
                 check_type_ref(&entry.struct_type, scope, &place.key("struct"), report);
                 if let Some(pointer) = &entry.pointer {
@@ -1154,6 +1159,9 @@ fn check_field(field: &Field, kind: Container, scope: &Scope, place: &Place, rep
     if let Some(conversion) = &field.conversion {
         check_conversion(conversion, &place.key("conversion"), report);
     }
+    if let Some(inverse) = &field.inverse {
+        check_conversion(inverse, &place.key("inverse"), report);
+    }
     check_invalid(&field.invalid, place, report);
     if let Some(when) = &field.when {
         check_condition(when, &place.key("when"), 1, report);
@@ -1170,8 +1178,18 @@ fn check_text(text: Option<TextEncoding>, place: &Place, report: &mut Report) {
     }
 }
 
-fn check_array(array: &ArrayEntry, scope: &Scope, place: &Place, report: &mut Report) {
-    if let Some(canonical) = &array.canonical {
+fn check_array(
+    array: &ArrayEntry,
+    kind: Container,
+    scope: &Scope,
+    place: &Place,
+    report: &mut Report,
+) {
+    if let Some(canonical) = array
+        .canonical
+        .as_ref()
+        .filter(|_| kind != Container::Command)
+    {
         check_canonical(canonical, scope, &place.key("canonical"), report);
     }
     if let Some(interval) = array.sample_interval_ms {
@@ -1211,6 +1229,9 @@ fn check_element(element: &ScalarElement, place: &Place, report: &mut Report) {
     check_text(element.text, place, report);
     if let Some(conversion) = &element.conversion {
         check_conversion(conversion, &place.key("conversion"), report);
+    }
+    if let Some(inverse) = &element.inverse {
+        check_conversion(inverse, &place.key("inverse"), report);
     }
     check_invalid(&element.invalid, place, report);
 }
@@ -1493,7 +1514,7 @@ fn check_type_graph<'a>(
     height
 }
 
-fn used_types(entries: &[Entry]) -> BTreeSet<&str> {
+pub(super) fn used_types(entries: &[Entry]) -> BTreeSet<&str> {
     entries
         .iter()
         .filter_map(|entry| match entry {

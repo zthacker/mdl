@@ -1044,13 +1044,20 @@ fn array_rules() {
                      "element": { "kind": "scalar", "type": "uint", "size_bits": 8 } }])),
         vec![(Code::WrongEncoding, entry(0, "/count"))]
     );
-    assert_eq!(
-        element(
-            json!({ "kind": "scalar", "type": "bytes", "length": { "kind": "fixed", "bytes": 0 } }),
-            json!({ "kind": "remaining" })
-        ),
-        vec![(Code::FieldSize, entry(1, "/count"))]
-    );
+    // An element that is always empty can't be counted, however many.
+    for count in [
+        json!({ "kind": "remaining" }),
+        json!({ "kind": "fixed", "count": 2 }),
+        json!({ "kind": "field", "field": "n" }),
+    ] {
+        assert_eq!(
+            element(
+                json!({ "kind": "scalar", "type": "bytes", "length": { "kind": "fixed", "bytes": 0 } }),
+                count
+            ),
+            vec![(Code::FieldSize, entry(1, "/element"))]
+        );
+    }
     assert_eq!(
         element(
             json!({ "kind": "scalar", "type": "string", "length": { "kind": "field", "field": "n" } }),
@@ -2474,7 +2481,8 @@ fn an_argument_fits_the_field_that_encodes_it() {
 
 #[test]
 fn command_packets_and_telemetry_keep_to_their_own_keys() {
-    assert_one(Code::CommandShape, "/sets/0/commands/1/entries/4", |v| {
+    // An array in a command packet encodes a list argument.
+    assert_one(Code::NoValue, "/sets/0/commands/1/entries/4", |v| {
         set_mode_packet(v)["entries"].as_array_mut().unwrap().push(
             json!({ "kind": "array", "name": "pad",
                           "count": { "kind": "fixed", "count": 1 },
@@ -3138,7 +3146,11 @@ fn command_identities_are_constants_a_decoder_reads_directly() {
         );
     let validated = validate(bundle(value)).unwrap();
     let bundle = validated.bundle();
-    let identities = command_identities(&bundle.sets[0], &bundle.families[0]);
+    let identities = command_identities(
+        &bundle.sets[0],
+        &bundle.families[0],
+        &std::collections::BTreeMap::new(),
+    );
     let opcode = KeyId::Bits {
         offset: 0,
         size: 8,
@@ -3297,5 +3309,367 @@ fn a_duplicate_points_at_its_first_definition() {
                 Some("/sets/0/commands/1".to_string())
             ),
         ]
+    );
+}
+
+/// The fixture with list arguments: nav.route sends waypoints as records
+/// of three lists, nav.burst two lists sharing one count field.
+fn with_lists(v: &mut Value) {
+    let list = |ty: &str, min: f64, max: f64| json!({ "type": ty, "range": { "min": min, "max": max }, "list": { "min": 1, "max": 4 } });
+    let mut lat = list("f64", -90.0, 90.0);
+    lat["name"] = json!("lat");
+    lat["unit"] = json!("deg");
+    let mut lon = list("f64", -180.0, 180.0);
+    lon["name"] = json!("lon");
+    let mut alt = list("u64", 0.0, 1000.0);
+    alt["name"] = json!("alt");
+    v["catalog"]["commands"]["nav.route"] = json!({ "arguments": [lat, lon, alt] });
+    v["catalog"]["commands"]["nav.burst"] = json!({ "arguments": [
+        { "name": "samples", "type": "i64", "range": { "min": -100, "max": 100 },
+          "list": { "max": 6 } },
+        { "name": "weights", "type": "f64", "range": { "min": 0, "max": 100 },
+          "list": { "max": 6 } }
+    ] });
+    let degrees = |name: &str| {
+        json!({ "kind": "field", "name": name, "type": "int", "size_bits": 32,
+                "conversion": { "kind": "linear", "scale": 1e-7, "offset": 0.0 },
+                "argument": name })
+    };
+    let mut lat_field = degrees("lat");
+    lat_field["unit"] = json!("deg");
+    set_x(v)["types"]["waypoint"] = json!({ "entries": [
+        { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8, "value": 7 },
+        lat_field,
+        degrees("lon"),
+        { "kind": "field", "name": "alt", "type": "uint", "size_bits": 16, "argument": "alt" }
+    ] });
+    let commands = set_x(v)["commands"].as_array_mut().unwrap();
+    commands.push(
+        json!({ "name": "ROUTE", "canonical": "nav.route", "metadata": { "apid": 300 },
+        "entries": [
+            { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 40 },
+            { "kind": "field", "name": "count", "type": "uint", "size_bits": 8 },
+            { "kind": "array", "name": "waypoints",
+              "count": { "kind": "field", "field": "count" },
+              "element": { "kind": "struct", "name": "waypoint" } }
+        ] }),
+    );
+    commands.push(
+        json!({ "name": "BURST", "canonical": "nav.burst", "metadata": { "apid": 300 },
+        "entries": [
+            { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 41 },
+            { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+            { "kind": "array", "name": "samples", "count": { "kind": "field", "field": "n" },
+              "element": { "kind": "scalar", "type": "int", "size_bits": 16 },
+              "argument": "samples" },
+            { "kind": "array", "name": "weights", "count": { "kind": "field", "field": "n" },
+              "element": { "kind": "scalar", "type": "uint", "size_bits": 8,
+                           "conversion": { "kind": "linear", "scale": 0.5, "offset": 0.0 } },
+              "argument": "weights" }
+        ] }),
+    );
+}
+
+fn route(v: &mut Value) -> &mut Value {
+    &mut set_x(v)["commands"][2]
+}
+
+fn burst(v: &mut Value) -> &mut Value {
+    &mut set_x(v)["commands"][3]
+}
+
+const ROUTE: &str = "/sets/0/commands/2";
+const BURST: &str = "/sets/0/commands/3";
+const WAYPOINT: &str = "/sets/0/types/waypoint";
+
+#[test]
+fn list_arguments_are_encoded_by_arrays_of_values_or_records() {
+    assert_eq!(problems(with_lists), vec![]);
+    let burst_argument =
+        |index: usize, rest: &str| format!("/catalog/commands/nav.burst/arguments/{index}{rest}");
+    // A list's bounds, and no default.
+    assert_one(
+        Code::ExplicitDefault,
+        &burst_argument(0, "/list/min"),
+        |v| {
+            with_lists(v);
+            v["catalog"]["commands"]["nav.burst"]["arguments"][0]["list"]["min"] = json!(0);
+        },
+    );
+    assert_one(Code::LimitsOrder, &burst_argument(0, "/list"), |v| {
+        with_lists(v);
+        v["catalog"]["commands"]["nav.burst"]["arguments"][0]["list"] =
+            json!({ "min": 5, "max": 2 });
+    });
+    assert_one(Code::DefaultValue, &burst_argument(0, "/default"), |v| {
+        with_lists(v);
+        v["catalog"]["commands"]["nav.burst"]["arguments"][0]["default"] = json!(1);
+    });
+    // A list goes to an array, a single value to a field.
+    assert_one(
+        Code::CanonicalType,
+        &format!("{BURST}/entries/2/argument"),
+        |v| {
+            with_lists(v);
+            v["catalog"]["commands"]["nav.burst"]["arguments"][0]
+                .as_object_mut()
+                .unwrap()
+                .remove("list");
+        },
+    );
+    assert_one(
+        Code::CanonicalType,
+        &format!("{BURST}/entries/1/argument"),
+        |v| {
+            with_lists(v);
+            let entries = burst(v)["entries"].as_array_mut().unwrap();
+            entries[1]["argument"] = json!("samples");
+            entries.remove(2);
+            entries[2]["count"] = json!({ "kind": "remaining" });
+        },
+    );
+    // Each element fits the argument's type and range, as a field would.
+    assert_one(
+        Code::CanonicalType,
+        &format!("{BURST}/entries/2/argument"),
+        |v| {
+            with_lists(v);
+            burst(v)["entries"][2]["element"] = json!({ "kind": "scalar", "type": "string",
+                "length": { "kind": "fixed", "bytes": 2 } });
+        },
+    );
+    assert_one(
+        Code::ValueRange,
+        &format!("{BURST}/entries/2/argument"),
+        |v| {
+            with_lists(v);
+            burst(v)["entries"][2]["element"]["type"] = json!("uint");
+        },
+    );
+    assert_one(
+        Code::ConversionType,
+        &format!("{BURST}/entries/3/element/inverse"),
+        |v| {
+            with_lists(v);
+            burst(v)["entries"][3]["element"]["inverse"] =
+                json!({ "kind": "linear", "scale": 2.0, "offset": 0.0 });
+        },
+    );
+    // Every list is encoded, once.
+    assert_one(Code::UnmappedArgument, &format!("{BURST}/canonical"), |v| {
+        with_lists(v);
+        burst(v)["entries"].as_array_mut().unwrap().remove(3);
+    });
+    assert_one(
+        Code::DuplicateMapping,
+        &format!("{BURST}/entries/3/argument"),
+        |v| {
+            with_lists(v);
+            burst(v)["entries"][3]["argument"] = json!("samples");
+            burst(v)["entries"][3]["element"] = json!({ "kind": "scalar", "type": "int",
+                "size_bits": 16 });
+            v["catalog"]["commands"]["nav.burst"]["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .pop();
+        },
+    );
+}
+
+#[test]
+fn every_list_the_catalog_allows_fits_its_array() {
+    // A count field holds the most the catalog allows: a bound, and one
+    // it can hold.
+    assert_one(Code::ValueRange, &format!("{BURST}/entries/2/count"), |v| {
+        with_lists(v);
+        v["catalog"]["commands"]["nav.burst"]["arguments"][0]["list"] = json!({});
+    });
+    assert_one(Code::ValueRange, &format!("{BURST}/entries/2/count"), |v| {
+        with_lists(v);
+        burst(v)["entries"][1]["size_bits"] = json!(2);
+        v["catalog"]["commands"]["nav.burst"]["arguments"][1]["list"] = json!({ "max": 3 });
+    });
+    // With add 1, the field holds the count less one, so there's at least
+    // one value.
+    assert_one(Code::ValueRange, &format!("{BURST}/entries/2/count"), |v| {
+        with_lists(v);
+        burst(v)["entries"][2]["count"]["add"] = json!(1);
+        burst(v)["entries"][3]["count"]["add"] = json!(1);
+        v["catalog"]["commands"]["nav.burst"]["arguments"][1]["list"] =
+            json!({ "min": 1, "max": 6 });
+    });
+    // A fixed count takes exactly that many.
+    assert_one(Code::ValueRange, &format!("{BURST}/entries/3/count"), |v| {
+        with_lists(v);
+        burst(v)["entries"][3]["count"] = json!({ "kind": "fixed", "count": 6 });
+    });
+    assert_eq!(
+        problems(|v| {
+            with_lists(v);
+            burst(v)["entries"][3]["count"] = json!({ "kind": "fixed", "count": 6 });
+            v["catalog"]["commands"]["nav.burst"]["arguments"][1]["list"] =
+                json!({ "min": 6, "max": 6 });
+        }),
+        vec![]
+    );
+    // Records: each list they take.
+    let count = format!("{ROUTE}/entries/2/count");
+    assert_eq!(
+        problems(|v| {
+            with_lists(v);
+            route(v)["entries"][1]["size_bits"] = json!(2);
+        }),
+        vec![
+            (Code::ValueRange, count.clone()),
+            (Code::ValueRange, count.clone()),
+            (Code::ValueRange, count)
+        ]
+    );
+}
+
+#[test]
+fn a_record_type_two_packets_use_is_reported_once() {
+    let problems = problems(|v| {
+        with_lists(v);
+        let mut copy = route(v).clone();
+        copy["name"] = json!("ROUTE_AGAIN");
+        copy["canonical"] = json!("nav.route_again");
+        copy["entries"][0]["value"] = json!(42);
+        set_x(v)["commands"].as_array_mut().unwrap().push(copy);
+        let command = v["catalog"]["commands"]["nav.route"].clone();
+        v["catalog"]["commands"]["nav.route_again"] = command;
+        // Both commands' alt has no range, and a u16 can't hold every u64.
+        for name in ["nav.route", "nav.route_again"] {
+            v["catalog"]["commands"][name]["arguments"][2]
+                .as_object_mut()
+                .unwrap()
+                .remove("range");
+        }
+    });
+    assert_eq!(
+        problems,
+        vec![(Code::ValueRange, format!("{WAYPOINT}/entries/3/argument"))]
+    );
+}
+
+#[test]
+fn records_take_list_arguments_and_constants() {
+    assert_one(
+        Code::CommandShape,
+        &format!("{ROUTE}/entries/2/argument"),
+        |v| {
+            with_lists(v);
+            route(v)["entries"][2]["argument"] = json!("lat");
+        },
+    );
+    assert_one(Code::NoValue, &format!("{WAYPOINT}/entries/0"), |v| {
+        with_lists(v);
+        set_x(v)["types"]["waypoint"]["entries"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("value");
+    });
+    assert_one(
+        Code::CommandShape,
+        &format!("{WAYPOINT}/entries/0/target"),
+        |v| {
+            with_lists(v);
+            let kind = &mut set_x(v)["types"]["waypoint"]["entries"][0];
+            kind.as_object_mut().unwrap().remove("value");
+            kind["target"] = json!(true);
+        },
+    );
+    assert_one(Code::CommandShape, &format!("{WAYPOINT}/entries/4"), |v| {
+        with_lists(v);
+        set_x(v)["types"]["waypoint"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({ "kind": "struct", "name": "inner", "struct": "vec3_i32" }));
+    });
+    // Records with nothing but constants have no length.
+    assert_one(Code::NoValue, &format!("{ROUTE}/entries/2"), |v| {
+        with_lists(v);
+        set_x(v)["types"]["waypoint"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .truncate(1);
+        v["catalog"]["commands"]["nav.route"]["arguments"] = json!([]);
+    });
+    // A field of a record doesn't take its length from another; the field
+    // it would take it from isn't echoed as having no value.
+    assert_one(
+        Code::CommandShape,
+        &format!("{WAYPOINT}/entries/4/length"),
+        |v| {
+            with_lists(v);
+            let entries = set_x(v)["types"]["waypoint"]["entries"]
+                .as_array_mut()
+                .unwrap();
+            entries[0].as_object_mut().unwrap().remove("value");
+            entries.push(json!({ "kind": "field", "name": "tag", "type": "string",
+                "length": { "kind": "field", "field": "kind" }, "value": "x" }));
+        },
+    );
+    // A struct type holds command records or telemetry.
+    assert_one(Code::CommandShape, WAYPOINT, |v| {
+        with_lists(v);
+        set_x(v)["types"]["pair"] = json!({ "entries": [
+            { "kind": "struct", "name": "point", "struct": "waypoint" }
+        ] });
+    });
+}
+
+#[test]
+fn a_count_field_counts_arrays_and_a_length_field_one_field() {
+    // Two arrays sharing a count are in the fixture; a count that is also
+    // a length isn't.
+    assert_one(
+        Code::CommandShape,
+        &format!("{BURST}/entries/4/length/field"),
+        |v| {
+            with_lists(v);
+            burst(v)["entries"].as_array_mut().unwrap().push(json!({
+                "kind": "field", "name": "note", "type": "bytes",
+                "length": { "kind": "field", "field": "n" } }));
+            v["catalog"]["commands"]["nav.burst"]["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "name": "note", "type": "bytes" }));
+            burst(v)["entries"][4]["argument"] = json!("note");
+        },
+    );
+}
+
+#[test]
+fn telemetry_arrays_take_no_command_keys() {
+    let array = json!({ "kind": "array", "name": "levels", "count": { "kind": "fixed", "count": 2 },
+        "element": { "kind": "scalar", "type": "uint", "size_bits": 8 } });
+    let levels = "/sets/0/types/levels/entries/0";
+    assert_one(Code::CommandOnly, &format!("{levels}/argument"), |v| {
+        let mut array = array.clone();
+        array["argument"] = json!("mode");
+        set_x(v)["types"]["levels"] = json!({ "entries": [array] });
+    });
+    assert_one(
+        Code::CommandOnly,
+        &format!("{levels}/element/inverse"),
+        |v| {
+            let mut array = array.clone();
+            array["element"]["inverse"] = json!({ "kind": "linear", "scale": 2.0, "offset": 0.0 });
+            set_x(v)["types"]["levels"] = json!({ "entries": [array] });
+        },
+    );
+}
+
+#[test]
+fn an_inverse_is_checked_as_a_conversion() {
+    assert_one(
+        Code::NotSorted,
+        "/sets/0/commands/1/entries/2/inverse/points/1/raw",
+        |v| {
+            set_mode_packet(v)["entries"][2]["inverse"] = json!({ "kind": "table", "points": [
+                { "raw": 3600, "value": 36000 }, { "raw": 0, "value": 0 }
+            ] });
+        },
     );
 }

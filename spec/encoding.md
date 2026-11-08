@@ -26,7 +26,8 @@ checksums; this document uses those definitions and doesn't repeat them.
   - the canonical command, which the set MUST encode
     [`unknown_command`];
   - arguments: values by name, each a bool, an integer (−2^63 to
-    2^64 − 1), a double, text or bytes;
+    2^64 − 1), a double, text or bytes, or for a list argument a list of
+    these;
   - the target: the native id of the asset the command is sent to,
     needed only by a packet with a target field (§3.3).
 
@@ -73,9 +74,29 @@ A set may leave out an argument that has a default (an older layout, from
 before the argument was added). With that set the argument can only be
 its default; any other value is [`not_default`].
 
+### 2.5 Lists
+
+An argument with `list` takes a list of values, and one without takes a
+single value [`wrong_type`]. The list's length MUST lie within `list`'s
+`min` and `max`, ends included, an absent end being open
+[`list_length`]. Then each value is checked as §2.2 and §2.3 check a
+single value, against the argument's type, states and range; the first
+value that fails is the error, naming its index (counted from 0). Validation
+guarantees that a list argument has no default, so every set encodes
+it.
+
 ## 3. Raw values
 
-Each field of the packet gets one raw value, from exactly one source.
+Each field of the packet gets one raw value, from exactly one source, as
+does each field of an array's records; scalar elements get theirs from a
+list argument (§3.6).
+
+Raw values are worked out entry by entry, in order: a field's from its
+source, an array's elements in index order, and for an array of records,
+first the comparison of its lists' lengths, then each record's fields in
+entry order. Then, in a binary payload, length fields, in the order of
+the entries whose lengths they hold (§3.5), and then arrays' counts, in
+entry order (§3.6). The first problem is the error.
 
 ### 3.1 Arguments
 
@@ -162,11 +183,51 @@ length `n` as `(n − add) / multiply`, which MUST be a whole number of at
 least 0 that fits the length field [`bad_length`, on the entry whose
 length it is].
 
+### 3.6 Arrays
+
+An array encodes list arguments, one element per value:
+
+- **scalar elements:** element *i* is the value *i* of the array's
+  `argument`, turned into a raw value as §3.1 to §3.4 turn a field's, the
+  element taken as a field (its type, size, conversion, `inverse`, unit,
+  text and length);
+- **struct elements (records):** record *i* holds, in each field that
+  names an argument, that list's value *i*, and in each field with a
+  `value`, the constant, each as §3.1 to §3.4 say. The lists a record's
+  fields take MUST have the same length [`bad_count`], which is the
+  number of records.
+
+The array's `count` then holds:
+
+- `fixed`: the number of elements MUST be the count [`bad_count`];
+- `field`: the count field holds the number of elements `n` as `(n −
+  add) / multiply`, which MUST be a whole number of at least 0 that fits
+  it [`bad_count`]. Several arrays may take their count from one field;
+  each MUST give it the same value [`bad_count`, on the later array], so
+  arrays with the same `multiply` and `add` hold lists of one length. A
+  field gives one length or counts arrays, not both (validation
+  guarantees it);
+- `remaining`: any number of elements.
+
+Validation guarantees that every list the catalog allows fits: a `fixed`
+count is the list's `min` and `max` both, and a count field holds the
+list's `max` and has an `add` no greater than its `min`. Only a
+`multiply` the length doesn't divide, lists of different lengths in one
+array's records, and arrays sharing a count that disagree remain
+[`bad_count`].
+
+A problem with one element is that element's error, naming its index,
+and for a record the field.
+
 ## 4. Binary payloads
 
 - **Positions.** Each entry is written where decoding reads it (§5.2 of
   `decoding.md`): at its `offset_bits`, or where the previous entry ended.
-  Validation guarantees that no two entries overlap.
+  Validation guarantees that no two entries overlap. An array's elements
+  follow one another from the array's position: a scalar element takes
+  the bits a field of its shape takes, and a record lays its entries out
+  from its own start, as `decoding.md` §5 lays out a struct's, ending at
+  the furthest end of its entries.
 - **Values.** Integers and bools are written as `decoding.md` §2.1 reads
   them, in the field's `byte_order` or else the family's, an `int` in
   two's complement in its size; floats as IEEE 754 binary32 or binary64,
@@ -185,9 +246,12 @@ length it is].
 
 The payload is one JSON object, `{}` for a packet with no entries. Each
 field's raw value is written at its pointer, with objects created along
-the way; every pointer token is an object key. Validation guarantees that
-no command field's pointer is empty (the whole document) and that no
-pointer equals another or leads into it.
+the way; every pointer token is an object key. An array is written at its
+pointer as a JSON array of its elements, in order: a scalar element as a
+field's value, a record as an object with each of its fields at its
+pointer inside it. Validation guarantees that no pointer of a command
+field, array or record field is empty (the whole object) and that, among
+the entries of one object, no pointer equals another or leads into it.
 
 The text is written as the JSON Canonicalization Scheme (RFC 8785)
 writes JSON: no whitespace, object members in order of their keys' UTF-16
@@ -204,8 +268,8 @@ JSON.
   entries has an empty payload, which the link frames on its own;
 - the packet, whose `metadata` the link frames the payload with;
 - the set's digest, to record with what was sent;
-- the raw value of each field and checksum, as decoding the payload gives
-  them;
+- the raw value of each field and checksum, and each array's elements
+  (raw values, or records of them), as decoding the payload gives them;
 - the defaulted arguments, in catalog order;
 - the command's `deprecated` note, if it has one. A deprecated command
   still encodes; a caller SHOULD warn.
@@ -245,6 +309,8 @@ fields that can be read without decoding anything else:
   constants of different lengths are different keys;
 - JSON: integer and string fields, by pointer, compared exactly.
 
+Fields inside arrays are never keys.
+
 Validation guarantees that every two command packets of a set share a key
 with different values, so a payload matches at most one. A payload
 matches a packet when every key's value in the message equals the
@@ -259,9 +325,10 @@ rest). A command packet has no length: the payload is the packet, and
 bytes after its last entry, or keys of a JSON payload that no field
 reads, are ignored, so layouts may grow at the end. A checksum covers
 only bytes before it, so bytes past the packet are covered by the link's
-framing alone; a `remaining` value takes in whatever follows it. Every
-constant field MUST hold its value, including those that took no part in
-identification [`wrong_constant`].
+framing alone; a `remaining` value or array takes in whatever follows it.
+Every constant field MUST hold its value, including those that took no
+part in identification and those in every record of an array
+[`wrong_constant`].
 
 ### 7.4 Arguments
 
@@ -312,6 +379,12 @@ exactly. A terminated buffer's padding isn't part of its value, so a
 payload padded otherwise than §3.4 pads decodes, and encodes again with
 §3.4's padding.
 
+A list argument is its array's elements in order, each converted as
+above from its raw value: a scalar element's, or in each record the
+field that names the argument. The list's length MUST be one `list`
+allows [`list_length`]; then the first value the catalog doesn't allow
+is the error, naming its index.
+
 An argument the set doesn't encode is its default, and the result lists
 it as defaulted. A packet with a target field gives the target's native
 id: an integer field's integer, or a string field's text (text in an
@@ -322,7 +395,7 @@ integer's one decimal spelling is that integer).
 | Code | Where |
 | --- | --- |
 | `unknown_set`, `unknown_command` | the request (§1) |
-| `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `out_of_range`, `not_default` | an argument (§2, §7.4); the error names it |
-| `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length` | a field (§3); the error names it |
+| `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `out_of_range`, `not_default`, `list_length` | an argument (§2, §7.4); the error names it, and a list's value by its index |
+| `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length`, `bad_count` | a field or array (§3); the error names it, and an array's element by its index |
 | `no_packet`, `wrong_constant`, and the routing and entry codes of `decoding.md` | decoding a command (§7) |
 | `invalid_layout` | a definition that didn't pass validation; never for a validated one |

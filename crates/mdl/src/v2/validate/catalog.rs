@@ -8,7 +8,8 @@ use super::rules::{
 };
 use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::ir::{
-    Argument, ArgumentRange, Catalog, Command, Frame, Limits, Literal, Param, ParamType, Scalar,
+    Argument, ArgumentRange, Catalog, Command, Frame, Limits, ListBounds, Literal, Param,
+    ParamType, Scalar,
 };
 
 pub(super) fn check(catalog: &Catalog, place: &Place, report: &mut Report) {
@@ -193,8 +194,40 @@ fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
     if let Some(range) = &argument.range {
         check_range(argument.ty, range, &place.key("range"), report);
     }
-    if let Some(default) = &argument.default {
-        check_default(argument, default, &place.key("default"), report);
+    if let Some(list) = &argument.list {
+        check_list(list, &place.key("list"), report);
+    }
+    match (&argument.default, argument.list) {
+        (Some(_), Some(_)) => report.error(
+            Code::DefaultValue,
+            &place.key("default"),
+            format!(
+                "argument {} is a list, and a list argument has no default",
+                argument.name
+            ),
+        ),
+        (Some(default), None) => check_default(argument, default, &place.key("default"), report),
+        (None, _) => {}
+    }
+}
+
+/// A list's bounds: the least no more than the most, and 0 left implicit.
+fn check_list(list: &ListBounds, place: &Place, report: &mut Report) {
+    if list.min == Some(0) {
+        report.error(
+            Code::ExplicitDefault,
+            &place.key("min"),
+            "0 is the default min; omit it",
+        );
+    }
+    if let (Some(min), Some(max)) = (list.min, list.max)
+        && min > max
+    {
+        report.error(
+            Code::LimitsOrder,
+            place,
+            format!("min {min} is greater than max {max}"),
+        );
     }
 }
 
