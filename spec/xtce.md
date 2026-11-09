@@ -354,9 +354,12 @@ it otherwise.
   `BaseContainer` names a command container as references name items
   (§2) [`xtce.reference`], and MUST name the container of the nearest
   meta-command above it that has one, which is what Yamcs encodes ahead of
-  it. Another base, a telemetry container, a base for a meta-command
-  without a `BaseMetaCommand`, and restriction criteria are unsupported. Yamcs doesn't read a
-  `CommandContainerSet`, so it's left out [`xtce.ignored`].
+  it. Another base, a telemetry container, and a base for a meta-command
+  without a `BaseMetaCommand` are unsupported. The sent command's
+  container's restriction criteria give its parameter entries their
+  values; Yamcs reads no other criteria, so those of an abstract
+  meta-command's container are left out [`xtce.ignored`]. Yamcs doesn't
+  read a `CommandContainerSet`, so it's left out too.
 - **Arguments in entries.** An `ArgumentRefEntry` names an argument its
   own meta-command declares, as Yamcs reads it [`xtce.reference`], and an
   argument is in one entry of a container. It's a field of the argument's
@@ -368,6 +371,23 @@ it otherwise.
   the command [`xtce.invalid`]. A value for a float or bytes argument,
   however it's spelled, is unsupported: MDL constants are integers and
   text, and Yamcs writes a float through its own arithmetic (§6.3).
+- **Parameters in entries.** A `ParameterRefEntry` is a constant field
+  for the parameter, or one for each member of an aggregate, named as a
+  telemetry field is (§3). It holds the value the sent command's criteria
+  give the parameter or member, as Yamcs fills it: an `==` comparison in a
+  `ComparisonList` on the sent command's container's `BaseContainer`, read
+  as a comparison's value is (§5). A comparison with another operator, and
+  a `Comparison`, `BooleanExpression` or other criterion outside a
+  `ComparisonList`, aren't read, as Yamcs reads none of them
+  [`xtce.ignored`]; two values for one parameter are an error
+  [`xtce.invalid`]. A parameter or member the criteria give no value is
+  unsupported: Yamcs sends its latest value, which MDL can't. So is a
+  calibrated, float or text parameter's engineering value (MDL constants
+  are raw integers and text), a label on several raw values, and an array
+  parameter. Yamcs fails on a signed integer or a label here; they're read
+  as XTCE says. With `useCalibratedValue="false"` the value is the raw
+  value, as XTCE says, where Yamcs reads it as the engineering value
+  regardless [`xtce.differs`].
 - **Fixed values.** A `FixedValueEntry` is an unsigned integer constant
   named for its `name`, or `fixed1`, `fixed2` and so on, counted in the
   packet. It holds `binaryValue`'s low `sizeInBits` bits (all of them by
@@ -378,19 +398,37 @@ it otherwise.
   that aren't zero are dropped, as Yamcs drops them [`xtce.ignored`].
 - **What a command packet can't hold.** Every entry of an MDL command
   packet is written, so an entry with an `IncludeCondition` is
-  unsupported. So are repeated entries, parameter and container entries,
-  and array arguments, in this version.
+  unsupported. So are repeated entries, container entries, and, in this
+  version, array arguments.
 
 ### 6.2 Argument types
 
 Argument types, in `ArgumentTypeSet`, are read as parameter types of the
 same kind are (§4), with these differences:
 
-- Integer, float, enumerated, boolean, string and binary types are
-  supported. Absolute times are unsupported, as for parameters; relative
-  times, aggregates, arrays and calibrated types are unsupported in this
-  version. XTCE 1.2's misspelling `RelativeTimeAgumentType` is read as
+- Integer, float, enumerated, boolean, string, binary and relative time
+  types are supported. Absolute times are unsupported, as for parameters;
+  aggregates and arrays are unsupported in this version. Every version of
+  XTCE's schema names the relative time argument type's element
+  `RelativeTimeAgumentType`; it's read, and so is
   `RelativeTimeArgumentType`.
+- **Calibrators.** A float type's `DefaultCalibrator` runs from
+  engineering to raw, as Yamcs applies it. A polynomial of degree 1, raw
+  = a + b·v, is the field's inverse as written (`linear`, scale b and
+  offset a), which MDL evaluates as Yamcs does (multiply, then add), and
+  its algebraic inverse is the field's conversion (`poly`, −a/b and 1/b),
+  for decoding a command. A spline of order 1 whose calibrated values only
+  rise or only fall is a linear table with its points swapped (a point's
+  calibrated value is the raw value, its raw value the engineering one),
+  which MDL reads backwards (`encoding.md` §3.1); it extrapolates when the
+  spline does. Decoding a command needs the calibrator's exact inverse, so
+  a constant polynomial, a higher degree, an order 0 spline, a spline that
+  rises and falls, and a math operation are unsupported.
+- **Relative times** are read as relative time parameters are (§4): a
+  duration in its unit, the encoding's scale and offset a `linear`
+  conversion, which MDL inverts exactly. Yamcs doesn't encode relative
+  time arguments, so they follow XTCE. A calibrator in the encoding, and a
+  scale of 0, are unsupported.
 - **Ranges.** A number type's `ValidRange`, alone (XTCE 1.0 and 1.1) or
   the one in a `ValidRangeSet` (1.1 and 1.2), is the argument's `range`.
   An exclusive end is the nearest double inside the range, which keeps
@@ -400,8 +438,10 @@ same kind are (§4), with these differences:
   range, which Yamcs doesn't load either, is unsupported, and so is an
   integer end past ±(2^53 − 1), where an MDL range's ends lie. Yamcs
   checks the range against the engineering value whatever
-  `validRangeAppliesToCalibrated` says, and an uncalibrated type's raw
-  and engineering values are one.
+  `validRangeAppliesToCalibrated` says. An uncalibrated type's raw and
+  engineering values are one; on a calibrated type, `false` puts the range
+  on raw values, as XTCE says, and the argument's range is the engineering
+  values whose raw values lie in it [`xtce.differs`].
 - **Without a range.** An integer argument with no valid range takes what
   both its encoding holds and its type does (`signed`, and `sizeInBits`,
   32 by default), which Yamcs checks a value against; an end its catalog
@@ -409,7 +449,14 @@ same kind are (§4), with these differences:
   cut there [`xtce.differs`]. An uncalibrated float written as an integer
   takes what MDL's rounding keeps in the encoding, from just above
   `low − 0.5` to just below `high + 0.5`, for each end its valid range
-  doesn't give (§6.3). An unsigned integer type over a two's complement
+  doesn't give (§6.3). A calibrated argument, and a relative time written
+  as an integer, takes the engineering values whose raw values the
+  encoding holds, worked out through the calibrator or the scale and
+  offset, cut at ±(2^53 − 1) [`xtce.differs`]; a float encoding holds so
+  much that the cut is its range. If every such value lies past
+  ±(2^53 − 1), the argument is unsupported, and if a given end lies past
+  every such value, it's an error [`xtce.invalid`]. A spline that doesn't
+  extrapolate keeps a range to its points. An unsigned integer type over a two's complement
   encoding is an `i64` argument, its range keeping it at 0 and above,
   since an MDL command writes a `u64` argument only to a `uint` field.
 - **Defaults.** `initialValue`, the argument's or else its type's, is the
@@ -418,7 +465,8 @@ same kind are (§4), with these differences:
   between digits; a finite number in decimal notation (Java's `1.5f` and
   hexadecimal floats aren't read); a boolean's labels, or `true` and
   `false`; an enumeration's label; binary as hexadecimal digits; text as
-  it is.
+  it is; and for a relative time, an `xs:duration` without years or
+  months, whose lengths vary (`PT1.5S`), in the argument's unit.
 - **Text.** A fixed-size string is padded with NULs, as Yamcs pads it:
   `Fixed` alone, or with a `TerminationChar` of `00`, is a fixed buffer
   with a NUL terminator (`encoding.md` §3.4). A fixed buffer with another
@@ -437,7 +485,7 @@ same kind are (§4), with these differences:
 ### 6.3 Where MDL encodes otherwise
 
 MDL encodes arguments by its own rules (`encoding.md` §3), which differ
-from Yamcs's in these cases. The first three are warnings where they are
+from Yamcs's in these cases. The first six are warnings where they are
 [`xtce.differs`]:
 
 - An uncalibrated float written as an integer: Yamcs drops the fraction
@@ -449,10 +497,29 @@ from Yamcs's in these cases. The first three are warnings where they are
   validation reports it.
 - A float type of 32 bits, XTCE's default `sizeInBits`, written in 64:
   Yamcs narrows the value to 32 bits first, and MDL writes it whole.
-- An integer argument without a range whose encoding holds values past
+- An argument without a range whose encoding holds values past
   ±(2^53 − 1): MDL refuses them, since its range ends there.
-- A raw value its field can't hold: Yamcs keeps the low bits, and MDL
-  refuses it (`raw_range`).
+- An argument's spline that doesn't extrapolate: Yamcs extrapolates it
+  whatever it says, and MDL keeps to its points, as XTCE says, refusing a
+  value outside them.
+- A range on raw values (`validRangeAppliesToCalibrated="false"`): Yamcs
+  checks it against the engineering value, and MDL against the raw value,
+  as XTCE says.
+- A command's criteria value with `useCalibratedValue="false"`: Yamcs
+  reads it as the engineering value, and MDL as the raw value, as XTCE
+  says.
+- A raw value its field can't hold: Yamcs keeps the low bits (a negative
+  value through a calibrator into an unsigned field is 0), and MDL refuses
+  it (`raw_range`, or `out_of_range` where a range keeps it in the field).
+- A calibrated value exactly half way between two integers: Yamcs rounds
+  it toward positive infinity (−2.5 is −2), and MDL away from zero (−3).
+- A calibrated 32-bit float type (XTCE's default `sizeInBits`): Yamcs
+  narrows the value to 32 bits before calibrating it, and MDL calibrates
+  it whole. Rounding to an integer field hides the difference but at the
+  edges of a raw step.
+- A spline read backwards: MDL's arithmetic (`encoding.md` §3.1) differs
+  from Yamcs's interpolation, so the raw value before rounding can differ
+  in its last bit.
 - A fixed-size binary value of the wrong length: Yamcs pads a shorter one
   with zeros and cuts a longer one short, and MDL refuses both
   (`bad_length`).
@@ -482,9 +549,10 @@ is [`xtce.ignored`]:
   significance, verifiers, parameters to set and alarms to suspend; block
   meta-commands, meta-command references (the meta-command is imported
   where it's defined), and a `CommandContainerSet` (§6);
-- what §6 lists of arguments: one no entry writes, an argument type's
-  alarms, text size ranges and restriction patterns, an enumeration
-  label's later values, and a command entry's time association.
+- what §6 lists of commands: an argument no entry writes, an argument
+  type's alarms, text size ranges and restriction patterns, an
+  enumeration label's later values, a command entry's time association,
+  and restriction criteria Yamcs doesn't fill parameter entries from.
 
 ## 8. Diagnostics
 

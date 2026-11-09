@@ -66,6 +66,7 @@ use mdl::v2::ir::Locator;
 use mdl::v2::read::read_bundle_value;
 use mdl::v2::source::{Parsed, SourceDiagnostic, SourceFile};
 
+mod calibration;
 mod import;
 mod names;
 mod out;

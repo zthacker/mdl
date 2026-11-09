@@ -328,6 +328,9 @@ impl Writer<'_, '_> {
         if let Some(conversion) = &scalar.conversion {
             object.put_object("conversion", conversion.clone());
         }
+        if let Some(inverse) = &scalar.inverse {
+            object.put_object("inverse", inverse.clone());
+        }
         if let Some((unit, span)) = &scalar.unit {
             object.put("unit", unit.as_str(), Some(*span));
         }

@@ -202,6 +202,24 @@
         <BooleanArgumentType name="SwitchType">
           <IntegerDataEncoding sizeInBits="8"/>
         </BooleanArgumentType>
+        <!--
+          A current written in centiamps. An argument's calibrator runs from
+          engineering to raw, as Yamcs applies it: raw = 100 A.
+        -->
+        <FloatArgumentType name="ChargeType">
+          <UnitSet><Unit>A</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16">
+            <DefaultCalibrator>
+              <PolynomialCalibrator>
+                <Term coefficient="0" exponent="0"/>
+                <Term coefficient="100" exponent="1"/>
+              </PolynomialCalibrator>
+            </DefaultCalibrator>
+          </IntegerDataEncoding>
+          <ValidRangeSet>
+            <ValidRange minInclusive="0" maxInclusive="5"/>
+          </ValidRangeSet>
+        </FloatArgumentType>
         <!-- No valid range: what the 16 bits hold. -->
         <IntegerArgumentType name="MinutesType" signed="false">
           <UnitSet><Unit>min</Unit></UnitSet>
@@ -251,6 +269,21 @@
             <EntryList>
               <ArgumentRefEntry argumentRef="On"/>
               <ArgumentRefEntry argumentRef="Minutes"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+        <MetaCommand name="SetCharge" shortDescription="Set the battery charge current">
+          <BaseMetaCommand metaCommandRef="EPSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="3"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Current" argumentTypeRef="ChargeType"/>
+          </ArgumentList>
+          <CommandContainer name="SetCharge">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Current"/>
             </EntryList>
           </CommandContainer>
         </MetaCommand>

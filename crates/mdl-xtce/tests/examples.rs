@@ -100,7 +100,7 @@ fn demosat_decodes_its_eps_and_adcs_packets() {
         [
             "106:27 SpaceSystem EPS's shortDescription isn't imported: MDL keeps descriptions \
              of catalog params, commands and arguments only",
-            "261:28 SpaceSystem ADCS's shortDescription isn't imported: MDL keeps descriptions \
+            "294:28 SpaceSystem ADCS's shortDescription isn't imported: MDL keeps descriptions \
              of catalog params, commands and arguments only",
         ]
     );
@@ -245,6 +245,20 @@ fn demosat_encodes_its_commands_and_decodes_them_back() {
     expected.extend_from_slice(&[2, 1, 0x00, 0x5A]);
     assert_eq!(heater(90).unwrap(), expected);
     assert_eq!(heater(65_536).unwrap_err().code(), "out_of_range");
+
+    // SetCharge: opcode 3 and the current through its calibrator, 100 A,
+    // which decodes back through the calibrator's inverse.
+    let charge = |amps: f64| {
+        encode(
+            CommandRequest::new("demosat", "demosat.eps.setcharge").with_argument("current", amps),
+        )
+    };
+    let bytes = charge(1.5).unwrap();
+    let mut expected = header(100);
+    expected.extend_from_slice(&[3, 0x00, 0x96]);
+    assert_eq!(bytes, expected);
+    assert_eq!(decode(&bytes).1, [("current", ArgumentValue::Float(1.5))]);
+    assert_eq!(charge(5.01).unwrap_err().code(), "out_of_range");
 
     // Point: APID 101, opcode 1, the target NUL-padded to eight bytes, and
     // the rate as a 32-bit float, which must be above 0.

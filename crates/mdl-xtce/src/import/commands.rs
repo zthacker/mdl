@@ -10,8 +10,9 @@
 //! with its assigned value, which a caller can't change.
 //!
 //! An assigned argument's entry, and a FixedValueEntry, are constant
-//! fields. An argument no entry writes changes no bytes, so it isn't
-//! imported.
+//! fields, and so is a ParameterRefEntry, which takes its value from the
+//! `==` ComparisonList of the sent command's container, as Yamcs fills it.
+//! An argument no entry writes changes no bytes, so it isn't imported.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,8 +20,9 @@ use mdl::v2::source::Span;
 use serde_json::{Value, json};
 
 use super::entries::Location;
-use super::{Entry, Field, Import, id};
+use super::{Entry, Field, Import, ParamKey, id};
 use crate::Code;
+use crate::calibration::duration_seconds;
 use crate::names::{catalog_part, identifier};
 use crate::space::Kind;
 use crate::types::{Order, Raw, Scalar, Shape, Wanted, description, raw_value};
@@ -67,6 +69,18 @@ struct Declared<'d> {
 
 /// A command's chain: each meta-command, root first, with its SpaceSystem.
 type Chain<'d> = [(usize, El<'d>)];
+
+/// A value the sent command's criteria give a parameter or member: the
+/// value as written, whether it's the calibrated value, and where it is.
+#[derive(Clone, Copy)]
+struct Given<'d> {
+    value: &'d str,
+    calibrated: bool,
+    span: Span,
+}
+
+/// The values the sent command's criteria give, by parameter or member.
+type Values<'d> = BTreeMap<ParamKey<'d>, Given<'d>>;
 
 const META_COMMAND: Expect<'static> = Expect {
     attrs: &["name", "abstract", "shortDescription"],
@@ -170,6 +184,8 @@ impl<'d> Import<'d, '_> {
                 .declare(index, *at_space, *meta, &mut declared)
                 .is_some();
         }
+        let (values, read_whole) = self.criteria_values(&chain);
+        complete &= read_whole;
         let mut entries = Vec::new();
         let mut unnamed = 0;
         for index in 0..chain.len() {
@@ -177,12 +193,19 @@ impl<'d> Import<'d, '_> {
             let Some(container) = meta.child("CommandContainer") else {
                 continue;
             };
-            let place = Owner {
+            let owner = Owner {
                 index,
                 space: at_space,
                 meta,
+                last: index + 1 == chain.len(),
             };
-            match self.command_entries(&place, &chain, container, &mut declared, &mut unnamed) {
+            let read = Read {
+                chain: &chain,
+                values: &values,
+                read_whole,
+                unnamed: &mut unnamed,
+            };
+            match self.command_entries(&owner, container, &mut declared, read) {
                 Some(added) => entries.extend(added),
                 None => complete = false,
             }
@@ -425,15 +448,174 @@ impl<'d> Import<'d, '_> {
         }
     }
 
+    /// The values the sent command's criteria give parameters: those of an
+    /// `==` ComparisonList on its container's BaseContainer, the only ones
+    /// Yamcs fills parameter entries from. Its other criteria aren't read.
+    /// The flag is false after reporting a comparison that can't be read.
+    fn criteria_values(&mut self, chain: &Chain<'d>) -> (Values<'d>, bool) {
+        let mut values = Values::new();
+        let Some(&(space, meta)) = chain.last() else {
+            return (values, true);
+        };
+        let criteria = meta
+            .child("CommandContainer")
+            .and_then(|c| c.child("BaseContainer"))
+            .and_then(|b| b.child("RestrictionCriteria"));
+        let Some(criteria) = criteria else {
+            return (values, true);
+        };
+        criteria.check(
+            &Expect {
+                attrs: &[],
+                children: &[
+                    "ComparisonList",
+                    "Comparison",
+                    "BooleanExpression",
+                    "CustomAlgorithm",
+                    "NextContainer",
+                ],
+                ignored: &[],
+                text: false,
+            },
+            self.report,
+        );
+        for other in criteria.children().filter(|c| c.name() != "ComparisonList") {
+            self.report.warning(
+                Code::Ignored,
+                other.span(),
+                format!(
+                    "a command container's {} isn't read: Yamcs fills parameter entries from \
+                     a ComparisonList only",
+                    other.name()
+                ),
+            );
+        }
+        let Some(list) = criteria.child("ComparisonList") else {
+            return (values, true);
+        };
+        list.check(
+            &Expect {
+                attrs: &[],
+                children: &["Comparison"],
+                ignored: &[],
+                text: false,
+            },
+            self.report,
+        );
+        let mut complete = true;
+        for comparison in list.all("Comparison") {
+            comparison.check(
+                &Expect {
+                    attrs: &[
+                        "parameterRef",
+                        "value",
+                        "comparisonOperator",
+                        "useCalibratedValue",
+                        "instance",
+                    ],
+                    children: &[],
+                    ignored: &[],
+                    text: false,
+                },
+                self.report,
+            );
+            let (Some(reference), Some(value)) = (
+                comparison.required("parameterRef", self.report),
+                comparison.required("value", self.report),
+            ) else {
+                complete = false;
+                continue;
+            };
+            if let Some(operator) = comparison.attr("comparisonOperator")
+                && operator.value.trim() != "=="
+            {
+                self.report.warning(
+                    Code::Ignored,
+                    operator.span,
+                    "a comparison that isn't == isn't read: Yamcs fills parameter entries from \
+                     == comparisons only",
+                );
+                continue;
+            }
+            if let Some(instance) = comparison.attr("instance")
+                && xml::long(instance, self.report) != Some(0)
+            {
+                self.report.error(
+                    Code::Unsupported,
+                    instance.span,
+                    "a comparison with an instance other than 0 isn't supported",
+                );
+                complete = false;
+                continue;
+            }
+            let calibrated = match comparison.attr("useCalibratedValue") {
+                Some(attr) => {
+                    let calibrated = xml::boolean(attr, self.report).unwrap_or(true);
+                    if !calibrated {
+                        self.report.warning(
+                            Code::Differs,
+                            attr.span,
+                            "Yamcs reads a command's criteria value as an engineering value \
+                             whatever useCalibratedValue says; MDL reads this one as the raw \
+                             value, as XTCE says",
+                        );
+                    }
+                    calibrated
+                }
+                None => true,
+            };
+            let found = match self.tree.resolve(space, reference.value, Kind::Parameter) {
+                Ok(found) => found,
+                Err(message) => {
+                    self.report.error(Code::Reference, reference.span, message);
+                    complete = false;
+                    continue;
+                }
+            };
+            let Some(name) = found.el.item_name() else {
+                complete = false;
+                continue;
+            };
+            self.seen.insert((found.space, name));
+            let key = (found.space, name, found.members);
+            let given = Given {
+                value: value.value,
+                calibrated,
+                span: value.span,
+            };
+            match values.get(&key) {
+                Some(first) if first.value != given.value => {
+                    self.report.duplicate(
+                        Code::Invalid,
+                        value.span,
+                        first.span,
+                        format!("the criteria give {} two values", reference.value),
+                    );
+                    complete = false;
+                }
+                Some(_) => {}
+                None => {
+                    values.insert(key, given);
+                }
+            }
+        }
+        (values, complete)
+    }
+
     /// The entries a meta-command's CommandContainer adds.
     fn command_entries(
         &mut self,
         owner: &Owner<'d>,
-        chain: &Chain<'d>,
         container: El<'d>,
         declared: &mut [Declared<'d>],
-        unnamed: &mut usize,
+        read: Read<'_, 'd>,
     ) -> Option<Vec<Entry<'d>>> {
+        let Read {
+            chain,
+            values,
+            read_whole,
+            unnamed,
+        } = read;
         container.check(&COMMAND_CONTAINER, self.report);
         if let Some(size) = container.child("BinaryEncoding") {
             self.report.error(
@@ -467,11 +649,12 @@ impl<'d> Import<'d, '_> {
             let added = match entry.name() {
                 "ArgumentRefEntry" => self.argument_entry(owner, entry, declared),
                 "FixedValueEntry" => self.fixed_entry(entry, unnamed),
-                "ParameterRefEntry" | "ArrayParameterRefEntry" => {
+                "ParameterRefEntry" => self.parameter_entry_value(owner, entry, values, read_whole),
+                "ArrayParameterRefEntry" => {
                     self.report.error(
                         Code::Unsupported,
                         entry.span(),
-                        "a parameter's value in a command isn't supported yet",
+                        "an array parameter in a command isn't supported",
                     );
                     None
                 }
@@ -529,13 +712,25 @@ impl<'d> Import<'d, '_> {
             },
             self.report,
         );
-        if let Some(criteria) = base.child("RestrictionCriteria") {
-            self.report.error(
-                Code::Unsupported,
+        // The sent command's criteria are read with its parameter entries;
+        // Yamcs reads no others, so those of a meta-command never sent mean
+        // nothing.
+        if let Some(criteria) = base.child("RestrictionCriteria")
+            && !owner.last
+            && owner
+                .meta
+                .attr("abstract")
+                .is_some_and(|a| xml::boolean(a, self.report) == Some(true))
+        {
+            self.report.warning(
+                Code::Ignored,
                 criteria.span(),
-                "restriction criteria on a command container aren't supported yet",
+                format!(
+                    "these criteria aren't read: Yamcs reads only the sent command's, and \
+                     meta-command {} is abstract",
+                    owner.meta.item_name().unwrap_or_default()
+                ),
             );
-            return None;
         }
         let reference = base.required("containerRef", self.report)?;
         let named = match self
@@ -655,6 +850,7 @@ impl<'d> Import<'d, '_> {
                 let value = self.assigned_value(&scalar, argument.xtce, text, span)?;
                 // A constant is written as its raw value.
                 scalar.conversion = None;
+                scalar.inverse = None;
                 scalar.unit = None;
                 (None, Some((value, span)))
             }
@@ -679,6 +875,144 @@ impl<'d> Import<'d, '_> {
             when: None,
         })));
         Some(out)
+    }
+
+    /// A ParameterRefEntry: a constant field for the parameter, or one for
+    /// each member of an aggregate, each holding the value the sent
+    /// command's criteria give it.
+    fn parameter_entry_value(
+        &mut self,
+        owner: &Owner<'d>,
+        entry: El<'d>,
+        values: &Values<'d>,
+        read_whole: bool,
+    ) -> Option<Vec<Entry<'d>>> {
+        entry.check(
+            &Expect {
+                attrs: &["parameterRef"],
+                children: ENTRY_CHILDREN,
+                ignored: ENTRY_IGNORED,
+                text: false,
+            },
+            self.report,
+        );
+        let location = self.command_location(entry)?;
+        let reference = entry.required("parameterRef", self.report)?;
+        let found = match self
+            .tree
+            .resolve(owner.space, reference.value, Kind::Parameter)
+        {
+            Ok(found) => found,
+            Err(message) => {
+                self.report.error(Code::Reference, reference.span, message);
+                return None;
+            }
+        };
+        let name = found.el.item_name()?;
+        self.seen.insert((found.space, name));
+        if !found.members.is_empty() {
+            self.report.error(
+                Code::Invalid,
+                reference.span,
+                "an entry names a whole parameter, not a member of one",
+            );
+            return None;
+        }
+        let shape = self.parameter_shape(found.space, found.el)?;
+        let mut scalars = Vec::new();
+        if !flatten((found.space, name, Vec::new()), &shape, &mut scalars) {
+            self.report.error(
+                Code::Unsupported,
+                reference.span,
+                "an array parameter in a command isn't supported",
+            );
+            return None;
+        }
+        let mut out = Vec::new();
+        out.extend(location.padding());
+        for (index, (key, mut scalar)) in scalars.into_iter().enumerate() {
+            let shown = self.describe(&key);
+            let Some(given) = values.get(&key) else {
+                // A comparison that couldn't be read may have given it.
+                if !read_whole {
+                    return None;
+                }
+                self.report.error(
+                    Code::Unsupported,
+                    entry.span(),
+                    format!(
+                        "the sent command's criteria give {shown} no value: Yamcs fills a \
+                         parameter entry from an == ComparisonList on the sent command's \
+                         container, and otherwise sends the parameter's latest value, which MDL \
+                         can't"
+                    ),
+                );
+                return None;
+            };
+            let value = self.parameter_value(&scalar, &shown, *given)?;
+            scalar.conversion = None;
+            scalar.inverse = None;
+            scalar.unit = None;
+            let length = match &scalar.length {
+                Some(crate::types::Length::Written(length, span)) => Some((length.clone(), *span)),
+                _ => None,
+            };
+            out.push(Entry::Field(Box::new(Field {
+                name: self.field_name(&key, found.el),
+                key: None,
+                span: entry.span(),
+                scalar,
+                length,
+                canonical: None,
+                argument: None,
+                value: Some((value, given.span)),
+                offset: if index == 0 { location.offset() } else { None },
+                when: None,
+            })));
+        }
+        Some(out)
+    }
+
+    /// The raw value criteria give a parameter, read as a comparison's
+    /// value is: an integer, an enumeration's label, or a boolean's labels.
+    fn parameter_value(
+        &mut self,
+        scalar: &Scalar<'d>,
+        shown: &str,
+        given: Given<'d>,
+    ) -> Option<Value> {
+        let unsupported = |report: &mut crate::report::Report, why: &str| {
+            report.error(
+                Code::Unsupported,
+                given.span,
+                format!("the value criteria give {shown} isn't supported: {why}"),
+            );
+        };
+        if matches!(scalar.raw, Raw::Other) && given.calibrated {
+            unsupported(
+                self.report,
+                "MDL constants are raw integers and text, and its engineering value is \
+                 calibrated, a float or text",
+            );
+            return None;
+        }
+        match raw_value(scalar.ty.0, &scalar.raw, given.value, given.calibrated) {
+            Ok(Wanted::One(raw)) => Some(integer_json(i128::from(raw))),
+            // A boolean's true is any raw value but 0; 1 is written.
+            Ok(Wanted::NonZero) => Some(json!(1)),
+            Ok(Wanted::Any(_)) => {
+                unsupported(self.report, "the label stands for several raw values");
+                None
+            }
+            Err(reason) => {
+                self.report.error(
+                    Code::Invalid,
+                    given.span,
+                    format!("the value criteria give {shown}: {reason}"),
+                );
+                None
+            }
+        }
     }
 
     /// The raw value an ArgumentAssignment gives a field, as Yamcs reads
@@ -999,7 +1333,28 @@ impl<'d> Import<'d, '_> {
         text: &str,
         span: Span,
     ) -> Option<Value> {
+        let relative_time = matches!(
+            scalar.el.name(),
+            "RelativeTimeArgumentType" | "RelativeTimeAgumentType"
+        );
         let value = match (scalar.param, &scalar.raw) {
+            // An xs:duration, in the argument's unit.
+            _ if relative_time => match (duration_seconds(text), scalar.unit.as_ref()) {
+                (Some(seconds), Some((unit, _))) => {
+                    let value = match unit.as_str() {
+                        "ps" => seconds * 1e12,
+                        "d" => seconds / 86_400.0,
+                        _ => seconds,
+                    };
+                    Ok(json!(value))
+                }
+                (Some(_), None) => Err(format!(
+                    "{text:?} is a duration, and this argument's months or years vary in length"
+                )),
+                (None, _) => Err(format!(
+                    "{text:?} isn't a duration in days, hours, minutes and seconds (PT1.5S)"
+                )),
+            },
             ("u64" | "i64", _) => argument_integer(text)
                 .map(integer_json)
                 .ok_or_else(|| format!("{text:?} isn't an integer")),
@@ -1100,11 +1455,44 @@ impl<'d> Import<'d, '_> {
 }
 
 /// The meta-command whose container is being read: where it is in the
-/// chain, its SpaceSystem, and its element.
+/// chain, its SpaceSystem, its element, and whether it's the command sent.
 struct Owner<'d> {
     index: usize,
     space: usize,
     meta: El<'d>,
+    last: bool,
+}
+
+/// What reading a container's entries needs from the command: its chain,
+/// the values its criteria give (and whether every comparison was read),
+/// and how many unnamed fixed values came before.
+struct Read<'a, 'd> {
+    chain: &'a Chain<'d>,
+    values: &'a Values<'d>,
+    read_whole: bool,
+    unnamed: &'a mut usize,
+}
+
+/// The scalars a parameter's shape holds, with the parameter or member
+/// each is: one, or an aggregate's members in order. `false` for an
+/// array, which a command can't fix the values of.
+fn flatten<'d>(
+    key: ParamKey<'d>,
+    shape: &Shape<'d>,
+    out: &mut Vec<(ParamKey<'d>, Scalar<'d>)>,
+) -> bool {
+    match shape {
+        Shape::Scalar(scalar) => {
+            out.push((key, (**scalar).clone()));
+            true
+        }
+        Shape::Aggregate(members) => members.iter().all(|member| {
+            let mut member_key = key.clone();
+            member_key.2.push(member.name);
+            flatten(member_key, &member.shape, out)
+        }),
+        Shape::Array(_) => false,
+    }
 }
 
 /// Where a command entry goes.
@@ -1144,6 +1532,7 @@ fn pattern(entry: El<'_>, bits: u32, span: Span) -> Scalar<'_> {
         length: None,
         text: None,
         conversion: None,
+        inverse: None,
         unit: None,
         param: "u64",
         states: Vec::new(),
