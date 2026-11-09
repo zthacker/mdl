@@ -16,6 +16,7 @@ pub mod diagnostics;
 pub mod encode;
 pub mod ir;
 pub mod json;
+pub mod layout;
 pub mod message;
 pub mod read;
 pub mod route;

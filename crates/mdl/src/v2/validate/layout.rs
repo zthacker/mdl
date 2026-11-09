@@ -45,6 +45,7 @@ use crate::v2::ir::{
     ArrayEntry, ByteLength, ByteOrder, CompareOp, Condition, Conversion, Count, Element, Entry,
     Field, FromField, Length, Scalar, ScalarElement, ScalarType, StructType, TextEncoding,
 };
+use crate::v2::layout::Placement;
 
 /// Size bounds in bits. `max` is `None` when unbounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,7 +147,11 @@ pub(super) struct Layout<'a> {
 /// One entry's size facts.
 #[derive(Debug, Clone, Copy)]
 struct Facts {
+    /// Its size where the container's layout is concerned: from nothing
+    /// for a conditional entry.
     size: Size,
+    /// Its size when present.
+    present: Size,
     size_residues: Residues,
     /// Must start on a byte.
     needs_byte: bool,
@@ -179,6 +184,7 @@ impl Facts {
     fn plain(size: Size, size_residues: Residues) -> Facts {
         Facts {
             size,
+            present: size,
             size_residues,
             needs_byte: false,
             holds_narrow: false,
@@ -289,6 +295,23 @@ impl<'a> Layout<'a> {
         place: &Place,
         report: &mut Report,
     ) -> Option<Shape> {
+        self.place_container(entries, length, container, place, report)
+            .0
+    }
+
+    /// [`check_container`](Self::check_container), also giving where each
+    /// entry of a binary container can be: `None` for one whose size an
+    /// error makes unknown, and for every entry after it. The static
+    /// position is left for the caller.
+    pub(super) fn place_container(
+        &self,
+        entries: &'a [Entry],
+        length: Option<&Length>,
+        container: Container,
+        place: &Place,
+        report: &mut Report,
+    ) -> (Option<Shape>, Vec<Option<Placement>>) {
+        let mut placements = Vec::with_capacity(entries.len());
         let in_struct = container == Container::StructType;
         let mut scope = Scope {
             earlier: BTreeMap::new(),
@@ -309,7 +332,7 @@ impl<'a> Layout<'a> {
                 self.check_json_entry(entry, &scope, &entry_place, report);
                 remember(entry, &mut scope);
             }
-            return None;
+            return (None, placements);
         }
 
         // Where the next sequential entry starts: earliest, latest.
@@ -358,12 +381,22 @@ impl<'a> Layout<'a> {
             remember(entry, &mut scope);
             let Some(facts) = facts else {
                 known = false;
+                placements.push(None);
                 continue;
             };
             if !known {
+                placements.push(None);
                 continue;
             }
             let conditional = entry_condition(entry).is_some();
+            placements.push(Some(Placement {
+                static_offset_bits: None,
+                start_min_bits: start.0,
+                start_max_bits: start.1,
+                size_min_bits: facts.present.min,
+                size_max_bits: facts.present.max,
+                conditional,
+            }));
             needs_byte |= facts.needs_byte;
             holds_narrow |= facts.is_narrow();
             self.check_alignment(name, &facts, start_residues, &entry_place, report);
@@ -425,7 +458,7 @@ impl<'a> Layout<'a> {
         // Overlaps among the entries placed before any error are still real.
         report_overlaps(entries, &extents, place, report);
         if !known {
-            return None;
+            return (None, placements);
         }
         // The furthest any entry can reach; unbounded if any can be.
         let max = cursor.1.and_then(|end| {
@@ -439,12 +472,13 @@ impl<'a> Layout<'a> {
             None if explicit_jumps => end_residues.union(residues),
             None => residues,
         };
-        Some(Shape {
+        let shape = Shape {
             size,
             size_residues,
             needs_byte,
             holds_narrow,
-        })
+        };
+        (Some(shape), placements)
     }
 
     /// Size facts of one binary entry, checking its shape and references.
@@ -610,6 +644,7 @@ impl<'a> Layout<'a> {
         };
         Some(Facts {
             size,
+            present: size,
             size_residues,
             needs_byte: element.needs_byte,
             holds_narrow: false,
