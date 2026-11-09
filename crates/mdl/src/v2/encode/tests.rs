@@ -2019,3 +2019,63 @@ fn a_decoded_list_has_a_length_and_values_the_catalog_allows() {
         "command lab.burst, argument samples: value 1: 500 is outside its range, -100 to 100"
     );
 }
+
+#[test]
+fn a_list_default_is_encoded_when_the_list_is_left_out() {
+    let mut bundle = lab();
+    bundle["catalog"]["commands"]["lab.mask"]["arguments"][1]["default"] = json!(["ab", "cd"]);
+    let sets = sets_of(&bundle, "lab");
+    let flags = ArgumentValue::List(vec![ArgumentValue::Bool(true); 4]);
+    let encoded = sets
+        .encode(&CommandRequest::new("lab_v13", "lab.mask").with_argument("flags", flags.clone()))
+        .unwrap();
+    assert_eq!(encoded.defaulted, ["names"]);
+    assert_eq!(encoded.payload, b"\x17\xF0ab\0\0cd\0\0");
+    let decoded = sets
+        .decode_command("lab_v13", &binary(&encoded.payload))
+        .unwrap();
+    assert_eq!(
+        decoded.arguments[1],
+        (
+            "names",
+            ArgumentValue::List(vec![
+                ArgumentValue::Text("ab".into()),
+                ArgumentValue::Text("cd".into())
+            ])
+        )
+    );
+
+    // A set that doesn't encode the list sends only its default.
+    let v13 = bundle["sets"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|set| set["name"] == "lab_v13")
+        .unwrap();
+    let mask = &mut v13["commands"][2];
+    assert_eq!(mask["name"], "MASK");
+    mask["entries"].as_array_mut().unwrap().truncate(3);
+    let sets = sets_of(&bundle, "lab");
+    let names = ArgumentValue::List(vec![ArgumentValue::Text("ab".into())]);
+    let error = sets
+        .encode(
+            &CommandRequest::new("lab_v13", "lab.mask")
+                .with_argument("flags", flags.clone())
+                .with_argument("names", names),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "command lab.mask, argument names: the set doesn't encode it, so it can only be its \
+         default, [\"ab\", \"cd\"]"
+    );
+    let same = sets
+        .encode(&CommandRequest::new("lab_v13", "lab.mask").with_argument("flags", flags))
+        .unwrap();
+    assert_eq!(same.payload, b"\x17\xF0");
+    let decoded = sets
+        .decode_command("lab_v13", &binary(b"\x17\xF0"))
+        .unwrap();
+    assert_eq!(decoded.defaulted, ["names"]);
+    assert_eq!(decoded.arguments[1].1.to_string(), "a list of 2 values");
+}

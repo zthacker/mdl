@@ -235,6 +235,9 @@ pub enum Literal {
     Int(i64),
     Float(f64),
     Str(String),
+    /// A list argument's default, a JSON array: one value per item, each a
+    /// literal that isn't a list.
+    List(Vec<Literal>),
 }
 
 impl PartialEq for Literal {
@@ -248,6 +251,7 @@ impl PartialEq for Literal {
                 x.fract() == 0.0 && i64_from_integral(*x) == Some(*n)
             }
             (Literal::Str(a), Literal::Str(b)) => a == b,
+            (Literal::List(a), Literal::List(b)) => a == b,
             _ => false,
         }
     }
@@ -269,6 +273,7 @@ impl Serialize for Literal {
                 "{x} isn't a finite number, which JSON can't hold"
             ))),
             Literal::Str(s) => serializer.serialize_str(s),
+            Literal::List(items) => serializer.collect_seq(items),
         }
     }
 }
@@ -281,11 +286,11 @@ impl<'de> Deserialize<'de> for Literal {
 
 struct LiteralVisitor;
 
-impl Visitor<'_> for LiteralVisitor {
+impl<'de> Visitor<'de> for LiteralVisitor {
     type Value = Literal;
 
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("a bool, a number or a string")
+        f.write_str("a bool, a number, a string or a list of them")
     }
 
     fn visit_bool<E>(self, b: bool) -> Result<Literal, E> {
@@ -321,6 +326,14 @@ impl Visitor<'_> for LiteralVisitor {
 
     fn visit_string<E>(self, s: String) -> Result<Literal, E> {
         Ok(Literal::Str(s))
+    }
+
+    fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Literal, A::Error> {
+        let mut items = Vec::with_capacity(seq.size_hint().unwrap_or(0).min(4096));
+        while let Some(item) = seq.next_element()? {
+            items.push(item);
+        }
+        Ok(Literal::List(items))
     }
 }
 
@@ -595,7 +608,8 @@ pub struct Argument {
     /// encodes them. How many values it takes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub list: Option<ListBounds>,
-    /// The value used when a caller leaves the argument out.
+    /// The value used when a caller leaves the argument out: a list of
+    /// values for a list argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Literal>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

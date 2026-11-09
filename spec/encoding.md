@@ -60,7 +60,7 @@ Anything else is [`wrong_type`]. A double for an `f64` argument MUST be
 finite [`non_finite`].
 Defaults are values like any other: a bytes default is written in the
 catalog as lowercase hex, and an integer past ±(2^53 − 1) as a decimal
-string.
+string. A list argument's default is a JSON array of them (§2.5).
 
 ### 2.3 Ranges
 
@@ -81,9 +81,17 @@ single value [`wrong_type`]. The list's length MUST lie within `list`'s
 `min` and `max`, ends included, an absent end being open
 [`list_length`]. Then each value is checked as §2.2 and §2.3 check a
 single value, against the argument's type, states and range; the first
-value that fails is the error, naming its index (counted from 0). Validation
-guarantees that a list argument has no default, so every set encodes
-it.
+value that fails is the error, naming its index (counted from 0).
+
+A list argument's default is a list whose length lies within `list`, each
+value one its type, states and range allow. Lists that must have one
+length (§3.6) have defaults that do: those that fill one array's records,
+and those of arrays that share a count field, whose defaults give it one
+count it can hold. Validation guarantees both, so the defaults of a
+command's lists encode together; a caller's list that disagrees with a
+defaulted one is [`bad_count`]. As for any argument with a default, a set
+may leave a list argument out (§2.4), and then only its default can be
+sent: a list equal to it value by value, in order.
 
 ## 3. Raw values
 

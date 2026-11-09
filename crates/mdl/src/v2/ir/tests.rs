@@ -568,7 +568,31 @@ mod properties {
         ]
     }
 
+    fn single_literal() -> impl Strategy<Value = Literal> {
+        prop_oneof![
+            any::<bool>().prop_map(Literal::Bool),
+            (-(1_i64 << 53) + 1..1_i64 << 53).prop_map(Literal::Int),
+            (-1e9_f64..1e9).prop_map(Literal::Float),
+            "[a-z0-9]{0,8}".prop_map(Literal::Str),
+        ]
+    }
+
+    fn literal() -> impl Strategy<Value = Literal> {
+        prop_oneof![
+            single_literal(),
+            prop::collection::vec(single_literal(), 0..5).prop_map(Literal::List),
+        ]
+    }
+
     proptest! {
+        #[test]
+        fn literals_round_trip(literal in literal()) {
+            let text = canonical(&literal);
+            let back: Literal = reread(&text);
+            prop_assert_eq!(&back, &literal);
+            prop_assert_eq!(canonical(&back), text);
+        }
+
         /// Typed value → JSON → canonical text → parsed back: the same
         /// typed value, and the same canonical text.
         #[test]
@@ -603,10 +627,28 @@ fn literals_read_as_canonical_json_writes_them() {
     assert_eq!(read(json!(3.0)).unwrap(), Literal::Int(3));
     assert_eq!(read(json!(-0.5)).unwrap(), Literal::Float(-0.5));
     assert_eq!(read(json!("0a1b")).unwrap(), Literal::Str("0a1b".into()));
+    // A list argument's default is a list of them.
+    let list = read(json!([1, 2.5, "x", true])).unwrap();
+    assert_eq!(
+        list,
+        Literal::List(vec![
+            Literal::Int(1),
+            Literal::Float(2.5),
+            Literal::Str("x".into()),
+            Literal::Bool(true)
+        ])
+    );
+    assert_eq!(canonical(&list), r#"[1,2.5,"x",true]"#);
+    assert_eq!(read(json!([])).unwrap(), Literal::List(Vec::new()));
+    assert_ne!(Literal::List(vec![Literal::Int(1)]), Literal::Int(1));
+    assert_eq!(
+        Literal::List(vec![Literal::Float(2.0)]),
+        Literal::List(vec![Literal::Int(2)])
+    );
     let error = read(json!(u64::MAX)).unwrap_err().to_string();
     assert!(error.contains("write it as the string"), "{error}");
     assert!(read(json!(null)).is_err());
-    assert!(read(json!([1])).is_err());
+    assert!(read(json!({ "a": 1 })).is_err());
     assert_eq!(
         canonical(&Literal::Float(0.25)),
         "0.25",
