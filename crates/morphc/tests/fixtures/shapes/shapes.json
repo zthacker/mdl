@@ -1,0 +1,116 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "a.v": {
+        "type": "f64"
+      },
+      "a.rest": {
+        "type": "u64"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "f",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "bits",
+        "offset_bits": 0,
+        "size_bits": 8
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "s",
+      "family": "f",
+      "packets": [
+        {
+          "name": "P",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "n",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "field",
+              "name": "label",
+              "type": "string",
+              "length": {
+                "kind": "fixed",
+                "bytes": 8,
+                "terminator": 0
+              }
+            },
+            {
+              "kind": "array",
+              "name": "none",
+              "count": {
+                "kind": "fixed",
+                "count": 0
+              },
+              "element": {
+                "kind": "scalar",
+                "type": "uint",
+                "size_bits": 8
+              },
+              "when": {
+                "kind": "compare",
+                "field": "n",
+                "op": "eq",
+                "value": 0
+              }
+            },
+            {
+              "kind": "field",
+              "name": "v",
+              "type": "uint",
+              "size_bits": 16,
+              "canonical": "a.v",
+              "conversion": {
+                "kind": "poly",
+                "coefficients": [
+                  1,
+                  0.5,
+                  2
+                ]
+              }
+            },
+            {
+              "kind": "field",
+              "name": "flags",
+              "type": "uint",
+              "size_bits": 8,
+              "when": {
+                "kind": "not",
+                "condition": {
+                  "kind": "compare",
+                  "field": "n",
+                  "op": "eq",
+                  "value": 0
+                }
+              }
+            },
+            {
+              "kind": "array",
+              "name": "rest",
+              "count": {
+                "kind": "remaining"
+              },
+              "canonical": "a.rest",
+              "element": {
+                "kind": "scalar",
+                "type": "uint",
+                "size_bits": 8
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

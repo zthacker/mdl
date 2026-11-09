@@ -102,8 +102,10 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
 - [x] `morphc build`: any frontends merged into one bundle, validated, and
       written to a content-addressed artifact store (rebuilds keep
       unchanged sets' identities); grouped warnings, JSON output
-- [ ] `morphc inspect`, `decode` (hex or file in, JSON out), `encode`,
-      `--set`
+- [x] `morphc inspect`: families and sets with their identities, a set's
+      datasheet with every entry's position (from a public layout API), and
+      every packet that sends a param or encodes a command
+- [ ] `morphc decode` (hex or file in, JSON out), `encode`, `--set`
 - [ ] A build file listing inputs with their own options (several XTCE
       imports in one build)
 - [ ] README and examples rewritten around v2
