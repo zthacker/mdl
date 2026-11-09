@@ -615,6 +615,12 @@ fn from_literal(argument: &Argument, literal: &Literal) -> Result<ArgumentValue,
         (_, Literal::Int(value)) => ArgumentValue::Int(*value),
         (_, Literal::Float(value)) => ArgumentValue::Float(*value),
         (_, Literal::Str(value)) => ArgumentValue::Text(value.clone()),
+        (_, Literal::List(items)) => ArgumentValue::List(
+            items
+                .iter()
+                .map(|item| from_literal(argument, item))
+                .collect::<Result<_, _>>()?,
+        ),
     })
 }
 
@@ -642,6 +648,10 @@ fn show_literal(literal: &Literal) -> String {
         Literal::Int(value) => value.to_string(),
         Literal::Float(value) => value.to_string(),
         Literal::Str(value) => format!("{value:?}"),
+        Literal::List(items) => {
+            let shown: Vec<String> = items.iter().map(show_literal).collect();
+            format!("[{}]", shown.join(", "))
+        }
     }
 }
 

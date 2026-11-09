@@ -197,17 +197,80 @@ fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
     if let Some(list) = &argument.list {
         check_list(list, &place.key("list"), report);
     }
+    let at = place.key("default");
     match (&argument.default, argument.list) {
+        (Some(Literal::List(values)), Some(list)) => {
+            check_list_default(argument, list, values, place, report);
+        }
         (Some(_), Some(_)) => report.error(
             Code::DefaultValue,
-            &place.key("default"),
+            &at,
             format!(
-                "argument {} is a list, and a list argument has no default",
+                "argument {} is a list, so its default is a list of values",
                 argument.name
             ),
         ),
-        (Some(default), None) => check_default(argument, default, &place.key("default"), report),
+        (Some(Literal::List(_)), None) => report.error(
+            Code::DefaultValue,
+            &at,
+            format!(
+                "argument {} takes a single value, so its default is one, not a list",
+                argument.name
+            ),
+        ),
+        (Some(default), None) => check_default(argument, default, &at, report),
         (None, _) => {}
+    }
+}
+
+/// A list argument's default (at the argument's `place`): as many values
+/// as the list takes, each a single value its type, states and range allow.
+fn check_list_default(
+    argument: &Argument,
+    list: ListBounds,
+    values: &[Literal],
+    place: &Place,
+    report: &mut Report,
+) {
+    let count = values.len();
+    let fits = |bound: Option<u32>, keep: fn(usize, usize) -> bool| {
+        bound.is_none_or(|bound| usize::try_from(bound).is_ok_and(|bound| keep(count, bound)))
+    };
+    if !fits(list.min, |count, min| count >= min) || !fits(list.max, |count, max| count <= max) {
+        report.error(
+            Code::DefaultValue,
+            &place.key("default"),
+            format!(
+                "argument {}'s default has {count} values, outside the {} its list takes",
+                argument.name,
+                bounds(list)
+            ),
+        );
+    }
+    for (index, value) in values.iter().enumerate() {
+        let at = place.at("default", index);
+        match value {
+            Literal::List(_) => report.error(
+                Code::DefaultValue,
+                &at,
+                format!(
+                    "argument {}'s default is a list of single values, not of lists",
+                    argument.name
+                ),
+            ),
+            value => check_default(argument, value, &at, report),
+        }
+    }
+}
+
+/// A list's bounds in words.
+fn bounds(list: ListBounds) -> String {
+    match (list.min, list.max) {
+        (Some(min), Some(max)) if min == max => format!("exactly {min}"),
+        (Some(min), Some(max)) => format!("{min} to {max}"),
+        (Some(min), None) => format!("at least {min}"),
+        (None, Some(max)) => format!("at most {max}"),
+        (None, None) => "any number".to_string(),
     }
 }
 

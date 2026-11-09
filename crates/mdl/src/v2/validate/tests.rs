@@ -3401,10 +3401,81 @@ fn list_arguments_are_encoded_by_arrays_of_values_or_records() {
         v["catalog"]["commands"]["nav.burst"]["arguments"][0]["list"] =
             json!({ "min": 5, "max": 2 });
     });
+    // A list's default is a list of values its bounds, type and range
+    // allow, each checked as a single default is.
     assert_one(Code::DefaultValue, &burst_argument(0, "/default"), |v| {
         with_lists(v);
         v["catalog"]["commands"]["nav.burst"]["arguments"][0]["default"] = json!(1);
     });
+    let defaulted = |default: Value| {
+        move |v: &mut Value| {
+            with_lists(v);
+            v["catalog"]["commands"]["nav.burst"]["arguments"][0]["default"] = default;
+        }
+    };
+    assert_eq!(problems(defaulted(json!([1, -2, 3]))), vec![]);
+    assert_eq!(problems(defaulted(json!([]))), vec![]);
+    assert_one(
+        Code::DefaultValue,
+        &burst_argument(0, "/default"),
+        defaulted(json!([1, 2, 3, 4, 5, 6, 7])),
+    );
+    assert_one(
+        Code::DefaultValue,
+        &burst_argument(0, "/default/1"),
+        defaulted(json!([1, 200])),
+    );
+    assert_one(
+        Code::DefaultValue,
+        &burst_argument(0, "/default/0"),
+        defaulted(json!([[1]])),
+    );
+    assert_one(
+        Code::DefaultValue,
+        &burst_argument(0, "/default/2"),
+        defaulted(json!([1, 2, "three"])),
+    );
+    // Lists that share a count (samples and weights, counted by n) or fill
+    // one array's records (lat, lon, alt) have defaults of one length.
+    assert_one(Code::DefaultValue, &format!("{BURST}/entries/3"), |v| {
+        with_lists(v);
+        let burst = &mut v["catalog"]["commands"]["nav.burst"]["arguments"];
+        burst[0]["default"] = json!([1, 2]);
+        burst[1]["default"] = json!([1, 2, 3]);
+    });
+    assert_eq!(
+        problems(|v| {
+            with_lists(v);
+            let burst = &mut v["catalog"]["commands"]["nav.burst"]["arguments"];
+            burst[0]["default"] = json!([1, 2]);
+            burst[1]["default"] = json!([5, 6]);
+        }),
+        vec![]
+    );
+    assert_one(Code::DefaultValue, &format!("{ROUTE}/entries/2"), |v| {
+        with_lists(v);
+        let route = &mut v["catalog"]["commands"]["nav.route"]["arguments"];
+        route[0]["default"] = json!([1.0]);
+        route[1]["default"] = json!([2.0, 3.0]);
+    });
+    // A count field that holds (count - 1) / 2 counts only odd lengths.
+    assert_one(Code::DefaultValue, &format!("{BURST}/entries/2"), |v| {
+        with_lists(v);
+        let arguments = &mut v["catalog"]["commands"]["nav.burst"]["arguments"];
+        arguments[0]["default"] = json!([1, 2]);
+        arguments[0]["list"] = json!({ "min": 1, "max": 6 });
+        arguments[1]["list"] = json!({ "min": 1, "max": 6 });
+        burst(v)["entries"][2]["count"] =
+            json!({ "kind": "field", "field": "n", "multiply": 2, "add": 1 });
+        burst(v)["entries"][3]["count"] =
+            json!({ "kind": "field", "field": "n", "multiply": 2, "add": 1 });
+    });
+    // A single value's default isn't a list.
+    assert_one(
+        Code::DefaultValue,
+        "/catalog/commands/eps.set_mode/arguments/1/default",
+        |v| command(v, "eps.set_mode")["arguments"][1]["default"] = json!([0]),
+    );
     // A list goes to an array, a single value to a field.
     assert_one(
         Code::CanonicalType,

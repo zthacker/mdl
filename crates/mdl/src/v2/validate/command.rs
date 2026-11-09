@@ -15,7 +15,7 @@ use crate::v2::diagnostics::{Code, Place, Report};
 use crate::v2::encode::raw_unchecked;
 use crate::v2::ir::{
     Argument, ArrayEntry, ByteLength, Catalog, CommandPacket, Conversion, Count, Element, Encoding,
-    Entry, Family, Field, ParamType, Scalar, ScalarElement, ScalarType, Set, StructType,
+    Entry, Family, Field, Literal, ParamType, Scalar, ScalarElement, ScalarType, Set, StructType,
 };
 use crate::v2::text;
 use crate::v2::units::convert_between;
@@ -420,6 +420,105 @@ impl<'a> Sources<'a> {
                         argument.name, packet.canonical
                     ),
                 );
+            }
+        }
+        self.check_default_lengths(place, report);
+    }
+
+    /// Lists that must have one length have defaults that do: those that
+    /// fill one array's records, and those of arrays that share a count
+    /// field, whose defaults give it one count, each a count it can hold
+    /// (`(length - add) / multiply`, whole and not negative). So the
+    /// defaults of a command's lists encode together.
+    fn check_default_lengths(&self, place: &Place, report: &mut Report) {
+        let default_length = |name: &str| {
+            self.arguments
+                .into_iter()
+                .flatten()
+                .find(|argument| argument.name == name)
+                .and_then(|argument| match &argument.default {
+                    Some(Literal::List(values)) => Some(values.len()),
+                    _ => None,
+                })
+        };
+        // Each count field: the count the first defaulted list gives it, and
+        // that list.
+        let mut counts: BTreeMap<&str, (i128, &str)> = BTreeMap::new();
+        for (index, entry) in self.packet.entries.iter().enumerate() {
+            let Entry::Array(array) = entry else {
+                continue;
+            };
+            let at = place.item("entries", index, "array", &array.name);
+            let lists: Vec<&str> = match &array.element {
+                Element::Scalar(_) => array.argument.as_deref().into_iter().collect(),
+                Element::Struct { name } => self
+                    .types
+                    .get(name)
+                    .map(|record| {
+                        record
+                            .entries
+                            .iter()
+                            .filter_map(|entry| match entry {
+                                Entry::Field(field) => field.argument.as_deref(),
+                                _ => None,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            };
+            let defaulted: Vec<(&str, usize)> = lists
+                .into_iter()
+                .filter_map(|name| default_length(name).map(|length| (name, length)))
+                .collect();
+            let Some(&(first, length)) = defaulted.first() else {
+                continue;
+            };
+            if let Some((other, other_length)) = defaulted.iter().find(|(_, l)| *l != length) {
+                report.error(
+                    Code::DefaultValue,
+                    &at,
+                    format!(
+                        "the defaults of lists {first} and {other}, which fill array {}'s \
+                         records, have {length} and {other_length} values; lists that fill the \
+                         same records have the same length",
+                        array.name
+                    ),
+                );
+                continue;
+            }
+            let Some(Count::Field(from)) = &array.count else {
+                continue;
+            };
+            let multiply = i128::from(from.multiply.unwrap_or(1));
+            let add = i128::from(from.add.unwrap_or(0));
+            let held = i128::try_from(length).unwrap_or(i128::MAX) - add;
+            if held < 0 || held % multiply != 0 {
+                report.error(
+                    Code::DefaultValue,
+                    &at,
+                    format!(
+                        "list {first}'s default has {length} values, which {} can't count: it \
+                         holds (count - {add}) / {multiply}",
+                        from.field
+                    ),
+                );
+                continue;
+            }
+            let count = held / multiply;
+            match counts.get(from.field.as_str()) {
+                Some(&(earlier, other)) if earlier != count => report.error(
+                    Code::DefaultValue,
+                    &at,
+                    format!(
+                        "{} counts the arrays of lists {other} and {first}, whose defaults give \
+                         it {earlier} and {count}; arrays that share a count hold as many values",
+                        from.field
+                    ),
+                ),
+                Some(_) => {}
+                None => {
+                    counts.insert(&from.field, (count, first));
+                }
             }
         }
     }
