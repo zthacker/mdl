@@ -8,6 +8,9 @@ use mdl::v2::validate::MAX_NESTING;
 use serde_json::{Value, json};
 
 use crate::Code;
+use crate::calibration::{
+    Empty, Holds, SAFE, ToRaw, argument_calibration, engineering_range, worked_out,
+};
 use crate::out::{List, Object};
 use crate::report::Report;
 use crate::space::{ARGUMENT_TYPES, Kind, Tree};
@@ -149,6 +152,9 @@ pub(crate) struct Scalar<'d> {
     pub(crate) length: Option<Length<'d>>,
     pub(crate) text: Option<(&'static str, Span)>,
     pub(crate) conversion: Option<Object>,
+    /// An argument's conversion from engineering to raw, where its
+    /// conversion doesn't invert exactly.
+    pub(crate) inverse: Option<Object>,
     pub(crate) unit: Option<(String, Span)>,
     /// The param's type: `u64`, `i64`, `f64`, `bool`, `str`, `bytes` or
     /// `enum`.
@@ -169,6 +175,90 @@ pub(crate) struct Scalar<'d> {
 pub(crate) struct ValidRange {
     pub(crate) min: Option<(f64, Span)>,
     pub(crate) max: Option<(f64, Span)>,
+    /// Where `validRangeAppliesToCalibrated="false"` says the range is on
+    /// raw values.
+    pub(crate) raw: Option<Span>,
+}
+
+/// A DefaultCalibrator, as XTCE writes it.
+#[derive(Clone)]
+pub(crate) struct Calibrator {
+    /// The DefaultCalibrator element.
+    pub(crate) span: Span,
+    pub(crate) calibration: Calibration,
+}
+
+#[derive(Clone)]
+pub(crate) enum Calibration {
+    /// Coefficients by exponent, with no zero highest term past the first.
+    Polynomial { coefficients: Vec<f64>, span: Span },
+    Spline {
+        points: Vec<SplinePoint>,
+        order: (i64, Span),
+        /// Where `extrapolate="true"` is.
+        extrapolate: Option<Span>,
+        span: Span,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct SplinePoint {
+    pub(crate) raw: (f64, Span),
+    pub(crate) calibrated: (f64, Span),
+    pub(crate) span: Span,
+}
+
+impl Calibrator {
+    /// As a parameter's conversion, raw to engineering. A spline of order 0
+    /// is a step table, of order 1 a linear one.
+    fn conversion(&self) -> Object {
+        match &self.calibration {
+            Calibration::Polynomial { coefficients, span } => {
+                let mut conversion = Object::at(*span);
+                match coefficients.as_slice() {
+                    [offset] => {
+                        conversion.put("kind", "linear", None);
+                        conversion.put("scale", 0.0, None);
+                        conversion.put("offset", *offset, None);
+                    }
+                    [offset, scale] => {
+                        conversion.put("kind", "linear", None);
+                        conversion.put("scale", *scale, None);
+                        conversion.put("offset", *offset, None);
+                    }
+                    _ => {
+                        conversion.put("kind", "poly", None);
+                        conversion.put("coefficients", coefficients.clone(), None);
+                    }
+                }
+                conversion
+            }
+            Calibration::Spline {
+                points,
+                order,
+                extrapolate,
+                span,
+            } => {
+                let mut list = List::default();
+                for point in points {
+                    let mut object = Object::at(point.span);
+                    object.put("raw", point.raw.0, Some(point.raw.1));
+                    object.put("value", point.calibrated.0, Some(point.calibrated.1));
+                    list.push_object(object);
+                }
+                let mut conversion = Object::at(*span);
+                conversion.put("kind", "table", None);
+                conversion.put_list("points", list);
+                if order.0 == 0 {
+                    conversion.put("interpolation", "step", Some(order.1));
+                }
+                if let Some(at) = extrapolate {
+                    conversion.put("extrapolate", true, Some(*at));
+                }
+                conversion
+            }
+        }
+    }
 }
 
 /// Alarm ranges as MDL's limits, each with where it came from.
@@ -437,15 +527,9 @@ impl<'d> Types<'d> {
                 );
                 None
             }
-            "RelativeTimeArgumentType" | "RelativeTimeAgumentType" => {
-                report.error(
-                    Code::Unsupported,
-                    el.span(),
-                    "relative time arguments aren't supported yet",
-                );
-                None
-            }
-            "RelativeTimeParameterType" => relative_time(el, report),
+            "RelativeTimeParameterType"
+            | "RelativeTimeArgumentType"
+            | "RelativeTimeAgumentType" => relative_time(el, role, report),
             other => {
                 report.error(
                     Code::Invalid,
@@ -612,7 +696,7 @@ fn integer<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>
         };
         report.error(
             Code::Unsupported,
-            calibrator.1,
+            calibrator.span,
             format!(
                 "an integer type with a calibrator: MDL's calibrations give floats, so the value \
                  would change; make it a {instead}"
@@ -664,14 +748,6 @@ fn float<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> 
     } else {
         integer_encoding(encoding_el, report)?
     };
-    if let (Role::Argument, Some((_, span))) = (role, &encoding.calibrator) {
-        report.error(
-            Code::Unsupported,
-            *span,
-            "a calibrated argument type isn't supported yet",
-        );
-        return None;
-    }
     let calibrated = encoding.calibrator.is_some();
     let mut scalar = encoding.scalar(el);
     scalar.param = "f64";
@@ -685,14 +761,147 @@ fn float<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> 
         Role::Parameter => scalar.limits = limits(el, report),
         Role::Argument => {
             float_argument_differences(el, &encoding, report)?;
-            scalar.range = valid_range(el, false, report)?;
-            if encoding.ty != "float" {
-                scalar.range = Some(rounded_range(scalar.range.take(), &encoding, report));
-            }
+            let given = valid_range(el, false, report)?;
+            scalar.range = match &encoding.calibrator {
+                None if encoding.ty != "float" => Some(rounded_range(given, &encoding, report)),
+                None => given,
+                Some(calibrator) => {
+                    let calibration = argument_calibration(calibrator, report)?;
+                    let range = calibrated_range(given, &calibration.to_raw, &encoding, report)?;
+                    scalar.conversion = Some(calibration.conversion);
+                    scalar.inverse = calibration.inverse;
+                    Some(range)
+                }
+            };
             scalar.initial = initial(el, role);
         }
     }
     Some(scalar)
+}
+
+/// What a number encoding holds, as raw values.
+fn holds(encoding: &Encoding<'_>) -> Holds {
+    match (encoding.ty, encoding.size) {
+        ("float", 32) => Holds::Float32,
+        ("float", _) => Holds::Float64,
+        _ => {
+            let (low, high) = encoding_integers(encoding);
+            Holds::Integers(low, high)
+        }
+    }
+}
+
+/// A calibrated argument's range, which MDL needs whole. A valid range on
+/// engineering values is taken as it is, within a spline's points if it
+/// doesn't extrapolate; one on raw values (`validRangeAppliesToCalibrated`
+/// false) is the engineering values whose raw values lie in it, as XTCE
+/// says, though Yamcs checks it against the engineering value. Without
+/// one, it's the engineering values whose raw values the encoding holds.
+fn calibrated_range(
+    given: Option<ValidRange>,
+    to_raw: &ToRaw,
+    encoding: &Encoding<'_>,
+    report: &mut Report,
+) -> Option<ValidRange> {
+    let span = encoding.size_span;
+    let worked = |raw: Option<(f64, f64)>, report: &mut Report| {
+        derived_range(to_raw, holds(encoding), raw, span, report)
+    };
+    match given {
+        Some(ValidRange {
+            min,
+            max,
+            raw: Some(raw_span),
+        }) => {
+            let raw = (
+                min.map_or(f64::NEG_INFINITY, |end| end.0),
+                max.map_or(f64::INFINITY, |end| end.0),
+            );
+            let (low, high) = worked(Some(raw), report)?;
+            report.warning(
+                Code::Differs,
+                raw_span,
+                format!(
+                    "the valid range is on raw values, as validRangeAppliesToCalibrated says, \
+                     so the argument's range is {low} to {high}; Yamcs checks the range against \
+                     the engineering value"
+                ),
+            );
+            Some(ValidRange {
+                min: Some((low, min.map_or(raw_span, |end| end.1))),
+                max: Some((high, max.map_or(raw_span, |end| end.1))),
+                raw: None,
+            })
+        }
+        Some(mut range) => {
+            // MDL keeps a spline that doesn't extrapolate to its points
+            // (reported with the calibrator).
+            if let Some((first, last)) = to_raw.domain() {
+                range.min = range.min.map(|(value, at)| (value.max(first), at));
+                range.max = range.max.map(|(value, at)| (value.min(last), at));
+            }
+            let (low, high) = worked(None, report)?;
+            // A given end past everything the encoding holds leaves no
+            // range once the other end is worked out.
+            let past = range
+                .min
+                .filter(|(min, _)| *min > high)
+                .or(range.max.filter(|(max, _)| *max < low));
+            if let Some((end, at)) = past {
+                report.error(
+                    Code::Invalid,
+                    at,
+                    format!(
+                        "the valid range's end, {end}, lies past every value whose raw value the \
+                         encoding holds ({low} to {high})"
+                    ),
+                );
+                return None;
+            }
+            range.min = range.min.or(Some((low, span)));
+            range.max = range.max.or(Some((high, span)));
+            Some(range)
+        }
+        None => worked(None, report).map(|range| worked_out(span, range)),
+    }
+}
+
+/// The engineering values whose raw values the field holds (within `raw`,
+/// when given), reported when there are none MDL's range can say.
+fn derived_range(
+    to_raw: &ToRaw,
+    holds: Holds,
+    raw: Option<(f64, f64)>,
+    span: Span,
+    report: &mut Report,
+) -> Option<(f64, f64)> {
+    match engineering_range(to_raw, holds, raw) {
+        Ok((low, high, cut)) => {
+            if cut {
+                past_safe(span, report);
+            }
+            Some((low, high))
+        }
+        Err(Empty::NoValue) => {
+            report.error(
+                Code::Invalid,
+                span,
+                "no value of this argument gives a raw value its encoding holds in its range",
+            );
+            None
+        }
+        Err(Empty::PastSafe) => {
+            report.error(
+                Code::Unsupported,
+                span,
+                format!(
+                    "every value of this argument whose raw value the encoding holds lies past \
+                     ±{SAFE}, where an MDL range's ends can't reach"
+                ),
+            );
+            None
+        }
+    }
 }
 
 /// The integers an integer encoding holds: unsigned, or two's complement.
@@ -709,10 +918,6 @@ fn signed_or_not(signed: bool, bits: u32) -> (i128, i128) {
         (0, (1 << bits) - 1)
     }
 }
-
-/// The largest integer every JSON reader holds exactly, which bounds an
-/// MDL range's ends.
-const SAFE: i128 = (1 << 53) - 1;
 
 /// An integer argument type: whether it's signed and how many bits it
 /// has, as XTCE says, and its catalog type.
@@ -741,7 +946,11 @@ fn integer_holds(encoding: &Encoding<'_>, held: Held, report: &mut Report) -> Op
     }
     let min = (low > own_low).then(|| (low.max(-SAFE) as f64, span));
     let max = (high < own_high).then(|| (high.min(SAFE) as f64, span));
-    (min.is_some() || max.is_some()).then_some(ValidRange { min, max })
+    (min.is_some() || max.is_some()).then_some(ValidRange {
+        min,
+        max,
+        raw: None,
+    })
 }
 
 /// Values a range would hold but can't say, since its ends lie within
@@ -773,17 +982,22 @@ fn rounded_range(
 ) -> ValidRange {
     let (low, high) = encoding_integers(encoding);
     let span = encoding.size_span;
-    let safe = SAFE as f64;
-    let (lowest, highest) = (rounds_to_at_least(low), rounds_to_at_most(high));
+    let as_written = ToRaw::Linear {
+        scale: 1.0,
+        offset: 0.0,
+    };
+    // The least and greatest values that round into the encoding, cut at
+    // ±(2^53 - 1); an encoding always holds some.
+    let (lowest, highest, cut) = engineering_range(&as_written, Holds::Integers(low, high), None)
+        .unwrap_or((low as f64, high as f64, false));
     let given = given.unwrap_or(ValidRange {
         min: None,
         max: None,
+        raw: None,
     });
-    // An end the range doesn't give is cut at ±(2^53 - 1).
-    if (given.min.is_none() && lowest < -safe) || (given.max.is_none() && highest > safe) {
+    if cut && (given.min.is_none() || given.max.is_none()) {
         past_safe(span, report);
     }
-    let (lowest, highest) = (lowest.max(-safe), highest.min(safe));
     let mut narrowed = |end: &str, (value, at): (f64, Span), last: f64, beyond: i128| {
         report.warning(
             Code::Differs,
@@ -796,16 +1010,18 @@ fn rounded_range(
         );
         (last, at)
     };
+    // An end MDL rounds out of the encoding that Yamcs, dropping the
+    // fraction, keeps in it.
     let min = match given.min {
         None => (lowest, span),
-        Some(end) if end.0 < lowest && end.0 > (low - 1) as f64 => {
+        Some(end) if (end.0.round() as i128) < low && end.0 > (low - 1) as f64 => {
             narrowed("minimum", end, lowest, low - 1)
         }
         Some(end) => end,
     };
     let max = match given.max {
         None => (highest, span),
-        Some(end) if end.0 > highest && end.0 < (high + 1) as f64 => {
+        Some(end) if (end.0.round() as i128) > high && end.0 < (high + 1) as f64 => {
             narrowed("maximum", end, highest, high + 1)
         }
         Some(end) => end,
@@ -813,26 +1029,8 @@ fn rounded_range(
     ValidRange {
         min: Some(min),
         max: Some(max),
+        raw: None,
     }
-}
-
-/// The least double that MDL's rounding (to the nearest integer, halves
-/// away from zero) takes to `low` or above.
-fn rounds_to_at_least(low: i128) -> f64 {
-    let mut value = (low as f64 - 0.5).next_up();
-    while (value.round() as i128) < low {
-        value = value.next_up();
-    }
-    value
-}
-
-/// The greatest double that MDL's rounding takes to `high` or below.
-fn rounds_to_at_most(high: i128) -> f64 {
-    let mut value = (high as f64 + 0.5).next_down();
-    while (value.round() as i128) > high {
-        value = value.next_down();
-    }
-    value
 }
 
 /// Where Yamcs writes an uncalibrated float argument other than as MDL
@@ -849,7 +1047,7 @@ fn float_argument_differences(
         Some(attr) => xml::long(attr, report)? == 32,
         None => true,
     };
-    if encoding.ty != "float" {
+    if encoding.ty != "float" && encoding.calibrator.is_none() {
         report.warning(
             Code::Differs,
             encoding.el.span(),
@@ -857,13 +1055,13 @@ fn float_argument_differences(
              -2.7 is -2); MDL rounds it to the nearest integer, halves away from zero (3 and \
              -3)",
         );
-    } else if narrow && encoding.size == 64 {
+    } else if encoding.ty == "float" && narrow && encoding.size == 64 {
         let span = el.attr("sizeInBits").map_or(el.span(), |a| a.span);
         report.warning(
             Code::Differs,
             span,
-            "Yamcs narrows a value of this 32-bit float type to 32 bits before writing it in 64 \
-             (0.1 is written as 0.10000000149011612); MDL writes it whole; give the type \
+            "Yamcs narrows a value of this 32-bit float type to 32 bits before it writes it in \
+             64 (0.1 becomes 0.10000000149011612); MDL keeps the whole value; give the type \
              sizeInBits=\"64\" to say so",
         );
     }
@@ -871,21 +1069,27 @@ fn float_argument_differences(
 }
 
 /// A relative time: a duration, as a number of its unit. The encoding's
-/// scale and offset are a linear conversion.
-fn relative_time<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
+/// scale and offset are a linear conversion. Yamcs doesn't encode a
+/// relative time argument, so one is read as XTCE says, as a parameter is.
+fn relative_time<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let mut ignored = vec![
+        "shortDescription",
+        "LongDescription",
+        "AliasSet",
+        "AncillaryDataSet",
+        "DefaultAlarm",
+        "ContextAlarmList",
+    ];
+    let mut attrs = vec!["name", "baseType"];
+    match role {
+        Role::Parameter => ignored.push("initialValue"),
+        Role::Argument => attrs.push("initialValue"),
+    }
     el.check(
         &Expect {
-            attrs: &["name", "baseType"],
+            attrs: &attrs,
             children: &["Encoding", "ReferenceTime"],
-            ignored: &[
-                "shortDescription",
-                "LongDescription",
-                "AliasSet",
-                "AncillaryDataSet",
-                "initialValue",
-                "DefaultAlarm",
-                "ContextAlarmList",
-            ],
+            ignored: &ignored,
             text: false,
         },
         report,
@@ -950,11 +1154,21 @@ fn relative_time<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         &["IntegerDataEncoding", "FloatDataEncoding"],
         report,
     )?;
-    let mut scalar = if data.name() == "FloatDataEncoding" {
-        float_encoding(data, report)?.scalar(el)
+    let data = if data.name() == "FloatDataEncoding" {
+        float_encoding(data, report)?
     } else {
-        integer_encoding(data, report)?.scalar(el)
+        integer_encoding(data, report)?
     };
+    let mut scalar = data.scalar(el);
+    if let (Role::Argument, Some(calibrator)) = (role, &data.calibrator) {
+        report.error(
+            Code::Unsupported,
+            calibrator.span,
+            "a calibrated relative time argument isn't supported: XTCE and Yamcs disagree on \
+             which way an argument's calibrator runs, and Yamcs doesn't encode relative times",
+        );
+        return None;
+    }
     if (scale.0, offset.0) != (1.0, 0.0) {
         if scalar.conversion.is_some() {
             report.error(
@@ -976,6 +1190,29 @@ fn relative_time<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         Raw::Other
     };
     scalar.unit = unit;
+    if role == Role::Argument {
+        if scale.0 == 0.0 {
+            report.error(
+                Code::Unsupported,
+                scale.1,
+                "a relative time argument with a scale of 0 isn't supported: every value would \
+                 be written as one raw value",
+            );
+            return None;
+        }
+        // MDL checks that the values an argument may take fit an integer
+        // field, so the range is what the field holds.
+        if data.ty != "float" {
+            let to_raw = ToRaw::Linear {
+                scale: scale.0,
+                offset: offset.0,
+            };
+            let span = data.size_span;
+            let range = derived_range(&to_raw, holds(&data), None, span, report)?;
+            scalar.range = Some(worked_out(span, range));
+        }
+        scalar.initial = initial(el, role);
+    }
     Some(scalar)
 }
 
@@ -1123,7 +1360,7 @@ fn enumerated<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<
     if let Some(calibrator) = &encoding.calibrator {
         report.error(
             Code::Unsupported,
-            calibrator.1,
+            calibrator.span,
             "an enumerated type with a calibrator isn't supported",
         );
         return None;
@@ -1248,7 +1485,7 @@ fn boolean<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>
     if let Some(calibrator) = &encoding.calibrator {
         report.error(
             Code::Unsupported,
-            calibrator.1,
+            calibrator.span,
             "a boolean type with a calibrator isn't supported",
         );
         return None;
@@ -1343,6 +1580,7 @@ fn string<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
         length: Some(length),
         text,
         conversion: None,
+        inverse: None,
         unit: None,
         param: "str",
         states: Vec::new(),
@@ -1949,6 +2187,7 @@ fn binary<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
         length: Some(length),
         text: None,
         conversion: None,
+        inverse: None,
         unit: None,
         param: "bytes",
         states: Vec::new(),
@@ -2059,6 +2298,9 @@ fn initial<'d>(el: El<'d>, role: Role) -> Option<(&'d str, Span)> {
 /// the engineering value whatever `validRangeAppliesToCalibrated` says,
 /// and the two are the same value for an uncalibrated type.
 fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<ValidRange>> {
+    // XTCE 1.2 says it on the set, XTCE 1.0 and 1.1 on the range or the
+    // type.
+    let mut applies = el.attr("validRangeAppliesToCalibrated");
     let range = match (el.child("ValidRangeSet"), el.child("ValidRange")) {
         (Some(_), Some(direct)) => {
             report.error(
@@ -2078,6 +2320,7 @@ fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<
                 },
                 report,
             );
+            applies = set.attr("validRangeAppliesToCalibrated").or(applies);
             let ranges: Vec<El<'_>> = set.all("ValidRange").collect();
             match ranges.as_slice() {
                 [range] => *range,
@@ -2155,7 +2398,12 @@ fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<
         };
     let min = end("minInclusive", "minExclusive", report)?;
     let max = end("maxInclusive", "maxExclusive", report)?;
-    Some((min.is_some() || max.is_some()).then_some(ValidRange { min, max }))
+    let applies = range.attr("validRangeAppliesToCalibrated").or(applies);
+    let raw = match applies {
+        Some(attr) => (!xml::boolean(attr, report)?).then_some(attr.span),
+        None => None,
+    };
+    Some((min.is_some() || max.is_some()).then_some(ValidRange { min, max, raw }))
 }
 
 /// An integer end of a range, which MDL holds within ±(2^53 - 1), where
@@ -2228,7 +2476,7 @@ struct Encoding<'d> {
     size: u32,
     size_span: Span,
     order: Option<(Order, Span)>,
-    calibrator: Option<(Object, Span)>,
+    calibrator: Option<Calibrator>,
 }
 
 impl<'d> Encoding<'d> {
@@ -2240,7 +2488,8 @@ impl<'d> Encoding<'d> {
             order: self.order,
             length: None,
             text: None,
-            conversion: self.calibrator.as_ref().map(|(object, _)| object.clone()),
+            conversion: self.calibrator.as_ref().map(Calibrator::conversion),
+            inverse: None,
             unit: None,
             param: "f64",
             states: Vec::new(),
@@ -2505,7 +2754,7 @@ fn list_order(list: El<'_>, size: u32, report: &mut Report) -> Option<Order> {
 }
 
 /// A DefaultCalibrator as an MDL conversion.
-fn default_calibrator(el: El<'_>, report: &mut Report) -> Option<(Object, Span)> {
+fn default_calibrator(el: El<'_>, report: &mut Report) -> Option<Calibrator> {
     el.check(
         &Expect {
             attrs: &[],
@@ -2527,10 +2776,12 @@ fn default_calibrator(el: El<'_>, report: &mut Report) -> Option<(Object, Span)>
     );
     let span = el.span();
     if let Some(polynomial) = el.child("PolynomialCalibrator") {
-        return Some((polynomial_conversion(polynomial, report)?, span));
+        let calibration = polynomial_calibration(polynomial, report)?;
+        return Some(Calibrator { span, calibration });
     }
     if let Some(spline) = el.child("SplineCalibrator") {
-        return Some((spline_conversion(spline, report)?, span));
+        let calibration = spline_calibration(spline, report)?;
+        return Some(Calibrator { span, calibration });
     }
     if let Some(math) = el.child("MathOperationCalibrator") {
         report.error(
@@ -2551,7 +2802,7 @@ fn default_calibrator(el: El<'_>, report: &mut Report) -> Option<(Object, Span)>
 /// The highest polynomial degree imported.
 const MAX_DEGREE: usize = 32;
 
-fn polynomial_conversion(el: El<'_>, report: &mut Report) -> Option<Object> {
+fn polynomial_calibration(el: El<'_>, report: &mut Report) -> Option<Calibration> {
     el.check(
         &Expect {
             attrs: &[],
@@ -2600,31 +2851,17 @@ fn polynomial_conversion(el: El<'_>, report: &mut Report) -> Option<Object> {
     while coefficients.len() > 1 && coefficients.last() == Some(&0.0) {
         coefficients.pop();
     }
-    let mut conversion = Object::at(el.span());
-    match coefficients.as_slice() {
-        [] => {
-            report.error(Code::Invalid, el.span(), "a polynomial has terms");
-            return None;
-        }
-        [offset] => {
-            conversion.put("kind", "linear", None);
-            conversion.put("scale", 0.0, None);
-            conversion.put("offset", *offset, None);
-        }
-        [offset, scale] => {
-            conversion.put("kind", "linear", None);
-            conversion.put("scale", *scale, None);
-            conversion.put("offset", *offset, None);
-        }
-        _ => {
-            conversion.put("kind", "poly", None);
-            conversion.put("coefficients", coefficients.clone(), None);
-        }
+    if coefficients.is_empty() {
+        report.error(Code::Invalid, el.span(), "a polynomial has terms");
+        return None;
     }
-    Some(conversion)
+    Some(Calibration::Polynomial {
+        coefficients,
+        span: el.span(),
+    })
 }
 
-fn spline_conversion(el: El<'_>, report: &mut Report) -> Option<Object> {
+fn spline_calibration(el: El<'_>, report: &mut Report) -> Option<Calibration> {
     el.check(
         &Expect {
             attrs: &["order", "extrapolate"],
@@ -2644,9 +2881,8 @@ fn spline_conversion(el: El<'_>, report: &mut Report) -> Option<Object> {
         Some(attr) => (xml::long(attr, report)?, attr.span),
         None => (1, el.span()),
     };
-    let interpolation = match order.0 {
-        0 => Some("step"),
-        1 => None,
+    match order.0 {
+        0 | 1 => {}
         n => {
             report.error(
                 Code::Unsupported,
@@ -2662,7 +2898,7 @@ fn spline_conversion(el: El<'_>, report: &mut Report) -> Option<Object> {
         Some(attr) => xml::boolean(attr, report)?.then_some(attr.span),
         None => None,
     };
-    let mut points = List::default();
+    let mut points = Vec::new();
     for point in el.all("SplinePoint") {
         point.check(
             &Expect {
@@ -2685,25 +2921,18 @@ fn spline_conversion(el: El<'_>, report: &mut Report) -> Option<Object> {
             );
             return None;
         }
-        let mut object = Object::at(point.span());
-        object.put("raw", xml::double(raw, report)?, Some(raw.span));
-        object.put(
-            "value",
-            xml::double(calibrated, report)?,
-            Some(calibrated.span),
-        );
-        points.push_object(object);
+        points.push(SplinePoint {
+            raw: (xml::double(raw, report)?, raw.span),
+            calibrated: (xml::double(calibrated, report)?, calibrated.span),
+            span: point.span(),
+        });
     }
-    let mut conversion = Object::at(el.span());
-    conversion.put("kind", "table", None);
-    conversion.put_list("points", points);
-    if let Some(interpolation) = interpolation {
-        conversion.put("interpolation", interpolation, Some(order.1));
-    }
-    if let Some(span) = extrapolate {
-        conversion.put("extrapolate", true, Some(span));
-    }
-    Some(conversion)
+    Some(Calibration::Spline {
+        points,
+        order,
+        extrapolate,
+        span: el.span(),
+    })
 }
 
 /// An item's description: its shortDescription and LongDescription, both

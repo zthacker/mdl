@@ -2608,16 +2608,6 @@ fn a_command_container_is_built_on_its_inherited_meta_commands() {
             "a command container built on a telemetry container isn't supported".into()
         )
     );
-    let (code, message) = one_error(&based(
-        r#"<BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="P" value="1"/></RestrictionCriteria></BaseContainer>"#,
-    ));
-    assert_eq!(
-        (code.as_str(), message.as_str()),
-        (
-            "xtce.unsupported",
-            "restriction criteria on a command container aren't supported yet"
-        )
-    );
     let rootless = doc(&commands(
         ARG_U8,
         &format!(
@@ -2632,10 +2622,6 @@ fn a_command_container_is_built_on_its_inherited_meta_commands() {
 #[test]
 fn what_a_command_packet_cant_hold_is_unsupported() {
     for (entry, message) in [
-        (
-            r#"<ParameterRefEntry parameterRef="P"/>"#,
-            "a parameter's value in a command isn't supported yet",
-        ),
         (
             r#"<ContainerRefEntry containerRef="C"/>"#,
             "ContainerRefEntry in a command isn't supported: an MDL command packet holds \
@@ -2663,7 +2649,6 @@ fn what_a_command_packet_cant_hold_is_unsupported() {
         );
     }
     for ty in [
-        r#"<FloatArgumentType name="A"><IntegerDataEncoding sizeInBits="8"><DefaultCalibrator><PolynomialCalibrator><Term coefficient="2" exponent="1"/></PolynomialCalibrator></DefaultCalibrator></IntegerDataEncoding></FloatArgumentType>"#,
         r#"<AggregateArgumentType name="A"><MemberList><Member name="x" typeRef="U8"/></MemberList></AggregateArgumentType>"#,
         r#"<AbsoluteTimeArgumentType name="A"/>"#,
     ] {
@@ -2727,6 +2712,300 @@ fn command_and_argument_names() {
             "xtce.invalid".into(),
             "meta-command A inherits from itself".into()
         )
+    );
+}
+
+/// The catalog argument of a one-argument command `Go`, its field, and the
+/// codes of the warnings, from a document that validates.
+fn validated_argument(ty: &str) -> (Value, Value, Vec<String>) {
+    let text = go_with(ty, "A");
+    let (sources, result) = import_all(&[("sat.xml", &text)]);
+    let parsed = result.unwrap_or_else(|d| panic!("{:#?}", shown(&sources, &d)));
+    let codes = parsed.warnings.iter().map(|w| w.code.to_string()).collect();
+    let bundle = serde_json::to_value(&parsed.bundle).unwrap();
+    if let Err(d) = validate(parsed.bundle) {
+        panic!("{:#?}", shown(&sources, &parsed.map.locate_all(&d)));
+    }
+    (
+        bundle["catalog"]["commands"]["sat.go"]["arguments"][0].clone(),
+        bundle["sets"][0]["commands"][0]["entries"][2].clone(),
+        codes,
+    )
+}
+
+/// A float argument type `A` written in 16 unsigned bits through
+/// `calibrator`, with `rest` after the encoding.
+fn calibrated(calibrator: &str, rest: &str) -> String {
+    format!(
+        r#"<FloatArgumentType name="A"><IntegerDataEncoding sizeInBits="16"><DefaultCalibrator>{calibrator}</DefaultCalibrator></IntegerDataEncoding>{rest}</FloatArgumentType>"#
+    )
+}
+
+const CENTI: &str = r#"<PolynomialCalibrator><Term coefficient="0" exponent="0"/><Term coefficient="100" exponent="1"/></PolynomialCalibrator>"#;
+
+#[test]
+fn an_argument_calibrator_is_the_inverse_and_its_inverse_the_conversion() {
+    // Yamcs writes 100 v: that's the field's inverse as written, and the
+    // conversion is its inverse, for decoding a command.
+    let (argument, field, warnings) = validated_argument(&calibrated(
+        CENTI,
+        r#"<ValidRangeSet><ValidRange minInclusive="0" maxInclusive="5"/></ValidRangeSet>"#,
+    ));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(argument["range"], json!({"min": 0.0, "max": 5.0}));
+    assert_eq!(
+        field["conversion"],
+        json!({"kind": "poly", "coefficients": [0.0, 0.01]})
+    );
+    assert_eq!(
+        field["inverse"],
+        json!({"kind": "linear", "scale": 100.0, "offset": 0.0})
+    );
+    // Without a range, what the field holds: raw 0 to 65535, rounded.
+    let (argument, _, _) = validated_argument(&calibrated(CENTI, ""));
+    let (min, max) = (
+        argument["range"]["min"].as_f64().unwrap(),
+        argument["range"]["max"].as_f64().unwrap(),
+    );
+    assert_eq!(
+        ((100.0 * min).round(), (100.0 * max).round()),
+        (0.0, 65535.0)
+    );
+    assert!((100.0 * min.next_down()).round() < 0.0);
+    assert!((100.0 * max.next_up()).round() > 65535.0);
+}
+
+#[test]
+fn a_spline_that_only_rises_or_falls_is_a_table_read_backwards() {
+    // Engineering 0 to 10 is raw 1000 down to 0, extrapolating.
+    let falling = r#"<SplineCalibrator extrapolate="true"><SplinePoint raw="0" calibrated="1000"/><SplinePoint raw="10" calibrated="0"/></SplineCalibrator>"#;
+    let (argument, field, warnings) = validated_argument(&calibrated(falling, ""));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        field["conversion"],
+        json!({"kind": "table", "points": [{"raw": 0.0, "value": 10.0}, {"raw": 1000.0, "value": 0.0}], "extrapolate": true})
+    );
+    assert_eq!(field.get("inverse"), None);
+    let max = argument["range"]["max"].as_f64().unwrap();
+    assert!(max > 10.0, "extrapolated down to raw 0: {max}");
+    // Yamcs extrapolates whatever the spline says; MDL keeps to the points.
+    let kept = falling.replace(r#" extrapolate="true""#, "");
+    let (argument, _, warnings) = validated_argument(&calibrated(&kept, ""));
+    assert_eq!(warnings, ["xtce.differs"]);
+    assert_eq!(argument["range"], json!({"min": 0.0, "max": 10.0}));
+    for (spline, message) in [
+        (
+            r#"<SplineCalibrator order="0"><SplinePoint raw="0" calibrated="0"/><SplinePoint raw="1" calibrated="5"/></SplineCalibrator>"#,
+            "an order 0 spline on an argument",
+        ),
+        (
+            r#"<SplineCalibrator><SplinePoint raw="0" calibrated="0"/><SplinePoint raw="1" calibrated="5"/><SplinePoint raw="2" calibrated="1"/></SplineCalibrator>"#,
+            "an argument spline that doesn't only rise or only fall",
+        ),
+        (
+            r#"<PolynomialCalibrator><Term coefficient="1" exponent="2"/></PolynomialCalibrator>"#,
+            "an argument calibrator of degree 2 or more",
+        ),
+        (
+            r#"<PolynomialCalibrator><Term coefficient="3" exponent="0"/></PolynomialCalibrator>"#,
+            "a constant argument calibrator",
+        ),
+    ] {
+        let (code, text) = one_error(&go_with(&calibrated(spline, ""), "A"));
+        assert_eq!(code, "xtce.unsupported", "{spline}");
+        assert!(text.starts_with(message), "{text}");
+    }
+}
+
+#[test]
+fn a_range_on_raw_values_is_the_engineering_values_that_give_them() {
+    // Raw 0 to 1000 through 100 v is engineering 0 to 10, give or take
+    // the rounding at each end.
+    let (argument, _, warnings) = validated_argument(&calibrated(
+        CENTI,
+        r#"<ValidRangeSet validRangeAppliesToCalibrated="false"><ValidRange minInclusive="0" maxInclusive="1000"/></ValidRangeSet>"#,
+    ));
+    assert_eq!(warnings, ["xtce.differs"]);
+    let (min, max) = (
+        argument["range"]["min"].as_f64().unwrap(),
+        argument["range"]["max"].as_f64().unwrap(),
+    );
+    assert_eq!(
+        ((100.0 * min).round(), (100.0 * max).round()),
+        (0.0, 1000.0)
+    );
+    assert!((100.0 * max.next_up()).round() > 1000.0);
+}
+
+#[test]
+fn a_falling_spline_takes_a_range_on_raw_values_backwards() {
+    // Raw 1000 down to 0 over engineering 0 to 10: raw 200 to 800 is
+    // engineering 2 to 8, give or take the rounding at each end.
+    let falling = r#"<SplineCalibrator extrapolate="true"><SplinePoint raw="0" calibrated="1000"/><SplinePoint raw="10" calibrated="0"/></SplineCalibrator>"#;
+    let (argument, _, warnings) = validated_argument(&calibrated(
+        falling,
+        r#"<ValidRangeSet validRangeAppliesToCalibrated="false"><ValidRange minInclusive="200" maxInclusive="800"/></ValidRangeSet>"#,
+    ));
+    assert_eq!(warnings, ["xtce.differs"]);
+    let (min, max) = (
+        argument["range"]["min"].as_f64().unwrap(),
+        argument["range"]["max"].as_f64().unwrap(),
+    );
+    assert!(
+        (1.99..2.0).contains(&min) && (8.0..8.01).contains(&max),
+        "{min} {max}"
+    );
+    // A given end past everything the encoding holds.
+    let (code, message) = one_error(&go_with(
+        &calibrated(
+            CENTI,
+            r#"<ValidRangeSet><ValidRange minInclusive="700"/></ValidRangeSet>"#,
+        ),
+        "A",
+    ));
+    assert_eq!(code, "xtce.invalid");
+    assert!(
+        message.starts_with("the valid range's end, 700, lies past every value"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_relative_time_argument_is_a_duration_with_a_linear_conversion() {
+    let ty = r#"<RelativeTimeAgumentType name="A" initialValue="PT1.5S"><Encoding units="seconds" scale="0.001"><IntegerDataEncoding sizeInBits="32"/></Encoding></RelativeTimeAgumentType>"#;
+    let (argument, field, warnings) = validated_argument(ty);
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+        (&argument["type"], &argument["unit"], &argument["default"]),
+        (&json!("f64"), &json!("s"), &json!(1.5))
+    );
+    assert_eq!(
+        field["conversion"],
+        json!({"kind": "linear", "scale": 0.001, "offset": 0.0})
+    );
+    assert!(argument["range"]["max"].as_f64().unwrap() > 4_294_967.0);
+    let bad = ty.replace("PT1.5S", "P1M");
+    let (code, message) = one_error(&go_with(&bad, "A"));
+    assert_eq!(code, "xtce.invalid");
+    assert!(message.contains("isn't a duration"), "{message}");
+}
+
+/// A command `Go` built on `Base`, whose container writes the parameter
+/// `Id` (an aggregate of an 8-bit `Apid` and a 1-bit enumeration `Kind`)
+/// and an 8-bit `Seq`, with `criteria` on `Go`'s container.
+fn with_parameters(criteria: &str) -> String {
+    let types = format!(
+        r#"{U8}<EnumeratedParameterType name="KindType"><IntegerDataEncoding sizeInBits="1"/><EnumerationList><Enumeration value="0" label="TM"/><Enumeration value="1" label="TC"/></EnumerationList></EnumeratedParameterType>
+           <AggregateParameterType name="IdType"><MemberList><Member name="Apid" typeRef="U8"/><Member name="Kind" typeRef="KindType"/></MemberList></AggregateParameterType>"#
+    );
+    let params = format!("{}{}", param("Id", "IdType"), param("Seq", "U8"));
+    let metas = format!(
+        r#"<MetaCommand name="Base" abstract="true"><CommandContainer name="Base"><EntryList>
+             <ParameterRefEntry parameterRef="Id"/><ParameterRefEntry parameterRef="Seq"/>
+           </EntryList></CommandContainer></MetaCommand>
+           <MetaCommand name="Go"><BaseMetaCommand metaCommandRef="Base"/>
+             <CommandContainer name="Go"><EntryList/><BaseContainer containerRef="Base"><RestrictionCriteria>{criteria}</RestrictionCriteria></BaseContainer></CommandContainer>
+           </MetaCommand>"#
+    );
+    doc(&format!(
+        "<TelemetryMetaData><ParameterTypeSet>{types}</ParameterTypeSet><ParameterSet>{params}</ParameterSet></TelemetryMetaData>{}",
+        commands("", &metas)
+    ))
+}
+
+#[test]
+fn a_parameter_entry_holds_what_the_sent_commands_comparison_list_gives() {
+    let list = r#"<ComparisonList>
+        <Comparison parameterRef="Id.Apid" value="0x2A"/>
+        <Comparison parameterRef="Id/Kind" value="TC"/>
+        <Comparison parameterRef="Seq" value="7"/>
+      </ComparisonList>"#;
+    let text = with_parameters(list);
+    let packet = &bundle(&text)["sets"][0]["commands"][0];
+    let fields: Vec<(&str, &Value)> = packet["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| (e["name"].as_str().unwrap(), &e["value"]))
+        .collect();
+    assert_eq!(
+        fields,
+        [
+            ("Id_Apid", &json!(42)),
+            ("Id_Kind", &json!(1)),
+            ("Seq", &json!(7))
+        ]
+    );
+    let (_, result) = import_all(&[("sat.xml", &text)]);
+    validate(result.unwrap().bundle).unwrap();
+
+    // Without a value for every member, nothing to write.
+    let partial = with_parameters(
+        r#"<ComparisonList><Comparison parameterRef="Id.Apid" value="1"/><Comparison parameterRef="Seq" value="0"/></ComparisonList>"#,
+    );
+    let (code, message) = one_error(&partial);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("the sent command's criteria give /Sat/Id.Kind no value"),
+        "{message}"
+    );
+    // Yamcs reads only a ComparisonList, and only its == comparisons:
+    // with nothing else to give them values, the entries are unsupported.
+    let messages = |criteria: &str| -> Vec<(String, String)> {
+        let (sources, result) = import_all(&[("sat.xml", &with_parameters(criteria))]);
+        shown(&sources, &result.unwrap_err())
+            .into_iter()
+            .map(|(_, code, _, message)| (code, message))
+            .collect()
+    };
+    let single = messages(r#"<Comparison parameterRef="Seq" value="0"/>"#);
+    assert_eq!(
+        single
+            .iter()
+            .map(|(code, _)| code.as_str())
+            .collect::<Vec<_>>(),
+        ["xtce.unsupported", "xtce.unsupported", "xtce.ignored"]
+    );
+    assert_eq!(
+        single[2].1,
+        "a command container's Comparison isn't read: Yamcs fills parameter entries from a \
+         ComparisonList only"
+    );
+    let unequal = messages(
+        r#"<ComparisonList><Comparison parameterRef="Id.Apid" value="1"/><Comparison parameterRef="Id.Kind" value="TC"/><Comparison parameterRef="Seq" value="0" comparisonOperator="!="/></ComparisonList>"#,
+    );
+    assert_eq!(
+        unequal
+            .iter()
+            .map(|(code, _)| code.as_str())
+            .collect::<Vec<_>>(),
+        ["xtce.unsupported", "xtce.ignored"]
+    );
+    // Yamcs reads a criteria value as an engineering value whatever
+    // useCalibratedValue says; MDL takes XTCE's raw value, and says so.
+    let raw = with_parameters(&list.replace(
+        r#"value="TC"/>"#,
+        r#"value="1" useCalibratedValue="false"/>"#,
+    ));
+    let (sources, result) = import_all(&[("sat.xml", &raw)]);
+    let parsed = result.unwrap();
+    assert_eq!(
+        shown(&sources, &parsed.warnings)
+            .into_iter()
+            .map(|(_, code, _, _)| code)
+            .collect::<Vec<_>>(),
+        ["xtce.differs"]
+    );
+    let bundle = serde_json::to_value(parsed.bundle).unwrap();
+    assert_eq!(bundle["sets"][0]["commands"][0]["entries"][1]["value"], 1);
+    // Two values for one parameter.
+    assert_eq!(
+        one_error(&with_parameters(&list.replace(
+            "</ComparisonList>",
+            r#"<Comparison parameterRef="Seq" value="8"/></ComparisonList>"#
+        )))
+        .0,
+        "xtce.invalid"
     );
 }
 

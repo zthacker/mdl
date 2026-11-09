@@ -907,6 +907,7 @@ fn size_tag<'d>(
         length: None,
         text: None,
         conversion: None,
+        inverse: None,
         unit: None,
         param: "u64",
         states: Vec::new(),
