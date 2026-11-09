@@ -539,6 +539,8 @@ impl<'d> Import<'d, '_> {
                             scalar: size_tag(scalar, *bits, *order, *span),
                             length: None,
                             canonical: None,
+                            argument: None,
+                            value: None,
                             offset,
                             when: place.when.clone(),
                         })));
@@ -561,6 +563,8 @@ impl<'d> Import<'d, '_> {
                     scalar: (**scalar).clone(),
                     length,
                     canonical: Some(canonical),
+                    argument: None,
+                    value: None,
                     offset,
                     when: place.when.clone(),
                 })));
@@ -908,6 +912,8 @@ fn size_tag<'d>(
         states: Vec::new(),
         raw: Raw::Integer,
         limits: None,
+        range: None,
+        initial: None,
     }
 }
 

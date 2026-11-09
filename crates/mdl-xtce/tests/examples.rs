@@ -1,11 +1,13 @@
-//! The examples in `examples/xtce` import, validate and build, and decode
-//! packets the way their comments say.
+//! The examples in `examples/xtce` import, validate and build, decode
+//! packets the way their comments say, and encode commands to the bytes
+//! they describe.
 
 use std::path::Path;
 
 use mdl::v2::artifact::{Artifacts, Written, build};
 use mdl::v2::bindings::Bindings;
 use mdl::v2::decode::{Decoded, Quality, SampleValue};
+use mdl::v2::encode::{ArgumentValue, CommandRequest};
 use mdl::v2::ir::Artifact;
 use mdl::v2::message::{Message, Payload};
 use mdl::v2::read::{Loaded, read_artifact};
@@ -96,10 +98,10 @@ fn demosat_decodes_its_eps_and_adcs_packets() {
     assert_eq!(
         warnings,
         [
-            "68:27 SpaceSystem EPS's shortDescription isn't imported: MDL keeps descriptions \
-             for catalog params only",
-            "150:28 SpaceSystem ADCS's shortDescription isn't imported: MDL keeps descriptions \
-             for catalog params only",
+            "106:27 SpaceSystem EPS's shortDescription isn't imported: MDL keeps descriptions \
+             of catalog params, commands and arguments only",
+            "261:28 SpaceSystem ADCS's shortDescription isn't imported: MDL keeps descriptions \
+             of catalog params, commands and arguments only",
         ]
     );
     let registry = Bindings::from_toml(
@@ -179,6 +181,93 @@ effective_from = "2026-01-01T00:00:00Z"
     assert_eq!(number(&decoded, "demosat.adcs.rate.x"), 0.5);
     assert_eq!(number(&decoded, "demosat.adcs.rate.y"), -0.25);
     assert_eq!(number(&decoded, "demosat.adcs.rate.z"), 1.0);
+}
+
+#[test]
+fn demosat_encodes_its_commands_and_decodes_them_back() {
+    let (artifacts, _) = example("demosat.xml");
+    let sats = family_sets(&artifacts, "demosat");
+    let ground: Timestamp = "2026-06-01T12:00:00Z".parse().unwrap();
+    // The telecommand header for an APID: version 0, type 1 (a command),
+    // no secondary header, standalone, the count and length left as zeros.
+    let header = |apid: u16| {
+        let mut bytes = (0x1000 | apid).to_be_bytes().to_vec();
+        bytes.extend_from_slice(&[0xC0, 0x00, 0x00, 0x00]);
+        bytes
+    };
+    let encode = |request: CommandRequest| sats.encode(&request).map(|e| e.payload);
+    let decode = |bytes: &[u8]| {
+        let decoded = sats
+            .decode_command("demosat", &Message::new(Payload::Binary(bytes), ground))
+            .unwrap();
+        (decoded.command().to_string(), decoded.arguments)
+    };
+
+    // SetMode: opcode 1 to APID 100 (both assigned along the way), then the
+    // mode's raw value and the delay.
+    let set_mode = CommandRequest::new("demosat", "eps.set_mode")
+        .with_argument("mode", "NOMINAL")
+        .with_argument("delay", 30_u64);
+    let bytes = encode(set_mode).unwrap();
+    let mut expected = header(100);
+    expected.extend_from_slice(&[1, 2, 0x00, 0x1E]);
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        decode(&bytes),
+        (
+            "eps.set_mode".to_string(),
+            vec![
+                ("mode", ArgumentValue::Text("NOMINAL".into())),
+                ("delay", ArgumentValue::Uint(30))
+            ]
+        )
+    );
+    // The delay's type gives its default and its valid range.
+    let defaulted = sats
+        .encode(&CommandRequest::new("demosat", "eps.set_mode").with_argument("mode", "SAFE"))
+        .unwrap();
+    assert_eq!(defaulted.defaulted, ["delay"]);
+    assert_eq!(&defaulted.payload[6..], [1, 1, 0, 0]);
+    let late = CommandRequest::new("demosat", "eps.set_mode")
+        .with_argument("mode", "SAFE")
+        .with_argument("delay", 3601_u64);
+    assert_eq!(encode(late).unwrap_err().code(), "out_of_range");
+
+    // SetHeater: opcode 2, the switch's initial value, True, as 1, and
+    // the minutes, which may be anything their 16 bits hold.
+    let heater = |minutes: u64| {
+        encode(
+            CommandRequest::new("demosat", "demosat.eps.setheater")
+                .with_argument("minutes", minutes),
+        )
+    };
+    let mut expected = header(100);
+    expected.extend_from_slice(&[2, 1, 0x00, 0x5A]);
+    assert_eq!(heater(90).unwrap(), expected);
+    assert_eq!(heater(65_536).unwrap_err().code(), "out_of_range");
+
+    // Point: APID 101, opcode 1, the target NUL-padded to eight bytes, and
+    // the rate as a 32-bit float, which must be above 0.
+    let point = CommandRequest::new("demosat", "demosat.adcs.point")
+        .with_argument("target", "SUN")
+        .with_argument("rate", 0.25);
+    let bytes = encode(point).unwrap();
+    let mut expected = header(101);
+    expected.push(1);
+    expected.extend_from_slice(b"SUN\0\0\0\0\0");
+    expected.extend_from_slice(&0.25_f32.to_be_bytes());
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        decode(&bytes).1,
+        [
+            ("target", ArgumentValue::Text("SUN".into())),
+            ("rate", ArgumentValue::Float(0.25))
+        ]
+    );
+    let still = CommandRequest::new("demosat", "demosat.adcs.point")
+        .with_argument("target", "SUN")
+        .with_argument("rate", 0.0);
+    assert_eq!(encode(still).unwrap_err().code(), "out_of_range");
 }
 
 /// Every good sample of `param`, by index.

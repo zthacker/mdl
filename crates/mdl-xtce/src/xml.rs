@@ -338,7 +338,9 @@ fn is_document_namespace(namespace: &str) -> bool {
 /// The warning for something left out, saying what it is.
 fn ignored(owner: &str, name: &str) -> String {
     let what = match name {
-        "shortDescription" | "LongDescription" => "MDL keeps descriptions for catalog params only",
+        "shortDescription" | "LongDescription" => {
+            "MDL keeps descriptions of catalog params, commands and arguments only"
+        }
         "AliasSet" => "MDL reads only aliases in the MDL namespace",
         "AncillaryDataSet" => "MDL has no ancillary data",
         "initialValue" => "MDL has no initial values",
@@ -351,9 +353,10 @@ fn ignored(owner: &str, name: &str) -> String {
         "minConformance" => "MDL limits apply to each value",
         "ValidRange" | "validRangeAppliesToCalibrated" => "MDL has no valid ranges",
         "ToString" => "MDL has no display formats",
-        "dataSource" | "readOnly" | "persistence" | "SystemName" | "PhysicalAddressSet" => {
+        "dataSource" | "readOnly" | "persistence" | "PhysicalAddressSet" => {
             "MDL has no parameter properties"
         }
+        "SystemName" => "MDL doesn't keep system names",
         "ValidityCondition" => {
             "MDL has no validity conditions, which set a value's quality, not the value"
         }
@@ -366,6 +369,21 @@ fn ignored(owner: &str, name: &str) -> String {
         "operationalStatus" => "MDL has no operational status",
         "oneStringValue" | "zeroStringValue" => "MDL booleans are true and false",
         "maxSizeInBits" => "MDL doesn't bound a variable string's size",
+        "SizeRangeInCharacters" => "MDL doesn't bound text by its length in characters",
+        "restrictionPattern" => "MDL doesn't check text against a pattern",
+        "CommandContainerSet" => {
+            "command containers are read inside meta-commands, as Yamcs reads them"
+        }
+        "MetaCommandRef" => "the meta-command it names is imported where it's defined",
+        "BlockMetaCommand" => "MDL has no command sequences",
+        "TransmissionConstraintList" | "Interlock" => {
+            "MDL doesn't decide when a command may be sent"
+        }
+        "DefaultSignificance" | "ContextSignificanceList" => "MDL has no command significance",
+        "VerifierSet" => "MDL doesn't verify commands",
+        "ParameterToSetList" | "ParametersToSuspendAlarmsOnSet" => {
+            "MDL doesn't set parameters or suspend alarms when a command is sent"
+        }
         "description" | "power" | "factor" | "form" => "it's part of a unit",
         "name" => "MDL doesn't name calibrators",
         _ => "it doesn't change decoded values",

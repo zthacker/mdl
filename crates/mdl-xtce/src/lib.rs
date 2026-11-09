@@ -6,9 +6,12 @@
 //! container a packet of one set, each parameter in it a field and a
 //! catalog param, and the restriction criteria of the containers it
 //! inherits from its identify keys. Aggregates become one field per
-//! member. Whatever the XTCE says that MDL can't represent is reported,
-//! never dropped: as an error when leaving it out would change a decoded
-//! value, as a warning otherwise.
+//! member. Each concrete MetaCommand becomes a catalog command and a
+//! command packet: the arguments and container entries of every
+//! meta-command it inherits from, root first, an assigned argument or a
+//! FixedValueEntry being a constant. Whatever the XTCE says that MDL can't
+//! represent is reported, never dropped: as an error when leaving it out
+//! would change a decoded or encoded value, as a warning otherwise.
 //!
 //! ```
 //! use mdl::v2::source::Sources;
@@ -100,13 +103,16 @@ pub enum Code {
     /// A name that can't become an MDL name, or two that become the same.
     Name,
     /// Something MDL can't represent, whose absence would change a decoded
-    /// value. The bundle isn't built.
+    /// or encoded value. The bundle isn't built.
     Unsupported,
-    /// Something MDL doesn't keep that doesn't change decoded values: a
-    /// warning.
+    /// Something MDL doesn't keep that doesn't change decoded or encoded
+    /// values: a warning.
     Ignored,
     /// An XTCE name changed to fit MDL's rules for names: a warning.
     Renamed,
+    /// Something imported that MDL encodes differently from Yamcs: a
+    /// warning naming the difference.
+    Differs,
 }
 
 impl Code {
@@ -121,6 +127,7 @@ impl Code {
         Code::Unsupported,
         Code::Ignored,
         Code::Renamed,
+        Code::Differs,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -134,6 +141,7 @@ impl Code {
             Code::Unsupported => "xtce.unsupported",
             Code::Ignored => "xtce.ignored",
             Code::Renamed => "xtce.renamed",
+            Code::Differs => "xtce.differs",
         }
     }
 }
@@ -198,7 +206,8 @@ impl Options {
 /// References may cross files (`/OtherRoot/Sub/Param`).
 ///
 /// On success, the warnings are what was left out without changing any
-/// decoded value. On failure, every problem is reported, warnings
+/// decoded or encoded value, and where MDL encodes a command otherwise
+/// than Yamcs. On failure, every problem is reported, warnings
 /// included, in file order and then by position.
 pub fn read<'a>(
     files: impl IntoIterator<Item = SourceFile<'a>>,

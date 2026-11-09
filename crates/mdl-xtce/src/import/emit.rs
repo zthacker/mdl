@@ -6,6 +6,7 @@ use mdl::v2::ir::IrVersion;
 use mdl::v2::source::{SourceMap, Span};
 use serde_json::Value;
 
+use super::commands::{Argument, Command};
 use super::{Element, Entry, Packet, Param, StructType, TypeId};
 use crate::out::{List, Object};
 use crate::types::{Order, Scalar};
@@ -20,6 +21,7 @@ pub(super) struct Bundle<'a, 'd> {
     pub(super) set: &'a str,
     pub(super) packets: &'a [Packet<'d>],
     pub(super) structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
+    pub(super) commands: &'a [Command<'d>],
 }
 
 pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
@@ -33,6 +35,13 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     }
     let mut catalog = Object::at(parts.root);
     catalog.put_object("params", params);
+    if !parts.commands.is_empty() {
+        let mut commands = Object::default();
+        for command in parts.commands {
+            commands.put_object(&command.canonical.0, command_object(command));
+        }
+        catalog.put_object("commands", commands);
+    }
 
     let mut family = Object::at(parts.root);
     family.put("name", parts.family, None);
@@ -59,6 +68,13 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
         packets.push_object(writer.packet(packet));
     }
     set.put_list("packets", packets);
+    if !parts.commands.is_empty() {
+        let mut commands = List::default();
+        for command in parts.commands {
+            commands.push_object(writer.command(command));
+        }
+        set.put_list("commands", commands);
+    }
     let mut sets = List::default();
     sets.push_object(set);
 
@@ -104,6 +120,54 @@ fn param_object(param: &Param<'_>) -> Object {
     object
 }
 
+fn command_object(command: &Command<'_>) -> Object {
+    let mut object = Object::at(command.el.span());
+    if !command.arguments.is_empty() {
+        let mut arguments = List::default();
+        for argument in &command.arguments {
+            arguments.push_object(argument_object(argument));
+        }
+        object.put_list("arguments", arguments);
+    }
+    if let Some((text, span)) = &command.description {
+        object.put("description", text.as_str(), Some(*span));
+    }
+    object
+}
+
+fn argument_object(argument: &Argument<'_>) -> Object {
+    let scalar = &argument.scalar;
+    let mut object = Object::at(argument.el.span());
+    object.put("name", argument.name.0.as_str(), Some(argument.name.1));
+    object.put("type", scalar.param, Some(scalar.el.span()));
+    if let Some((unit, span)) = &scalar.unit {
+        object.put("unit", unit.as_str(), Some(*span));
+    }
+    if !scalar.states.is_empty() {
+        let mut states = List::default();
+        for (state, span) in &scalar.states {
+            states.push(state.as_str(), Some(*span));
+        }
+        object.put_list("states", states);
+    }
+    if let Some(range) = &scalar.range {
+        let mut object_range = Object::at(scalar.el.span());
+        for (key, end) in [("min", range.min), ("max", range.max)] {
+            if let Some((value, span)) = end {
+                object_range.put(key, value, Some(span));
+            }
+        }
+        object.put_object("range", object_range);
+    }
+    if let Some((value, span)) = &argument.default {
+        object.put("default", value.clone(), Some(*span));
+    }
+    if let Some((text, span)) = &argument.description {
+        object.put("description", text.as_str(), Some(*span));
+    }
+    object
+}
+
 /// Writes entries, knowing the family's byte order and the struct types'
 /// names.
 struct Writer<'a, 'd> {
@@ -127,6 +191,24 @@ impl Writer<'_, '_> {
             object.put_object("identify", identify);
         }
         object.put_list("entries", self.entries(&packet.entries));
+        object
+    }
+
+    fn command(&self, command: &Command<'_>) -> Object {
+        let mut object = Object::at(command.el.span());
+        object.put(
+            "name",
+            command.name.as_str(),
+            command.el.attr("name").map(|a| a.span),
+        );
+        object.put(
+            "canonical",
+            command.canonical.0.as_str(),
+            Some(command.canonical.1),
+        );
+        if !command.entries.is_empty() {
+            object.put_list("entries", self.entries(&command.entries));
+        }
         object
     }
 
@@ -169,6 +251,12 @@ impl Writer<'_, '_> {
                 }
                 if let Some((canonical, span)) = &field.canonical {
                     object.put("canonical", canonical.as_str(), Some(*span));
+                }
+                if let Some((argument, span)) = &field.argument {
+                    object.put("argument", argument.as_str(), Some(*span));
+                }
+                if let Some((value, span)) = &field.value {
+                    object.put("value", value.clone(), Some(*span));
                 }
                 if let Some(when) = &field.when {
                     object.put_object("when", when.clone());
