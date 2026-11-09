@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::MAX_NESTING;
 use super::command;
-use super::layout::{Container, Layout, exact_type_sizes, static_offsets, type_name};
+use super::layout::{Container, Layout, Shape, exact_type_sizes, static_offsets, type_name};
 use super::mapping;
 use super::rules::{
     check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
@@ -19,6 +19,7 @@ use crate::v2::ir::{
     Element, Encoding, Entry, Family, Field, Interpolation, Locator, Packet, Point, Scalar,
     ScalarElement, ScalarType, Set, StructType, TextEncoding, Time,
 };
+use crate::v2::layout::{ContainerLayout, Placement, SetLayout};
 use crate::v2::time::Timestamp;
 
 /// What entries may refer to.
@@ -676,6 +677,90 @@ pub(crate) enum KeyId {
         packet: usize,
         name: String,
     },
+}
+
+/// Where every entry of a binary set's containers can be, worked out by
+/// the walk [`check_layout`] makes. Only meaningful for a validated set and
+/// its family; `None` for a self-describing one.
+pub(crate) fn layout_of(set: &Set, family: &Family) -> Option<SetLayout> {
+    if family.encoding != Encoding::Binary {
+        return None;
+    }
+    // A validated set reports nothing here.
+    let mut scratch = Report::default();
+    let place = Place::root("");
+    let heights = check_type_graph(&set.types, &place, &mut scratch);
+    let type_sizes = exact_type_sizes(&set.types, &heights);
+    let mut layout = Layout {
+        binary: true,
+        byte_order: family.byte_order,
+        types: BTreeMap::new(),
+    };
+    let laid = |name: &str,
+                entries: &[Entry],
+                placed: (Option<Shape>, Vec<Option<Placement>>)|
+     -> Option<(ContainerLayout, Shape)> {
+        let (shape, placements) = placed;
+        let shape = shape?;
+        let placements: Vec<Placement> = placements.into_iter().collect::<Option<_>>()?;
+        let entries = placements
+            .into_iter()
+            .zip(static_offsets(entries, &type_sizes))
+            .map(|(placement, offset)| Placement {
+                static_offset_bits: offset,
+                ..placement
+            })
+            .collect();
+        let container = ContainerLayout {
+            name: name.to_string(),
+            entries,
+            size_min_bits: shape.size.min,
+            size_max_bits: shape.size.max,
+        };
+        Some((container, shape))
+    };
+    let mut order: Vec<(&String, &StructType)> = set.types.iter().collect();
+    order.sort_by_key(|(name, _)| heights.get(name.as_str()).copied().unwrap_or(0));
+    let mut types = BTreeMap::new();
+    for (name, struct_type) in order {
+        let placed = layout.place_container(
+            &struct_type.entries,
+            None,
+            Container::StructType,
+            &place,
+            &mut scratch,
+        );
+        let (container, shape) = laid(name, &struct_type.entries, placed)?;
+        layout.types.insert(name, shape);
+        types.insert(name.clone(), container);
+    }
+    let mut packets = Vec::new();
+    for packet in &set.packets {
+        let placed = layout.place_container(
+            &packet.entries,
+            packet.length.as_ref(),
+            Container::Packet,
+            &place,
+            &mut scratch,
+        );
+        packets.push(laid(&packet.name, &packet.entries, placed)?.0);
+    }
+    let mut commands = Vec::new();
+    for packet in &set.commands {
+        let placed = layout.place_container(
+            &packet.entries,
+            None,
+            Container::Command,
+            &place,
+            &mut scratch,
+        );
+        commands.push(laid(&packet.name, &packet.entries, placed)?.0);
+    }
+    Some(SetLayout {
+        packets,
+        commands,
+        types,
+    })
 }
 
 /// The identify keys of each packet of a set, resolved exactly as
