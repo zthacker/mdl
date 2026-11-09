@@ -1,4 +1,5 @@
-//! Parameter types: what a field reads and what its catalog param holds.
+//! Parameter and argument types: what a field reads or writes, and what
+//! its catalog param or argument holds.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,9 +10,29 @@ use serde_json::{Value, json};
 use crate::Code;
 use crate::out::{List, Object};
 use crate::report::Report;
-use crate::space::{Kind, Tree};
+use crate::space::{ARGUMENT_TYPES, Kind, Tree};
 use crate::units::{Ucum, ucum};
 use crate::xml::{self, Attr, El, Expect};
+
+/// Whether a type is a parameter's or an argument's. Both read the same
+/// encodings; a parameter type's alarms are its params' limits, and an
+/// argument type's valid range and initial value are its argument's range
+/// and default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Role {
+    Parameter,
+    Argument,
+}
+
+impl Role {
+    fn of(el: &El<'_>) -> Role {
+        if ARGUMENT_TYPES.contains(&el.name()) {
+            Role::Argument
+        } else {
+            Role::Parameter
+        }
+    }
+}
 
 /// What a parameter of a type is: one value, an aggregate's members, or
 /// an array of elements.
@@ -137,6 +158,17 @@ pub(crate) struct Scalar<'d> {
     pub(crate) raw: Raw,
     /// A number type's alarm ranges, as the param's limits.
     pub(crate) limits: Option<Limits>,
+    /// A number argument type's valid range, as the argument's range.
+    pub(crate) range: Option<ValidRange>,
+    /// An argument type's initial value, as XTCE writes it.
+    pub(crate) initial: Option<(&'d str, Span)>,
+}
+
+/// A valid range as MDL's: inclusive ends, each with where it came from.
+#[derive(Debug, Clone)]
+pub(crate) struct ValidRange {
+    pub(crate) min: Option<(f64, Span)>,
+    pub(crate) max: Option<(f64, Span)>,
 }
 
 /// Alarm ranges as MDL's limits, each with where it came from.
@@ -281,12 +313,15 @@ fn parse_integer(text: &str) -> Option<i64> {
     i64::try_from(if negative { -magnitude } else { magnitude }).ok()
 }
 
+/// A type: whose it is, its SpaceSystem and its name.
+type TypeKey<'d> = (Role, usize, &'d str);
+
 /// Shapes of the types used so far, each worked out once.
 #[derive(Default)]
 pub(crate) struct Types<'d> {
-    shapes: BTreeMap<(usize, &'d str), Option<Shape<'d>>>,
+    shapes: BTreeMap<TypeKey<'d>, Option<Shape<'d>>>,
     /// Aggregates being worked out, to catch one that contains itself.
-    open: BTreeSet<(usize, &'d str)>,
+    open: BTreeSet<TypeKey<'d>>,
 }
 
 /// Children every type may have that don't change decoded values.
@@ -314,7 +349,7 @@ impl<'d> Types<'d> {
         el: El<'d>,
         report: &mut Report,
     ) -> Option<Shape<'d>> {
-        let key = (space, el.item_name().unwrap_or_default());
+        let key = (Role::of(&el), space, el.item_name().unwrap_or_default());
         if let Some(shape) = self.shapes.get(&key) {
             return shape.clone();
         }
@@ -326,7 +361,7 @@ impl<'d> Types<'d> {
                 report.error(
                     Code::Invalid,
                     el.span(),
-                    format!("type {} contains itself", key.1),
+                    format!("type {} contains itself", key.2),
                 );
                 return None;
             }
@@ -366,13 +401,14 @@ impl<'d> Types<'d> {
             );
             return None;
         }
+        let role = Role::of(&el);
         let scalar = match el.name() {
-            "IntegerParameterType" => integer(el, report),
-            "FloatParameterType" => float(el, report),
-            "EnumeratedParameterType" => enumerated(el, report),
-            "BooleanParameterType" => boolean(el, report),
-            "StringParameterType" => string(el, space, report),
-            "BinaryParameterType" => binary(el, space, report),
+            "IntegerParameterType" | "IntegerArgumentType" => integer(el, role, report),
+            "FloatParameterType" | "FloatArgumentType" => float(el, role, report),
+            "EnumeratedParameterType" | "EnumeratedArgumentType" => enumerated(el, role, report),
+            "BooleanParameterType" | "BooleanArgumentType" => boolean(el, role, report),
+            "StringParameterType" | "StringArgumentType" => string(el, space, role, report),
+            "BinaryParameterType" | "BinaryArgumentType" => binary(el, space, role, report),
             "AggregateParameterType" => return self.aggregate(tree, space, el, report),
             "ArrayParameterType" => return self.array(tree, space, el, report),
             "AbsoluteTimeParameterType" => {
@@ -381,6 +417,31 @@ impl<'d> Types<'d> {
                     el.span(),
                     "absolute time parameters aren't supported: an MDL field holds a number, \
                      not an instant, so the decoded value would change",
+                );
+                None
+            }
+            "AbsoluteTimeArgumentType" => {
+                report.error(
+                    Code::Unsupported,
+                    el.span(),
+                    "absolute time arguments aren't supported: an MDL field holds a number, not \
+                     an instant, so the encoded value would change",
+                );
+                None
+            }
+            "AggregateArgumentType" | "ArrayArgumentType" => {
+                report.error(
+                    Code::Unsupported,
+                    el.span(),
+                    "aggregate and array arguments aren't supported yet",
+                );
+                None
+            }
+            "RelativeTimeArgumentType" | "RelativeTimeAgumentType" => {
+                report.error(
+                    Code::Unsupported,
+                    el.span(),
+                    "relative time arguments aren't supported yet",
                 );
                 None
             }
@@ -523,55 +584,96 @@ impl<'d> Types<'d> {
     }
 }
 
-fn integer<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
-    el.check(
-        &numeric_expect(&["name", "signed", "sizeInBits", "baseType"]),
-        report,
-    );
+fn integer<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let lists = Lists::numeric(role, &["name", "signed", "sizeInBits", "baseType"]);
+    el.check(&lists.expect(), report);
     let signed = el.attr("signed").and_then(|a| xml::boolean(a, report));
+    // The engineering value's size, which Yamcs checks an argument against.
+    let mut type_bits = 32;
     if let Some(size) = el.attr("sizeInBits")
-        && xml::long(size, report).is_some_and(|bits| !(1..=64).contains(&bits))
+        && let Some(bits) = xml::long(size, report)
     {
-        report.error(
-            Code::Unsupported,
-            size.span,
-            "MDL's integers are at most 64 bits",
-        );
+        if !(1..=64).contains(&bits) {
+            report.error(
+                Code::Unsupported,
+                size.span,
+                "MDL's integers are at most 64 bits",
+            );
+        }
+        type_bits = bits.clamp(1, 64);
     }
     let unit = unit(el, report);
     let encoding = only_encoding(el, &["IntegerDataEncoding"], report)?;
     let encoding = integer_encoding(encoding, report)?;
     if let Some(calibrator) = &encoding.calibrator {
+        let instead = match role {
+            Role::Parameter => "FloatParameterType",
+            Role::Argument => "FloatArgumentType",
+        };
         report.error(
             Code::Unsupported,
             calibrator.1,
-            "an integer type with a calibrator: MDL's calibrations give floats, so the value \
-             would change; make it a FloatParameterType",
+            format!(
+                "an integer type with a calibrator: MDL's calibrations give floats, so the value \
+                 would change; make it a {instead}"
+            ),
         );
         return None;
     }
+    let signed = signed.unwrap_or(true);
+    // An MDL command writes a u64 argument to a uint field only, so an
+    // unsigned argument over a two's complement encoding is an i64, which
+    // its range keeps at 0 and above.
+    let param = if signed || (role == Role::Argument && encoding.ty == "int") {
+        "i64"
+    } else {
+        "u64"
+    };
+    let (limits, range) = match role {
+        Role::Parameter => (limits(el, report), None),
+        Role::Argument => match valid_range(el, true, report)? {
+            Some(range) => (None, Some(range)),
+            None => {
+                let held = Held {
+                    signed,
+                    bits: type_bits,
+                    param,
+                };
+                (None, integer_holds(&encoding, held, report))
+            }
+        },
+    };
     Some(Scalar {
-        param: if signed.unwrap_or(true) { "i64" } else { "u64" },
+        param,
         raw: Raw::Integer,
         unit,
-        limits: limits(el, report),
+        limits,
+        range,
+        initial: initial(el, role),
         ..encoding.scalar(el)
     })
 }
 
-fn float<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
-    el.check(&numeric_expect(&["name", "sizeInBits", "baseType"]), report);
+fn float<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let lists = Lists::numeric(role, &["name", "sizeInBits", "baseType"]);
+    el.check(&lists.expect(), report);
     let unit = unit(el, report);
-    let encoding = only_encoding(el, &["FloatDataEncoding", "IntegerDataEncoding"], report)?;
-    let (mut scalar, calibrated) = if encoding.name() == "FloatDataEncoding" {
-        let encoding = float_encoding(encoding, report)?;
-        let calibrated = encoding.calibrator.is_some();
-        (encoding.scalar(el), calibrated)
+    let encoding_el = only_encoding(el, &["FloatDataEncoding", "IntegerDataEncoding"], report)?;
+    let encoding = if encoding_el.name() == "FloatDataEncoding" {
+        float_encoding(encoding_el, report)?
     } else {
-        let encoding = integer_encoding(encoding, report)?;
-        let calibrated = encoding.calibrator.is_some();
-        (encoding.scalar(el), calibrated)
+        integer_encoding(encoding_el, report)?
     };
+    if let (Role::Argument, Some((_, span))) = (role, &encoding.calibrator) {
+        report.error(
+            Code::Unsupported,
+            *span,
+            "a calibrated argument type isn't supported yet",
+        );
+        return None;
+    }
+    let calibrated = encoding.calibrator.is_some();
+    let mut scalar = encoding.scalar(el);
     scalar.param = "f64";
     scalar.unit = unit;
     scalar.raw = if calibrated || scalar.ty.0 == "float" {
@@ -579,8 +681,193 @@ fn float<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
     } else {
         Raw::Integer
     };
-    scalar.limits = limits(el, report);
+    match role {
+        Role::Parameter => scalar.limits = limits(el, report),
+        Role::Argument => {
+            float_argument_differences(el, &encoding, report)?;
+            scalar.range = valid_range(el, false, report)?;
+            if encoding.ty != "float" {
+                scalar.range = Some(rounded_range(scalar.range.take(), &encoding, report));
+            }
+            scalar.initial = initial(el, role);
+        }
+    }
     Some(scalar)
+}
+
+/// The integers an integer encoding holds: unsigned, or two's complement.
+fn encoding_integers(encoding: &Encoding<'_>) -> (i128, i128) {
+    signed_or_not(encoding.ty == "int", encoding.size)
+}
+
+/// The integers of `bits` bits, signed (two's complement) or not.
+fn signed_or_not(signed: bool, bits: u32) -> (i128, i128) {
+    let bits = bits.clamp(1, 64);
+    if signed {
+        (-(1 << (bits - 1)), (1 << (bits - 1)) - 1)
+    } else {
+        (0, (1 << bits) - 1)
+    }
+}
+
+/// The largest integer every JSON reader holds exactly, which bounds an
+/// MDL range's ends.
+const SAFE: i128 = (1 << 53) - 1;
+
+/// An integer argument type: whether it's signed and how many bits it
+/// has, as XTCE says, and its catalog type.
+struct Held {
+    signed: bool,
+    bits: i64,
+    param: &'static str,
+}
+
+/// What an integer argument with no valid range may be: what its encoding
+/// holds, and its type too (`signed`, and `sizeInBits`, 32 by default),
+/// which Yamcs checks a value against. An end the catalog type has anyway
+/// is left out; one past ±(2^53 - 1) is cut there.
+fn integer_holds(encoding: &Encoding<'_>, held: Held, report: &mut Report) -> Option<ValidRange> {
+    let (field_low, field_high) = encoding_integers(encoding);
+    let (type_low, type_high) = signed_or_not(held.signed, u32::try_from(held.bits).unwrap_or(64));
+    let (own_low, own_high) = if held.param == "i64" {
+        (i128::from(i64::MIN), i128::from(i64::MAX))
+    } else {
+        (0, i128::from(u64::MAX))
+    };
+    let (low, high) = (field_low.max(type_low), field_high.min(type_high));
+    let span = encoding.size_span;
+    if (low > own_low && low < -SAFE) || (high < own_high && high > SAFE) {
+        past_safe(span, report);
+    }
+    let min = (low > own_low).then(|| (low.max(-SAFE) as f64, span));
+    let max = (high < own_high).then(|| (high.min(SAFE) as f64, span));
+    (min.is_some() || max.is_some()).then_some(ValidRange { min, max })
+}
+
+/// Values a range would hold but can't say, since its ends lie within
+/// ±(2^53 - 1).
+fn past_safe(span: Span, report: &mut Report) {
+    report.warning(
+        Code::Differs,
+        span,
+        format!(
+            "MDL refuses this argument's values past ±{SAFE}, which the encoding holds and \
+             Yamcs sends: an MDL range's ends lie within ±(2^53 - 1), where every JSON reader \
+             agrees"
+        ),
+    );
+}
+
+/// The range of an uncalibrated float written as an integer, as MDL
+/// rounds it: where the type gives no end, from the least value that
+/// rounds into the encoding to the greatest (just above `low - 0.5` and
+/// just below `high + 0.5`). A given end that Yamcs keeps inside the
+/// encoding, since it drops a value's fraction, but that MDL's rounding
+/// takes outside it is narrowed to the last value MDL keeps, with a
+/// warning; an end outside the encoding either way is left for validation
+/// to report.
+fn rounded_range(
+    given: Option<ValidRange>,
+    encoding: &Encoding<'_>,
+    report: &mut Report,
+) -> ValidRange {
+    let (low, high) = encoding_integers(encoding);
+    let span = encoding.size_span;
+    let safe = SAFE as f64;
+    let (lowest, highest) = (rounds_to_at_least(low), rounds_to_at_most(high));
+    let given = given.unwrap_or(ValidRange {
+        min: None,
+        max: None,
+    });
+    // An end the range doesn't give is cut at ±(2^53 - 1).
+    if (given.min.is_none() && lowest < -safe) || (given.max.is_none() && highest > safe) {
+        past_safe(span, report);
+    }
+    let (lowest, highest) = (lowest.max(-safe), highest.min(safe));
+    let mut narrowed = |end: &str, (value, at): (f64, Span), last: f64, beyond: i128| {
+        report.warning(
+            Code::Differs,
+            at,
+            format!(
+                "the valid range's {end}, {value}, is narrowed to {last}: MDL rounds the values \
+                 past it to {beyond}, which the encoding can't hold, where Yamcs drops their \
+                 fraction"
+            ),
+        );
+        (last, at)
+    };
+    let min = match given.min {
+        None => (lowest, span),
+        Some(end) if end.0 < lowest && end.0 > (low - 1) as f64 => {
+            narrowed("minimum", end, lowest, low - 1)
+        }
+        Some(end) => end,
+    };
+    let max = match given.max {
+        None => (highest, span),
+        Some(end) if end.0 > highest && end.0 < (high + 1) as f64 => {
+            narrowed("maximum", end, highest, high + 1)
+        }
+        Some(end) => end,
+    };
+    ValidRange {
+        min: Some(min),
+        max: Some(max),
+    }
+}
+
+/// The least double that MDL's rounding (to the nearest integer, halves
+/// away from zero) takes to `low` or above.
+fn rounds_to_at_least(low: i128) -> f64 {
+    let mut value = (low as f64 - 0.5).next_up();
+    while (value.round() as i128) < low {
+        value = value.next_up();
+    }
+    value
+}
+
+/// The greatest double that MDL's rounding takes to `high` or below.
+fn rounds_to_at_most(high: i128) -> f64 {
+    let mut value = (high as f64 + 0.5).next_down();
+    while (value.round() as i128) > high {
+        value = value.next_down();
+    }
+    value
+}
+
+/// Where Yamcs writes an uncalibrated float argument other than as MDL
+/// does: it narrows the value to the type's `sizeInBits` (32 unless the
+/// type says 64) before writing it, and drops the fraction of a value
+/// written as an integer, where MDL writes the value whole and rounds it
+/// to the nearest integer.
+fn float_argument_differences(
+    el: El<'_>,
+    encoding: &Encoding<'_>,
+    report: &mut Report,
+) -> Option<()> {
+    let narrow = match el.attr("sizeInBits") {
+        Some(attr) => xml::long(attr, report)? == 32,
+        None => true,
+    };
+    if encoding.ty != "float" {
+        report.warning(
+            Code::Differs,
+            encoding.el.span(),
+            "Yamcs drops the fraction of a float argument written as an integer (2.7 is 2, and \
+             -2.7 is -2); MDL rounds it to the nearest integer, halves away from zero (3 and \
+             -3)",
+        );
+    } else if narrow && encoding.size == 64 {
+        let span = el.attr("sizeInBits").map_or(el.span(), |a| a.span);
+        report.warning(
+            Code::Differs,
+            span,
+            "Yamcs narrows a value of this 32-bit float type to 32 bits before writing it in 64 \
+             (0.1 is written as 0.10000000149011612); MDL writes it whole; give the type \
+             sizeInBits=\"64\" to say so",
+        );
+    }
+    Some(())
 }
 
 /// A relative time: a duration, as a number of its unit. The encoding's
@@ -827,31 +1114,9 @@ fn alarm_range(el: El<'_>, report: &mut Report) -> Option<(End, End)> {
     Some((low, high))
 }
 
-fn enumerated<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
-    el.check(
-        &Expect {
-            attrs: &["name", "baseType"],
-            children: &[
-                "UnitSet",
-                "EnumerationList",
-                "IntegerDataEncoding",
-                "FloatDataEncoding",
-                "StringDataEncoding",
-                "BinaryDataEncoding",
-            ],
-            ignored: &[
-                "shortDescription",
-                "LongDescription",
-                "AliasSet",
-                "AncillaryDataSet",
-                "initialValue",
-                "DefaultAlarm",
-                "ContextAlarmList",
-            ],
-            text: false,
-        },
-        report,
-    );
+fn enumerated<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let lists = Lists::new(role, &["name", "baseType"], &["EnumerationList"], &[]);
+    el.check(&lists.expect(), report);
     no_unit(el, report);
     let encoding = only_encoding(el, &["IntegerDataEncoding"], report)?;
     let encoding = integer_encoding(encoding, report)?;
@@ -912,12 +1177,27 @@ fn enumerated<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
             );
             continue;
         }
+        let listed = states.iter().any(|(name, _)| name == label.value);
+        // Yamcs encodes a label as its first value, and MDL decodes a
+        // command through a states conversion that lists each once.
+        if listed && role == Role::Argument {
+            report.warning(
+                Code::Ignored,
+                value.span,
+                format!(
+                    "label {} stands for {raw} too, which isn't imported: an argument is \
+                     encoded as its label's first value, as Yamcs encodes it",
+                    label.value
+                ),
+            );
+            continue;
+        }
         let mut state = Object::at(entry.span());
         state.put("raw", raw, Some(value.span));
         state.put("name", label.value, Some(label.span));
         conversion_states.push_object(state);
         labels.push((label.value.to_string(), raw));
-        if !states.iter().any(|(name, _)| name == label.value) {
+        if !listed {
             states.push((label.value.to_string(), label.span));
         }
     }
@@ -933,34 +1213,19 @@ fn enumerated<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         param: "enum",
         states,
         raw: Raw::Labels(labels),
+        initial: initial(el, role),
         ..encoding.scalar(el)
     })
 }
 
-fn boolean<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
-    el.check(
-        &Expect {
-            attrs: &["name", "baseType", "oneStringValue", "zeroStringValue"],
-            children: &[
-                "UnitSet",
-                "IntegerDataEncoding",
-                "FloatDataEncoding",
-                "StringDataEncoding",
-                "BinaryDataEncoding",
-            ],
-            ignored: &[
-                "shortDescription",
-                "LongDescription",
-                "AliasSet",
-                "AncillaryDataSet",
-                "initialValue",
-                "DefaultAlarm",
-                "ContextAlarmList",
-            ],
-            text: false,
-        },
-        report,
+fn boolean<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let lists = Lists::new(
+        role,
+        &["name", "baseType", "oneStringValue", "zeroStringValue"],
+        &[],
+        &[],
     );
+    el.check(&lists.expect(), report);
     no_unit(el, report);
     let one = el.attr("oneStringValue");
     let zero = el.attr("zeroStringValue");
@@ -997,35 +1262,41 @@ fn boolean<'d>(el: El<'d>, report: &mut Report) -> Option<Scalar<'d>> {
         one: one_label.to_string(),
         zero: zero_label.to_string(),
     };
+    scalar.initial = initial(el, role);
     Some(scalar)
 }
 
-fn string<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d>> {
-    el.check(
-        &Expect {
-            attrs: &["name", "baseType"],
-            children: &[
-                "UnitSet",
-                "IntegerDataEncoding",
-                "FloatDataEncoding",
-                "StringDataEncoding",
-                "BinaryDataEncoding",
-            ],
-            ignored: &[
-                "shortDescription",
-                "LongDescription",
-                "AliasSet",
-                "AncillaryDataSet",
-                "initialValue",
-                "restrictionPattern",
-                "SizeRangeInCharacters",
-                "DefaultAlarm",
-                "ContextAlarmList",
-            ],
-            text: false,
-        },
-        report,
+fn string<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let lists = Lists::new(
+        role,
+        &["name", "baseType", "characterWidth"],
+        &[],
+        &["restrictionPattern", "SizeRangeInCharacters"],
     );
+    el.check(&lists.expect(), report);
+    if let Some(width) = el.attr("characterWidth") {
+        if width.value.trim() == "8" {
+            report.warning(
+                Code::Ignored,
+                width.span,
+                format!(
+                    "{}'s characterWidth isn't imported: MDL reads text by its encoding",
+                    el.describe()
+                ),
+            );
+        } else {
+            report.error(
+                Code::Unsupported,
+                width.span,
+                format!(
+                    "characters of {} bits aren't supported: MDL reads text as UTF-8, US-ASCII \
+                     or ISO-8859-1 bytes",
+                    width.value.trim()
+                ),
+            );
+            return None;
+        }
+    }
     no_unit(el, report);
     let encoding = only_encoding(el, &["StringDataEncoding"], report)?;
     encoding.check(
@@ -1060,7 +1331,10 @@ fn string<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d
             }
         },
     };
-    let length = string_length(encoding, space, order, report)?;
+    let length = match role {
+        Role::Parameter => string_length(encoding, space, order, report)?,
+        Role::Argument => argument_string_length(encoding, report)?,
+    };
     Some(Scalar {
         el,
         ty: ("string", encoding.span()),
@@ -1074,7 +1348,110 @@ fn string<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d
         states: Vec::new(),
         raw: Raw::Other,
         limits: None,
+        range: None,
+        initial: initial(el, role),
     })
+}
+
+/// A string argument's length, written as Yamcs writes it: a fixed-size
+/// buffer is padded with NULs (after one terminator, if the type has one),
+/// which MDL's fixed buffer with a NUL terminator does too; a terminated
+/// string is followed by its terminator. Sizes other arguments give, and
+/// leading sizes, aren't supported yet.
+fn argument_string_length<'d>(encoding: El<'d>, report: &mut Report) -> Option<Length<'d>> {
+    let not_yet = |report: &mut Report, span: Span| {
+        report.error(
+            Code::Unsupported,
+            span,
+            "a string argument whose size another argument or a leading size gives isn't \
+             supported yet",
+        );
+    };
+    if let Some(size) = encoding.child("SizeInBits") {
+        size.check(
+            &Expect {
+                attrs: &[],
+                children: &["Fixed", "TerminationChar", "LeadingSize"],
+                ignored: &[],
+                text: false,
+            },
+            report,
+        );
+        if let Some(leading) = size.child("LeadingSize") {
+            not_yet(report, leading.span());
+            return None;
+        }
+        return match (size.child("Fixed"), size.child("TerminationChar")) {
+            (Some(fixed), terminator) => {
+                let (bytes, span) = fixed_bytes(fixed, report)?;
+                if let Some(terminator) = terminator {
+                    let (byte, at) = terminator_byte(terminator, report)?;
+                    if byte != 0 {
+                        report.error(
+                            Code::Unsupported,
+                            at,
+                            "a fixed-size string argument ended by a terminator other than 00 \
+                             isn't supported: Yamcs writes one terminator and then NULs to the \
+                             end of the buffer, and MDL fills the buffer with the terminator",
+                        );
+                        return None;
+                    }
+                }
+                Some(Length::Written(
+                    json!({ "kind": "fixed", "bytes": bytes, "terminator": 0 }),
+                    span,
+                ))
+            }
+            (None, Some(terminator)) => terminated(terminator, report),
+            (None, None) => {
+                report.error(
+                    Code::Invalid,
+                    size.span(),
+                    "a string's SizeInBits is Fixed or a TerminationChar",
+                );
+                None
+            }
+        };
+    }
+    if let Some(variable) = encoding.child("Variable") {
+        variable.check(
+            &Expect {
+                attrs: &[],
+                children: &[
+                    "TerminationChar",
+                    "LeadingSize",
+                    "DynamicValue",
+                    "DiscreteLookupList",
+                ],
+                ignored: &["maxSizeInBits"],
+                text: false,
+            },
+            report,
+        );
+        for name in ["DynamicValue", "LeadingSize", "DiscreteLookupList"] {
+            if let Some(size) = variable.child(name) {
+                not_yet(report, size.span());
+                return None;
+            }
+        }
+        return match variable.child("TerminationChar") {
+            Some(terminator) => terminated(terminator, report),
+            None => {
+                report.error(
+                    Code::Invalid,
+                    variable.span(),
+                    "a variable string has a DynamicValue, a LeadingSize or a TerminationChar",
+                );
+                None
+            }
+        };
+    }
+    report.error(
+        Code::Invalid,
+        encoding.span(),
+        "a StringDataEncoding has a SizeInBits or a Variable size",
+    );
+    None
 }
 
 /// A string's length: fixed, up to a terminator, both, a leading size,
@@ -1500,30 +1877,9 @@ fn terminator_byte(terminator: El<'_>, report: &mut Report) -> Option<(u8, Span)
     }
 }
 
-fn binary<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d>> {
-    el.check(
-        &Expect {
-            attrs: &["name", "baseType"],
-            children: &[
-                "UnitSet",
-                "IntegerDataEncoding",
-                "FloatDataEncoding",
-                "StringDataEncoding",
-                "BinaryDataEncoding",
-            ],
-            ignored: &[
-                "shortDescription",
-                "LongDescription",
-                "AliasSet",
-                "AncillaryDataSet",
-                "initialValue",
-                "DefaultAlarm",
-                "ContextAlarmList",
-            ],
-            text: false,
-        },
-        report,
-    );
+fn binary<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
+    let lists = Lists::new(role, &["name", "baseType"], &[], &[]);
+    el.check(&lists.expect(), report);
     no_unit(el, report);
     let encoding = only_encoding(el, &["BinaryDataEncoding"], report)?;
     encoding.check(
@@ -1572,6 +1928,14 @@ fn binary<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d
             let bytes = whole_bytes(value, report)?;
             Length::Written(json!({ "kind": "fixed", "bytes": bytes }), value.span())
         }
+        None if role == Role::Argument => {
+            report.error(
+                Code::Unsupported,
+                size.span(),
+                "a binary argument whose size another argument gives isn't supported yet",
+            );
+            return None;
+        }
         None => match integer_value(size, space, report)? {
             IntegerValue::Dynamic(dynamic) => Length::Counted(dynamic),
             IntegerValue::Fixed(..) => return None,
@@ -1590,6 +1954,8 @@ fn binary<'d>(el: El<'d>, space: usize, report: &mut Report) -> Option<Scalar<'d
         states: Vec::new(),
         raw: Raw::Other,
         limits: None,
+        range: None,
+        initial: initial(el, role),
     })
 }
 
@@ -1612,31 +1978,216 @@ fn whole_bytes(value: El<'_>, report: &mut Report) -> Option<u32> {
     }
 }
 
-/// Number types' attributes and children, with `attrs` read.
-fn numeric_expect<'s>(attrs: &'s [&'s str]) -> Expect<'s> {
-    Expect {
-        attrs,
-        children: &[
-            "DefaultAlarm",
-            "UnitSet",
-            "IntegerDataEncoding",
-            "FloatDataEncoding",
-            "StringDataEncoding",
-            "BinaryDataEncoding",
-        ],
-        ignored: &[
-            "shortDescription",
-            "LongDescription",
-            "AliasSet",
-            "AncillaryDataSet",
-            "initialValue",
-            "ToString",
-            "ValidRange",
-            "validRangeAppliesToCalibrated",
-            "ContextAlarmList",
-        ],
-        text: false,
+/// Children every type may have that the reader reads: a unit and its data
+/// encoding.
+const ENCODED: &[&str] = &[
+    "UnitSet",
+    "IntegerDataEncoding",
+    "FloatDataEncoding",
+    "StringDataEncoding",
+    "BinaryDataEncoding",
+];
+
+/// What a type element may hold: what every type of its kind may, and what
+/// its role adds. A parameter type's alarms are read (by number types) and
+/// its initial value is left out; an argument type's initial value and
+/// valid range are read and its alarms (XTCE 1.0 allows them) left out.
+struct Lists {
+    attrs: Vec<&'static str>,
+    children: Vec<&'static str>,
+    ignored: Vec<&'static str>,
+}
+
+impl Lists {
+    fn new(
+        role: Role,
+        attrs: &[&'static str],
+        children: &[&'static str],
+        ignored: &[&'static str],
+    ) -> Lists {
+        let mut lists = Lists {
+            attrs: attrs.to_vec(),
+            children: [children, ENCODED].concat(),
+            ignored: [ignored, DESCRIBED, &["DefaultAlarm", "ContextAlarmList"]].concat(),
+        };
+        match role {
+            Role::Parameter => lists.ignored.push("initialValue"),
+            Role::Argument => lists.attrs.push("initialValue"),
+        }
+        lists
     }
+
+    /// A number type's lists.
+    fn numeric(role: Role, attrs: &[&'static str]) -> Lists {
+        let mut lists = Lists::new(role, attrs, &[], &["ToString"]);
+        match role {
+            Role::Parameter => {
+                lists.ignored.retain(|name| *name != "DefaultAlarm");
+                lists.children.push("DefaultAlarm");
+                lists
+                    .ignored
+                    .extend(["ValidRange", "validRangeAppliesToCalibrated"]);
+            }
+            Role::Argument => {
+                lists.children.extend(["ValidRange", "ValidRangeSet"]);
+                lists.attrs.push("validRangeAppliesToCalibrated");
+            }
+        }
+        lists
+    }
+
+    fn expect(&self) -> Expect<'_> {
+        Expect {
+            attrs: &self.attrs,
+            children: &self.children,
+            ignored: &self.ignored,
+            text: false,
+        }
+    }
+}
+
+/// An argument type's initial value, as XTCE writes it.
+fn initial<'d>(el: El<'d>, role: Role) -> Option<(&'d str, Span)> {
+    match role {
+        Role::Parameter => None,
+        Role::Argument => el.attr("initialValue").map(|a| (a.value, a.span)),
+    }
+}
+
+/// A number argument type's valid range: one ValidRange, alone (XTCE 1.0
+/// and 1.1) or in a ValidRangeSet (1.1 and 1.2). Yamcs checks it against
+/// the engineering value whatever `validRangeAppliesToCalibrated` says,
+/// and the two are the same value for an uncalibrated type.
+fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<ValidRange>> {
+    let range = match (el.child("ValidRangeSet"), el.child("ValidRange")) {
+        (Some(_), Some(direct)) => {
+            report.error(
+                Code::Invalid,
+                direct.span(),
+                "a type has a ValidRangeSet or a ValidRange, not both",
+            );
+            return None;
+        }
+        (Some(set), None) => {
+            set.check(
+                &Expect {
+                    attrs: &["validRangeAppliesToCalibrated"],
+                    children: &["ValidRange"],
+                    ignored: &[],
+                    text: false,
+                },
+                report,
+            );
+            let ranges: Vec<El<'_>> = set.all("ValidRange").collect();
+            match ranges.as_slice() {
+                [range] => *range,
+                [] => {
+                    report.error(
+                        Code::Invalid,
+                        set.span(),
+                        "a ValidRangeSet holds a ValidRange",
+                    );
+                    return None;
+                }
+                [_, second, ..] => {
+                    report.error(
+                        Code::Unsupported,
+                        second.span(),
+                        "more than one valid range isn't supported: an MDL argument has one \
+                         range, and Yamcs loads one",
+                    );
+                    return None;
+                }
+            }
+        }
+        (None, Some(direct)) => direct,
+        (None, None) => return Some(None),
+    };
+    let mut attrs = vec![
+        "minInclusive",
+        "maxInclusive",
+        "validRangeAppliesToCalibrated",
+    ];
+    if !integer {
+        attrs.extend(["minExclusive", "maxExclusive"]);
+    }
+    range.check(
+        &Expect {
+            attrs: &attrs,
+            children: &[],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    let end =
+        |inclusive: &str, exclusive: &str, report: &mut Report| -> Option<Option<(f64, Span)>> {
+            if let Some(attr) = range.attr(inclusive) {
+                if let Some(other) = range.attr(exclusive) {
+                    report.warning(
+                    Code::Ignored,
+                    other.span,
+                    format!(
+                        "{exclusive} isn't imported: the range has {inclusive} too, which Yamcs \
+                         takes"
+                    ),
+                );
+                }
+                let value = if integer {
+                    exact_double(attr, report)?
+                } else {
+                    finite(attr, report)?
+                };
+                return Some(Some((value, attr.span)));
+            }
+            let Some(attr) = range.attr(exclusive) else {
+                return Some(None);
+            };
+            // The nearest double inside the range, which MDL's inclusive end
+            // holds exactly.
+            let value = finite(attr, report)?;
+            let inside = if exclusive == "minExclusive" {
+                value.next_up()
+            } else {
+                value.next_down()
+            };
+            Some(Some((inside, attr.span)))
+        };
+    let min = end("minInclusive", "minExclusive", report)?;
+    let max = end("maxInclusive", "maxExclusive", report)?;
+    Some((min.is_some() || max.is_some()).then_some(ValidRange { min, max }))
+}
+
+/// An integer end of a range, which MDL holds within ±(2^53 - 1), where
+/// every JSON reader agrees.
+fn exact_double(attr: Attr<'_>, report: &mut Report) -> Option<f64> {
+    let value = xml::long(attr, report)?;
+    if i128::from(value).abs() <= SAFE {
+        return Some(value as f64);
+    }
+    report.error(
+        Code::Unsupported,
+        attr.span,
+        format!(
+            "{value} isn't supported as a range's end: an MDL range's ends lie within ±(2^53 - \
+             1), where every JSON reader agrees"
+        ),
+    );
+    None
+}
+
+/// A finite double.
+fn finite(attr: Attr<'_>, report: &mut Report) -> Option<f64> {
+    let value = xml::double(attr, report)?;
+    if value.is_finite() {
+        return Some(value);
+    }
+    report.error(
+        Code::Invalid,
+        attr.span,
+        format!("{} {value} isn't a finite number", attr.name),
+    );
+    None
 }
 
 /// The type's one data encoding, which must be one of `allowed`.
@@ -1695,6 +2246,8 @@ impl<'d> Encoding<'d> {
             states: Vec::new(),
             raw: Raw::Other,
             limits: None,
+            range: None,
+            initial: None,
         }
     }
 }

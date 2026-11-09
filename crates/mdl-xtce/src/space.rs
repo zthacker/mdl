@@ -21,6 +21,11 @@ pub(crate) enum Kind {
     ParameterType,
     Parameter,
     Container,
+    ArgumentType,
+    MetaCommand,
+    /// A meta-command's CommandContainer, which another meta-command's
+    /// container may be built on.
+    CommandContainer,
 }
 
 impl Kind {
@@ -29,6 +34,9 @@ impl Kind {
             Kind::ParameterType => "parameter type",
             Kind::Parameter => "parameter",
             Kind::Container => "container",
+            Kind::ArgumentType => "argument type",
+            Kind::MetaCommand => "meta-command",
+            Kind::CommandContainer => "command container",
         }
     }
 }
@@ -41,6 +49,9 @@ pub(crate) struct Space<'d> {
     types: BTreeMap<&'d str, El<'d>>,
     params: BTreeMap<&'d str, El<'d>>,
     containers: BTreeMap<&'d str, El<'d>>,
+    argument_types: BTreeMap<&'d str, El<'d>>,
+    meta_commands: BTreeMap<&'d str, El<'d>>,
+    command_containers: BTreeMap<&'d str, El<'d>>,
 }
 
 impl<'d> Space<'d> {
@@ -49,6 +60,9 @@ impl<'d> Space<'d> {
             Kind::ParameterType => &self.types,
             Kind::Parameter => &self.params,
             Kind::Container => &self.containers,
+            Kind::ArgumentType => &self.argument_types,
+            Kind::MetaCommand => &self.meta_commands,
+            Kind::CommandContainer => &self.command_containers,
         }
     }
 
@@ -57,6 +71,9 @@ impl<'d> Space<'d> {
             Kind::ParameterType => &mut self.types,
             Kind::Parameter => &mut self.params,
             Kind::Container => &mut self.containers,
+            Kind::ArgumentType => &mut self.argument_types,
+            Kind::MetaCommand => &mut self.meta_commands,
+            Kind::CommandContainer => &mut self.command_containers,
         }
     }
 }
@@ -100,18 +117,17 @@ const TELEMETRY: Expect<'static> = Expect {
     text: false,
 };
 
-/// Commands come with the importer's next version; their parameters and
-/// types are read already, since telemetry may use them.
+/// Command containers are read inside their meta-commands, as Yamcs reads
+/// them; it skips a CommandContainerSet.
 const COMMANDS: Expect<'static> = Expect {
     attrs: &[],
-    children: &["ParameterTypeSet", "ParameterSet"],
-    ignored: &[
+    children: &[
+        "ParameterTypeSet",
+        "ParameterSet",
         "ArgumentTypeSet",
         "MetaCommandSet",
-        "CommandContainerSet",
-        "AlgorithmSet",
-        "StreamSet",
     ],
+    ignored: &["CommandContainerSet", "AlgorithmSet", "StreamSet"],
     text: false,
 };
 
@@ -130,6 +146,21 @@ const PARAMETER_TYPES: &[&str] = &[
     "AbsoluteTimeParameterType",
     "ArrayParameterType",
     "AggregateParameterType",
+];
+
+/// Argument types, including XTCE 1.2's misspelled relative time type.
+pub(crate) const ARGUMENT_TYPES: &[&str] = &[
+    "StringArgumentType",
+    "EnumeratedArgumentType",
+    "IntegerArgumentType",
+    "BinaryArgumentType",
+    "FloatArgumentType",
+    "BooleanArgumentType",
+    "RelativeTimeArgumentType",
+    "RelativeTimeAgumentType",
+    "AbsoluteTimeArgumentType",
+    "ArrayArgumentType",
+    "AggregateArgumentType",
 ];
 
 impl<'d> Tree<'d> {
@@ -178,6 +209,9 @@ impl<'d> Tree<'d> {
             types: BTreeMap::new(),
             params: BTreeMap::new(),
             containers: BTreeMap::new(),
+            argument_types: BTreeMap::new(),
+            meta_commands: BTreeMap::new(),
+            command_containers: BTreeMap::new(),
         });
         for child in el.children() {
             match child.name() {
@@ -219,8 +253,9 @@ impl<'d> Tree<'d> {
         Some(index)
     }
 
-    /// The parameter types, parameters and (for telemetry) containers of a
-    /// TelemetryMetaData or CommandMetaData.
+    /// The parameter types, parameters and containers of a
+    /// TelemetryMetaData, or the parameter types, parameters, argument
+    /// types and meta-commands of a CommandMetaData.
     fn add_sets(&mut self, space: usize, meta: El<'d>, telemetry: bool, report: &mut Report) {
         for set in meta.children() {
             match set.name() {
@@ -252,6 +287,39 @@ impl<'d> Tree<'d> {
                     );
                     for item in set.all("Parameter") {
                         self.name(space, Kind::Parameter, item, report);
+                    }
+                }
+                "ArgumentTypeSet" if !telemetry => {
+                    set.check(
+                        &Expect {
+                            attrs: &[],
+                            children: ARGUMENT_TYPES,
+                            ignored: &[],
+                            text: false,
+                        },
+                        report,
+                    );
+                    for item in set.children() {
+                        if ARGUMENT_TYPES.contains(&item.name()) {
+                            self.name(space, Kind::ArgumentType, item, report);
+                        }
+                    }
+                }
+                "MetaCommandSet" if !telemetry => {
+                    set.check(
+                        &Expect {
+                            attrs: &[],
+                            children: &["MetaCommand"],
+                            ignored: &["MetaCommandRef", "BlockMetaCommand"],
+                            text: false,
+                        },
+                        report,
+                    );
+                    for item in set.all("MetaCommand") {
+                        self.name(space, Kind::MetaCommand, item, report);
+                        if let Some(container) = item.child("CommandContainer") {
+                            self.name(space, Kind::CommandContainer, container, report);
+                        }
                     }
                 }
                 "ContainerSet" if telemetry => {

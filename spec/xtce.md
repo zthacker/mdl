@@ -11,9 +11,11 @@ implementation is the `mdl-xtce` crate.
 XTCE describes a space system's packets whole, headers included. An
 imported packet is one concrete sequence container with the entries of
 every container it inherits from; the restriction criteria along the way
-become its identify keys. What XTCE says that MDL can't represent is
-reported as `frontends.md` §2 requires: an error when leaving it out would
-change a decoded value, a warning otherwise.
+become its identify keys. An imported command is one concrete
+meta-command with the arguments and entries of every meta-command it
+inherits from, encoded as Yamcs encodes it. What XTCE says that MDL can't
+represent is reported as `frontends.md` §2 requires: an error when leaving
+it out would change a decoded or encoded value, a warning otherwise.
 
 ## 1. Documents
 
@@ -27,7 +29,7 @@ later one [`xtce.duplicate`]. References may cross documents.
 Every element the importer reads is checked. An attribute or child it
 doesn't read is an error [`xtce.unsupported`], since it can't tell whether
 leaving it out would change a value, unless this document lists it as
-left out (§6), which is a warning [`xtce.ignored`]. Attributes in the XML
+left out (§7), which is a warning [`xtce.ignored`]. Attributes in the XML
 Schema instance and XML namespaces (`xsi:schemaLocation`, `xml:lang`)
 describe the document and are skipped; attributes in other namespaces are
 warnings, and elements in other namespaces, XInclude among them, are
@@ -41,8 +43,9 @@ importer.
 
 ## 2. Names and references
 
-Each SpaceSystem names its parameter types, parameters and containers,
-each kind on its own; a name used twice for one kind is an error at the
+Each SpaceSystem names its parameter types, parameters, containers,
+argument types, meta-commands and meta-commands' command containers, each
+kind on its own; a name used twice for one kind is an error at the
 second, with the first as its first location [`xtce.duplicate`].
 
 References resolve as Yamcs resolves them, so a document written for it
@@ -69,15 +72,17 @@ An import produces one family and one set:
   SpaceSystem's name lowercased with `_` for each run of characters other
   than letters and digits; a name that doesn't start with a letter needs
   the option [`xtce.name`]. Its encoding is `binary`. Its byte order is
-  little-endian when every number wider than a byte is, and big-endian
-  otherwise, each little-endian field naming its own (`decoding.md`
-  §2.1), so a big-endian header ahead of little-endian data is described
-  as it is. Its alias is the option, or a fixed value: the first root
+  little-endian when every number wider than a byte that a packet reads
+  or an argument writes is, and big-endian otherwise, each field in the
+  other order naming its own (`decoding.md` §2.1), so a big-endian header
+  ahead of little-endian data is described as it is. A command's
+  constants are bit patterns, and don't count. Its alias is the option, or a fixed value: the first root
   SpaceSystem's name.
 - **Set.** Its name is the option, or the family's. It has one packet for
-  each concrete sequence container, in document order, and a struct type
-  for each embedded container and each array element that isn't a scalar
-  (§5).
+  each concrete sequence container, in document order, a struct type for
+  each embedded container and each array element that isn't a scalar
+  (§5), and a command packet for each concrete meta-command, in document
+  order (§6).
 - **Catalog.** Each parameter a packet holds is a param; an aggregate
   parameter is one param per member. A param's name is the parameter's
   alias in the `MDL` namespace (`<Alias nameSpace="MDL"
@@ -88,7 +93,8 @@ An import produces one family and one set:
   member's name adds its own part (`demosat.adcs.rate.x`). Two parameters
   with one catalog name are an error at the later, with the earlier as its
   first location [`xtce.name`]. A param's description is the parameter's
-  `shortDescription` and `LongDescription`, or a member's.
+  `shortDescription` and `LongDescription`, or a member's. Each concrete
+  meta-command is a catalog command (§6).
 - **Names in a set.** A field is named for its parameter, members joined
   by `_` (`CCSDS_Packet_ID_APID`), and a packet for its container. A name
   that isn't an MDL identifier has `_` for each other character, and `_`
@@ -313,27 +319,174 @@ A parameter no packet holds isn't imported [`xtce.ignored`]; this is
 reported when every packet imported, since after an error which packets
 hold what isn't known.
 
-## 6. What is left out
+## 6. Commands
 
-These don't change a decoded value. Each is a warning where it is
-[`xtce.ignored`]:
+A command is encoded as Yamcs encodes it, so a document written for Yamcs
+sends the same bytes with MDL; §6.3 lists where MDL's encoding rules make
+it otherwise.
 
-- descriptions of anything but parameters and aggregate members;
+### 6.1 Meta-commands
+
+- **Commands.** Each `MetaCommand` that isn't `abstract` is a catalog
+  command and a command packet. Its chain is the meta-commands it
+  inherits from (`BaseMetaCommand`), root first, then itself; one that
+  inherits from itself is an error [`xtce.invalid`].
+- **Arguments.** A command's arguments are those each meta-command in its
+  chain declares (`ArgumentList`), in chain order, less those an
+  `ArgumentAssignment` gives a value. An assignment, in a meta-command's
+  `BaseMetaCommand`, names an argument of a meta-command above it
+  [`xtce.reference`] that isn't assigned already [`xtce.invalid`]. A
+  meta-command that declares an argument twice, or one it inherits, is an
+  error [`xtce.duplicate`]. An argument no entry writes changes no bytes
+  and isn't imported [`xtce.ignored`]; Yamcs requires it, records it and
+  writes nothing.
+- **Names.** A command's catalog name is the meta-command's alias in the
+  `MDL` namespace, else its path and name, as a param's (§3); params and
+  commands share the catalog's names [`xtce.name`]. An argument's name is
+  its alias in the `MDL` namespace, else its name as a part of a catalog
+  name (`Heater-Id` is `heater_id`); two of one command with one name are
+  an error [`xtce.name`]. A command packet is named for its meta-command,
+  qualified as packets are (§3). The descriptions are the meta-command's
+  and each argument's own.
+- **Packets.** A command packet holds the entries of each meta-command's
+  `CommandContainer`, in chain order, placed from the start of the packet
+  as a telemetry packet's entries are (§5). A `CommandContainer`'s
+  `BaseContainer` names a command container as references name items
+  (§2) [`xtce.reference`], and MUST name the container of the nearest
+  meta-command above it that has one, which is what Yamcs encodes ahead of
+  it. Another base, a telemetry container, a base for a meta-command
+  without a `BaseMetaCommand`, and restriction criteria are unsupported. Yamcs doesn't read a
+  `CommandContainerSet`, so it's left out [`xtce.ignored`].
+- **Arguments in entries.** An `ArgumentRefEntry` names an argument its
+  own meta-command declares, as Yamcs reads it [`xtce.reference`], and an
+  argument is in one entry of a container. It's a field of the argument's
+  type that encodes the argument, named for it. For an assigned argument
+  it's a constant instead, the assigned value as its raw value: an integer
+  read as a default is (§6.2), an enumeration's label, a boolean's labels
+  (true being written as 1), or the text, for a string. An integer MUST
+  lie within the argument's valid range, which Yamcs checks when it sends
+  the command [`xtce.invalid`]. A value for a float or bytes argument,
+  however it's spelled, is unsupported: MDL constants are integers and
+  text, and Yamcs writes a float through its own arithmetic (§6.3).
+- **Fixed values.** A `FixedValueEntry` is an unsigned integer constant
+  named for its `name`, or `fixed1`, `fixed2` and so on, counted in the
+  packet. It holds `binaryValue`'s low `sizeInBits` bits (all of them by
+  default), most significant first; more than 64 bits are fields of 64
+  bits named with `_1`, `_2` and so on, the first taking the bits left
+  over. `binaryValue` is hexadecimal, an odd number of digits read with a
+  leading 0, with at least `sizeInBits` bits [`xtce.invalid`]; higher bits
+  that aren't zero are dropped, as Yamcs drops them [`xtce.ignored`].
+- **What a command packet can't hold.** Every entry of an MDL command
+  packet is written, so an entry with an `IncludeCondition` is
+  unsupported. So are repeated entries, parameter and container entries,
+  and array arguments, in this version.
+
+### 6.2 Argument types
+
+Argument types, in `ArgumentTypeSet`, are read as parameter types of the
+same kind are (§4), with these differences:
+
+- Integer, float, enumerated, boolean, string and binary types are
+  supported. Absolute times are unsupported, as for parameters; relative
+  times, aggregates, arrays and calibrated types are unsupported in this
+  version. XTCE 1.2's misspelling `RelativeTimeAgumentType` is read as
+  `RelativeTimeArgumentType`.
+- **Ranges.** A number type's `ValidRange`, alone (XTCE 1.0 and 1.1) or
+  the one in a `ValidRangeSet` (1.1 and 1.2), is the argument's `range`.
+  An exclusive end is the nearest double inside the range, which keeps
+  the same values in it (`minExclusive="0"` is a `min` of 5e-324). With
+  both an inclusive and an exclusive end, the inclusive one is taken, as
+  Yamcs takes it, and the other left out [`xtce.ignored`]. More than one
+  range, which Yamcs doesn't load either, is unsupported, and so is an
+  integer end past ±(2^53 − 1), where an MDL range's ends lie. Yamcs
+  checks the range against the engineering value whatever
+  `validRangeAppliesToCalibrated` says, and an uncalibrated type's raw
+  and engineering values are one.
+- **Without a range.** An integer argument with no valid range takes what
+  both its encoding holds and its type does (`signed`, and `sizeInBits`,
+  32 by default), which Yamcs checks a value against; an end its catalog
+  type has anyway (a `u64`'s 0) is left out, and one past ±(2^53 − 1) is
+  cut there [`xtce.differs`]. An uncalibrated float written as an integer
+  takes what MDL's rounding keeps in the encoding, from just above
+  `low − 0.5` to just below `high + 0.5`, for each end its valid range
+  doesn't give (§6.3). An unsigned integer type over a two's complement
+  encoding is an `i64` argument, its range keeping it at 0 and above,
+  since an MDL command writes a `u64` argument only to a `uint` field.
+- **Defaults.** `initialValue`, the argument's or else its type's, is the
+  argument's default, read as Yamcs reads it [`xtce.invalid`]: an integer
+  in decimal, or after `0x`, `0o` or `0b` in that base, with `_` allowed
+  between digits; a finite number in decimal notation (Java's `1.5f` and
+  hexadecimal floats aren't read); a boolean's labels, or `true` and
+  `false`; an enumeration's label; binary as hexadecimal digits; text as
+  it is.
+- **Text.** A fixed-size string is padded with NULs, as Yamcs pads it:
+  `Fixed` alone, or with a `TerminationChar` of `00`, is a fixed buffer
+  with a NUL terminator (`encoding.md` §3.4). A fixed buffer with another
+  terminator is unsupported, since Yamcs writes one terminator and then
+  NULs where MDL fills the buffer with the terminator. A terminated string
+  is written the same by both, and both refuse a value longer than its
+  buffer. A size another argument gives, or a leading size, is
+  unsupported in this version, for strings and binary.
+- **Enumerations.** A label on several values is encoded as the first of
+  them, as Yamcs encodes it; the others aren't imported [`xtce.ignored`].
+- **Left out** [`xtce.ignored`]: an argument type's alarms (XTCE 1.0
+  allows them), `SizeRangeInCharacters` and `restrictionPattern`; a time
+  association on a command entry, which means nothing for a value a
+  command writes.
+
+### 6.3 Where MDL encodes otherwise
+
+MDL encodes arguments by its own rules (`encoding.md` §3), which differ
+from Yamcs's in these cases. The first three are warnings where they are
+[`xtce.differs`]:
+
+- An uncalibrated float written as an integer: Yamcs drops the fraction
+  (2.7 is 2), and MDL rounds to the nearest integer, halves away from zero
+  (3). So an end of its valid range that Yamcs keeps inside the encoding
+  but MDL's rounding takes outside it is narrowed to the last value MDL
+  keeps: a byte's `maxExclusive` of 256 is a `max` of 255.49999999999997.
+  An end outside the encoding either way is the document's to fix, and
+  validation reports it.
+- A float type of 32 bits, XTCE's default `sizeInBits`, written in 64:
+  Yamcs narrows the value to 32 bits first, and MDL writes it whole.
+- An integer argument without a range whose encoding holds values past
+  ±(2^53 − 1): MDL refuses them, since its range ends there.
+- A raw value its field can't hold: Yamcs keeps the low bits, and MDL
+  refuses it (`raw_range`).
+- A fixed-size binary value of the wrong length: Yamcs pads a shorter one
+  with zeros and cuts a longer one short, and MDL refuses both
+  (`bad_length`).
+- A NUL in a NUL-padded string: Yamcs writes it, and MDL refuses it
+  (`contains_terminator`).
+
+## 7. What is left out
+
+These don't change a decoded or encoded value. Each is a warning where it
+is [`xtce.ignored`]:
+
+- descriptions of anything but parameters, aggregate members,
+  meta-commands and arguments;
 - aliases outside the `MDL` namespace, and ancillary data;
-- initial values, change thresholds, what alarms say beyond MDL's limits
-  (§4), valid ranges, display formats (`ToString`), and parameter
-  properties other than time associations, validity conditions included
-  (they set a value's quality, not the value);
+- parameters' initial values, change thresholds, what alarms say beyond
+  MDL's limits (§4), parameter types' valid ranges, display formats
+  (`ToString`), a string type's `characterWidth` of 8 (wider characters
+  are unsupported), and parameter properties other than time associations,
+  validity conditions included (they set a value's quality, not the
+  value);
 - expected rates and idle patterns;
 - the document `Header`, algorithms, streams, services and operational
   status;
 - a boolean type's labels other than `True` and `False`, and a terminated
   string's `maxSizeInBits`;
-- in this version, commands: argument types, meta-commands and command
-  containers (the parameter types and parameters in `CommandMetaData` are
-  read, since telemetry may use them).
+- a meta-command's system name, transmission constraints, interlock,
+  significance, verifiers, parameters to set and alarms to suspend; block
+  meta-commands, meta-command references (the meta-command is imported
+  where it's defined), and a `CommandContainerSet` (§6);
+- what §6 lists of arguments: one no entry writes, an argument type's
+  alarms, text size ranges and restriction patterns, an enumeration
+  label's later values, and a command entry's time association.
 
-## 7. Diagnostics
+## 8. Diagnostics
 
 | Code | What |
 | --- | --- |
@@ -343,9 +496,10 @@ These don't change a decoded value. Each is a warning where it is
 | `xtce.reference` | A reference that names nothing. |
 | `xtce.duplicate` | Two items of one kind with one name in a SpaceSystem, or two root SpaceSystems with one name. |
 | `xtce.name` | A name that can't become an MDL name, or two that become the same. |
-| `xtce.unsupported` | Something MDL can't represent whose absence would change a decoded value. |
-| `xtce.ignored` | A warning: something left out that doesn't change decoded values. |
+| `xtce.unsupported` | Something MDL can't represent whose absence would change a decoded or encoded value. |
+| `xtce.ignored` | A warning: something left out that doesn't change decoded or encoded values. |
 | `xtce.renamed` | A warning: a name changed to fit MDL's rules. |
+| `xtce.differs` | A warning: a command MDL encodes otherwise than Yamcs (§6.3). |
 
 An element is reported at its tag, an attribute at its value, and text at
 the text. A problem in a definition many packets share is reported once.

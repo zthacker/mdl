@@ -2,7 +2,10 @@
 <!--
   DemoSat: a CCSDS satellite described the way XTCE tools describe one.
   The root holds the CCSDS primary header; EPS and ADCS each add a packet
-  that inherits it and is told apart by its APID.
+  that inherits it and is told apart by its APID. Commands work the same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
 -->
 <SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
   <TelemetryMetaData>
@@ -64,6 +67,41 @@
       </SequenceContainer>
     </ContainerSet>
   </TelemetryMetaData>
+  <CommandMetaData>
+    <ArgumentTypeSet>
+      <IntegerArgumentType name="APIDType" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerArgumentType>
+      <IntegerArgumentType name="OpcodeType" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerArgumentType>
+    </ArgumentTypeSet>
+    <MetaCommandSet>
+      <!--
+        A telecommand's primary header, then its opcode. The link fills in
+        the sequence count and the length, as Yamcs's command
+        post-processors do, so they're written as zeros here.
+      -->
+      <MetaCommand name="CCSDSCommand" abstract="true">
+        <ArgumentList>
+          <Argument name="APID" argumentTypeRef="APIDType"/>
+          <Argument name="Opcode" argumentTypeRef="OpcodeType"/>
+        </ArgumentList>
+        <CommandContainer name="CCSDSCommand">
+          <EntryList>
+            <FixedValueEntry name="Version" binaryValue="0" sizeInBits="3"/>
+            <FixedValueEntry name="Type" binaryValue="1" sizeInBits="1"/>
+            <FixedValueEntry name="SecHdrFlag" binaryValue="0" sizeInBits="1"/>
+            <ArgumentRefEntry argumentRef="APID"/>
+            <FixedValueEntry name="GroupFlags" binaryValue="3" sizeInBits="2"/>
+            <FixedValueEntry name="Count" binaryValue="0000" sizeInBits="14"/>
+            <FixedValueEntry name="Length" binaryValue="0000" sizeInBits="16"/>
+            <ArgumentRefEntry argumentRef="Opcode"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
 
   <SpaceSystem name="EPS" shortDescription="Electrical power">
     <TelemetryMetaData>
@@ -145,6 +183,79 @@
         </SequenceContainer>
       </ContainerSet>
     </TelemetryMetaData>
+    <CommandMetaData>
+      <ArgumentTypeSet>
+        <EnumeratedArgumentType name="ModeArgType">
+          <IntegerDataEncoding sizeInBits="8"/>
+          <EnumerationList>
+            <Enumeration value="1" label="SAFE"/>
+            <Enumeration value="2" label="NOMINAL"/>
+          </EnumerationList>
+        </EnumeratedArgumentType>
+        <IntegerArgumentType name="DelayType" signed="false" initialValue="0">
+          <UnitSet><Unit>s</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16"/>
+          <ValidRangeSet>
+            <ValidRange minInclusive="0" maxInclusive="3600"/>
+          </ValidRangeSet>
+        </IntegerArgumentType>
+        <BooleanArgumentType name="SwitchType">
+          <IntegerDataEncoding sizeInBits="8"/>
+        </BooleanArgumentType>
+        <!-- No valid range: what the 16 bits hold. -->
+        <IntegerArgumentType name="MinutesType" signed="false">
+          <UnitSet><Unit>min</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16"/>
+        </IntegerArgumentType>
+      </ArgumentTypeSet>
+      <MetaCommandSet>
+        <!-- Every power command goes to APID 100. -->
+        <MetaCommand name="EPSCommand" abstract="true">
+          <BaseMetaCommand metaCommandRef="/DemoSat/CCSDSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="100"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+        </MetaCommand>
+        <MetaCommand name="SetMode" shortDescription="Switch the power system's mode">
+          <AliasSet><Alias nameSpace="MDL" alias="eps.set_mode"/></AliasSet>
+          <BaseMetaCommand metaCommandRef="EPSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="1"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Mode" argumentTypeRef="ModeArgType"/>
+            <Argument name="Delay" argumentTypeRef="DelayType"
+                      shortDescription="Seconds to wait before switching"/>
+          </ArgumentList>
+          <CommandContainer name="SetMode">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Mode"/>
+              <ArgumentRefEntry argumentRef="Delay"/>
+            </EntryList>
+            <BaseContainer containerRef="/DemoSat/CCSDSCommand"/>
+          </CommandContainer>
+        </MetaCommand>
+        <MetaCommand name="SetHeater">
+          <BaseMetaCommand metaCommandRef="EPSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="2"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="On" argumentTypeRef="SwitchType" initialValue="True"/>
+            <Argument name="Minutes" argumentTypeRef="MinutesType"/>
+          </ArgumentList>
+          <CommandContainer name="SetHeater">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="On"/>
+              <ArgumentRefEntry argumentRef="Minutes"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+      </MetaCommandSet>
+    </CommandMetaData>
   </SpaceSystem>
 
   <SpaceSystem name="ADCS" shortDescription="Attitude determination and control">
@@ -178,5 +289,42 @@
         </SequenceContainer>
       </ContainerSet>
     </TelemetryMetaData>
+    <CommandMetaData>
+      <ArgumentTypeSet>
+        <!-- A star's name, NUL-padded to eight bytes. -->
+        <StringArgumentType name="TargetType">
+          <StringDataEncoding encoding="US-ASCII">
+            <SizeInBits><Fixed><FixedValue>64</FixedValue></Fixed></SizeInBits>
+          </StringDataEncoding>
+        </StringArgumentType>
+        <FloatArgumentType name="SlewRateType">
+          <UnitSet><Unit>rad/s</Unit></UnitSet>
+          <FloatDataEncoding sizeInBits="32"/>
+          <ValidRangeSet>
+            <ValidRange minExclusive="0" maxInclusive="0.5"/>
+          </ValidRangeSet>
+        </FloatArgumentType>
+      </ArgumentTypeSet>
+      <MetaCommandSet>
+        <MetaCommand name="Point" shortDescription="Slew to a target">
+          <BaseMetaCommand metaCommandRef="../CCSDSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="101"/>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="1"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Target" argumentTypeRef="TargetType"/>
+            <Argument name="Rate" argumentTypeRef="SlewRateType" initialValue="0.1"/>
+          </ArgumentList>
+          <CommandContainer name="Point">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Target"/>
+              <ArgumentRefEntry argumentRef="Rate"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+      </MetaCommandSet>
+    </CommandMetaData>
   </SpaceSystem>
 </SpaceSystem>

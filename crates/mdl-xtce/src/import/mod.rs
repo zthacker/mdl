@@ -12,6 +12,9 @@
 //! A container embedded with a ContainerRefEntry is a struct type, and so
 //! are the elements of an array or a repeated parameter that are
 //! aggregates. Struct types are named once every packet is known.
+//!
+//! A concrete MetaCommand is a catalog command and a command packet
+//! (`commands`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -27,6 +30,7 @@ use crate::types::{Order, Raw, Scalar, Shape, Types, description};
 use crate::xml::{self, El, Expect};
 use crate::{Code, Naming, Options};
 
+mod commands;
 mod conditions;
 mod emit;
 mod entries;
@@ -122,6 +126,10 @@ struct Field<'d> {
     /// The length, written out, for a string or bytes field.
     length: Option<(Value, Span)>,
     canonical: Option<(String, Span)>,
+    /// In a command packet: the catalog argument it encodes.
+    argument: Option<(String, Span)>,
+    /// In a command packet: its constant raw value.
+    value: Option<(Value, Span)>,
     offset: Option<(u32, Span)>,
     when: Option<Object>,
 }
@@ -285,6 +293,7 @@ impl<'d, 'r> Import<'d, 'r> {
         }
         self.name_packets(&mut packets);
         self.name_types();
+        let commands = self.commands();
         self.report_unused();
         let root = tree.spaces.first()?;
         let root_span = root.el.span();
@@ -322,7 +331,7 @@ impl<'d, 'r> Import<'d, 'r> {
                 return None;
             }
         };
-        let order = self.family_order(&packets);
+        let order = self.family_order(&packets, &commands);
         Some(emit::bundle(emit::Bundle {
             root: root_span,
             params: &self.params,
@@ -332,6 +341,7 @@ impl<'d, 'r> Import<'d, 'r> {
             set: &set,
             packets: &packets,
             structs: &self.structs,
+            commands: &commands,
         }))
     }
 
@@ -775,9 +785,38 @@ impl<'d, 'r> Import<'d, 'r> {
         Some((name, span))
     }
 
-    /// A parameter's catalog name: its alias in the MDL namespace, else its
-    /// SpaceSystem path and name.
+    /// A parameter's or meta-command's catalog name: its alias in the MDL
+    /// namespace, else its SpaceSystem path and name.
     fn base_name(&mut self, space: usize, el: El<'d>) -> Option<(String, Span)> {
+        if let Some(alias) = self.mdl_alias(el)? {
+            return Some(alias);
+        }
+        let name = el.item_name()?;
+        let mut parts = Vec::new();
+        for part in self.tree.names(space).into_iter().chain([name]) {
+            match catalog_part(part) {
+                Some(part) => parts.push(part),
+                None => {
+                    self.report.error(
+                        Code::Name,
+                        el.span(),
+                        format!(
+                            "{part} has no letters or digits for a catalog name; give the \
+                             {} an alias in the MDL namespace",
+                            noun(el)
+                        ),
+                    );
+                    return None;
+                }
+            }
+        }
+        let span = el.attr("name").map_or(el.span(), |a| a.span);
+        Some((parts.join("."), span))
+    }
+
+    /// An item's alias in the MDL namespace, if it has one; `None` after
+    /// reporting an item with two.
+    fn mdl_alias(&mut self, el: El<'d>) -> Option<Option<(String, Span)>> {
         if let Some(set) = el.child("AliasSet") {
             set.check(
                 &Expect {
@@ -815,37 +854,18 @@ impl<'d, 'r> Import<'d, 'r> {
             }
             match mdl.as_slice() {
                 [] => {}
-                [alias] => return Some((alias.value.trim().to_string(), alias.span)),
+                [alias] => return Some(Some((alias.value.trim().to_string(), alias.span))),
                 [_, second, ..] => {
                     self.report.error(
                         Code::Invalid,
                         second.span,
-                        "a parameter has one alias in the MDL namespace",
+                        format!("a {} has one alias in the MDL namespace", noun(el)),
                     );
                     return None;
                 }
             }
         }
-        let name = el.item_name()?;
-        let mut parts = Vec::new();
-        for part in self.tree.names(space).into_iter().chain([name]) {
-            match catalog_part(part) {
-                Some(part) => parts.push(part),
-                None => {
-                    self.report.error(
-                        Code::Name,
-                        el.span(),
-                        format!(
-                            "{part} has no letters or digits for a catalog name; give the \
-                             parameter an alias in the MDL namespace"
-                        ),
-                    );
-                    return None;
-                }
-            }
-        }
-        let span = el.attr("name").map_or(el.span(), |a| a.span);
-        Some((parts.join("."), span))
+        Some(None)
     }
 
     /// A parameter or member for messages: `/Root/Sub/Name.member`.
@@ -999,13 +1019,17 @@ impl<'d, 'r> Import<'d, 'r> {
     /// Little-endian when every number wider than a byte is, else
     /// big-endian: a big-endian header ahead of little-endian data makes
     /// the family big-endian, its little-endian values naming their order.
-    fn family_order(&self, packets: &[Packet<'_>]) -> Order {
+    /// The numbers are those packets read and arguments write; a command's
+    /// constants are bit patterns, written in whichever order is theirs.
+    fn family_order(&self, packets: &[Packet<'_>], commands: &[commands::Command<'_>]) -> Order {
         let entries = packets
             .iter()
             .flat_map(|packet| &packet.entries)
-            .chain(self.structs.values().flat_map(|ty| &ty.entries));
+            .chain(self.structs.values().flat_map(|ty| &ty.entries))
+            .chain(commands.iter().flat_map(|command| &command.entries));
         let mut orders = entries
             .filter_map(|entry| match entry {
+                Entry::Field(field) if field.value.is_some() => None,
                 Entry::Field(field) => field.scalar.order.map(|(order, _)| order),
                 Entry::Array(array) => match &array.element {
                     Element::Scalar(scalar) => scalar.order.map(|(order, _)| order),
@@ -1019,6 +1043,15 @@ impl<'d, 'r> Import<'d, 'r> {
         } else {
             Order::Big
         }
+    }
+}
+
+/// What an element is, for messages.
+fn noun(el: El<'_>) -> &'static str {
+    match el.name() {
+        "MetaCommand" => "meta-command",
+        "Argument" => "argument",
+        _ => "parameter",
     }
 }
 

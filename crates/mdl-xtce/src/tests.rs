@@ -599,7 +599,7 @@ fn what_doesnt_change_values_is_a_warning() {
     );
     let text = doc(&format!(
         "<Header validationStatus=\"Working\"/>{telemetry}\
-         <CommandMetaData><MetaCommandSet/></CommandMetaData>"
+         <CommandMetaData><CommandContainerSet/></CommandMetaData>"
     ));
     let (sources, result) = import_all(&[("sat.xml", &text)]);
     let parsed = result.unwrap();
@@ -625,7 +625,8 @@ fn what_doesnt_change_values_is_a_warning() {
             "aliases in ops aren't imported: MDL reads only the MDL namespace",
             "TelemetryMetaData's AlgorithmSet isn't imported: MDL decodes what packets carry, \
              not what algorithms compute",
-            "CommandMetaData's MetaCommandSet isn't imported: it doesn't change decoded values",
+            "CommandMetaData's CommandContainerSet isn't imported: command containers are \
+             read inside meta-commands, as Yamcs reads them",
         ]
     );
 }
@@ -1796,6 +1797,939 @@ fn every_code_is_listed_once_under_the_importers_name() {
     }
 }
 
+/// A CommandMetaData with these argument types and meta-commands.
+fn commands(types: &str, metas: &str) -> String {
+    format!(
+        "<CommandMetaData><ArgumentTypeSet>{types}</ArgumentTypeSet>\
+         <MetaCommandSet>{metas}</MetaCommandSet></CommandMetaData>"
+    )
+}
+
+const ARG_U8: &str = r#"<IntegerArgumentType name="U8" signed="false"><IntegerDataEncoding sizeInBits="8"/></IntegerArgumentType>"#;
+
+/// An abstract meta-command `Base` writing a sync word and an opcode
+/// argument, and a concrete one, `Go`, built on it with opcode 7, holding
+/// `arguments` and `entries`.
+fn go(arguments: &str, entries: &str) -> String {
+    format!(
+        r#"<MetaCommand name="Base" abstract="true">
+             <ArgumentList><Argument name="Opcode" argumentTypeRef="U8"/></ArgumentList>
+             <CommandContainer name="Base"><EntryList>
+               <FixedValueEntry name="Sync" binaryValue="EB90" sizeInBits="16"/>
+               <ArgumentRefEntry argumentRef="Opcode"/>
+             </EntryList></CommandContainer>
+           </MetaCommand>
+           <MetaCommand name="Go">
+             <BaseMetaCommand metaCommandRef="Base"><ArgumentAssignmentList>
+               <ArgumentAssignment argumentName="Opcode" argumentValue="7"/>
+             </ArgumentAssignmentList></BaseMetaCommand>
+             <ArgumentList>{arguments}</ArgumentList>
+             <CommandContainer name="Go"><EntryList>{entries}</EntryList></CommandContainer>
+           </MetaCommand>"#
+    )
+}
+
+fn argument(name: &str, ty: &str) -> String {
+    format!(r#"<Argument name="{name}" argumentTypeRef="{ty}"/>"#)
+}
+
+fn argument_entry(name: &str) -> String {
+    format!(r#"<ArgumentRefEntry argumentRef="{name}"/>"#)
+}
+
+/// `Go` with one argument `A` of a type `types` defines as `ty`.
+fn go_with(types: &str, ty: &str) -> String {
+    doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(&argument("A", ty), &argument_entry("A")),
+    ))
+}
+
+#[test]
+fn meta_commands_are_catalog_commands_and_command_packets() {
+    let types = format!(
+        r#"{ARG_U8}
+           <EnumeratedArgumentType name="Mode"><IntegerDataEncoding sizeInBits="8"/><EnumerationList><Enumeration value="1" label="SAFE"/><Enumeration value="2" label="ON"/></EnumerationList></EnumeratedArgumentType>
+           <IntegerArgumentType name="Delay" signed="false" initialValue="0x0A"><UnitSet><Unit>s</Unit></UnitSet><IntegerDataEncoding sizeInBits="16"/><ValidRangeSet><ValidRange minInclusive="1" maxInclusive="600"/></ValidRangeSet></IntegerArgumentType>"#
+    );
+    let arguments = r#"<Argument name="Mode" argumentTypeRef="Mode" shortDescription="Where to go"/>
+        <Argument name="DelayTime" argumentTypeRef="Delay"/>"#;
+    let entries = format!(
+        r#"{}<ArgumentRefEntry argumentRef="DelayTime"><LocationInContainerInBits><FixedValue>4</FixedValue></LocationInContainerInBits></ArgumentRefEntry>"#,
+        argument_entry("Mode")
+    );
+    let text = doc(&commands(&types, &go(arguments, &entries)).replace(
+        r#"<MetaCommand name="Go">"#,
+        r#"<MetaCommand name="Go" shortDescription="Start">"#,
+    ));
+    let bundle = bundle(&text);
+    assert_eq!(
+        bundle["catalog"]["commands"],
+        json!({
+            "sat.go": {
+                "description": "Start",
+                "arguments": [
+                    {"name": "mode", "type": "enum", "states": ["SAFE", "ON"], "description": "Where to go"},
+                    {"name": "delaytime", "type": "u64", "unit": "s", "range": {"min": 1.0, "max": 600.0}, "default": 10}
+                ]
+            }
+        })
+    );
+    assert_eq!(
+        bundle["sets"][0]["commands"],
+        json!([{
+            "name": "Go",
+            "canonical": "sat.go",
+            "entries": [
+                {"kind": "field", "name": "Sync", "type": "uint", "size_bits": 16, "value": 60304},
+                {"kind": "field", "name": "Opcode", "type": "uint", "size_bits": 8, "value": 7},
+                {"kind": "field", "name": "Mode", "type": "uint", "size_bits": 8,
+                 "conversion": {"kind": "states", "states": [{"raw": 1, "name": "SAFE"}, {"raw": 2, "name": "ON"}]},
+                 "argument": "mode"},
+                {"kind": "padding", "size_bits": 4},
+                {"kind": "field", "name": "DelayTime", "type": "uint", "size_bits": 16, "unit": "s", "argument": "delaytime"}
+            ]
+        }])
+    );
+    let (_, result) = import_all(&[("sat.xml", &text)]);
+    validate(result.unwrap().bundle).unwrap();
+}
+
+#[test]
+fn a_command_inherits_arguments_and_entries_root_first() {
+    // Three levels: the root declares the APID and the opcode, the middle
+    // assigns the APID and adds a flag, the leaf assigns the opcode and
+    // writes its own argument.
+    let metas = r#"
+      <MetaCommand name="Root" abstract="true">
+        <ArgumentList><Argument name="Apid" argumentTypeRef="U8"/><Argument name="Op" argumentTypeRef="U8"/></ArgumentList>
+        <CommandContainer name="Root"><EntryList>
+          <ArgumentRefEntry argumentRef="Apid"/><ArgumentRefEntry argumentRef="Op"/>
+        </EntryList></CommandContainer>
+      </MetaCommand>
+      <MetaCommand name="Mid" abstract="true">
+        <BaseMetaCommand metaCommandRef="Root"><ArgumentAssignmentList>
+          <ArgumentAssignment argumentName="Apid" argumentValue="0x2A"/>
+        </ArgumentAssignmentList></BaseMetaCommand>
+        <ArgumentList><Argument name="Flag" argumentTypeRef="U8"/></ArgumentList>
+        <CommandContainer name="Mid"><EntryList><ArgumentRefEntry argumentRef="Flag"/></EntryList>
+          <BaseContainer containerRef="Root"/></CommandContainer>
+      </MetaCommand>
+      <MetaCommand name="Leaf">
+        <BaseMetaCommand metaCommandRef="Mid"><ArgumentAssignmentList>
+          <ArgumentAssignment argumentName="Op" argumentValue="3"/>
+        </ArgumentAssignmentList></BaseMetaCommand>
+        <ArgumentList><Argument name="Level" argumentTypeRef="U8"/></ArgumentList>
+        <CommandContainer name="Leaf"><EntryList><ArgumentRefEntry argumentRef="Level"/></EntryList>
+          <BaseContainer containerRef="Mid"/></CommandContainer>
+      </MetaCommand>
+      <MetaCommand name="Other">
+        <BaseMetaCommand metaCommandRef="Root"/>
+      </MetaCommand>"#;
+    let bundle = bundle(&doc(&commands(ARG_U8, metas)));
+    let arguments = |command: &str| -> Vec<String> {
+        bundle["catalog"]["commands"][command]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(arguments("sat.leaf"), ["flag", "level"]);
+    assert_eq!(arguments("sat.other"), ["apid", "op"]);
+    let leaf = &bundle["sets"][0]["commands"][0];
+    let entries: Vec<(&str, &Value)> = leaf["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            (
+                e["name"].as_str().unwrap(),
+                e.get("value").unwrap_or(&e["argument"]),
+            )
+        })
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            ("Apid", &json!(42)),
+            ("Op", &json!(3)),
+            ("Flag", &json!("flag")),
+            ("Level", &json!("level"))
+        ]
+    );
+}
+
+#[test]
+fn fixed_values_are_right_aligned_bit_patterns() {
+    let entries = r#"
+        <FixedValueEntry binaryValue="5" sizeInBits="3"/>
+        <FixedValueEntry name="Word" binaryValue="0102"/>
+        <FixedValueEntry name="Wide" binaryValue="00890123456789ABCDEF" sizeInBits="72"/>
+        <FixedValueEntry binaryValue="00" sizeInBits="5"/>"#;
+    let text = doc(&commands(ARG_U8, &go("", entries)));
+    let packet = &bundle(&text)["sets"][0]["commands"][0];
+    let fields: Vec<(&str, u64, &Value, Option<&str>)> = packet["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .skip(2)
+        .map(|e| {
+            (
+                e["name"].as_str().unwrap(),
+                e["size_bits"].as_u64().unwrap(),
+                &e["value"],
+                e["byte_order"].as_str(),
+            )
+        })
+        .collect();
+    // The family is big-endian (no number says otherwise), so no field
+    // names its order; the 72 bits are 8, then 64.
+    assert_eq!(
+        fields,
+        [
+            ("fixed1", 3, &json!(5), None),
+            ("Word", 16, &json!(258), None),
+            ("Wide_1", 8, &json!(0x89), None),
+            ("Wide_2", 64, &json!("81985529216486895"), None),
+            ("fixed2", 5, &json!(0), None),
+        ]
+    );
+}
+
+#[test]
+fn fixed_values_in_a_little_endian_family_name_their_order() {
+    let types = r#"<IntegerArgumentType name="LE" signed="false"><IntegerDataEncoding sizeInBits="16" byteOrder="leastSignificantByteFirst"/></IntegerArgumentType>"#;
+    let text = doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(&argument("A", "LE"), &argument_entry("A")),
+    ));
+    let bundle = bundle(&text);
+    assert_eq!(bundle["families"][0]["byte_order"], "little");
+    let sync = &bundle["sets"][0]["commands"][0]["entries"][0];
+    assert_eq!(
+        (&sync["name"], &sync["byte_order"]),
+        (&json!("Sync"), &json!("big"))
+    );
+}
+
+#[test]
+fn a_fixed_value_needs_its_bits_and_drops_higher_ones() {
+    let text = |entry: &str| doc(&commands(ARG_U8, &go("", entry)));
+    assert_eq!(
+        one_error(&text(
+            r#"<FixedValueEntry binaryValue="01" sizeInBits="12"/>"#
+        )),
+        (
+            "xtce.invalid".into(),
+            "binaryValue 01 has 8 bits, fewer than the entry's 12".into()
+        )
+    );
+    assert_eq!(
+        one_error(&text(r#"<FixedValueEntry binaryValue="0xFF"/>"#)),
+        (
+            "xtce.invalid".into(),
+            "binaryValue \"0xFF\" isn't hexadecimal".into()
+        )
+    );
+    assert_eq!(
+        one_problem(&text(
+            r#"<FixedValueEntry binaryValue="FF" sizeInBits="3"/>"#
+        )),
+        (
+            "xtce.ignored".into(),
+            "binaryValue FF's bits above its low 3 aren't imported: the entry is 3 bits, and \
+             Yamcs drops them too"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn string_and_binary_arguments_pad_as_yamcs_pads_them() {
+    let length = |ty: &str| {
+        let text = go_with(ty, "A");
+        bundle(&text)["sets"][0]["commands"][0]["entries"][2]["length"].clone()
+    };
+    let string = |size: &str| {
+        format!(
+            r#"<StringArgumentType name="A"><StringDataEncoding><{size}</StringDataEncoding></StringArgumentType>"#
+        )
+    };
+    assert_eq!(
+        length(&string(
+            "SizeInBits><Fixed><FixedValue>32</FixedValue></Fixed></SizeInBits>"
+        )),
+        json!({"kind": "fixed", "bytes": 4, "terminator": 0})
+    );
+    assert_eq!(
+        length(&string(
+            "SizeInBits><Fixed><FixedValue>32</FixedValue></Fixed><TerminationChar>00</TerminationChar></SizeInBits>"
+        )),
+        json!({"kind": "fixed", "bytes": 4, "terminator": 0})
+    );
+    assert_eq!(
+        length(&string(
+            "Variable><TerminationChar>0A</TerminationChar></Variable>"
+        )),
+        json!({"kind": "terminator", "byte": 10})
+    );
+    assert_eq!(
+        length(
+            r#"<BinaryArgumentType name="A"><BinaryDataEncoding><SizeInBits><FixedValue>16</FixedValue></SizeInBits></BinaryDataEncoding></BinaryArgumentType>"#
+        ),
+        json!({"kind": "fixed", "bytes": 2})
+    );
+    assert_eq!(
+        one_error(&go_with(
+            &string("SizeInBits><Fixed><FixedValue>32</FixedValue></Fixed><TerminationChar>20</TerminationChar></SizeInBits>"),
+            "A"
+        ))
+        .0,
+        "xtce.unsupported"
+    );
+    for size in [
+        "SizeInBits><LeadingSize sizeInBitsOfSizeTag=\"8\"/></SizeInBits>",
+        "Variable maxSizeInBits=\"64\"><DynamicValue><ArgumentInstanceRef argumentRef=\"N\"/></DynamicValue></Variable>",
+    ] {
+        assert_eq!(
+            one_error(&go_with(&string(size), "A")),
+            (
+                "xtce.unsupported".into(),
+                "a string argument whose size another argument or a leading size gives isn't \
+                 supported yet"
+                    .into()
+            ),
+            "{size}"
+        );
+    }
+}
+
+#[test]
+fn eight_bit_characters_are_text_and_wider_ones_unsupported() {
+    let string = |width: &str| {
+        format!(
+            r#"<StringParameterType name="Name" characterWidth="{width}"><StringDataEncoding><SizeInBits><Fixed><FixedValue>32</FixedValue></Fixed></SizeInBits></StringDataEncoding></StringParameterType>"#
+        )
+    };
+    let text = |width: &str| {
+        doc(&telemetry(
+            &string(width),
+            &param("N", "Name"),
+            &container("P", &entry("N")),
+        ))
+    };
+    assert_eq!(
+        one_problem(&text("8")),
+        (
+            "xtce.ignored".into(),
+            "StringParameterType Name's characterWidth isn't imported: MDL reads text by its \
+             encoding"
+                .into()
+        )
+    );
+    assert_eq!(
+        one_error(&text("16")),
+        (
+            "xtce.unsupported".into(),
+            "characters of 16 bits aren't supported: MDL reads text as UTF-8, US-ASCII or \
+             ISO-8859-1 bytes"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn an_enumeration_label_on_two_values_is_encoded_as_the_first() {
+    let ty = r#"<EnumeratedArgumentType name="A"><IntegerDataEncoding sizeInBits="8"/><EnumerationList>
+        <Enumeration value="1" label="ON"/><Enumeration value="2" label="OFF"/><Enumeration value="3" label="ON"/>
+      </EnumerationList></EnumeratedArgumentType>"#;
+    let text = go_with(ty, "A");
+    assert_eq!(
+        one_problem(&text),
+        (
+            "xtce.ignored".into(),
+            "label ON stands for 3 too, which isn't imported: an argument is encoded as its \
+             label's first value, as Yamcs encodes it"
+                .into()
+        )
+    );
+    let (_, result) = import_all(&[("sat.xml", &text)]);
+    let bundle = serde_json::to_value(result.unwrap().bundle).unwrap();
+    assert_eq!(
+        bundle["sets"][0]["commands"][0]["entries"][2]["conversion"]["states"],
+        json!([{"raw": 1, "name": "ON"}, {"raw": 2, "name": "OFF"}])
+    );
+}
+
+#[test]
+fn where_yamcs_writes_a_float_argument_otherwise_is_a_warning() {
+    let float = |attrs: &str, encoding: &str| {
+        format!(r#"<FloatArgumentType name="A"{attrs}>{encoding}</FloatArgumentType>"#)
+    };
+    let (code, message) = one_problem(&go_with(
+        &float("", r#"<IntegerDataEncoding sizeInBits="16"/>"#),
+        "A",
+    ));
+    assert_eq!(code, "xtce.differs");
+    assert!(message.starts_with("Yamcs drops the fraction"), "{message}");
+    let (code, message) = one_problem(&go_with(
+        &float("", r#"<FloatDataEncoding sizeInBits="64"/>"#),
+        "A",
+    ));
+    assert_eq!(code, "xtce.differs");
+    assert!(message.starts_with("Yamcs narrows a value"), "{message}");
+    bundle(&go_with(
+        &float(
+            r#" sizeInBits="64""#,
+            r#"<FloatDataEncoding sizeInBits="64"/>"#,
+        ),
+        "A",
+    ));
+    bundle(&go_with(
+        &float("", r#"<FloatDataEncoding sizeInBits="32"/>"#),
+        "A",
+    ));
+}
+
+#[test]
+fn valid_ranges_are_inclusive_ranges() {
+    let range = |ty: &str| {
+        bundle(&go_with(ty, "A"))["catalog"]["commands"]["sat.go"]["arguments"][0]["range"].clone()
+    };
+    let float = |range: &str| {
+        format!(
+            r#"<FloatArgumentType name="A" sizeInBits="64"><FloatDataEncoding sizeInBits="64"/>{range}</FloatArgumentType>"#
+        )
+    };
+    assert_eq!(
+        range(&float(
+            r#"<ValidRangeSet><ValidRange minExclusive="0" maxExclusive="1"/></ValidRangeSet>"#
+        )),
+        json!({"min": 0.0_f64.next_up(), "max": 1.0_f64.next_down()})
+    );
+    // XTCE 1.0 and 1.1 put the range on the type.
+    assert_eq!(
+        range(&float(r#"<ValidRange maxInclusive="2.5"/>"#)),
+        json!({"max": 2.5})
+    );
+    let integer = |range: &str| {
+        format!(
+            r#"<IntegerArgumentType name="A"><IntegerDataEncoding sizeInBits="64" encoding="twosComplement"/>{range}</IntegerArgumentType>"#
+        )
+    };
+    assert_eq!(
+        range(&integer(
+            r#"<ValidRangeSet><ValidRange minInclusive="-5" maxInclusive="9007199254740991"/></ValidRangeSet>"#
+        )),
+        json!({"min": -5.0, "max": 9_007_199_254_740_991.0})
+    );
+    assert_eq!(
+        one_problem(&go_with(
+            &float(
+                r#"<ValidRangeSet><ValidRange minInclusive="0" minExclusive="0"/></ValidRangeSet>"#
+            ),
+            "A"
+        )),
+        (
+            "xtce.ignored".into(),
+            "minExclusive isn't imported: the range has minInclusive too, which Yamcs takes".into()
+        )
+    );
+    for (range, code) in [
+        (
+            r#"<ValidRangeSet><ValidRange minInclusive="0"/><ValidRange maxInclusive="9"/></ValidRangeSet>"#,
+            "xtce.unsupported",
+        ),
+        (
+            r#"<ValidRangeSet><ValidRange minInclusive="0"/></ValidRangeSet><ValidRange minInclusive="0"/>"#,
+            "xtce.invalid",
+        ),
+        (
+            r#"<ValidRangeSet><ValidRange maxInclusive="9007199254740992"/></ValidRangeSet>"#,
+            "xtce.unsupported",
+        ),
+    ] {
+        assert_eq!(one_error(&go_with(&integer(range), "A")).0, code, "{range}");
+    }
+}
+
+/// The catalog range of `Go`'s one argument `A`, from a document that
+/// imports, validates, and warns only as `warnings` says.
+fn validated_range(ty: &str, warnings: &[&str]) -> Value {
+    let text = go_with(ty, "A");
+    let (sources, result) = import_all(&[("sat.xml", &text)]);
+    let parsed = result.unwrap_or_else(|d| panic!("{:#?}", shown(&sources, &d)));
+    let codes: Vec<String> = parsed.warnings.iter().map(|w| w.code.to_string()).collect();
+    assert_eq!(codes, warnings, "{:#?}", shown(&sources, &parsed.warnings));
+    let bundle = serde_json::to_value(&parsed.bundle).unwrap();
+    validate(parsed.bundle).unwrap();
+    bundle["catalog"]["commands"]["sat.go"]["arguments"][0]
+        .get("range")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+#[test]
+fn an_integer_argument_without_a_valid_range_takes_what_its_field_holds() {
+    let integer = |attrs: &str, encoding: &str| {
+        format!(r#"<IntegerArgumentType name="A"{attrs}>{encoding}</IntegerArgumentType>"#)
+    };
+    // What the encoding holds (a u64 starts at 0 already)...
+    assert_eq!(
+        validated_range(
+            &integer(
+                r#" signed="false""#,
+                r#"<IntegerDataEncoding sizeInBits="16"/>"#
+            ),
+            &[]
+        ),
+        json!({"max": 65535.0})
+    );
+    assert_eq!(
+        validated_range(
+            &integer(
+                "",
+                r#"<IntegerDataEncoding sizeInBits="12" encoding="twosComplement"/>"#
+            ),
+            &[]
+        ),
+        json!({"min": -2048.0, "max": 2047.0})
+    );
+    // An unsigned type over a two's complement encoding is an i64 kept at 0
+    // and above, since a command writes a u64 to a uint field only.
+    let unsigned_int = integer(
+        r#" signed="false""#,
+        r#"<IntegerDataEncoding sizeInBits="8" encoding="twosComplement"/>"#,
+    );
+    assert_eq!(
+        validated_range(&unsigned_int, &[]),
+        json!({"min": 0.0, "max": 127.0})
+    );
+    assert_eq!(
+        bundle(&go_with(&unsigned_int, "A"))["catalog"]["commands"]["sat.go"]["arguments"][0]["type"],
+        "i64"
+    );
+    // ...and the type: 32 signed bits unless it says otherwise, which
+    // Yamcs checks a value against.
+    assert_eq!(
+        validated_range(
+            &integer("", r#"<IntegerDataEncoding sizeInBits="64"/>"#),
+            &[]
+        ),
+        json!({"min": 0.0, "max": 2_147_483_647.0})
+    );
+    // Where those are the catalog type's own, no range is needed.
+    assert_eq!(
+        validated_range(
+            &integer(
+                r#" signed="false" sizeInBits="64""#,
+                r#"<IntegerDataEncoding sizeInBits="64"/>"#
+            ),
+            &[]
+        ),
+        Value::Null
+    );
+    assert_eq!(
+        validated_range(
+            &integer(
+                r#" sizeInBits="64""#,
+                r#"<IntegerDataEncoding sizeInBits="64" encoding="twosComplement"/>"#
+            ),
+            &[]
+        ),
+        Value::Null
+    );
+    // An MDL range ends within ±(2^53 - 1), so a wider field's top values
+    // are refused.
+    assert_eq!(
+        validated_range(
+            &integer(
+                r#" signed="false" sizeInBits="64""#,
+                r#"<IntegerDataEncoding sizeInBits="60"/>"#
+            ),
+            &["xtce.differs"]
+        ),
+        json!({"max": 9_007_199_254_740_991.0})
+    );
+}
+
+#[test]
+fn a_float_written_as_an_integer_takes_what_rounds_into_its_field() {
+    let float = |range: &str| {
+        format!(
+            r#"<FloatArgumentType name="A"><IntegerDataEncoding sizeInBits="8"/>{range}</FloatArgumentType>"#
+        )
+    };
+    let differs = ["xtce.differs"];
+    // From just above -0.5 to just below 255.5.
+    assert_eq!(
+        validated_range(&float(""), &differs),
+        json!({"min": (-0.5_f64).next_up(), "max": 255.5_f64.next_down()})
+    );
+    // Yamcs keeps 255.9 in the byte, dropping the fraction; MDL rounds it
+    // to 256, so the range is narrowed to what MDL keeps.
+    let (sources, result) = import_all(&[(
+        "sat.xml",
+        &go_with(
+            &float(r#"<ValidRange minInclusive="0" maxExclusive="256"/>"#),
+            "A",
+        ),
+    )]);
+    let messages: Vec<String> = shown(&sources, &result.unwrap().warnings)
+        .into_iter()
+        .map(|(_, _, _, message)| message)
+        .collect();
+    assert_eq!(
+        messages[1],
+        "the valid range's maximum, 255.99999999999997, is narrowed to 255.49999999999997: \
+         MDL rounds the values past it to 256, which the encoding can't hold, where Yamcs \
+         drops their fraction"
+    );
+    assert_eq!(
+        validated_range(
+            &float(r#"<ValidRange minInclusive="0" maxExclusive="256"/>"#),
+            &["xtce.differs", "xtce.differs"]
+        ),
+        json!({"min": 0.0, "max": 255.5_f64.next_down()})
+    );
+    // A range the byte can't hold either way is the document's to fix.
+    let text = go_with(&float(r#"<ValidRange maxInclusive="300"/>"#), "A");
+    let (_, result) = import_all(&[("sat.xml", &text)]);
+    assert!(validate(result.unwrap().bundle).is_err());
+}
+
+#[test]
+fn initial_values_are_defaults_read_as_yamcs_reads_them() {
+    let default = |ty: &str, argument: &str| {
+        let text = doc(&commands(
+            &format!("{ARG_U8}{ty}"),
+            &go(argument, &argument_entry("A")),
+        ));
+        bundle(&text)["catalog"]["commands"]["sat.go"]["arguments"][0]["default"].clone()
+    };
+    let int = r#"<IntegerArgumentType name="T" initialValue="0b1_0000"><IntegerDataEncoding sizeInBits="16"/></IntegerArgumentType>"#;
+    assert_eq!(default(int, &argument("A", "T")), json!(16));
+    // The argument's initial value is used over its type's.
+    assert_eq!(
+        default(
+            int,
+            r#"<Argument name="A" argumentTypeRef="T" initialValue="-3"/>"#
+        ),
+        json!(-3)
+    );
+    let boolean = r#"<BooleanArgumentType name="T" oneStringValue="ON" zeroStringValue="OFF"><IntegerDataEncoding sizeInBits="8"/></BooleanArgumentType>"#;
+    let text = doc(&commands(
+        &format!("{ARG_U8}{boolean}"),
+        &go(
+            r#"<Argument name="A" argumentTypeRef="T" initialValue="OFF"/>"#,
+            &argument_entry("A"),
+        ),
+    ));
+    let (_, result) = import_all(&[("sat.xml", &text)]);
+    let bundle = serde_json::to_value(result.unwrap().bundle).unwrap();
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"][0]["default"],
+        json!(false)
+    );
+    let binary = r#"<BinaryArgumentType name="T" initialValue="ABC"><BinaryDataEncoding><SizeInBits><FixedValue>16</FixedValue></SizeInBits></BinaryDataEncoding></BinaryArgumentType>"#;
+    assert_eq!(default(binary, &argument("A", "T")), json!("0abc"));
+    let float = r#"<FloatArgumentType name="T" sizeInBits="64" initialValue="2.5"><FloatDataEncoding sizeInBits="64"/></FloatArgumentType>"#;
+    assert_eq!(default(float, &argument("A", "T")), json!(2.5));
+    let enumerated = r#"<EnumeratedArgumentType name="T" initialValue="Off"><IntegerDataEncoding sizeInBits="8"/><EnumerationList><Enumeration value="0" label="OFF"/></EnumerationList></EnumeratedArgumentType>"#;
+    assert_eq!(
+        one_error(&doc(&commands(
+            &format!("{ARG_U8}{enumerated}"),
+            &go(&argument("A", "T"), &argument_entry("A")),
+        ))),
+        (
+            "xtce.invalid".into(),
+            "argument A's initial value: \"Off\" isn't one of its labels (OFF)".into()
+        )
+    );
+}
+
+#[test]
+fn an_argument_no_entry_writes_is_left_out() {
+    let text = doc(&commands(
+        ARG_U8,
+        &go(
+            &(argument("A", "U8") + &argument("Note", "U8")),
+            &argument_entry("A"),
+        ),
+    ));
+    assert_eq!(
+        one_problem(&text),
+        (
+            "xtce.ignored".into(),
+            "argument Note of meta-command /Sat/Go is in no entry, so it isn't imported: it \
+             changes no bytes"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn assignments_name_inherited_arguments_once() {
+    let assigning = |assignments: &str| {
+        doc(&commands(
+            ARG_U8,
+            &go("", "").replace(
+                r#"<ArgumentAssignment argumentName="Opcode" argumentValue="7"/>"#,
+                assignments,
+            ),
+        ))
+    };
+    assert_eq!(
+        one_error(&assigning(
+            r#"<ArgumentAssignment argumentName="Op" argumentValue="7"/>"#
+        )),
+        (
+            "xtce.reference".into(),
+            "Op names no argument that meta-command /Sat/Go inherits".into()
+        )
+    );
+    assert_eq!(
+        one_error(&assigning(
+            r#"<ArgumentAssignment argumentName="Opcode" argumentValue="7"/><ArgumentAssignment argumentName="Opcode" argumentValue="8"/>"#
+        )),
+        (
+            "xtce.invalid".into(),
+            "argument Opcode is given a value already".into()
+        )
+    );
+    assert_eq!(
+        one_error(&assigning(
+            r#"<ArgumentAssignment argumentName="Opcode" argumentValue="seven"/>"#
+        )),
+        (
+            "xtce.invalid".into(),
+            "the value assigned to argument Opcode: \"seven\" isn't an integer".into()
+        )
+    );
+    // A float's assigned value is unsupported, however it's spelled.
+    let float = |value: &str| {
+        doc(&commands(
+            r#"<FloatArgumentType name="U8"><IntegerDataEncoding sizeInBits="8"/></FloatArgumentType>"#,
+            &go("", "").replace(
+                r#"argumentValue="7""#,
+                &format!("argumentValue=\"{value}\""),
+            ),
+        ))
+    };
+    for value in ["2.5", "3"] {
+        assert_eq!(
+            one_error(&float(value)),
+            (
+                "xtce.unsupported".into(),
+                "a value assigned to argument Opcode isn't supported: MDL constants are \
+                 integers and text, and the argument is a float"
+                    .into()
+            ),
+            "{value}"
+        );
+    }
+    // Integers read as defaults are, and checked against the valid range.
+    let ranged = |value: &str| {
+        doc(&commands(
+            r#"<IntegerArgumentType name="U8" signed="false"><IntegerDataEncoding sizeInBits="8"/><ValidRangeSet><ValidRange minInclusive="1" maxInclusive="9"/></ValidRangeSet></IntegerArgumentType>"#,
+            &go("", "").replace(
+                r#"argumentValue="7""#,
+                &format!("argumentValue=\"{value}\""),
+            ),
+        ))
+    };
+    let packet = &bundle(&ranged("0b1_000"))["sets"][0]["commands"][0];
+    assert_eq!(packet["entries"][1]["value"], json!(8));
+    assert_eq!(
+        one_error(&ranged("10")),
+        (
+            "xtce.invalid".into(),
+            "the value assigned to argument Opcode, 10, is above its maximum, 9, so Yamcs \
+             refuses the command"
+                .into()
+        )
+    );
+}
+
+#[test]
+fn an_argument_entry_names_its_own_meta_commands_argument() {
+    let text = doc(&commands(ARG_U8, &go("", &argument_entry("Opcode"))));
+    assert_eq!(
+        one_error(&text),
+        (
+            "xtce.reference".into(),
+            "Opcode names no argument of meta-command /Sat/Go; an ArgumentRefEntry names an \
+             argument its own meta-command declares, as Yamcs reads it"
+                .into()
+        )
+    );
+    let twice = doc(&commands(
+        ARG_U8,
+        &go(
+            &argument("A", "U8"),
+            &(argument_entry("A") + &argument_entry("A")),
+        ),
+    ));
+    assert_eq!(one_error(&twice).0, "xtce.unsupported");
+}
+
+#[test]
+fn a_command_container_is_built_on_its_inherited_meta_commands() {
+    // Base is the meta-command Go inherits; Other is a meta-command it
+    // doesn't, and Tm a telemetry container.
+    let other = r#"<MetaCommand name="Other" abstract="true"><CommandContainer name="Other"><EntryList/></CommandContainer></MetaCommand>"#;
+    let based = |base: &str| {
+        let metas = go("", "").replace(
+            "<EntryList></EntryList></CommandContainer>",
+            &format!("<EntryList></EntryList>{base}</CommandContainer>"),
+        );
+        doc(&format!(
+            "{}{}",
+            telemetry(U8, &param("P", "U8"), &container("Tm", &entry("P"))),
+            commands(ARG_U8, &format!("{metas}{other}"))
+        ))
+    };
+    bundle(&based(r#"<BaseContainer containerRef="Base"/>"#));
+    bundle(&based(r#"<BaseContainer containerRef="/Sat/Base"/>"#));
+    let (code, message) = one_error(&based(r#"<BaseContainer containerRef="Other"/>"#));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(message.contains("build it on Base"), "{message}");
+    // A reference resolves before it's compared, so a path naming nothing
+    // isn't taken for the container its last part names.
+    assert_eq!(
+        one_error(&based(r#"<BaseContainer containerRef="/Nowhere/Base"/>"#)).0,
+        "xtce.reference"
+    );
+    assert_eq!(
+        one_error(&based(r#"<BaseContainer containerRef="Tm"/>"#)),
+        (
+            "xtce.unsupported".into(),
+            "a command container built on a telemetry container isn't supported".into()
+        )
+    );
+    let (code, message) = one_error(&based(
+        r#"<BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="P" value="1"/></RestrictionCriteria></BaseContainer>"#,
+    ));
+    assert_eq!(
+        (code.as_str(), message.as_str()),
+        (
+            "xtce.unsupported",
+            "restriction criteria on a command container aren't supported yet"
+        )
+    );
+    let rootless = doc(&commands(
+        ARG_U8,
+        &format!(
+            r#"{other}<MetaCommand name="Go"><CommandContainer name="Go"><EntryList/><BaseContainer containerRef="Other"/></CommandContainer></MetaCommand>"#
+        ),
+    ));
+    let (code, message) = one_error(&rootless);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(message.contains("supported only when"), "{message}");
+}
+
+#[test]
+fn what_a_command_packet_cant_hold_is_unsupported() {
+    for (entry, message) in [
+        (
+            r#"<ParameterRefEntry parameterRef="P"/>"#,
+            "a parameter's value in a command isn't supported yet",
+        ),
+        (
+            r#"<ContainerRefEntry containerRef="C"/>"#,
+            "ContainerRefEntry in a command isn't supported: an MDL command packet holds \
+             arguments and constants",
+        ),
+        (
+            r#"<ArrayArgumentRefEntry argumentRef="A"/>"#,
+            "array arguments aren't supported yet",
+        ),
+        (
+            r#"<FixedValueEntry binaryValue="01"><IncludeCondition><Comparison parameterRef="P" value="1"/></IncludeCondition></FixedValueEntry>"#,
+            "an entry of a command on a condition isn't supported: every entry of an MDL \
+             command packet is written",
+        ),
+        (
+            r#"<FixedValueEntry binaryValue="01"><RepeatEntry><Count><FixedValue>2</FixedValue></Count></RepeatEntry></FixedValueEntry>"#,
+            "a repeated entry in a command isn't supported yet",
+        ),
+    ] {
+        let text = doc(&commands(ARG_U8, &go("", entry)));
+        assert_eq!(
+            one_error(&text),
+            ("xtce.unsupported".into(), message.into()),
+            "{entry}"
+        );
+    }
+    for ty in [
+        r#"<FloatArgumentType name="A"><IntegerDataEncoding sizeInBits="8"><DefaultCalibrator><PolynomialCalibrator><Term coefficient="2" exponent="1"/></PolynomialCalibrator></DefaultCalibrator></IntegerDataEncoding></FloatArgumentType>"#,
+        r#"<AggregateArgumentType name="A"><MemberList><Member name="x" typeRef="U8"/></MemberList></AggregateArgumentType>"#,
+        r#"<AbsoluteTimeArgumentType name="A"/>"#,
+    ] {
+        assert_eq!(one_error(&go_with(ty, "A")).0, "xtce.unsupported", "{ty}");
+    }
+}
+
+#[test]
+fn command_and_argument_names() {
+    let text = doc(&commands(
+        ARG_U8,
+        &go(
+            r#"<Argument name="Heater-Id" argumentTypeRef="U8"/><Argument name="X" argumentTypeRef="U8"><AliasSet><Alias nameSpace="MDL" alias="level"/></AliasSet></Argument>"#,
+            &(argument_entry("Heater-Id") + &argument_entry("X")),
+        ),
+    ));
+    let (sources, result) = import_all(&[("sat.xml", &text)]);
+    let parsed = result.unwrap();
+    assert_eq!(
+        shown(&sources, &parsed.warnings)
+            .into_iter()
+            .map(|(_, code, _, message)| (code, message))
+            .collect::<Vec<_>>(),
+        [(
+            "xtce.renamed".to_string(),
+            "argument Heater-Id of meta-command /Sat/Go is field Heater_Id: MDL names are \
+             letters, digits and '_'"
+                .to_string()
+        )]
+    );
+    let bundle = serde_json::to_value(parsed.bundle).unwrap();
+    let names: Vec<&str> = bundle["catalog"]["commands"]["sat.go"]["arguments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["heater_id", "level"]);
+
+    // A command's catalog name is the catalog's, which params share.
+    let clash = doc(&format!(
+        "{}{}",
+        telemetry(U8, &param("Go", "U8"), &container("P", &entry("Go"))),
+        commands(ARG_U8, &go("", ""))
+    ));
+    assert_eq!(
+        one_error(&clash),
+        (
+            "xtce.name".into(),
+            "meta-command /Sat/Go and parameter /Sat/Go both have catalog name sat.go".into()
+        )
+    );
+    let looped = doc(&commands(
+        ARG_U8,
+        r#"<MetaCommand name="A"><BaseMetaCommand metaCommandRef="B"/></MetaCommand>
+           <MetaCommand name="B" abstract="true"><BaseMetaCommand metaCommandRef="A"/></MetaCommand>"#,
+    ));
+    assert_eq!(
+        one_error(&looped),
+        (
+            "xtce.invalid".into(),
+            "meta-command A inherits from itself".into()
+        )
+    );
+}
+
 proptest! {
     #[test]
     fn any_text_never_panics(text in "\\PC{0,200}") {
@@ -1803,7 +2737,7 @@ proptest! {
     }
 
     #[test]
-    fn any_cut_of_a_real_document_never_panics(cut in 0_usize..8000, length in 0_usize..400) {
+    fn any_cut_of_a_real_document_never_panics(cut in 0_usize..15000, length in 0_usize..400) {
         let text = include_str!("../../../examples/xtce/demosat.xml");
         let mut start = cut.min(text.len());
         while !text.is_char_boundary(start) {
