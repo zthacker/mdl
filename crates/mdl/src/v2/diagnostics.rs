@@ -149,6 +149,9 @@ pub enum Code {
     /// whole bytes from 8 to 64, a parameter that doesn't fit it, a range
     /// past the checksum, or a checksum inside a struct type.
     Checksum,
+    /// A value a later bundle gives that an earlier one's replaces when
+    /// bundles are merged: a description, a deprecation note or limits.
+    Overridden,
 }
 
 impl Code {
@@ -220,6 +223,7 @@ impl Code {
             Code::RemovedCommand => "removed_command",
             Code::ChangedCommand => "changed_command",
             Code::Checksum => "checksum",
+            Code::Overridden => "overridden",
         }
     }
 }

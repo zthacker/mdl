@@ -496,6 +496,9 @@ dependencies = [
  "anyhow",
  "clap",
  "mdl",
+ "mdl-toml",
+ "mdl-xtce",
+ "serde",
  "serde_json",
 ]
 

@@ -18,7 +18,7 @@ check:
 fmt:
     cargo fmt --all
 
-# The compiler, e.g. `just morphc build examples/definitions`
+# The compiler, e.g. `just morphc build examples/toml/mission`
 [positional-arguments]
 morphc *args:
     cargo run -q -p morphc -- "$@"

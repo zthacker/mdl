@@ -6,13 +6,9 @@ built for: a CCSDS satellite (big-endian, bit-packed), a JSON-lines satellite
 and a MAVLink v2 drone (little-endian). They double as the schema reference
 until the MDL spec is written.
 
-```sh
-just morphc build examples/definitions          # check everything; lists every problem
-just morphc build --ir some_ir.json             # IR from another frontend
-```
-
-Exit code 0 means valid. On problems, every one is listed as
-`<file or set>: <where>: <what>`, and the exit code is 1.
+These are v1 definitions, which `morphc` no longer reads: the same fleet
+in the v2 TOML format is in [`examples/toml/mission`](../toml/mission).
+This directory goes when v1 is removed.
 
 ## Files
 

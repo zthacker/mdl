@@ -10,5 +10,5 @@ Definitions written in OMG XTCE, imported with `mdl-xtce`
 
 `cargo test -p mdl-xtce --test examples` imports each file, validates and
 builds it, decodes sample packets through it, and encodes its commands to
-exact bytes and decodes them back. (`morphc build` learns
-XTCE in Phase 5.)
+exact bytes and decodes them back. From the command line,
+`just morphc build examples/xtce/demosat.xml` imports and builds one.

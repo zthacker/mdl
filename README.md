@@ -23,11 +23,37 @@ then applies the plan to raw messages.
 ## Quick start
 
 ```sh
-just morphc build examples/definitions
-# ok: 3 sets, 14 packets, 53 fields, 17 canonical params (MDL IR v1)
+just morphc build examples/toml/mission
+# catalog           16d971cf...
+# family ccsds_sat  74cc510c...
+# ...
+# ok: 4 params, 1 command, 3 families, 3 sets (MDL IR 2.0)
+
+# A TOML catalog beside a vendor's XTCE, written to an artifact store
+just morphc build catalog.toml vendor.xml --out store/
 
 just check    # fmt, clippy, tests
 ```
+
+`morphc build` reads `.toml` (MDL TOML), `.xml` (XTCE) and `.json` (an IR
+bundle from any tool) files and directories, merges them into one bundle
+and validates it, reporting every problem. Earlier inputs take precedence
+on descriptions and limits ([frontends](spec/frontends.md) §5); within a
+directory, TOML files come first, then JSON bundles, then XTCE documents,
+so a hand-written catalog wins over a vendor's import whatever the files
+are called. With `--out` it writes each
+artifact to a [store](spec/store.md) under its digest, with a manifest
+naming the build. Building into a store again is a rebuild: sets that
+haven't changed keep their identity, and a catalog change that would break
+them is refused unless you pass `--fresh`. Exit codes: 0 built, 1 the definitions
+have problems, 2 morphc couldn't run.
+
+`--format json` prints one JSON document on stdout for tools, whatever the
+outcome: `report` (its format version, 1), `ok`, `error` (why morphc
+couldn't run, exit code 2), `diagnostics` (each with `severity`, `code`,
+`message`, `context`, `path`, and `location` and `first` as `file`, byte
+offsets `start` and `end`, and lines and columns from 1), `notes`, and
+`build` (the artifacts with their digests, and what was written).
 
 Requires Rust 1.88 or later and [`just`](https://github.com/casey/just).
 
@@ -38,11 +64,11 @@ Requires Rust 1.88 or later and [`just`](https://github.com/casey/just).
 | `crates/mdl` | the library: IR, frontends, validation, plans, interpreter |
 | `crates/mdl-toml` | the TOML frontend: definitions written as the IR spelled in TOML |
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
-| `crates/morphc` | the compiler CLI |
+| `crates/morphc` | the compiler CLI: any frontends to artifacts |
 | `examples/definitions` | a worked example (a CCSDS satellite, a JSON satellite, a MAVLink drone) and, for now, the schema reference |
 | `examples/toml` | the same kind of fleet, and mixed versions on one link, in the v2 TOML format |
 | `examples/xtce` | a CCSDS satellite described in XTCE, imported and decoded |
-| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md) |
+| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [bindings files](spec/bindings.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [frontends](spec/frontends.md), [artifact stores](spec/store.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md) |
 
 ## License
 

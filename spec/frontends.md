@@ -11,7 +11,7 @@ the same thing produce the same artifacts.
 
 | Frontend | Where | Reads |
 | --- | --- | --- |
-| JSON | `mdl::v2::json` | a bundle written as the IR itself (§5) |
+| JSON | `mdl::v2::json` | a bundle written as the IR itself (§6) |
 | TOML | `mdl-toml` | the IR spelled in TOML, in any number of files (`toml.md`) |
 | XTCE | `mdl-xtce` | OMG XTCE 1.0 to 1.2 documents: the subset `xtce.md` describes |
 
@@ -94,7 +94,46 @@ A frontend that builds one bundle from several files (TOML does):
 - reports its own diagnostics in file order, then by position within each
   file. Validation's follow, in validation's order.
 
-## 5. The JSON frontend
+## 5. Bundles from several frontends
+
+A program may read definitions with more than one frontend, a catalog in
+TOML beside a vendor's packets imported from XTCE, say, and merge their
+bundles into one before validation (the core's `merge`, which `morphc`
+uses):
+
+- The bundles merge in the order given, which is also their precedence.
+  Families and sets are appended, so two with one name reach validation,
+  which reports them (`duplicate_name`), as §4 says of one frontend's
+  files.
+- Catalog params and commands merge by name, so an imported parameter can
+  map to a catalog's name. Two definitions of one param MUST agree on
+  what decoding depends on: type, unit, states (in order, as the IR lists
+  them) and frame. Two of one command MUST have the same arguments, in
+  order, agreeing on everything but their descriptions: type, unit,
+  states, range, list bounds and default. Any disagreement is an error
+  (`duplicate_name`) at the later definition's value, with the earlier's
+  as its first location (§3), and its message names both values.
+- Limits, descriptions and deprecation notes change neither decoding nor
+  encoding. One only the later definition gives is taken from it. When
+  both give one and they differ, the earlier's is kept and the later's
+  is reported as a warning (`overridden`) at the later value, with the
+  earlier's as its first location, and its message names both values.
+  Listing a curated catalog first makes its texts and limits win over an
+  import's.
+- The merged bundle's IR version is the newest any part has.
+- Every part's spans index the same set of sources. Where two parts
+  record a span for one JSON Pointer, the earlier part's is kept. The
+  bundle and its `catalog` hold values from every part, so once two parts
+  merge they have no span, as §4 says of a list or map assembled from
+  several files; nor do the catalog's `params` or `commands`, `families`
+  or `sets` once two parts give them items. A replaced value's spans are
+  dropped, so a diagnostic points into the file its value came from.
+- The diagnostics, each part's warnings with the merge's own, are in file
+  order, then by position: the order of the files in the shared sources,
+  which needn't be the order of the parts. A failed merge returns its
+  warnings with its errors.
+
+## 6. The JSON frontend
 
 The JSON frontend reads one bundle document: `{ "mdl_version", "catalog",
 "families", "sets" }`. Several files are not merged.

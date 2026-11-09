@@ -99,8 +99,13 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
 
 ## Phase 5: `morphc`
 
-- [ ] `morphc build` (any frontend to artifacts), `inspect`, `decode` (hex
-      or file in, JSON out), `encode`, `--set`
+- [x] `morphc build`: any frontends merged into one bundle, validated, and
+      written to a content-addressed artifact store (rebuilds keep
+      unchanged sets' identities); grouped warnings, JSON output
+- [ ] `morphc inspect`, `decode` (hex or file in, JSON out), `encode`,
+      `--set`
+- [ ] A build file listing inputs with their own options (several XTCE
+      imports in one build)
 - [ ] README and examples rewritten around v2
 - [ ] Remove v1 (`ir`, `validate`, `interpret`, `plan`, `frontend`, `bits`)
       and move `v2::*` up one level
