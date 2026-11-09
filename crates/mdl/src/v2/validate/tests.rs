@@ -3528,6 +3528,34 @@ fn every_list_the_catalog_allows_fits_its_array() {
 }
 
 #[test]
+fn an_integer_argument_without_a_range_fits_a_field_as_wide_as_its_type() {
+    // lab.load's slot is a u64 with a range, into an 8-bit field. Without
+    // the range, a 64-bit field holds every u64, as a 64-bit int field
+    // holds every i64; a 32-bit field doesn't.
+    let unranged = |v: &mut Value, ty: &str, field_type: &str, bits: u32| {
+        let argument = &mut v["catalog"]["commands"]["eps.load_table"]["arguments"][1];
+        argument.as_object_mut().unwrap().remove("range");
+        argument.as_object_mut().unwrap().remove("default");
+        argument["type"] = json!(ty);
+        let field = &mut v["sets"][0]["commands"][0]["entries"][1];
+        field["type"] = json!(field_type);
+        field["size_bits"] = json!(bits);
+    };
+    assert_eq!(problems(|v| unranged(v, "u64", "uint", 64)), vec![]);
+    assert_eq!(problems(|v| unranged(v, "i64", "int", 64)), vec![]);
+    assert_one(
+        Code::ValueRange,
+        "/sets/0/commands/0/entries/1/argument",
+        |v| unranged(v, "u64", "uint", 32),
+    );
+    assert_one(
+        Code::ValueRange,
+        "/sets/0/commands/0/entries/1/argument",
+        |v| unranged(v, "i64", "uint", 64),
+    );
+}
+
+#[test]
 fn a_record_type_two_packets_use_is_reported_once() {
     let problems = problems(|v| {
         with_lists(v);
