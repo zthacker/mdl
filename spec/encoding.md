@@ -137,7 +137,10 @@ next, the inputs being, for a `table`, `min`, the raw value of every point
 strictly between `min` and `max`, and `max` (which checks it exactly), and
 for a `poly`, the 4097 points `min + (k × (max − min)) / 4096`, for k from
 0 to 4096. A `linear` inverse always qualifies. It also guarantees that the range's ends, through the inverse and
-rounded as below, fit an integer field, so every value in range does.
+rounded as below, fit an integer field, so every value in range does. An
+absent end is the argument type's own, which for an unconverted `u64` or
+`i64` argument is compared as the integer it is: such an argument needs no
+range to fill a 64-bit field.
 
 A result for an integer field is rounded to the nearest integer, ties away
 from zero (0.25 s at 0.1 s per count is raw 3; the two results above are

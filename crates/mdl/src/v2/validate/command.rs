@@ -1482,8 +1482,22 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
     // compare exactly: u64::MAX as f64 is 2^64, so comparing doubles would
     // let raw 2^64 through. An infinite end saturates past every field.
     let exact = |raw: f64| raw.is_finite().then(|| raw.round() as i128);
-    let fits = exact(raw_low).is_some_and(|low| low >= field_low)
-        && exact(raw_high).is_some_and(|high| high <= field_high);
+    // An unconverted integer argument's missing end is its type's own,
+    // which is an integer: a u64 fills a 64-bit field exactly.
+    let own_ends = match (&field.conversion, argument.ty) {
+        (None, ParamType::U64) => Some((0, i128::from(u64::MAX))),
+        (None, ParamType::I64) => Some((i128::from(i64::MIN), i128::from(i64::MAX))),
+        _ => None,
+    };
+    let (low_raw, high_raw) = match own_ends {
+        Some((own_low, own_high)) => (
+            range.min.map_or(Some(own_low), exact),
+            range.max.map_or(Some(own_high), exact),
+        ),
+        None => (exact(raw_low), exact(raw_high)),
+    };
+    let fits = low_raw.is_some_and(|low| low >= field_low)
+        && high_raw.is_some_and(|high| high <= field_high);
     if fits {
         return;
     }
