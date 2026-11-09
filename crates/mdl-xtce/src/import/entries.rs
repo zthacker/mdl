@@ -306,6 +306,7 @@ impl<'d> Import<'d, '_> {
                 element: Element::Struct(ty),
                 count,
                 canonical: None,
+                argument: None,
                 offset: place.offset(),
                 when: place.when,
             })));
@@ -364,6 +365,7 @@ impl<'d> Import<'d, '_> {
             ty.clone(),
             StructType {
                 name: String::new(),
+                record: None,
                 base: identifier(name).0,
                 space,
                 span: el.span(),
@@ -634,6 +636,7 @@ impl<'d> Import<'d, '_> {
             element,
             count,
             canonical,
+            argument: None,
             offset: place.offset(),
             when: place.when.clone(),
         })))
@@ -705,6 +708,7 @@ impl<'d> Import<'d, '_> {
             ty.clone(),
             StructType {
                 name: String::new(),
+                record: None,
                 base,
                 space: key.0,
                 span: el.span(),
@@ -762,6 +766,14 @@ impl<'d> Import<'d, '_> {
         linear: Result<(u32, i64), String>,
         known: &[(ParamKey<'d>, Known)],
     ) -> Option<(String, u32, i64)> {
+        if dynamic.argument {
+            self.report.error(
+                Code::Invalid,
+                dynamic.span,
+                "an ArgumentInstanceRef names an argument, which only a command has",
+            );
+            return None;
+        }
         let (multiply, add) = match linear {
             Ok(linear) => linear,
             Err(reason) => {
@@ -893,7 +905,7 @@ impl<'d> Import<'d, '_> {
 
 /// The size tag of a leading-size string: an unsigned integer of `bits`
 /// bits, in the string encoding's byte order.
-fn size_tag<'d>(
+pub(super) fn size_tag<'d>(
     string: &Scalar<'d>,
     bits: u32,
     order: Option<(Order, Span)>,
@@ -928,7 +940,7 @@ fn clear_offset(entry: &mut Entry<'_>) {
 }
 
 /// MDL's `{kind: field, field, multiply, add}`, leaving out the defaults.
-fn from_field(field: &str, multiply: u32, add: i64) -> Value {
+pub(super) fn from_field(field: &str, multiply: u32, add: i64) -> Value {
     let mut value = json!({ "kind": "field", "field": field });
     if multiply != 1 {
         value["multiply"] = json!(multiply);

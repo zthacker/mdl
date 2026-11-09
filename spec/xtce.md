@@ -360,16 +360,25 @@ it otherwise.
   values; Yamcs reads no other criteria, so those of an abstract
   meta-command's container are left out [`xtce.ignored`]. Yamcs doesn't
   read a `CommandContainerSet`, so it's left out too.
-- **Arguments in entries.** An `ArgumentRefEntry` names an argument its
-  own meta-command declares, as Yamcs reads it [`xtce.reference`], and an
-  argument is in one entry of a container. It's a field of the argument's
-  type that encodes the argument, named for it. For an assigned argument
-  it's a constant instead, the assigned value as its raw value: an integer
-  read as a default is (§6.2), an enumeration's label, a boolean's labels
-  (true being written as 1), or the text, for a string. An integer MUST
-  lie within the argument's valid range, which Yamcs checks when it sends
-  the command [`xtce.invalid`]. A value for a float or bytes argument,
-  however it's spelled, is unsupported: MDL constants are integers and
+- **Arguments in entries.** An `ArgumentRefEntry`, or an
+  `ArrayArgumentRefEntry`, names an argument its own meta-command declares,
+  as Yamcs reads it [`xtce.reference`], and an argument is in one entry of
+  a container. It's a field of the argument's type that encodes the
+  argument, named for it; for an aggregate, a field per member, named for
+  the argument and the members joined by `_` (`Target_Id`); for an array,
+  an array (§6.2), which an `ArrayArgumentRefEntry` names
+  [`xtce.invalid`]. Yamcs skips an `ArrayArgumentRefEntry` and writes
+  nothing for it; MDL writes the array, as XTCE says [`xtce.differs`]. A
+  subset of an array (an entry's own `DimensionList`) is unsupported. For
+  an assigned argument it's a constant instead, the assigned value as its
+  raw value: an integer read as a default is (§6.2), an enumeration's
+  label, a boolean's labels (true being written as 1), the text, for a
+  string, and for an aggregate a JSON object of its members, completed as
+  §6.2 Defaults says (a member nothing gives a value is an error
+  [`xtce.invalid`], as Yamcs refuses it). An integer MUST lie within the
+  argument's valid range, which Yamcs checks when it sends the command
+  [`xtce.invalid`]. A value for a float, bytes or array argument, however
+  it's spelled, is unsupported: MDL constants are single integers and
   text, and Yamcs writes a float through its own arithmetic (§6.3).
 - **Parameters in entries.** A `ParameterRefEntry` is a constant field
   for the parameter, or one for each member of an aggregate, named as a
@@ -398,20 +407,60 @@ it otherwise.
   that aren't zero are dropped, as Yamcs drops them [`xtce.ignored`].
 - **What a command packet can't hold.** Every entry of an MDL command
   packet is written, so an entry with an `IncludeCondition` is
-  unsupported. So are repeated entries, container entries, and, in this
-  version, array arguments.
+  unsupported. So are repeated entries and container entries.
 
 ### 6.2 Argument types
 
 Argument types, in `ArgumentTypeSet`, are read as parameter types of the
 same kind are (§4), with these differences:
 
-- Integer, float, enumerated, boolean, string, binary and relative time
-  types are supported. Absolute times are unsupported, as for parameters;
-  aggregates and arrays are unsupported in this version. Every version of
-  XTCE's schema names the relative time argument type's element
-  `RelativeTimeAgumentType`; it's read, and so is
-  `RelativeTimeArgumentType`.
+- Integer, float, enumerated, boolean, string, binary, relative time,
+  aggregate and array types are supported; absolute times are
+  unsupported, as for parameters. Every version of XTCE's schema names the
+  relative time argument type's element `RelativeTimeAgumentType`; it's
+  read, and so is `RelativeTimeArgumentType`.
+- **Aggregates.** An aggregate argument is a catalog argument per member,
+  named for the argument and each member's name as a catalog name part,
+  joined by `_` (`Target` with members `Id` and `Range` is `target_id` and
+  `target_range`), each with the member's type and description; a member
+  name changed to fit MDL's field names is reported [`xtce.renamed`]. A
+  member's default is what the argument's initial value gives it,
+  completed as Defaults says. An aggregate argument type's own
+  `initialValue`, which XTCE 1.2 doesn't have and Yamcs doesn't read, is
+  left out [`xtce.ignored`]. An aggregate holding an array is unsupported.
+- **Arrays.** An array argument of one dimension is a list argument
+  written by an array entry: of its elements, for a scalar element type;
+  for an aggregate's, of records, a struct type named for the meta-command
+  and the field with `_element` (`Track_Waypoints_element`), qualified as
+  containers' struct types are where meta-commands share a name (§3), and
+  where another struct type has the name, by its SpaceSystems' names and
+  then `__` between the meta-command's name and the field's
+  [`xtce.renamed`],
+  holding a field per member that takes its own list argument,
+  named as an aggregate's members are (`targets_id`), so the lists fill
+  the records together. A fixed dimension gives the array a fixed count,
+  which is the list's least and most values. An ending index another
+  argument gives makes that argument the array's count field (Sizes).
+  Several dimensions, elements whose size another value gives, a starting
+  index another value gives, and an XTCE 1.1 array type without a
+  `DimensionList` are unsupported.
+- **Sizes.** An argument another argument's size reads
+  (`ArgumentInstanceRef`), an array's ending index or a string's or
+  binary's `DynamicValue`, is the count or length field MDL works out from
+  the value it measures, so it isn't a catalog argument [`xtce.ignored`].
+  Its slope and intercept, and an array's starting index, are the field's
+  `multiply` and `add`, as a parameter's size is read (§4); a list's
+  bounds are the counts the argument's range (or its field) holds, up to
+  the 4294967295 a list's bounds hold. The field MUST come before what it
+  measures [`xtce.unsupported`], and be an unsigned integer whose raw
+  value is its value, whose range its field holds [`xtce.invalid`]. Each
+  of these is unsupported, since an MDL field gives one value one size: an
+  argument that's both a count and a length, a length for two values, an
+  aggregate or list as a size, and a size of an argument no entry writes.
+  A size a parameter gives is unsupported too, as Yamcs refuses it.
+  An assigned size argument is a constant, and the array it counts has
+  that fixed count, as Yamcs then refuses any other; a string or binary it
+  measures, that fixed length (a string NUL-padded, as Yamcs pads it).
 - **Calibrators.** A float type's `DefaultCalibrator` runs from
   engineering to raw, as Yamcs applies it. A polynomial of degree 1, raw
   = a + b·v, is the field's inverse as written (`linear`, scale b and
@@ -465,16 +514,27 @@ same kind are (§4), with these differences:
   between digits; a finite number in decimal notation (Java's `1.5f` and
   hexadecimal floats aren't read); a boolean's labels, or `true` and
   `false`; an enumeration's label; binary as hexadecimal digits; text as
-  it is; and for a relative time, an `xs:duration` without years or
-  months, whose lengths vary (`PT1.5S`), in the argument's unit.
+  it is; for a relative time, an `xs:duration` without years or months,
+  whose lengths vary (`PT1.5S`), in the argument's unit; for an aggregate,
+  a JSON object of its members (`{"Id": 3}`); and for an array, a JSON
+  array of its values, or of objects for records. The argument's own
+  initial value is used over its type's (an array type's being a Yamcs
+  extension XTCE 1.2 doesn't have). An aggregate's value, given or
+  initial, is completed as Yamcs completes it: from the first member it
+  leaves out down, each member's own initial value (an aggregate member's
+  a JSON object of its members), outermost first, then the member's
+  type's. A member's value that should be an object of its members and
+  isn't, and a member an object names that the aggregate doesn't have,
+  are errors [`xtce.invalid`].
 - **Text.** A fixed-size string is padded with NULs, as Yamcs pads it:
   `Fixed` alone, or with a `TerminationChar` of `00`, is a fixed buffer
   with a NUL terminator (`encoding.md` §3.4). A fixed buffer with another
   terminator is unsupported, since Yamcs writes one terminator and then
   NULs where MDL fills the buffer with the terminator. A terminated string
   is written the same by both, and both refuse a value longer than its
-  buffer. A size another argument gives, or a leading size, is
-  unsupported in this version, for strings and binary.
+  buffer. A leading size is a size tag before the text, a field named for
+  the string's with `_size`, which MDL works out; a size another argument
+  gives is that argument's field (Sizes).
 - **Enumerations.** A label on several values is encoded as the first of
   them, as Yamcs encodes it; the others aren't imported [`xtce.ignored`].
 - **Left out** [`xtce.ignored`]: an argument type's alarms (XTCE 1.0
@@ -485,7 +545,7 @@ same kind are (§4), with these differences:
 ### 6.3 Where MDL encodes otherwise
 
 MDL encodes arguments by its own rules (`encoding.md` §3), which differ
-from Yamcs's in these cases. The first six are warnings where they are
+from Yamcs's in these cases. The first seven are warnings where they are
 [`xtce.differs`]:
 
 - An uncalibrated float written as an integer: Yamcs drops the fraction
@@ -508,6 +568,8 @@ from Yamcs's in these cases. The first six are warnings where they are
 - A command's criteria value with `useCalibratedValue="false"`: Yamcs
   reads it as the engineering value, and MDL as the raw value, as XTCE
   says.
+- An `ArrayArgumentRefEntry`: Yamcs skips it, and MDL writes the array,
+  as XTCE says.
 - A raw value its field can't hold: Yamcs keeps the low bits (a negative
   value through a calibrator into an unsigned field is 0), and MDL refuses
   it (`raw_range`, or `out_of_range` where a range keeps it in the field).
@@ -525,6 +587,16 @@ from Yamcs's in these cases. The first six are warnings where they are
   (`bad_length`).
 - A NUL in a NUL-padded string: Yamcs writes it, and MDL refuses it
   (`contains_terminator`).
+- A size argument: Yamcs fills an array's size in when it's left out and
+  has no initial value of its own or its type's (else it takes that value
+  and refuses a list of any other length), and checks it when it's given;
+  it requires a string's or binary's, padding a shorter value to it (and
+  cutting a longer binary value short). MDL works every size out from the
+  value, so a caller doesn't give it.
+- A variable string's `maxSizeInBits`: Yamcs refuses a longer value when
+  it sends the command, and MDL bounds it only as its length field does.
+- An array of records' initial value (a JSON array of objects): Yamcs
+  can't read one, and MDL reads each object as an aggregate's value.
 
 ## 7. What is left out
 
@@ -543,16 +615,18 @@ is [`xtce.ignored`]:
 - expected rates and idle patterns;
 - the document `Header`, algorithms, streams, services and operational
   status;
-- a boolean type's labels other than `True` and `False`, and a terminated
-  string's `maxSizeInBits`;
+- a boolean type's labels other than `True` and `False`, and a variable
+  string's `maxSizeInBits` (for a command's, §6.3 says what Yamcs does);
 - a meta-command's system name, transmission constraints, interlock,
   significance, verifiers, parameters to set and alarms to suspend; block
   meta-commands, meta-command references (the meta-command is imported
   where it's defined), and a `CommandContainerSet` (§6);
 - what §6 lists of commands: an argument no entry writes, an argument
-  type's alarms, text size ranges and restriction patterns, an
-  enumeration label's later values, a command entry's time association,
-  and restriction criteria Yamcs doesn't fill parameter entries from.
+  that gives another's size, an argument type's alarms, an aggregate
+  argument type's `initialValue`, text size ranges and restriction
+  patterns, an enumeration label's later values, a command entry's time
+  association, and restriction criteria Yamcs doesn't fill parameter
+  entries from.
 
 ## 8. Diagnostics
 

@@ -150,6 +150,16 @@ fn argument_object(argument: &Argument<'_>) -> Object {
         }
         object.put_list("states", states);
     }
+    if let Some((min, max)) = argument.list {
+        let mut list = Object::at(argument.el.span());
+        if let Some(min) = min.filter(|min| *min > 0) {
+            list.put("min", min, None);
+        }
+        if let Some(max) = max {
+            list.put("max", max, None);
+        }
+        object.put_object("list", list);
+    }
     if let Some(range) = &scalar.range {
         let mut object_range = Object::at(scalar.el.span());
         for (key, end) in [("min", range.min), ("max", range.max)] {
@@ -288,6 +298,9 @@ impl Writer<'_, '_> {
                 object.put_object("element", element);
                 if let Some((canonical, span)) = &array.canonical {
                     object.put("canonical", canonical.as_str(), Some(*span));
+                }
+                if let Some((argument, span)) = &array.argument {
+                    object.put("argument", argument.as_str(), Some(*span));
                 }
                 if let Some(when) = &array.when {
                     object.put_object("when", when.clone());

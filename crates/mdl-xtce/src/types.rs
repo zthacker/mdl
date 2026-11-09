@@ -28,6 +28,14 @@ pub(crate) enum Role {
 }
 
 impl Role {
+    /// The kind of type a type of this role refers to.
+    fn kind(self) -> Kind {
+        match self {
+            Role::Parameter => Kind::ParameterType,
+            Role::Argument => Kind::ArgumentType,
+        }
+    }
+
     fn of(el: &El<'_>) -> Role {
         if ARGUMENT_TYPES.contains(&el.name()) {
             Role::Argument
@@ -94,6 +102,9 @@ pub(crate) struct Dynamic<'d> {
     pub(crate) calibrated: bool,
     pub(crate) slope: i64,
     pub(crate) intercept: i64,
+    /// Whether it reads an argument (`ArgumentInstanceRef`), as a command's
+    /// sizes do, not a parameter.
+    pub(crate) argument: bool,
 }
 
 impl Dynamic<'_> {
@@ -136,6 +147,8 @@ pub(crate) struct Member<'d> {
     pub(crate) name: &'d str,
     pub(crate) description: Option<(String, Span)>,
     pub(crate) shape: Shape<'d>,
+    /// An argument type's member's initial value, as XTCE writes it.
+    pub(crate) initial: Option<(&'d str, Span)>,
 }
 
 /// One value: how a field reads it, and what its param holds.
@@ -445,7 +458,13 @@ impl<'d> Types<'d> {
         }
         // Only aggregates and arrays contain types, so only they can nest
         // or loop.
-        let container = matches!(el.name(), "AggregateParameterType" | "ArrayParameterType");
+        let container = matches!(
+            el.name(),
+            "AggregateParameterType"
+                | "ArrayParameterType"
+                | "AggregateArgumentType"
+                | "ArrayArgumentType"
+        );
         if container {
             if self.open.contains(&key) {
                 report.error(
@@ -499,8 +518,12 @@ impl<'d> Types<'d> {
             "BooleanParameterType" | "BooleanArgumentType" => boolean(el, role, report),
             "StringParameterType" | "StringArgumentType" => string(el, space, role, report),
             "BinaryParameterType" | "BinaryArgumentType" => binary(el, space, role, report),
-            "AggregateParameterType" => return self.aggregate(tree, space, el, report),
-            "ArrayParameterType" => return self.array(tree, space, el, report),
+            "AggregateParameterType" | "AggregateArgumentType" => {
+                return self.aggregate(tree, space, el, report);
+            }
+            "ArrayParameterType" | "ArrayArgumentType" => {
+                return self.array(tree, space, el, report);
+            }
             "AbsoluteTimeParameterType" => {
                 report.error(
                     Code::Unsupported,
@@ -516,14 +539,6 @@ impl<'d> Types<'d> {
                     el.span(),
                     "absolute time arguments aren't supported: an MDL field holds a number, not \
                      an instant, so the encoded value would change",
-                );
-                None
-            }
-            "AggregateArgumentType" | "ArrayArgumentType" => {
-                report.error(
-                    Code::Unsupported,
-                    el.span(),
-                    "aggregate and array arguments aren't supported yet",
                 );
                 None
             }
@@ -549,17 +564,24 @@ impl<'d> Types<'d> {
         el: El<'d>,
         report: &mut Report,
     ) -> Option<Shape<'d>> {
+        let role = Role::of(&el);
+        let mut attrs = vec!["name", "arrayTypeRef", "numberOfDimensions"];
+        let mut ignored = DESCRIBED.to_vec();
+        match role {
+            Role::Parameter => ignored.push("initialValue"),
+            Role::Argument => attrs.push("initialValue"),
+        }
         el.check(
             &Expect {
-                attrs: &["name", "arrayTypeRef", "numberOfDimensions"],
+                attrs: &attrs,
                 children: &["DimensionList"],
-                ignored: DESCRIBED,
+                ignored: &ignored,
                 text: false,
             },
             report,
         );
         let type_ref = el.required("arrayTypeRef", report)?;
-        let element = match tree.resolve(space, type_ref.value, Kind::ParameterType) {
+        let element = match tree.resolve(space, type_ref.value, role.kind()) {
             Ok(found) => self.shape(tree, found.space, found.el, report)?,
             Err(message) => {
                 report.error(Code::Reference, type_ref.span, message);
@@ -603,15 +625,30 @@ impl<'d> Types<'d> {
         el: El<'d>,
         report: &mut Report,
     ) -> Option<Shape<'d>> {
+        let role = Role::of(&el);
+        let mut attrs = vec!["name"];
+        let mut ignored = DESCRIBED.to_vec();
+        match role {
+            Role::Parameter => ignored.push("initialValue"),
+            Role::Argument => attrs.push("initialValue"),
+        }
         el.check(
             &Expect {
-                attrs: &["name"],
+                attrs: &attrs,
                 children: &["MemberList"],
-                ignored: DESCRIBED,
+                ignored: &ignored,
                 text: false,
             },
             report,
         );
+        if let (Role::Argument, Some(initial)) = (role, el.attr("initialValue")) {
+            report.warning(
+                Code::Ignored,
+                initial.span,
+                "an aggregate argument type's initialValue isn't read: XTCE 1.2 has none, and \
+                 Yamcs reads the argument's and its members' instead",
+            );
+        }
         let Some(list) = el.child("MemberList") else {
             report.error(
                 Code::Invalid,
@@ -631,12 +668,22 @@ impl<'d> Types<'d> {
         );
         let mut members = Vec::new();
         let mut complete = true;
+        let (member_attrs, member_ignored): (&[&str], &[&str]) = match role {
+            Role::Parameter => (
+                &["name", "typeRef", "shortDescription"],
+                &["AliasSet", "AncillaryDataSet", "initialValue"],
+            ),
+            Role::Argument => (
+                &["name", "typeRef", "shortDescription", "initialValue"],
+                &["AliasSet", "AncillaryDataSet"],
+            ),
+        };
         for member in list.all("Member") {
             member.check(
                 &Expect {
-                    attrs: &["name", "typeRef", "shortDescription"],
+                    attrs: member_attrs,
                     children: &["LongDescription"],
-                    ignored: &["AliasSet", "AncillaryDataSet", "initialValue"],
+                    ignored: member_ignored,
                     text: false,
                 },
                 report,
@@ -648,7 +695,7 @@ impl<'d> Types<'d> {
                 complete = false;
                 continue;
             };
-            let shape = match tree.resolve(space, type_ref.value, Kind::ParameterType) {
+            let shape = match tree.resolve(space, type_ref.value, role.kind()) {
                 Ok(found) => self.shape(tree, found.space, found.el, report),
                 Err(message) => {
                     report.error(Code::Reference, type_ref.span, message);
@@ -660,6 +707,7 @@ impl<'d> Types<'d> {
                     name: name.value,
                     description: description(member),
                     shape,
+                    initial: initial(member, role),
                 }),
                 None => complete = false,
             }
@@ -1570,7 +1618,7 @@ fn string<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
     };
     let length = match role {
         Role::Parameter => string_length(encoding, space, order, report)?,
-        Role::Argument => argument_string_length(encoding, report)?,
+        Role::Argument => argument_string_length(encoding, space, order, report)?,
     };
     Some(Scalar {
         el,
@@ -1593,103 +1641,56 @@ fn string<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
 
 /// A string argument's length, written as Yamcs writes it: a fixed-size
 /// buffer is padded with NULs (after one terminator, if the type has one),
-/// which MDL's fixed buffer with a NUL terminator does too; a terminated
-/// string is followed by its terminator. Sizes other arguments give, and
-/// leading sizes, aren't supported yet.
-fn argument_string_length<'d>(encoding: El<'d>, report: &mut Report) -> Option<Length<'d>> {
-    let not_yet = |report: &mut Report, span: Span| {
+/// which MDL's fixed buffer with a NUL terminator does too. Every other
+/// length (a terminator, a leading size, a size another argument gives) is
+/// read as a parameter's is.
+fn argument_string_length<'d>(
+    encoding: El<'d>,
+    space: usize,
+    order: Option<(Order, Span)>,
+    report: &mut Report,
+) -> Option<Length<'d>> {
+    let fixed = encoding
+        .child("SizeInBits")
+        .and_then(|size| size.child("Fixed").map(|fixed| (size, fixed)));
+    let Some((size, fixed)) = fixed else {
+        return string_length(encoding, space, order, report);
+    };
+    size.check(
+        &Expect {
+            attrs: &[],
+            children: &["Fixed", "TerminationChar", "LeadingSize"],
+            ignored: &[],
+            text: false,
+        },
+        report,
+    );
+    if let Some(leading) = size.child("LeadingSize") {
         report.error(
             Code::Unsupported,
-            span,
-            "a string argument whose size another argument or a leading size gives isn't \
-             supported yet",
+            leading.span(),
+            "a leading size inside a fixed-size buffer isn't supported",
         );
-    };
-    if let Some(size) = encoding.child("SizeInBits") {
-        size.check(
-            &Expect {
-                attrs: &[],
-                children: &["Fixed", "TerminationChar", "LeadingSize"],
-                ignored: &[],
-                text: false,
-            },
-            report,
-        );
-        if let Some(leading) = size.child("LeadingSize") {
-            not_yet(report, leading.span());
+        return None;
+    }
+    let (bytes, span) = fixed_bytes(fixed, report)?;
+    if let Some(terminator) = size.child("TerminationChar") {
+        let (byte, at) = terminator_byte(terminator, report)?;
+        if byte != 0 {
+            report.error(
+                Code::Unsupported,
+                at,
+                "a fixed-size string argument ended by a terminator other than 00 isn't \
+                 supported: Yamcs writes one terminator and then NULs to the end of the buffer, \
+                 and MDL fills the buffer with the terminator",
+            );
             return None;
         }
-        return match (size.child("Fixed"), size.child("TerminationChar")) {
-            (Some(fixed), terminator) => {
-                let (bytes, span) = fixed_bytes(fixed, report)?;
-                if let Some(terminator) = terminator {
-                    let (byte, at) = terminator_byte(terminator, report)?;
-                    if byte != 0 {
-                        report.error(
-                            Code::Unsupported,
-                            at,
-                            "a fixed-size string argument ended by a terminator other than 00 \
-                             isn't supported: Yamcs writes one terminator and then NULs to the \
-                             end of the buffer, and MDL fills the buffer with the terminator",
-                        );
-                        return None;
-                    }
-                }
-                Some(Length::Written(
-                    json!({ "kind": "fixed", "bytes": bytes, "terminator": 0 }),
-                    span,
-                ))
-            }
-            (None, Some(terminator)) => terminated(terminator, report),
-            (None, None) => {
-                report.error(
-                    Code::Invalid,
-                    size.span(),
-                    "a string's SizeInBits is Fixed or a TerminationChar",
-                );
-                None
-            }
-        };
     }
-    if let Some(variable) = encoding.child("Variable") {
-        variable.check(
-            &Expect {
-                attrs: &[],
-                children: &[
-                    "TerminationChar",
-                    "LeadingSize",
-                    "DynamicValue",
-                    "DiscreteLookupList",
-                ],
-                ignored: &["maxSizeInBits"],
-                text: false,
-            },
-            report,
-        );
-        for name in ["DynamicValue", "LeadingSize", "DiscreteLookupList"] {
-            if let Some(size) = variable.child(name) {
-                not_yet(report, size.span());
-                return None;
-            }
-        }
-        return match variable.child("TerminationChar") {
-            Some(terminator) => terminated(terminator, report),
-            None => {
-                report.error(
-                    Code::Invalid,
-                    variable.span(),
-                    "a variable string has a DynamicValue, a LeadingSize or a TerminationChar",
-                );
-                None
-            }
-        };
-    }
-    report.error(
-        Code::Invalid,
-        encoding.span(),
-        "a StringDataEncoding has a SizeInBits or a Variable size",
-    );
-    None
+    Some(Length::Written(
+        json!({ "kind": "fixed", "bytes": bytes, "terminator": 0 }),
+        span,
+    ))
 }
 
 /// A string's length: fixed, up to a terminator, both, a leading size,
@@ -1882,31 +1883,53 @@ pub(crate) fn dynamic<'d>(
     el.check(
         &Expect {
             attrs: &[],
-            children: &["ParameterInstanceRef", "LinearAdjustment"],
+            children: &[
+                "ParameterInstanceRef",
+                "ArgumentInstanceRef",
+                "LinearAdjustment",
+            ],
             ignored: &[],
             text: false,
         },
         report,
     );
-    let Some(instance) = el.child("ParameterInstanceRef") else {
-        report.error(
-            Code::Unsupported,
-            el.span(),
-            "a DynamicValue reads a parameter (an argument is for commands)",
-        );
-        return None;
+    let (instance, argument) = match (
+        el.child("ParameterInstanceRef"),
+        el.child("ArgumentInstanceRef"),
+    ) {
+        (Some(instance), None) => (instance, false),
+        (None, Some(instance)) => (instance, true),
+        _ => {
+            report.error(
+                Code::Invalid,
+                el.span(),
+                "a DynamicValue reads one ParameterInstanceRef or ArgumentInstanceRef",
+            );
+            return None;
+        }
+    };
+    let reference_attr = if argument {
+        "argumentRef"
+    } else {
+        "parameterRef"
+    };
+    // An argument has no earlier instances.
+    let attrs: &[&str] = if argument {
+        &["argumentRef", "useCalibratedValue"]
+    } else {
+        &["parameterRef", "instance", "useCalibratedValue"]
     };
     instance.check(
         &Expect {
-            attrs: &["parameterRef", "instance", "useCalibratedValue"],
+            attrs,
             children: &[],
             ignored: &[],
             text: false,
         },
         report,
     );
-    let reference = instance.required("parameterRef", report)?;
-    if reference.value == "_yamcs_ignore" {
+    let reference = instance.required(reference_attr, report)?;
+    if !argument && reference.value == "_yamcs_ignore" {
         return Some(None);
     }
     if let Some(attr) = instance.attr("instance")
@@ -1953,6 +1976,7 @@ pub(crate) fn dynamic<'d>(
         calibrated,
         slope,
         intercept,
+        argument,
     }))
 }
 
@@ -2165,14 +2189,6 @@ fn binary<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
             );
             let bytes = whole_bytes(value, report)?;
             Length::Written(json!({ "kind": "fixed", "bytes": bytes }), value.span())
-        }
-        None if role == Role::Argument => {
-            report.error(
-                Code::Unsupported,
-                size.span(),
-                "a binary argument whose size another argument gives isn't supported yet",
-            );
-            return None;
         }
         None => match integer_value(size, space, report)? {
             IntegerValue::Dynamic(dynamic) => Length::Counted(dynamic),

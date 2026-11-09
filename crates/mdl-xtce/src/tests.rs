@@ -2088,21 +2088,20 @@ fn string_and_binary_arguments_pad_as_yamcs_pads_them() {
         .0,
         "xtce.unsupported"
     );
-    for size in [
-        "SizeInBits><LeadingSize sizeInBitsOfSizeTag=\"8\"/></SizeInBits>",
-        "Variable maxSizeInBits=\"64\"><DynamicValue><ArgumentInstanceRef argumentRef=\"N\"/></DynamicValue></Variable>",
-    ] {
-        assert_eq!(
-            one_error(&go_with(&string(size), "A")),
-            (
-                "xtce.unsupported".into(),
-                "a string argument whose size another argument or a leading size gives isn't \
-                 supported yet"
-                    .into()
-            ),
-            "{size}"
-        );
-    }
+    // A Pascal string: a size tag MDL works out, then the text.
+    let text = go_with(
+        &string("SizeInBits><LeadingSize sizeInBitsOfSizeTag=\"8\"/></SizeInBits>"),
+        "A",
+    );
+    let entries = bundle(&text)["sets"][0]["commands"][0]["entries"].clone();
+    assert_eq!(
+        (&entries[2]["name"], entries[2].get("argument")),
+        (&json!("A_size"), None)
+    );
+    assert_eq!(
+        entries[3]["length"],
+        json!({"kind": "field", "field": "A_size"})
+    );
 }
 
 #[test]
@@ -2628,17 +2627,13 @@ fn what_a_command_packet_cant_hold_is_unsupported() {
              arguments and constants",
         ),
         (
-            r#"<ArrayArgumentRefEntry argumentRef="A"/>"#,
-            "array arguments aren't supported yet",
-        ),
-        (
             r#"<FixedValueEntry binaryValue="01"><IncludeCondition><Comparison parameterRef="P" value="1"/></IncludeCondition></FixedValueEntry>"#,
             "an entry of a command on a condition isn't supported: every entry of an MDL \
              command packet is written",
         ),
         (
             r#"<FixedValueEntry binaryValue="01"><RepeatEntry><Count><FixedValue>2</FixedValue></Count></RepeatEntry></FixedValueEntry>"#,
-            "a repeated entry in a command isn't supported yet",
+            "a repeated entry in a command isn't supported: an MDL list is an argument of its own",
         ),
     ] {
         let text = doc(&commands(ARG_U8, &go("", entry)));
@@ -2648,12 +2643,10 @@ fn what_a_command_packet_cant_hold_is_unsupported() {
             "{entry}"
         );
     }
-    for ty in [
-        r#"<AggregateArgumentType name="A"><MemberList><Member name="x" typeRef="U8"/></MemberList></AggregateArgumentType>"#,
-        r#"<AbsoluteTimeArgumentType name="A"/>"#,
-    ] {
-        assert_eq!(one_error(&go_with(ty, "A")).0, "xtce.unsupported", "{ty}");
-    }
+    assert_eq!(
+        one_error(&go_with(r#"<AbsoluteTimeArgumentType name="A"/>"#, "A")).0,
+        "xtce.unsupported"
+    );
 }
 
 #[test]
@@ -3007,6 +3000,652 @@ fn a_parameter_entry_holds_what_the_sent_commands_comparison_list_gives() {
         .0,
         "xtce.invalid"
     );
+}
+
+/// A document whose `Go` holds `arguments` and `entries`, with `types`
+/// besides U8, imported and validated: the bundle and the warnings' codes.
+fn validated_go(types: &str, arguments: &str, entries: &str) -> (Value, Vec<String>) {
+    validated_doc(&doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(arguments, entries),
+    )))
+}
+
+fn validated_doc(text: &str) -> (Value, Vec<String>) {
+    let (sources, result) = import_all(&[("sat.xml", text)]);
+    let parsed = result.unwrap_or_else(|d| panic!("{:#?}", shown(&sources, &d)));
+    let codes = parsed.warnings.iter().map(|w| w.code.to_string()).collect();
+    let bundle = serde_json::to_value(&parsed.bundle).unwrap();
+    if let Err(d) = validate(parsed.bundle) {
+        panic!("{:#?}", shown(&sources, &parsed.map.locate_all(&d)));
+    }
+    (bundle, codes)
+}
+
+/// A one-dimensional array argument type over `element`, its last index
+/// `ending` (an IntegerValue's content).
+fn argument_array_type(name: &str, element: &str, ending: &str, rest: &str) -> String {
+    format!(
+        r#"<ArrayArgumentType name="{name}" arrayTypeRef="{element}"{rest}><DimensionList><Dimension><StartingIndex><FixedValue>0</FixedValue></StartingIndex><EndingIndex>{ending}</EndingIndex></Dimension></DimensionList></ArrayArgumentType>"#
+    )
+}
+
+const BY_ARGUMENT_N: &str = r#"<DynamicValue><ArgumentInstanceRef argumentRef="N"/><LinearAdjustment intercept="-1"/></DynamicValue>"#;
+
+#[test]
+fn an_aggregate_argument_is_an_argument_per_member() {
+    let types = r#"<AggregateArgumentType name="Pos"><MemberList>
+        <Member name="X" typeRef="U8"/><Member name="Y" typeRef="U8" initialValue="5"/>
+      </MemberList></AggregateArgumentType>"#;
+    let (bundle, warnings) = validated_go(
+        types,
+        r#"<Argument name="Target" argumentTypeRef="Pos" initialValue='{"X": 3}'/>"#,
+        &argument_entry("Target"),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let arguments = &bundle["catalog"]["commands"]["sat.go"]["arguments"];
+    assert_eq!(
+        arguments,
+        &json!([
+            {"name": "target_x", "type": "u64", "range": {"max": 255.0}, "default": 3},
+            {"name": "target_y", "type": "u64", "range": {"max": 255.0}, "default": 5}
+        ])
+    );
+    let entries = &bundle["sets"][0]["commands"][0]["entries"];
+    assert_eq!(
+        (&entries[2]["name"], &entries[2]["argument"]),
+        (&json!("Target_X"), &json!("target_x"))
+    );
+    assert_eq!(
+        (&entries[3]["name"], &entries[3]["argument"]),
+        (&json!("Target_Y"), &json!("target_y"))
+    );
+
+    // Assigned, it's a constant per member: the JSON's, else the member's
+    // initial value.
+    let metas = format!(
+        r#"<MetaCommand name="Base" abstract="true">
+             <ArgumentList><Argument name="Target" argumentTypeRef="Pos"/></ArgumentList>
+             <CommandContainer name="Base"><EntryList>{}</EntryList></CommandContainer>
+           </MetaCommand>
+           <MetaCommand name="Go"><BaseMetaCommand metaCommandRef="Base"><ArgumentAssignmentList>
+             <ArgumentAssignment argumentName="Target" argumentValue='{{"X": 1}}'/>
+           </ArgumentAssignmentList></BaseMetaCommand></MetaCommand>"#,
+        argument_entry("Target")
+    );
+    let (bundle, _) = validated_doc(&doc(&commands(&format!("{ARG_U8}{types}"), &metas)));
+    let values: Vec<&Value> = bundle["sets"][0]["commands"][0]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| &e["value"])
+        .collect();
+    assert_eq!(values, [&json!(1), &json!(5)]);
+    let bad = metas.replace(r#"{"X": 1}"#, r#"{"Z": 1}"#);
+    assert_eq!(
+        one_error(&doc(&commands(&format!("{ARG_U8}{types}"), &bad))),
+        (
+            "xtce.invalid".into(),
+            "argument Target has no member Z".into()
+        )
+    );
+}
+
+#[test]
+fn an_array_argument_is_a_list_argument() {
+    let types = argument_array_type(
+        "Three",
+        "U8",
+        "<FixedValue>2</FixedValue>",
+        r#" initialValue="[1, 2, 3]""#,
+    );
+    let (bundle, warnings) = validated_go(
+        &types,
+        &argument("Levels", "Three"),
+        &argument_entry("Levels"),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    // Yamcs skips an ArrayArgumentRefEntry; MDL writes the array, as XTCE
+    // says, and warns.
+    let (same, warnings) = validated_go(
+        &types,
+        &argument("Levels", "Three"),
+        r#"<ArrayArgumentRefEntry argumentRef="Levels" lastEntryForThisArrayInstance="true"/>"#,
+    );
+    assert_eq!(warnings, ["xtce.differs"]);
+    assert_eq!(
+        same["sets"][0]["commands"][0]["entries"][2],
+        bundle["sets"][0]["commands"][0]["entries"][2]
+    );
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"],
+        json!([{"name": "levels", "type": "u64", "range": {"max": 255.0},
+                "list": {"min": 3, "max": 3}, "default": [1, 2, 3]}])
+    );
+    assert_eq!(
+        bundle["sets"][0]["commands"][0]["entries"][2],
+        json!({"kind": "array", "name": "Levels", "count": {"kind": "fixed", "count": 3},
+               "element": {"kind": "scalar", "type": "uint", "size_bits": 8},
+               "argument": "levels"})
+    );
+    // A list is written whole, by one entry.
+    let subset = r#"<ArrayArgumentRefEntry argumentRef="Levels"><DimensionList><Dimension><StartingIndex><FixedValue>0</FixedValue></StartingIndex><EndingIndex><FixedValue>1</FixedValue></EndingIndex></Dimension></DimensionList></ArrayArgumentRefEntry>"#;
+    let text = doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(&argument("Levels", "Three"), subset),
+    ));
+    assert_eq!(one_error(&text).0, "xtce.unsupported");
+}
+
+#[test]
+fn an_argument_giving_a_count_is_the_count_field() {
+    let types = argument_array_type("Some", "U8", BY_ARGUMENT_N, "");
+    let arguments = argument("N", "U8") + &argument("Values", "Some");
+    let (bundle, warnings) = validated_go(
+        &types,
+        &arguments,
+        &(argument_entry("N") + &argument_entry("Values")),
+    );
+    assert_eq!(warnings, ["xtce.ignored"]);
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"],
+        json!([{"name": "values", "type": "u64", "range": {"max": 255.0}, "list": {"max": 255}}])
+    );
+    let entries = &bundle["sets"][0]["commands"][0]["entries"];
+    assert_eq!(
+        entries[2],
+        json!({"kind": "field", "name": "N", "type": "uint", "size_bits": 8})
+    );
+    assert_eq!(entries[3]["count"], json!({"kind": "field", "field": "N"}));
+
+    // The count field comes first.
+    let (code, message) = one_error(&doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(
+            &arguments,
+            &(argument_entry("Values") + &argument_entry("N")),
+        ),
+    )));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(message.contains("isn't written before it"), "{message}");
+
+    // Assigned, the size is a constant and the count fixed.
+    let metas = format!(
+        r#"<MetaCommand name="Base" abstract="true"><ArgumentList>{arguments}</ArgumentList>
+             <CommandContainer name="Base"><EntryList>{}{}</EntryList></CommandContainer></MetaCommand>
+           <MetaCommand name="Go"><BaseMetaCommand metaCommandRef="Base"><ArgumentAssignmentList>
+             <ArgumentAssignment argumentName="N" argumentValue="2"/>
+           </ArgumentAssignmentList></BaseMetaCommand></MetaCommand>"#,
+        argument_entry("N"),
+        argument_entry("Values")
+    );
+    let (bundle, _) = validated_doc(&doc(&commands(&format!("{ARG_U8}{types}"), &metas)));
+    let entries = &bundle["sets"][0]["commands"][0]["entries"];
+    assert_eq!(entries[0]["value"], 2);
+    assert_eq!(entries[1]["count"], json!({"kind": "fixed", "count": 2}));
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"][0]["list"],
+        json!({"min": 2, "max": 2})
+    );
+}
+
+#[test]
+fn an_argument_giving_a_length_is_the_length_field() {
+    let types = r#"<StringArgumentType name="Text"><StringDataEncoding><Variable maxSizeInBits="256"><DynamicValue><ArgumentInstanceRef argumentRef="L"/><LinearAdjustment slope="8"/></DynamicValue></Variable></StringDataEncoding></StringArgumentType>"#;
+    let (bundle, warnings) = validated_go(
+        &format!(
+            "{types}<IntegerArgumentType name=\"I8\"><IntegerDataEncoding sizeInBits=\"8\" encoding=\"twosComplement\"/></IntegerArgumentType>"
+        ),
+        &(argument("L", "U8") + &argument("Name", "Text")),
+        &(argument_entry("L") + &argument_entry("Name")),
+    );
+    assert_eq!(warnings, ["xtce.ignored", "xtce.ignored"]);
+    let entries = &bundle["sets"][0]["commands"][0]["entries"];
+    assert_eq!(entries[3]["length"], json!({"kind": "field", "field": "L"}));
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"],
+        json!([{"name": "name", "type": "str"}])
+    );
+    // A size is an unsigned integer, and names an argument of the command.
+    let signed = doc(&commands(
+        &format!(
+            "{ARG_U8}{types}<IntegerArgumentType name=\"I8\"><IntegerDataEncoding sizeInBits=\"8\" encoding=\"twosComplement\"/></IntegerArgumentType>"
+        ),
+        &go(
+            &(argument("L", "I8") + &argument("Name", "Text")),
+            &(argument_entry("L") + &argument_entry("Name")),
+        ),
+    ));
+    assert_eq!(one_error(&signed).0, "xtce.unsupported");
+    let nameless = doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(&argument("Name", "Text"), &argument_entry("Name")),
+    ));
+    assert_eq!(
+        one_error(&nameless),
+        (
+            "xtce.reference".into(),
+            "L names no argument of this command".into()
+        )
+    );
+}
+
+#[test]
+fn an_array_of_aggregates_is_records_of_one_list_per_member() {
+    let types = format!(
+        r#"<IntegerArgumentType name="U16" signed="false"><IntegerDataEncoding sizeInBits="16"/></IntegerArgumentType>
+           <AggregateArgumentType name="Target"><MemberList><Member name="Id" typeRef="U8"/><Member name="Range" typeRef="U16"/></MemberList></AggregateArgumentType>
+           {}"#,
+        argument_array_type(
+            "Targets",
+            "Target",
+            "<FixedValue>1</FixedValue>",
+            r#" initialValue='[{"Id": 1, "Range": 100}, {"Id": 2, "Range": 200}]'"#
+        )
+    );
+    let (bundle, warnings) = validated_go(
+        &types,
+        &argument("Targets", "Targets"),
+        &argument_entry("Targets"),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let arguments = &bundle["catalog"]["commands"]["sat.go"]["arguments"];
+    assert_eq!(
+        (
+            &arguments[0]["name"],
+            &arguments[0]["default"],
+            &arguments[0]["list"]
+        ),
+        (
+            &json!("targets_id"),
+            &json!([1, 2]),
+            &json!({"min": 2, "max": 2})
+        )
+    );
+    assert_eq!(
+        (&arguments[1]["name"], &arguments[1]["default"]),
+        (&json!("targets_range"), &json!([100, 200]))
+    );
+    let set = &bundle["sets"][0];
+    assert_eq!(
+        set["commands"][0]["entries"][2]["element"],
+        json!({"kind": "struct", "name": "Go_Targets_element"})
+    );
+    assert_eq!(
+        set["types"]["Go_Targets_element"]["entries"],
+        json!([
+            {"kind": "field", "name": "Id", "type": "uint", "size_bits": 8, "argument": "targets_id"},
+            {"kind": "field", "name": "Range", "type": "uint", "size_bits": 16, "argument": "targets_range"}
+        ])
+    );
+}
+
+#[test]
+fn a_nested_aggregate_is_completed_as_yamcs_completes_it() {
+    // pos's own initial value gives x; y's gives y; the argument's gives z.
+    let types = r#"<AggregateArgumentType name="Inner"><MemberList>
+          <Member name="x" typeRef="U8"/><Member name="y" typeRef="U8" initialValue="7"/>
+        </MemberList></AggregateArgumentType>
+        <AggregateArgumentType name="Outer"><MemberList>
+          <Member name="pos" typeRef="Inner" initialValue='{"x": 4}'/><Member name="z" typeRef="U8"/>
+        </MemberList></AggregateArgumentType>"#;
+    let defaults = |initial: &str| {
+        let (bundle, _) = validated_go(
+            types,
+            &format!(r#"<Argument name="T" argumentTypeRef="Outer" initialValue='{initial}'/>"#),
+            &argument_entry("T"),
+        );
+        bundle["catalog"]["commands"]["sat.go"]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["name"].as_str().unwrap().to_string(),
+                    a["default"].clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        defaults(r#"{"z": 1}"#),
+        [
+            ("t_pos_x".to_string(), json!(4)),
+            ("t_pos_y".to_string(), json!(7)),
+            ("t_z".to_string(), json!(1))
+        ]
+    );
+    // Given pos, its members come from it, else their own initial values:
+    // x has none, so no default.
+    assert_eq!(
+        defaults(r#"{"pos": {"y": 2}, "z": 1}"#),
+        [
+            ("t_pos_x".to_string(), Value::Null),
+            ("t_pos_y".to_string(), json!(2)),
+            ("t_z".to_string(), json!(1))
+        ]
+    );
+    // pos is an aggregate, so its value is an object.
+    let text = doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(
+            r#"<Argument name="T" argumentTypeRef="Outer" initialValue='{"pos": 5}'/>"#,
+            &argument_entry("T"),
+        ),
+    ));
+    let (code, message) = one_error(&text);
+    assert_eq!(code, "xtce.invalid");
+    assert!(
+        message.starts_with("member pos of argument T is an aggregate"),
+        "{message}"
+    );
+    // A member's initial value names only its members.
+    let bad = types.replace(r#"{"x": 4}"#, r#"{"w": 4}"#);
+    let text = doc(&commands(
+        &format!("{ARG_U8}{bad}"),
+        &go(&argument("T", "Outer"), &argument_entry("T")),
+    ));
+    assert_eq!(
+        one_error(&text),
+        (
+            "xtce.invalid".into(),
+            "member pos of argument T has no member w".into()
+        )
+    );
+}
+
+#[test]
+fn records_of_two_commands_are_named_for_their_meta_commands() {
+    let types = argument_array_type("Points", "Pair", "<FixedValue>1</FixedValue>", "")
+        + r#"<AggregateArgumentType name="Pair"><MemberList><Member name="a" typeRef="U8"/><Member name="b" typeRef="U8"/></MemberList></AggregateArgumentType>"#;
+    let meta = |name: &str, op: &str| {
+        format!(
+            r#"<MetaCommand name="{name}"><ArgumentList>{}</ArgumentList><CommandContainer name="{name}"><EntryList><FixedValueEntry name="Op" binaryValue="{op}"/>{}</EntryList></CommandContainer></MetaCommand>"#,
+            argument("Points", "Points"),
+            argument_entry("Points")
+        )
+    };
+    let (bundle, warnings) = validated_doc(&doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &(meta("A", "01") + &meta("B", "02")),
+    )));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let names: Vec<&String> = bundle["sets"][0]["types"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .collect();
+    assert_eq!(names, ["A_Points_element", "B_Points_element"]);
+}
+
+#[test]
+fn a_record_type_another_struct_type_names_is_told_apart() {
+    let pair = r#"<AggregateArgumentType name="Pair"><MemberList><Member name="a" typeRef="U8"/><Member name="b" typeRef="U8"/></MemberList></AggregateArgumentType>"#.to_string()
+        + &argument_array_type("Points", "Pair", "<FixedValue>1</FixedValue>", "");
+    let meta = |name: &str, field: &str, op: &str| {
+        format!(
+            r#"<MetaCommand name="{name}"><ArgumentList>{}</ArgumentList><CommandContainer name="{name}"><EntryList><FixedValueEntry name="Op" binaryValue="{op}"/>{}</EntryList></CommandContainer></MetaCommand>"#,
+            argument(field, "Points"),
+            argument_entry(field)
+        )
+    };
+    let names = |bundle: &Value| -> Vec<String> {
+        bundle["sets"][0]["types"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect()
+    };
+    // A_B's Points and A's B_Points both join to A_B_Points.
+    let (bundle, _) = validated_doc(&doc(&commands(
+        &format!("{ARG_U8}{pair}"),
+        &(meta("A_B", "Points", "01") + &meta("A", "B_Points", "02")),
+    )));
+    assert_eq!(
+        names(&bundle),
+        ["Sat_A_B_Points_element", "Sat_A_B__Points_element"]
+    );
+    // A telemetry array of aggregates A_Points has A_Points_element.
+    let telemetry_types = format!(
+        r#"{U8}<AggregateParameterType name="PairT"><MemberList><Member name="a" typeRef="U8"/></MemberList></AggregateParameterType>
+           <ArrayParameterType name="PointsT" arrayTypeRef="PairT"><DimensionList><Dimension><StartingIndex><FixedValue>0</FixedValue></StartingIndex><EndingIndex><FixedValue>1</FixedValue></EndingIndex></Dimension></DimensionList></ArrayParameterType>"#
+    );
+    let text = doc(&format!(
+        "{}{}",
+        telemetry(
+            &telemetry_types,
+            &param("A_Points", "PointsT"),
+            &container("P", &entry("A_Points"))
+        ),
+        commands(&format!("{ARG_U8}{pair}"), &meta("A", "Points", "01"))
+    ));
+    let (bundle, warnings) = validated_doc(&text);
+    assert_eq!(warnings, ["xtce.renamed"]);
+    assert_eq!(names(&bundle), ["A_Points_element", "Sat_A_Points_element"]);
+}
+
+#[test]
+fn an_unwritten_value_shares_a_length_and_member_initial_values_are_checked() {
+    // Name and Note share L, but only Name is written.
+    let text_type = r#"<StringArgumentType name="Text"><StringDataEncoding><Variable maxSizeInBits="256"><DynamicValue><ArgumentInstanceRef argumentRef="L"/><LinearAdjustment slope="8"/></DynamicValue></Variable></StringDataEncoding></StringArgumentType>"#;
+    validated_go(
+        text_type,
+        &(argument("L", "U8") + &argument("Name", "Text") + &argument("Note", "Text")),
+        &(argument_entry("L") + &argument_entry("Name")),
+    );
+    // pos's initial value is checked though the argument gives pos whole.
+    let types = r#"<AggregateArgumentType name="Inner"><MemberList><Member name="x" typeRef="U8"/></MemberList></AggregateArgumentType>
+        <AggregateArgumentType name="Outer"><MemberList><Member name="pos" typeRef="Inner" initialValue='{"w": 4}'/></MemberList></AggregateArgumentType>"#;
+    let text = doc(&commands(
+        &format!("{ARG_U8}{types}"),
+        &go(
+            r#"<Argument name="T" argumentTypeRef="Outer" initialValue='{"pos": {"x": 1}}'/>"#,
+            &argument_entry("T"),
+        ),
+    ));
+    assert_eq!(
+        one_error(&text),
+        (
+            "xtce.invalid".into(),
+            "member pos of argument T has no member w".into()
+        )
+    );
+    // An ArrayArgumentRefEntry names an array argument.
+    let text = doc(&commands(
+        ARG_U8,
+        &go(
+            &argument("A", "U8"),
+            r#"<ArrayArgumentRefEntry argumentRef="A"/>"#,
+        ),
+    ));
+    assert_eq!(
+        one_error(&text),
+        (
+            "xtce.invalid".into(),
+            "an ArrayArgumentRefEntry names an array argument".into()
+        )
+    );
+}
+
+#[test]
+fn sizes_are_bounded_and_fixed_as_their_arguments_say() {
+    // A 32-bit count whose last index is N counts up to 2^32 values; the
+    // list stops at the most a u32 holds.
+    let types = r#"<IntegerArgumentType name="U32" signed="false"><IntegerDataEncoding sizeInBits="32"/></IntegerArgumentType>"#.to_string()
+        + &argument_array_type(
+            "Some",
+            "U8",
+            r#"<DynamicValue><ArgumentInstanceRef argumentRef="N"/></DynamicValue>"#,
+            "",
+        );
+    let (bundle, _) = validated_go(
+        &types,
+        &(argument("N", "U32") + &argument("Values", "Some")),
+        &(argument_entry("N") + &argument_entry("Values")),
+    );
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"][0]["list"],
+        json!({"min": 1, "max": 4_294_967_295_u32})
+    );
+    assert_eq!(
+        bundle["sets"][0]["commands"][0]["entries"][3]["count"],
+        json!({"kind": "field", "field": "N", "add": 1})
+    );
+
+    // An assigned length is a fixed, NUL-padded buffer.
+    let text_type = r#"<StringArgumentType name="Text"><StringDataEncoding><Variable maxSizeInBits="256"><DynamicValue><ArgumentInstanceRef argumentRef="L"/><LinearAdjustment slope="8"/></DynamicValue></Variable></StringDataEncoding></StringArgumentType>"#;
+    let metas = format!(
+        r#"<MetaCommand name="Base" abstract="true"><ArgumentList>{}{}</ArgumentList>
+             <CommandContainer name="Base"><EntryList>{}{}</EntryList></CommandContainer></MetaCommand>
+           <MetaCommand name="Go"><BaseMetaCommand metaCommandRef="Base"><ArgumentAssignmentList>
+             <ArgumentAssignment argumentName="L" argumentValue="4"/>
+           </ArgumentAssignmentList></BaseMetaCommand></MetaCommand>"#,
+        argument("L", "U8"),
+        argument("Name", "Text"),
+        argument_entry("L"),
+        argument_entry("Name")
+    );
+    let (bundle, _) = validated_doc(&doc(&commands(&format!("{ARG_U8}{text_type}"), &metas)));
+    assert_eq!(
+        bundle["sets"][0]["commands"][0]["entries"][1]["length"],
+        json!({"kind": "fixed", "bytes": 4, "terminator": 0})
+    );
+}
+
+#[test]
+fn sizes_mdl_cant_take_are_unsupported() {
+    let text = r#"<StringArgumentType name="Text"><StringDataEncoding><Variable maxSizeInBits="256"><DynamicValue><ArgumentInstanceRef argumentRef="L"/><LinearAdjustment slope="8"/></DynamicValue></Variable></StringDataEncoding></StringArgumentType>"#;
+    let some = argument_array_type("Some", "U8", BY_ARGUMENT_N, "");
+    let pair = r#"<AggregateArgumentType name="Pair"><MemberList><Member name="a" typeRef="U8"/><Member name="b" typeRef="U8"/></MemberList></AggregateArgumentType>"#;
+    let ranged = r#"<IntegerArgumentType name="Big" signed="false"><IntegerDataEncoding sizeInBits="8"/><ValidRangeSet><ValidRange minInclusive="300" maxInclusive="400"/></ValidRangeSet></IntegerArgumentType>"#;
+    let by_param = argument_array_type(
+        "ByParam",
+        "U8",
+        r#"<DynamicValue><ParameterInstanceRef parameterRef="P"/></DynamicValue>"#,
+        "",
+    );
+    let flat = |arguments: &str, entries: &str| {
+        doc(&commands(
+            &format!("{ARG_U8}{text}{some}{pair}{ranged}{by_param}"),
+            &go(arguments, entries),
+        ))
+    };
+    let cases = [
+        // One argument as both a count and a length.
+        (
+            flat(
+                &(argument("N", "U8") + &argument("Values", "Some") + &argument("Name", "Text")),
+                &(argument_entry("N") + &argument_entry("Values") + &argument_entry("Name")),
+            )
+            .replace(r#"argumentRef="L""#, r#"argumentRef="N""#),
+            "gives both a count and a length",
+        ),
+        // A length for two values.
+        (
+            flat(
+                &(argument("L", "U8") + &argument("Name", "Text") + &argument("Note", "Text")),
+                &(argument_entry("L") + &argument_entry("Name") + &argument_entry("Note")),
+            ),
+            "gives the length of two values",
+        ),
+        // An aggregate as a size.
+        (
+            flat(
+                &(argument("N", "Pair") + &argument("Values", "Some")),
+                &(argument_entry("N") + &argument_entry("Values")),
+            ),
+            "not an aggregate's or a list's",
+        ),
+        // A size of nothing written.
+        (
+            flat(
+                &(argument("N", "U8") + &argument("Values", "Some")),
+                &argument_entry("N"),
+            ),
+            "gives the size of an argument no entry writes",
+        ),
+        // A size whose range its field can't hold.
+        (
+            flat(
+                &(argument("N", "Big") + &argument("Values", "Some")),
+                &(argument_entry("N") + &argument_entry("Values")),
+            ),
+            "its valid range lies outside the raw values its field holds",
+        ),
+        // A size a parameter gives.
+        (
+            flat(&argument("Values", "ByParam"), &argument_entry("Values")),
+            "a size a parameter gives isn't supported in a command",
+        ),
+    ];
+    for (text, expected) in cases {
+        let errors: Vec<String> = {
+            let (sources, result) = import_all(&[("sat.xml", &text)]);
+            shown(&sources, &result.unwrap_err())
+                .into_iter()
+                .filter(|(severity, ..)| *severity == Severity::Error)
+                .map(|(_, _, _, message)| message)
+                .collect()
+        };
+        assert!(
+            errors.len() == 1 && errors[0].contains(expected),
+            "{expected}: {errors:#?}"
+        );
+    }
+}
+
+#[test]
+fn array_argument_shapes_mdl_cant_write_are_unsupported() {
+    let pair = r#"<AggregateArgumentType name="Pair"><MemberList><Member name="a" typeRef="U8"/><Member name="b" typeRef="U8"/></MemberList></AggregateArgumentType>"#;
+    let cases = [
+        (
+            argument_array_type("Three", "U8", "<FixedValue>2</FixedValue>", "")
+                + r#"<AggregateArgumentType name="A"><MemberList><Member name="list" typeRef="Three"/></MemberList></AggregateArgumentType>"#,
+            "an array inside an aggregate argument",
+        ),
+        (
+            r#"<ArrayArgumentType name="A" arrayTypeRef="U8"/>"#.to_string(),
+            "has no DimensionList",
+        ),
+        (
+            format!(
+                "{pair}{}",
+                argument_array_type(
+                    "A",
+                    "Pair",
+                    "<FixedValue>1</FixedValue>",
+                    r#" initialValue='[1, 2]'"#
+                )
+            ),
+            "which isn't an object of its elements' members",
+        ),
+        (
+            format!(
+                "{pair}{}",
+                argument_array_type(
+                    "A",
+                    "Pair",
+                    "<FixedValue>1</FixedValue>",
+                    r#" initialValue='[{"a": 1}, {"a": 2}]'"#
+                )
+            ),
+            "gives value 0 no b, and the member has no initial value",
+        ),
+        (
+            argument_array_type(
+                "A",
+                "U8",
+                "<FixedValue>1</FixedValue>",
+                r#" initialValue='{"a": 1}'"#,
+            ),
+            "isn't a JSON array of argument A's values",
+        ),
+    ];
+    for (types, expected) in cases {
+        let (_, message) = one_error(&go_with(&types, "A"));
+        assert!(message.contains(expected), "{expected}: {message}");
+    }
 }
 
 proptest! {

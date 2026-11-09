@@ -92,7 +92,7 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
 - [x] TOML (MDL's own authoring format), its own crate, with examples,
       including mixed versions on one link
 - [x] JSON: the IR itself, in the core, documented as a frontend
-- [ ] XTCE import, its own crate: telemetry and commands (SpaceSystem, parameter and
+- [x] XTCE import, its own crate: telemetry and commands (SpaceSystem, parameter and
       argument types with encodings and calibrators, sequence containers
       with base containers and restriction criteria, MetaCommands); the
       supported subset documented
