@@ -790,3 +790,368 @@ fn links_to_files_are_followed_and_links_to_directories_only_when_given() {
         stderr(&dangling)
     );
 }
+
+// ---- inspect --------------------------------------------------------------------
+
+#[test]
+fn inspect_names_every_family_and_set_with_the_digests_build_gives() {
+    let built = morphc(&["build", "."]);
+    let overview = morphc(&["inspect", "."]);
+    assert_eq!(overview.status.code(), Some(0), "{}", stderr(&overview));
+    let text = stdout(&overview);
+    let digest = |kind: &str| {
+        stdout(&built)
+            .lines()
+            .find(|line| line.starts_with(kind))
+            .and_then(|line| line.split_whitespace().find(|w| w.len() == 64))
+            .unwrap()
+            .to_string()
+    };
+    assert!(
+        text.starts_with(&format!(
+            "catalog  {}  4 params, 0 commands\n",
+            digest("catalog ")
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("family sat  {}\n", digest("family sat"))),
+        "{text}"
+    );
+    assert!(
+        text.contains("  binary, big-endian; asset id: fixed Sat; set chosen by binding\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "  set sat  {}  1 packet, 0 commands\n",
+            digest("set sat")
+        )),
+        "{text}"
+    );
+}
+
+#[test]
+fn inspect_set_shows_where_each_entry_sits() {
+    let out = morphc(&["inspect", "set", "sat", "."]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("  family sat: binary, big-endian\n"),
+        "{text}"
+    );
+    assert!(text.contains("\npacket HK\n"), "{text}");
+    assert!(
+        text.contains(
+            "  16   16    BusVoltage  uint16  eps.bus_voltage  unit V; linear scale 0.01 offset 0\n"
+        ),
+        "{text}"
+    );
+
+    let json = morphc(&["inspect", "set", "sat", ".", "--format", "json"]);
+    let report: Value = serde_json::from_str(&stdout(&json)).unwrap();
+    let inspect = &report["inspect"];
+    assert_eq!(inspect["view"], "set");
+    assert_eq!(inspect["set"]["packets"][0]["name"], "HK");
+    let entries = inspect["layout"]["packets"][0]["entries"]
+        .as_array()
+        .unwrap();
+    let starts: Vec<u64> = entries
+        .iter()
+        .map(|e| e["static_offset_bits"].as_u64().unwrap())
+        .collect();
+    assert_eq!(starts, [0, 8, 16]);
+    assert_eq!(
+        inspect["set"]["packets"][0]["entries"]
+            .as_array()
+            .unwrap()
+            .len(),
+        entries.len()
+    );
+}
+
+#[test]
+fn inspect_set_shows_ranges_counts_and_pointers() {
+    let binary = morphc_in(
+        &paired(),
+        &["inspect", "set", "vendor_x_v2", "-"],
+        Some(FULL_BUNDLE),
+    );
+    assert_eq!(binary.status.code(), Some(0), "{}", stderr(&binary));
+    let text = stdout(&binary);
+    assert!(
+        text.contains("command LOAD_TABLE; encodes eps.load_table; metadata apid = 300\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("len     uint16             length of table\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  32..524312  16         crc     crc16\n"),
+        "{text}"
+    );
+    assert!(text.contains("  32   16    check   iso8473\n"), "{text}");
+
+    let json = morphc_in(
+        &paired(),
+        &["inspect", "set", "vendor_j_v1", "-"],
+        Some(FULL_BUNDLE),
+    );
+    assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
+    let text = stdout(&json);
+    assert!(text.contains("  family vendor_j: json\n"), "{text}");
+    assert!(text.contains("  /cells  cells  struct cell[]\n"), "{text}");
+
+    let report: Value = serde_json::from_str(&stdout(&morphc_in(
+        &paired(),
+        &["inspect", "set", "vendor_j_v1", "-", "--format", "json"],
+        Some(FULL_BUNDLE),
+    )))
+    .unwrap();
+    assert_eq!(report["inspect"]["layout"], Value::Null);
+    assert_eq!(report["inspect"]["encoding"], "json");
+}
+
+#[test]
+fn inspect_describes_lengths_conditions_conversions_and_unfixed_starts() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/shapes");
+    let out = morphc_in(&dir, &["inspect", "set", "s", "shapes.json"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    let table = text.split_once("packet P\n").unwrap().1;
+    assert_eq!(
+        table,
+        "  bit     size  entry  type                  maps to  notes
+  0       8     n      uint8
+  8       64    label  string(8, ..0x00)
+  72      0     none   uint8 x 0                      when n == 0
+  72*     16    v      uint16                a.v      polynomial 1 + 0.5*x + 2*x^2
+  88*     8     flags  uint8                          when not (n == 0)
+  88..96  0..   rest   uint8 x (to the end)  a.rest
+  * starts there in every message, without a static position (decoding spec 5.2)
+"
+    );
+    let overview = stdout(&morphc_in(&dir, &["inspect", "shapes.json"], None));
+    assert!(overview.contains("asset id: bits 0..8;"), "{overview}");
+}
+
+#[test]
+fn inspect_param_lists_every_entry_that_sends_it() {
+    let out = morphc(&["inspect", "param", "eps.bus_voltage", "."]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "param eps.bus_voltage  f64, V\n  Main power bus voltage\n  limits red low 24, red high \
+         34\n\nsent by\n  set sat  packet HK  entry BusVoltage  (unit V; linear scale 0.01 \
+         offset 0)\n"
+    );
+    let unsent = morphc(&["inspect", "param", "eps.batt_temp", "."]);
+    assert!(
+        stdout(&unsent).ends_with("\nno packet sends it\n"),
+        "{}",
+        stdout(&unsent)
+    );
+}
+
+#[test]
+fn inspect_command_lists_every_packet_that_encodes_it() {
+    let out = morphc_in(
+        &paired(),
+        &["inspect", "command", "eps.load_table", "-"],
+        Some(FULL_BUNDLE),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("  arguments\n    table  bytes\n    slot  u64, range ..7, default 0\n"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("\nencoded by\n  set vendor_x_v2  command LOAD_TABLE  (slot, table)\n"),
+        "{text}"
+    );
+    let json = morphc_in(
+        &paired(),
+        &[
+            "inspect",
+            "command",
+            "eps.load_table",
+            "-",
+            "--format",
+            "json",
+        ],
+        Some(FULL_BUNDLE),
+    );
+    let report: Value = serde_json::from_str(&stdout(&json)).unwrap();
+    let packet = &report["inspect"]["packets"][0];
+    assert_eq!(packet["packet"], "LOAD_TABLE");
+    assert_eq!(packet["arguments"][1]["argument"], "table");
+}
+
+#[test]
+fn inspect_reads_a_stores_latest_build() {
+    let dir = paired_copy("inspect_store");
+    let first = morphc_in(&dir, &["build", "defs", "--out", "store"], None);
+    assert_eq!(first.status.code(), Some(0), "{}", stderr(&first));
+    let before = manifest(&dir.join("store"));
+    edit(
+        &dir.join("defs/catalog.toml"),
+        "Battery temperature",
+        "Battery pack temperature",
+    );
+    let rebuild = morphc_in(&dir, &["build", "defs", "--out", "store"], None);
+    assert_eq!(rebuild.status.code(), Some(0), "{}", stderr(&rebuild));
+
+    let out = morphc_in(&dir, &["inspect", "store"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    let after = manifest(&dir.join("store"));
+    assert!(text.contains(after["catalog"].as_str().unwrap()), "{text}");
+    assert!(
+        text.contains(&format!(
+            "    pins the older catalog {}\n",
+            before["catalog"].as_str().unwrap()
+        )),
+        "{text}"
+    );
+    let param = morphc_in(&dir, &["inspect", "param", "eps.batt_temp", "store"], None);
+    assert!(
+        stdout(&param).contains("  Battery pack temperature\n"),
+        "{}",
+        stdout(&param)
+    );
+
+    let xtce = morphc_in(&dir, &["inspect", "store", "--family", "x"], None);
+    assert_eq!(xtce.status.code(), Some(2));
+    assert!(
+        stderr(&xtce).contains("store is an artifact store"),
+        "{}",
+        stderr(&xtce)
+    );
+}
+
+#[test]
+fn inspect_reports_problems_and_unknown_names() {
+    let dir = paired_copy("inspect_problems");
+    let unknown = morphc_in(&dir, &["inspect", "set", "nope", "defs"], None);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(
+        stderr(&unknown).contains("there's no set nope; the sets are sat"),
+        "{}",
+        stderr(&unknown)
+    );
+    let param = morphc_in(&dir, &["inspect", "param", "nope", "defs"], None);
+    assert!(
+        stderr(&param).contains("the catalog has no param nope"),
+        "{}",
+        stderr(&param)
+    );
+
+    edit(
+        &dir.join("defs/catalog.toml"),
+        "unit        = \"V\"",
+        "unit        = \"mV\"",
+    );
+    let broken = morphc_in(&dir, &["inspect", "defs", "--format", "json"], None);
+    assert_eq!(broken.status.code(), Some(1));
+    let report: Value = serde_json::from_str(&stdout(&broken)).unwrap();
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["inspect"], Value::Null);
+}
+
+#[test]
+fn inspect_shows_definitions_as_a_store_of_them_would() {
+    let dir = paired_copy("inspect_modes");
+    let built = morphc_in(&dir, &["build", "defs", "--out", "store"], None);
+    assert_eq!(built.status.code(), Some(0), "{}", stderr(&built));
+    let full = scratch("inspect_modes_full");
+    fs::write(full.join("full.json"), FULL_BUNDLE).unwrap();
+    let stored = morphc_in(&full, &["build", "full.json", "--out", "store"], None);
+    assert_eq!(stored.status.code(), Some(0), "{}", stderr(&stored));
+    let json = |dir: &Path, args: &[&str]| -> Value {
+        let mut args = args.to_vec();
+        args.extend(["--format", "json"]);
+        let out = morphc_in(dir, &args, None);
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        serde_json::from_str::<Value>(&stdout(&out)).unwrap()["inspect"].clone()
+    };
+    assert_eq!(
+        json(&dir, &["inspect", "set", "sat", "defs"]),
+        json(&dir, &["inspect", "set", "sat", "store"])
+    );
+    // Packets come in name order either way, as the artifacts list them.
+    for view in [&["inspect"][..], &["inspect", "set", "vendor_j_v1"]] {
+        let mut defs = view.to_vec();
+        defs.push("full.json");
+        let mut store = view.to_vec();
+        store.push("store");
+        assert_eq!(json(&full, &defs), json(&full, &store), "{view:?}");
+    }
+}
+
+#[test]
+fn inspect_param_shows_a_composites_frame_and_conditions() {
+    let out = morphc_in(
+        &paired(),
+        &["inspect", "param", "nav.pos_ecef", "-", "--format", "json"],
+        Some(FULL_BUNDLE),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let composite = &report["inspect"]["uses"][0];
+    assert_eq!(composite["entry"], Value::Null);
+    assert_eq!(
+        composite["members"],
+        serde_json::json!(["pos.x", "pos.y", "pos.z"])
+    );
+    assert_eq!(composite["frame"], "ECI_J2000");
+    let text = stdout(&morphc_in(
+        &paired(),
+        &["inspect", "param", "nav.pos_ecef", "-"],
+        Some(FULL_BUNDLE),
+    ));
+    assert!(
+        text.contains("composite of pos.x, pos.y, pos.z  (in ECI_J2000)"),
+        "{text}"
+    );
+}
+
+#[test]
+fn inspect_view_words_come_first() {
+    let dir = paired_copy("view_words");
+    for args in [
+        &["inspect", "defs", "set", "sat"][..],
+        &["inspect", "--all-warnings", "set", "sat", "defs"],
+    ] {
+        let out = morphc_in(&dir, args, None);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(
+            stderr(&out)
+                .contains("views come before the inputs (`morphc inspect set NAME INPUT...`)"),
+            "{args:?}: {}",
+            stderr(&out)
+        );
+    }
+    // A directory named like a view.
+    fs::rename(dir.join("defs"), dir.join("set")).unwrap();
+    let word = morphc_in(&dir, &["inspect", "set"], None);
+    assert_eq!(word.status.code(), Some(2));
+    let path = morphc_in(&dir, &["inspect", "./set"], None);
+    assert_eq!(path.status.code(), Some(0), "{}", stderr(&path));
+
+    let unknown = morphc_in(
+        &dir,
+        &["inspect", "set", "nope", "./set", "--format", "json"],
+        None,
+    );
+    assert_eq!(unknown.status.code(), Some(2));
+    let report: Value = serde_json::from_str(&stdout(&unknown)).unwrap();
+    assert!(
+        report["error"]
+            .as_str()
+            .unwrap()
+            .contains("there's no set nope")
+    );
+    assert!(report.get("inspect").is_none());
+}

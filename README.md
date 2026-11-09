@@ -32,6 +32,10 @@ just morphc build examples/toml/mission
 # A TOML catalog beside a vendor's XTCE, written to an artifact store
 just morphc build catalog.toml vendor.xml --out store/
 
+# What a build holds: a set's datasheet, who sends a param
+just morphc inspect set ccsds_sat_v1 examples/toml/mission
+just morphc inspect param eps.bus_voltage store/
+
 just check    # fmt, clippy, tests
 ```
 
@@ -48,12 +52,28 @@ haven't changed keep their identity, and a catalog change that would break
 them is refused unless you pass `--fresh`. Exit codes: 0 built, 1 the definitions
 have problems, 2 morphc couldn't run.
 
+`morphc inspect` reads the same inputs, or one store's latest build, and
+shows what they hold without decoding anything: every family and set with
+its identity (`morphc inspect store/`), one set's packets with where each
+entry sits and what it maps to (`inspect set NAME`), every entry that sends
+a catalog param (`inspect param NAME`) or encodes a command (`inspect
+command NAME`). Positions come from the library's layout API, so they're
+the ones validation and decoding use; a start marked `*` is the same in
+every message without being a static position (decoding spec §5.2).
+Definitions show the identities a fresh build gives them; a store shows the
+ones its rebuilds kept. Either way a set's content is shown as its artifact
+holds it, packets in name order. Entries are named by path through struct
+entries and arrays (`pos.x`, `cells[].v`; MDL names hold no dots or
+brackets).
+
 `--format json` prints one JSON document on stdout for tools, whatever the
 outcome: `report` (its format version, 1), `ok`, `error` (why morphc
-couldn't run, exit code 2), `diagnostics` (each with `severity`, `code`,
+couldn't run, exit code 2; null otherwise), `diagnostics` (each with `severity`, `code`,
 `message`, `context`, `path`, and `location` and `first` as `file`, byte
 offsets `start` and `end`, and lines and columns from 1), `notes`, and
-`build` (the artifacts with their digests, and what was written).
+the command's own result: `build` (the artifacts with their digests, and
+what was written) or `inspect` (tagged by `view`, carrying IR values as
+the IR writes them, and a set's layout).
 
 Requires Rust 1.88 or later and [`just`](https://github.com/casey/just).
 

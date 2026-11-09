@@ -11,7 +11,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Format {
-    /// Diagnostics with their source lines on stderr, the artifacts on
+    /// Diagnostics with their source lines on stderr, the result on
     /// stdout.
     Human,
     /// One JSON document on stdout, with every diagnostic.
@@ -84,8 +84,8 @@ impl<'a> Report<'a> {
 
     /// Print everything and give the exit code: 0 when built, 1 when the
     /// definitions have errors.
-    pub fn finish(self, built: Option<Built>) -> ExitCode {
-        let code = match built {
+    pub fn finish<T: Outcome>(self, outcome: Option<T>) -> ExitCode {
+        let code = match outcome {
             Some(_) => ExitCode::SUCCESS,
             None => ExitCode::from(1),
         };
@@ -93,13 +93,12 @@ impl<'a> Report<'a> {
             Format::Human => emit(io::stderr(), &self.human_diagnostics()).and_then(|()| {
                 emit(
                     io::stdout(),
-                    &built.as_ref().map_or_else(String::new, human_built),
+                    &outcome.as_ref().map_or_else(String::new, Outcome::human),
                 )
             }),
             Format::Json => {
                 let document = Document {
-                    report: REPORT_VERSION,
-                    ok: built.is_some(),
+                    ok: outcome.is_some(),
                     error: None,
                     diagnostics: self
                         .diagnostics
@@ -107,7 +106,7 @@ impl<'a> Report<'a> {
                         .map(|d| JsonDiagnostic::of(d, self.sources))
                         .collect(),
                     notes: &self.notes,
-                    build: built.as_ref(),
+                    outcome: Some(outcome.as_ref()),
                 };
                 emit(io::stdout(), &json(&document))
             }
@@ -162,13 +161,12 @@ pub fn failed(format: Format, err: &anyhow::Error) -> ExitCode {
     let message = format!("{err:#}");
     let mut printed = emit(io::stderr(), &format!("morphc: {message}\n"));
     if format == Format::Json {
-        let document = Document {
-            report: REPORT_VERSION,
+        let document: Document<'_, Built> = Document {
             ok: false,
             error: Some(message),
             diagnostics: Vec::new(),
             notes: &[],
-            build: None,
+            outcome: None,
         };
         printed = printed.and_then(|()| emit(io::stdout(), &json(&document)));
     }
@@ -296,15 +294,49 @@ fn human_built(built: &Built) -> String {
     text
 }
 
-#[derive(Serialize)]
-struct Document<'a> {
-    report: u32,
+/// What a command made, printed after the diagnostics: under its key in
+/// the JSON document, or as text on stdout.
+pub trait Outcome: Serialize {
+    /// Its key in the JSON document: `build`, `inspect`.
+    const KEY: &'static str;
+
+    fn human(&self) -> String;
+}
+
+impl Outcome for Built {
+    const KEY: &'static str = "build";
+
+    fn human(&self) -> String {
+        human_built(self)
+    }
+}
+
+/// The JSON document: the same keys for every command, then the command's
+/// own (null when it made nothing). A document for a run that couldn't
+/// start has no command key.
+struct Document<'a, T> {
     ok: bool,
     /// Why morphc couldn't run (exit code 2), with no diagnostics.
     error: Option<String>,
     diagnostics: Vec<JsonDiagnostic>,
     notes: &'a [String],
-    build: Option<&'a Built>,
+    outcome: Option<Option<&'a T>>,
+}
+
+impl<T: Outcome> Serialize for Document<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("report", &REPORT_VERSION)?;
+        map.serialize_entry("ok", &self.ok)?;
+        map.serialize_entry("error", &self.error)?;
+        map.serialize_entry("diagnostics", &self.diagnostics)?;
+        map.serialize_entry("notes", self.notes)?;
+        if let Some(outcome) = &self.outcome {
+            map.serialize_entry(T::KEY, outcome)?;
+        }
+        map.end()
+    }
 }
 
 #[derive(Serialize)]
