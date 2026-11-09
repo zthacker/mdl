@@ -330,6 +330,32 @@
             <SizeInBits><Fixed><FixedValue>64</FixedValue></Fixed></SizeInBits>
           </StringDataEncoding>
         </StringArgumentType>
+        <IntegerArgumentType name="CountType" signed="false">
+          <IntegerDataEncoding sizeInBits="8"/>
+        </IntegerArgumentType>
+        <IntegerArgumentType name="AngleType" signed="false">
+          <IntegerDataEncoding sizeInBits="16"/>
+        </IntegerArgumentType>
+        <AggregateArgumentType name="WaypointType">
+          <MemberList>
+            <Member name="Azimuth" typeRef="AngleType"/>
+            <Member name="Elevation" typeRef="AngleType"/>
+          </MemberList>
+        </AggregateArgumentType>
+        <!-- As many waypoints as the count says: the last index is N - 1. -->
+        <ArrayArgumentType name="WaypointsType" arrayTypeRef="WaypointType">
+          <DimensionList>
+            <Dimension>
+              <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+              <EndingIndex>
+                <DynamicValue>
+                  <ArgumentInstanceRef argumentRef="N"/>
+                  <LinearAdjustment intercept="-1"/>
+                </DynamicValue>
+              </EndingIndex>
+            </Dimension>
+          </DimensionList>
+        </ArrayArgumentType>
         <FloatArgumentType name="SlewRateType">
           <UnitSet><Unit>rad/s</Unit></UnitSet>
           <FloatDataEncoding sizeInBits="32"/>
@@ -354,6 +380,25 @@
             <EntryList>
               <ArgumentRefEntry argumentRef="Target"/>
               <ArgumentRefEntry argumentRef="Rate"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+        <!-- MDL works the count out from the list of waypoints. -->
+        <MetaCommand name="Track" shortDescription="Follow a list of waypoints">
+          <BaseMetaCommand metaCommandRef="../CCSDSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="101"/>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="2"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="N" argumentTypeRef="CountType"/>
+            <Argument name="Waypoints" argumentTypeRef="WaypointsType"/>
+          </ArgumentList>
+          <CommandContainer name="Track">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="N"/>
+              <ArgumentRefEntry argumentRef="Waypoints"/>
             </EntryList>
           </CommandContainer>
         </MetaCommand>

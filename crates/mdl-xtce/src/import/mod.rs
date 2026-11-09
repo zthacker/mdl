@@ -30,6 +30,7 @@ use crate::types::{Order, Raw, Scalar, Shape, Types, description};
 use crate::xml::{self, El, Expect};
 use crate::{Code, Naming, Options};
 
+mod arguments;
 mod commands;
 mod conditions;
 mod emit;
@@ -142,6 +143,8 @@ struct ArrayField<'d> {
     element: Element<'d>,
     count: (Value, Span),
     canonical: Option<(String, Span)>,
+    /// In a command packet: the list argument its scalar elements encode.
+    argument: Option<(String, Span)>,
     offset: Option<(u32, Span)>,
     when: Option<Object>,
 }
@@ -169,6 +172,8 @@ enum TypeId<'d> {
     /// The elements of an array or repeated parameter (or member), and the
     /// bits of padding after each.
     Element(ParamKey<'d>, u32),
+    /// The records of an array argument whose elements are aggregates.
+    Record(ElId),
 }
 
 struct StructType<'d> {
@@ -177,6 +182,9 @@ struct StructType<'d> {
     /// The name it's given before any qualifying: the container's, or the
     /// field's with `_element`.
     base: String,
+    /// For an argument's records: its meta-command's and field's names, to
+    /// tell it apart from a type of the same name.
+    record: Option<(String, String)>,
     space: usize,
     span: Span,
     entries: Vec<Entry<'d>>,
@@ -292,8 +300,9 @@ impl<'d, 'r> Import<'d, 'r> {
             }
         }
         self.name_packets(&mut packets);
-        self.name_types();
+        // Commands add the struct types of argument records.
         let commands = self.commands();
+        self.name_types();
         self.report_unused();
         let root = tree.spaces.first()?;
         let root_span = root.el.span();
@@ -935,11 +944,31 @@ impl<'d, 'r> Import<'d, 'r> {
         let names = self.unique_names(&items, ("container", "struct type"));
         let mut named: BTreeMap<TypeId<'d>, String> =
             containers.into_iter().cloned().zip(names).collect();
+        // An argument's records are named for its meta-command and field,
+        // qualified as containers are where meta-commands share a name.
+        let records: Vec<(TypeId<'d>, String, usize, Span)> = ids
+            .iter()
+            .filter(|id| matches!(id, TypeId::Record(_)))
+            .filter_map(|id| {
+                self.structs
+                    .get(id)
+                    .map(|t| (id.clone(), t.base.clone(), t.space, t.span))
+            })
+            .collect();
+        let items: Vec<(&str, usize, Span)> = records
+            .iter()
+            .map(|(_, base, space, span)| (base.as_str(), *space, *span))
+            .collect();
+        let names = self.unique_names(&items, ("record type", "struct type"));
+        for ((id, ..), name) in records.iter().zip(names) {
+            named.insert(id.clone(), name);
+        }
         for id in &ids {
             if let (TypeId::Element(..), Some(ty)) = (id, self.structs.get(id)) {
                 named.insert(id.clone(), ty.base.clone());
             }
         }
+        self.separate_records(&mut named);
         let mut seen: BTreeMap<String, Span> = BTreeMap::new();
         for (id, name) in named {
             let Some(ty) = self.structs.get_mut(&id) else {
@@ -958,6 +987,50 @@ impl<'d, 'r> Import<'d, 'r> {
                     seen.insert(name, span);
                 }
             }
+        }
+    }
+
+    /// A record whose name another struct type has takes its SpaceSystems'
+    /// names, then `__` between its meta-command's name and its field's,
+    /// until none has it: a telemetry element type, or another command's
+    /// record whose names join to the same text.
+    fn separate_records(&mut self, named: &mut BTreeMap<TypeId<'d>, String>) {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for name in named.values() {
+            *counts.entry(name.clone()).or_default() += 1;
+        }
+        let records: Vec<TypeId<'d>> = named
+            .keys()
+            .filter(|id| matches!(id, TypeId::Record(_)))
+            .cloned()
+            .collect();
+        for id in records {
+            let (Some(old), Some(ty)) = (named.get(&id).cloned(), self.structs.get(&id)) else {
+                continue;
+            };
+            let (Some((meta, field)), true) = (&ty.record, counts.get(&old) > Some(&1)) else {
+                continue;
+            };
+            let path = identifier(&self.tree.names(ty.space).join("_")).0;
+            let candidates = [
+                format!("{path}_{meta}_{field}_element"),
+                format!("{path}_{meta}__{field}_element"),
+            ];
+            let free = |name: &String| counts.get(name).copied().unwrap_or(0) == 0;
+            let Some(new) = candidates.into_iter().find(free) else {
+                continue;
+            };
+            let span = ty.span;
+            if let Some(count) = counts.get_mut(&old) {
+                *count -= 1;
+            }
+            counts.insert(new.clone(), 1);
+            self.report.warning(
+                Code::Renamed,
+                span,
+                format!("record type {old} is struct type {new}: another struct type is also named {old}"),
+            );
+            named.insert(id, new);
         }
     }
 

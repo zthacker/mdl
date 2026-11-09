@@ -19,13 +19,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use mdl::v2::source::Span;
 use serde_json::{Value, json};
 
-use super::entries::Location;
-use super::{Entry, Field, Import, ParamKey, id};
+use super::arguments::{
+    Leaf, Measure, SizeField, json_text, leaves, member_field, member_name, size_references,
+    unknown_member,
+};
+use super::entries::{Location, from_field};
+use super::{ArrayField, Element, Entry, Field, Import, ParamKey, StructType, TypeId, id};
 use crate::Code;
 use crate::calibration::duration_seconds;
 use crate::names::{catalog_part, identifier};
 use crate::space::Kind;
-use crate::types::{Order, Raw, Scalar, Shape, Wanted, description, raw_value};
+use crate::types::{
+    ArrayShape, Count, Length, Order, Raw, Scalar, Shape, Wanted, description, raw_value,
+};
 use crate::xml::{self, El, Expect};
 
 /// A command, once worked out.
@@ -48,7 +54,12 @@ pub(super) struct Argument<'d> {
     pub(super) scalar: Scalar<'d>,
     pub(super) default: Option<(Value, Span)>,
     pub(super) description: Option<(String, Span)>,
+    /// A list argument's bounds.
+    pub(super) list: Option<Bounds>,
 }
+
+/// A list's least and greatest number of values; an absent end is open.
+pub(super) type Bounds = (Option<u32>, Option<u32>);
 
 /// An argument of a meta-command in a command's chain.
 struct Declared<'d> {
@@ -59,12 +70,16 @@ struct Declared<'d> {
     /// Its catalog name; `None` after reporting why there's none.
     name: Option<(String, Span)>,
     /// `None` after reporting why its type can't be read.
-    scalar: Option<Scalar<'d>>,
+    shape: Option<Shape<'d>>,
     /// The value an ArgumentAssignment gives it, where that value is, and
     /// where the assignment is.
     assigned: Option<(&'d str, Span, Span)>,
     /// Whether an entry writes it.
     written: bool,
+    /// What it's the size of, when another argument's size is its value.
+    size: Option<Measure>,
+    /// A list argument's bounds, once its array is written.
+    list: Option<Bounds>,
 }
 
 /// A command's chain: each meta-command, root first, with its SpaceSystem.
@@ -184,6 +199,21 @@ impl<'d> Import<'d, '_> {
                 .declare(index, *at_space, *meta, &mut declared)
                 .is_some();
         }
+        let (sized, unread) = self.mark_sizes(&mut declared);
+        complete &= sized;
+        // A size reported as unreadable stands in, so what it measures isn't
+        // reported again.
+        let mut sizes: Vec<(&'d str, SizeField)> = unread
+            .into_iter()
+            .map(|name| {
+                let field = SizeField {
+                    name: name.to_string(),
+                    assigned: None,
+                    raw: (0, 0),
+                };
+                (name, field)
+            })
+            .collect();
         let (values, read_whole) = self.criteria_values(&chain);
         complete &= read_whole;
         let mut entries = Vec::new();
@@ -204,12 +234,14 @@ impl<'d> Import<'d, '_> {
                 values: &values,
                 read_whole,
                 unnamed: &mut unnamed,
+                sizes: &mut sizes,
             };
             match self.command_entries(&owner, container, &mut declared, read) {
                 Some(added) => entries.extend(added),
                 None => complete = false,
             }
         }
+        complete &= self.check_measured(&declared).is_some();
         if !complete {
             return None;
         }
@@ -225,6 +257,52 @@ impl<'d> Import<'d, '_> {
             arguments,
             entries,
         })
+    }
+
+    /// Each size argument an entry writes measures a value an entry writes,
+    /// else MDL has nothing to work it out from, and a length one value
+    /// only, since an MDL field gives one value its length.
+    fn check_measured(&mut self, declared: &[Declared<'d>]) -> Option<()> {
+        let mut complete = true;
+        for size in declared.iter().filter(|d| d.size.is_some() && d.written) {
+            if size.assigned.is_some() {
+                continue;
+            }
+            let uses: Vec<Measure> = declared
+                .iter()
+                .filter(|d| d.written)
+                .filter_map(|d| d.shape.as_ref())
+                .flat_map(size_references)
+                .filter(|(dynamic, _)| dynamic.reference == size.xtce)
+                .map(|(_, measure)| measure)
+                .collect();
+            if uses.iter().filter(|m| **m == Measure::Length).count() > 1 {
+                self.report.error(
+                    Code::Unsupported,
+                    size.el.span(),
+                    format!(
+                        "argument {} gives the length of two values, and an MDL field gives one \
+                         value its length",
+                        size.xtce
+                    ),
+                );
+                complete = false;
+            }
+            let measured = !uses.is_empty();
+            if !measured {
+                self.report.error(
+                    Code::Unsupported,
+                    size.el.span(),
+                    format!(
+                        "argument {} gives the size of an argument no entry writes, so MDL has \
+                         nothing to work it out from",
+                        size.xtce
+                    ),
+                );
+                complete = false;
+            }
+        }
+        complete.then_some(())
     }
 
     /// The meta-command and those it inherits from, root first.
@@ -384,23 +462,27 @@ impl<'d> Import<'d, '_> {
                 complete = false;
                 continue;
             }
-            let scalar = self.argument_type(space, el);
+            let typed = self.argument_type(space, el);
             let name = self.argument_name(el, xtce.value);
-            complete &= scalar.is_some() && name.is_some();
+            complete &= typed.is_some() && name.is_some();
+            let shape = typed.map(|(shape, _)| shape);
             declared.push(Declared {
                 owner,
                 el,
                 xtce: xtce.value,
                 name,
-                scalar,
+                shape,
                 assigned: None,
                 written: false,
+                size: None,
+                list: None,
             });
         }
         complete.then_some(())
     }
 
-    fn argument_type(&mut self, space: usize, el: El<'d>) -> Option<Scalar<'d>> {
+    /// An argument's type: its shape, and its element.
+    fn argument_type(&mut self, space: usize, el: El<'d>) -> Option<(Shape<'d>, El<'d>)> {
         let type_ref = el.required("argumentTypeRef", self.report)?;
         let found = match self.tree.resolve(space, type_ref.value, Kind::ArgumentType) {
             Ok(found) => found,
@@ -409,20 +491,83 @@ impl<'d> Import<'d, '_> {
                 return None;
             }
         };
-        match self
+        let shape = self
             .types
-            .shape(self.tree, found.space, found.el, self.report)?
-        {
-            Shape::Scalar(scalar) => Some(*scalar),
-            Shape::Aggregate(_) | Shape::Array(_) => {
-                self.report.error(
-                    Code::Unsupported,
-                    type_ref.span,
-                    "aggregate and array arguments aren't supported yet",
-                );
-                None
+            .shape(self.tree, found.space, found.el, self.report)?;
+        Some((shape, found.el))
+    }
+
+    /// Marks each argument whose value another's size is, and what it
+    /// measures. A size reads an argument of the command, by name. The
+    /// flag is false after reporting a size that can't be read, and the
+    /// names are those sizes'.
+    fn mark_sizes(&mut self, declared: &mut [Declared<'d>]) -> (bool, Vec<&'d str>) {
+        let mut complete = true;
+        let mut unread = Vec::new();
+        let mut uses: Vec<(usize, Measure, Span)> = Vec::new();
+        for argument in declared.iter() {
+            let Some(shape) = &argument.shape else {
+                continue;
+            };
+            for (dynamic, measure) in size_references(shape) {
+                if !dynamic.argument {
+                    self.report.error(
+                        Code::Unsupported,
+                        dynamic.span,
+                        "a size a parameter gives isn't supported in a command: MDL works a \
+                         command's sizes out from its arguments, and Yamcs refuses a parameter \
+                         here too",
+                    );
+                    complete = false;
+                    unread.push(dynamic.reference);
+                    continue;
+                }
+                match declared.iter().position(|o| o.xtce == dynamic.reference) {
+                    Some(index) => uses.push((index, measure, dynamic.span)),
+                    None => {
+                        self.report.error(
+                            Code::Reference,
+                            dynamic.span,
+                            format!("{} names no argument of this command", dynamic.reference),
+                        );
+                        complete = false;
+                        unread.push(dynamic.reference);
+                    }
+                }
             }
         }
+        for (index, measure, span) in uses {
+            let xtce = declared[index].xtce;
+            if !matches!(declared[index].shape, Some(Shape::Scalar(_)) | None) {
+                self.report.error(
+                    Code::Unsupported,
+                    span,
+                    format!(
+                        "argument {xtce} gives a size, and MDL takes a size from one unsigned \
+                         integer field, not an aggregate's or a list's"
+                    ),
+                );
+                complete = false;
+                unread.push(xtce);
+                continue;
+            }
+            match declared[index].size {
+                Some(other) if other != measure => {
+                    self.report.error(
+                        Code::Unsupported,
+                        span,
+                        format!(
+                            "argument {} gives both a count and a length, and an MDL field holds \
+                             one",
+                            declared[index].xtce
+                        ),
+                    );
+                    complete = false;
+                }
+                _ => declared[index].size = Some(measure),
+            }
+        }
+        (complete, unread)
     }
 
     /// An argument's catalog name: its alias in the MDL namespace, else its
@@ -615,6 +760,7 @@ impl<'d> Import<'d, '_> {
             values,
             read_whole,
             unnamed,
+            sizes,
         } = read;
         container.check(&COMMAND_CONTAINER, self.report);
         if let Some(size) = container.child("BinaryEncoding") {
@@ -647,7 +793,9 @@ impl<'d> Import<'d, '_> {
         let mut complete = true;
         for entry in list.children() {
             let added = match entry.name() {
-                "ArgumentRefEntry" => self.argument_entry(owner, entry, declared),
+                "ArgumentRefEntry" | "ArrayArgumentRefEntry" => {
+                    self.argument_entry(owner, entry, declared, sizes)
+                }
                 "FixedValueEntry" => self.fixed_entry(entry, unnamed),
                 "ParameterRefEntry" => self.parameter_entry_value(owner, entry, values, read_whole),
                 "ArrayParameterRefEntry" => {
@@ -655,14 +803,6 @@ impl<'d> Import<'d, '_> {
                         Code::Unsupported,
                         entry.span(),
                         "an array parameter in a command isn't supported",
-                    );
-                    None
-                }
-                "ArrayArgumentRefEntry" => {
-                    self.report.error(
-                        Code::Unsupported,
-                        entry.span(),
-                        "array arguments aren't supported yet",
                     );
                     None
                 }
@@ -786,31 +926,62 @@ impl<'d> Import<'d, '_> {
         Some(())
     }
 
-    /// An ArgumentRefEntry: a field encoding the argument, or holding the
-    /// value assigned to it.
+    /// An ArgumentRefEntry (or ArrayArgumentRefEntry): the fields writing
+    /// the argument (one, or one per member of an aggregate), each encoding
+    /// it or holding the value assigned to it, or the array writing a list
+    /// argument.
     fn argument_entry(
         &mut self,
         owner: &Owner<'d>,
         entry: El<'d>,
         declared: &mut [Declared<'d>],
+        sizes: &mut Vec<(&'d str, SizeField)>,
     ) -> Option<Vec<Entry<'d>>> {
+        let array_entry = entry.name() == "ArrayArgumentRefEntry";
+        let mut children = ENTRY_CHILDREN.to_vec();
+        let mut attrs = vec!["argumentRef"];
+        if array_entry {
+            children.push("DimensionList");
+            attrs.push("lastEntryForThisArrayInstance");
+        }
         entry.check(
             &Expect {
-                attrs: &["argumentRef"],
-                children: ENTRY_CHILDREN,
+                attrs: &attrs,
+                children: &children,
                 ignored: ENTRY_IGNORED,
                 text: false,
             },
             self.report,
         );
+        if let Some(list) = entry.child("DimensionList") {
+            self.report.error(
+                Code::Unsupported,
+                list.span(),
+                "a subset of an array argument isn't supported: MDL writes whole lists",
+            );
+            return None;
+        }
+        if array_entry {
+            // Without a subset, the entry writes the whole array whether it's
+            // marked the last for it or not.
+            if let Some(last) = entry.attr("lastEntryForThisArrayInstance") {
+                xml::boolean(last, self.report)?;
+            }
+            self.report.warning(
+                Code::Differs,
+                entry.span(),
+                "Yamcs skips an ArrayArgumentRefEntry and writes nothing for it; MDL writes the \
+                 array, as XTCE says",
+            );
+        }
         let location = self.command_location(entry)?;
         let reference = entry.required("argumentRef", self.report)?;
         let meta = owner.meta.item_name().unwrap_or_default();
         let meta_path = format!("{}/{meta}", self.tree.path(owner.space));
         let found = declared
-            .iter_mut()
-            .find(|d| d.owner == owner.index && d.xtce == reference.value);
-        let Some(argument) = found else {
+            .iter()
+            .position(|d| d.owner == owner.index && d.xtce == reference.value);
+        let Some(index) = found else {
             let message = format!(
                 "{} names no argument of meta-command {meta_path}; an ArgumentRefEntry names an \
                  argument its own meta-command declares, as Yamcs reads it",
@@ -819,7 +990,15 @@ impl<'d> Import<'d, '_> {
             self.report.error(Code::Reference, reference.span, message);
             return None;
         };
-        if argument.written && argument.assigned.is_none() {
+        if array_entry && !matches!(declared[index].shape, Some(Shape::Array(_)) | None) {
+            self.report.error(
+                Code::Invalid,
+                entry.span(),
+                "an ArrayArgumentRefEntry names an array argument",
+            );
+            return None;
+        }
+        if declared[index].written && declared[index].assigned.is_none() {
             self.report.error(
                 Code::Unsupported,
                 entry.span(),
@@ -831,50 +1010,452 @@ impl<'d> Import<'d, '_> {
             );
             return None;
         }
-        argument.written = true;
-        let mut scalar = argument.scalar.clone()?;
-        let (name, renamed) = identifier(argument.xtce);
+        declared[index].written = true;
+        let argument = &declared[index];
+        let shape = argument.shape.clone()?;
+        let xtce = argument.xtce;
+        let (field, renamed) = identifier(xtce);
         if renamed {
             self.report.warning(
                 Code::Renamed,
                 entry.span(),
                 format!(
-                    "argument {} of meta-command {meta_path} is field {name}: MDL names are \
-                     letters, digits and '_'",
-                    argument.xtce
+                    "argument {xtce} of meta-command {meta_path} is field {field}: MDL names are \
+                     letters, digits and '_'"
                 ),
             );
         }
-        let (argument_name, value) = match argument.assigned {
-            Some((text, span, _)) => {
-                let value = self.assigned_value(&scalar, argument.xtce, text, span)?;
-                // A constant is written as its raw value.
-                scalar.conversion = None;
-                scalar.inverse = None;
-                scalar.unit = None;
-                (None, Some((value, span)))
-            }
-            None => (Some((argument.name.clone()?.0, reference.span)), None),
-        };
-        let length = match &scalar.length {
-            Some(crate::types::Length::Written(length, span)) => Some((length.clone(), *span)),
-            _ => None,
+        let written = Written {
+            xtce,
+            meta,
+            field,
+            catalog: argument.name.clone(),
+            assigned: argument.assigned,
+            size: argument.size.is_some(),
+            el: argument.el,
+            entry: entry.span(),
+            reference: reference.span,
         };
         let mut out = Vec::new();
         out.extend(location.padding());
-        out.push(Entry::Field(Box::new(Field {
+        let mut built = match &shape {
+            Shape::Array(array) => {
+                let (array, bounds) = self.array_argument(&written, array, owner.space, sizes)?;
+                declared[index].list = Some(bounds);
+                vec![array]
+            }
+            _ => self.argument_fields(&written, &shape, sizes)?,
+        };
+        if let Some(first) = built.first_mut() {
+            place(first, location.offset());
+        }
+        out.append(&mut built);
+        Some(out)
+    }
+
+    /// The fields writing a scalar or aggregate argument: one per value it
+    /// takes, named for the argument and its members.
+    fn argument_fields(
+        &mut self,
+        written: &Written<'d>,
+        shape: &Shape<'d>,
+        sizes: &mut Vec<(&'d str, SizeField)>,
+    ) -> Option<Vec<Entry<'d>>> {
+        let Some(leaves) = leaves(shape) else {
+            self.report.error(
+                Code::Unsupported,
+                written.entry,
+                "an array inside an aggregate argument isn't supported: MDL lists are \
+                 arguments of their own",
+            );
+            return None;
+        };
+        let aggregate = matches!(shape, Shape::Aggregate(_));
+        // An assigned aggregate is a JSON object of its members.
+        let assigned = match (written.assigned, aggregate) {
+            (Some((text, span, _)), true) => {
+                self.check_member_initials(written.xtce, &leaves)?;
+                Some((self.json_of(text, span, written.xtce, &leaves)?, span))
+            }
+            _ => None,
+        };
+        let mut out = Vec::new();
+        for leaf in &leaves {
+            let shown = std::iter::once(written.xtce)
+                .chain(leaf.path.iter().copied())
+                .collect::<Vec<_>>()
+                .join(".");
+            let value = match (written.assigned, &assigned) {
+                (_, Some((json, span))) => {
+                    match self.member_value(leaf, &leaves, written.xtce, Some((json, *span))) {
+                        Ok(Some(value)) => Some(value),
+                        Ok(None) => {
+                            self.report.error(
+                                Code::Invalid,
+                                *span,
+                                format!(
+                                    "the value assigned to argument {} gives member {} no value, \
+                                     and it has no initial value",
+                                    written.xtce,
+                                    leaf.shown()
+                                ),
+                            );
+                            return None;
+                        }
+                        Err(()) => return None,
+                    }
+                }
+                (Some((text, span, _)), None) => Some((text.to_string(), span)),
+                (None, _) => None,
+            };
+            let catalog = match &written.catalog {
+                Some((base, _)) => member_name(base, &leaf.path),
+                None => None,
+            };
+            let (name, renamed) = member_field(&written.field, &leaf.path);
+            if renamed {
+                self.report.warning(
+                    Code::Renamed,
+                    written.entry,
+                    format!(
+                        "member {} of argument {} is field {name}: MDL names are letters, digits \
+                         and '_'",
+                        leaf.shown(),
+                        written.xtce
+                    ),
+                );
+            }
+            let field = LeafField {
+                name,
+                scalar: leaf.scalar.clone(),
+                catalog: catalog.map(|name| (name, written.reference)),
+                value,
+                size_of: written.size.then_some(written.xtce),
+                span: written.entry,
+                shown,
+            };
+            out.extend(self.leaf_field(field, sizes)?);
+        }
+        Some(out)
+    }
+
+    /// The field writing one value: encoding a catalog argument, holding an
+    /// assigned value, or, for a size argument, worked out from what it
+    /// measures.
+    fn leaf_field(
+        &mut self,
+        leaf: LeafField<'d>,
+        sizes: &mut Vec<(&'d str, SizeField)>,
+    ) -> Option<Vec<Entry<'d>>> {
+        let mut scalar = leaf.scalar;
+        let (argument, value) = match leaf.value {
+            Some((text, span)) => {
+                let value = self.assigned_value(&scalar, &leaf.shown, &text, span)?;
+                (None, Some((value, span)))
+            }
+            None if leaf.size_of.is_some() => (None, None),
+            None => (Some(leaf.catalog?), None),
+        };
+        if value.is_some() || leaf.size_of.is_some() {
+            // A constant or a size is written as its raw value.
+            scalar.conversion = None;
+            scalar.inverse = None;
+            scalar.unit = None;
+        }
+        if let Some(xtce) = leaf.size_of {
+            let raw = self.check_size_field(&scalar, xtce, leaf.span);
+            let assigned = value.as_ref().and_then(|(value, _)| match value {
+                Value::Number(n) => n.as_i64().map(i128::from),
+                Value::String(text) => text.parse().ok(),
+                _ => None,
+            });
+            // Kept even when it can't be a size (reported), so what it
+            // measures isn't reported as having none.
+            sizes.push((
+                xtce,
+                SizeField {
+                    name: leaf.name.clone(),
+                    assigned,
+                    raw: raw.unwrap_or((0, 0)),
+                },
+            ));
+            raw?;
+        }
+        let field = Field {
+            name: leaf.name,
+            key: None,
+            span: leaf.span,
+            scalar,
+            length: None,
+            canonical: None,
+            argument,
+            value,
+            offset: None,
+            when: None,
+        };
+        self.length_entries(field, sizes)
+    }
+
+    /// The array writing a list argument, and the list's bounds: its count
+    /// fixed or from a size argument's field, its elements scalars, or for
+    /// an aggregate, records taking one list per member.
+    fn array_argument(
+        &mut self,
+        written: &Written<'d>,
+        array: &ArrayShape<'d>,
+        space: usize,
+        sizes: &[(&'d str, SizeField)],
+    ) -> Option<(Entry<'d>, Bounds)> {
+        if let Some((_, span, _)) = written.assigned {
+            self.report.error(
+                Code::Unsupported,
+                span,
+                "a value assigned to an array argument isn't supported: MDL constants are single \
+                 values",
+            );
+            return None;
+        }
+        let name = written.field.clone();
+        let (count, bounds) = self.list_count(array, &name, sizes)?;
+        let base = written.catalog.clone()?.0;
+        let (element, argument) = match &array.element {
+            Shape::Scalar(scalar) => {
+                let unsupported = match scalar.length {
+                    None | Some(Length::Written(..)) => None,
+                    Some(Length::Leading { .. }) => Some(
+                        "array elements with a leading size aren't supported: MDL elements have \
+                         sizes of their own",
+                    ),
+                    Some(Length::Counted(_)) => Some(
+                        "array elements whose size another value gives aren't supported: MDL \
+                         elements have sizes of their own",
+                    ),
+                };
+                if let Some(message) = unsupported {
+                    self.report
+                        .error(Code::Unsupported, scalar.el.span(), message);
+                    return None;
+                }
+                (
+                    Element::Scalar(scalar.clone()),
+                    Some((base, written.reference)),
+                )
+            }
+            shape => {
+                let Some(leaves) = leaves(shape) else {
+                    self.report.error(
+                        Code::Unsupported,
+                        array.el.span(),
+                        "an array of arrays (a multidimensional array) isn't supported: MDL \
+                         lists have one dimension",
+                    );
+                    return None;
+                };
+                let ty = self.record_type(written, &leaves, &base, space)?;
+                (Element::Struct(ty), None)
+            }
+        };
+        let array = ArrayField {
             name,
             key: None,
-            span: entry.span(),
-            scalar,
-            length,
+            span: written.entry,
+            element,
+            count,
             canonical: None,
-            argument: argument_name,
-            value,
-            offset: location.offset(),
+            argument,
+            offset: None,
             when: None,
-        })));
-        Some(out)
+        };
+        Some((Entry::Array(Box::new(array)), bounds))
+    }
+
+    /// An array argument's count and its list's bounds: fixed, or from the
+    /// field of the argument giving its size (fixed after all when that's
+    /// assigned).
+    fn list_count(
+        &mut self,
+        array: &ArrayShape<'d>,
+        name: &str,
+        sizes: &[(&'d str, SizeField)],
+    ) -> Option<((Value, Span), Bounds)> {
+        let fixed = |n: u32, span: Span| {
+            let bounds = (Some(n), Some(n));
+            Some(((json!({ "kind": "fixed", "count": n }), span), bounds))
+        };
+        match &array.count {
+            Some(Count::Fixed(n, span)) => fixed(*n, *span),
+            Some(Count::Counted { dynamic, start }) => {
+                let (multiply, add) = match dynamic.count(*start) {
+                    Ok(linear) => linear,
+                    Err(reason) => {
+                        self.report.error(Code::Unsupported, dynamic.span, reason);
+                        return None;
+                    }
+                };
+                let measured = format!("array {name}");
+                let field = self.written_size(dynamic, sizes, &measured)?.clone();
+                let count = |raw: i128| raw * i128::from(multiply) + i128::from(add);
+                if let Some(value) = field.assigned {
+                    let Ok(n) = u32::try_from(count(value)) else {
+                        self.report.error(
+                            Code::Invalid,
+                            dynamic.span,
+                            format!(
+                                "argument {} gives {measured} {} values",
+                                dynamic.reference,
+                                count(value)
+                            ),
+                        );
+                        return None;
+                    };
+                    return fixed(n, dynamic.span);
+                }
+                // No packet holds more values than a u32 counts, so a list's
+                // bounds stop there however much the field holds.
+                let max = u32::try_from(count(field.raw.1)).unwrap_or(u32::MAX);
+                let min = u32::try_from(count(field.raw.0).max(0)).ok();
+                let value = from_field(&field.name, multiply, add);
+                Some(((value, dynamic.span), (min, Some(max))))
+            }
+            None => {
+                self.report.error(
+                    Code::Unsupported,
+                    array.el.span(),
+                    format!(
+                        "array argument type {} has no DimensionList, and MDL takes an array \
+                         argument's size from its type",
+                        array.el.item_name().unwrap_or_default()
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// The struct type of an array argument's records: a field per member,
+    /// each taking its own list argument, named for the field with
+    /// `_element`.
+    fn record_type(
+        &mut self,
+        written: &Written<'d>,
+        leaves: &[Leaf<'d>],
+        base: &str,
+        space: usize,
+    ) -> Option<TypeId<'d>> {
+        let ty = TypeId::Record(id(&written.el));
+        if self.structs.contains_key(&ty) {
+            return Some(ty);
+        }
+        let meta = identifier(written.meta).0;
+        let mut entries = Vec::new();
+        for leaf in leaves {
+            let length = match &leaf.scalar.length {
+                None => None,
+                Some(Length::Written(length, span)) => Some((length.clone(), *span)),
+                Some(_) => {
+                    self.report.error(
+                        Code::Unsupported,
+                        leaf.scalar.el.span(),
+                        "a record member whose size another value gives isn't supported: MDL \
+                         record fields have their own sizes",
+                    );
+                    return None;
+                }
+            };
+            let Some(list) = member_name(base, &leaf.path) else {
+                self.report.error(
+                    Code::Name,
+                    written.reference,
+                    format!(
+                        "member {} of argument {} has no letters or digits for a catalog name",
+                        leaf.shown(),
+                        written.xtce
+                    ),
+                );
+                return None;
+            };
+            entries.push(Entry::Field(Box::new(Field {
+                name: self.record_field(written, leaf),
+                key: None,
+                span: written.entry,
+                scalar: leaf.scalar.clone(),
+                length,
+                canonical: None,
+                argument: Some((list, written.reference)),
+                value: None,
+                offset: None,
+                when: None,
+            })));
+        }
+        self.check_entries(&entries, "array element")?;
+        self.structs.insert(
+            ty.clone(),
+            StructType {
+                name: String::new(),
+                base: format!("{meta}_{}_element", written.field),
+                record: Some((meta.clone(), written.field.clone())),
+                space,
+                span: written.entry,
+                entries,
+            },
+        );
+        Some(ty)
+    }
+
+    /// A record field's name: the member names below the element joined by
+    /// `_`, a change to fit MDL's names reported.
+    fn record_field(&mut self, written: &Written<'d>, leaf: &Leaf<'d>) -> String {
+        let joined = leaf.path.join("_");
+        let (name, renamed) = identifier(&joined);
+        if renamed {
+            self.report.warning(
+                Code::Renamed,
+                written.entry,
+                format!(
+                    "member {} of argument {}'s elements is record field {name}: MDL names are \
+                     letters, digits and '_'",
+                    leaf.shown(),
+                    written.xtce
+                ),
+            );
+        }
+        name
+    }
+
+    /// A JSON object of an aggregate's members, as Yamcs reads an
+    /// aggregate's value; one naming a member it doesn't have is refused,
+    /// as Yamcs refuses it.
+    fn json_of(
+        &mut self,
+        text: &str,
+        span: Span,
+        argument: &str,
+        leaves: &[Leaf<'d>],
+    ) -> Option<Value> {
+        match serde_json::from_str::<Value>(text) {
+            Ok(value) if value.is_object() => {
+                if let Some(member) = unknown_member(&value, leaves) {
+                    self.report.error(
+                        Code::Invalid,
+                        span,
+                        format!("argument {argument} has no member {member}"),
+                    );
+                    return None;
+                }
+                Some(value)
+            }
+            _ => {
+                self.report.error(
+                    Code::Invalid,
+                    span,
+                    format!(
+                        "{text:?} isn't a JSON object of argument {argument}'s members, as Yamcs \
+                         reads an aggregate's value"
+                    ),
+                );
+                None
+            }
+        }
     }
 
     /// A ParameterRefEntry: a constant field for the parameter, or one for
@@ -1234,7 +1815,7 @@ impl<'d> Import<'d, '_> {
             self.report.error(
                 Code::Unsupported,
                 repeat.span(),
-                "a repeated entry in a command isn't supported yet",
+                "a repeated entry in a command isn't supported: an MDL list is an argument of its own",
             );
             return None;
         }
@@ -1246,8 +1827,9 @@ impl<'d> Import<'d, '_> {
     }
 
     /// The catalog arguments: those no ArgumentAssignment gives a value,
-    /// in order, each named once. One no entry writes changes no bytes, so
-    /// it's left out.
+    /// in order, an aggregate's members each its own, each named once. One
+    /// no entry writes changes no bytes, so it's left out, and so is one
+    /// that gives another's size, which MDL works out.
     fn catalog_arguments(
         &mut self,
         chain: &Chain<'d>,
@@ -1260,66 +1842,308 @@ impl<'d> Import<'d, '_> {
                 continue;
             }
             let (space, meta) = chain[argument.owner];
+            let meta_path = format!(
+                "{}/{}",
+                self.tree.path(space),
+                meta.item_name().unwrap_or_default()
+            );
+            if argument.size.is_some() {
+                self.report.warning(
+                    Code::Ignored,
+                    argument.el.span(),
+                    format!(
+                        "argument {} of meta-command {meta_path} isn't imported: it gives the \
+                         size of another argument, which MDL works out from that argument's value",
+                        argument.xtce
+                    ),
+                );
+                continue;
+            }
             if !argument.written {
                 self.report.warning(
                     Code::Ignored,
                     argument.el.span(),
                     format!(
-                        "argument {} of meta-command {}/{} is in no entry, so it isn't \
+                        "argument {} of meta-command {meta_path} is in no entry, so it isn't \
                          imported: it changes no bytes",
-                        argument.xtce,
-                        self.tree.path(space),
-                        meta.item_name().unwrap_or_default()
+                        argument.xtce
                     ),
                 );
                 continue;
             }
-            let (Some(name), Some(scalar)) = (argument.name.clone(), argument.scalar.clone())
-            else {
+            let (Some(name), Some(shape)) = (argument.name.clone(), argument.shape.as_ref()) else {
                 complete = false;
                 continue;
             };
-            if let Some(first) = arguments.iter().find(|a| a.name.0 == name.0) {
-                self.report.duplicate(
-                    Code::Name,
-                    argument.el.span(),
-                    first.el.span(),
-                    format!(
-                        "arguments {} and {} both have catalog name {}",
-                        first.el.item_name().unwrap_or_default(),
-                        argument.xtce,
-                        name.0
-                    ),
-                );
+            let made = match shape {
+                Shape::Scalar(scalar) => self.scalar_argument(argument, name, scalar),
+                Shape::Aggregate(_) => self.member_arguments(argument, &name, shape),
+                Shape::Array(array) => self.list_arguments(argument, &name, array),
+            };
+            let Some(made) = made else {
                 complete = false;
                 continue;
+            };
+            for made in made {
+                if let Some(first) = arguments.iter().find(|a| a.name.0 == made.name.0) {
+                    self.report.duplicate(
+                        Code::Name,
+                        made.el.span(),
+                        first.el.span(),
+                        format!(
+                            "arguments {} and {} both have catalog name {}",
+                            first.el.item_name().unwrap_or_default(),
+                            argument.xtce,
+                            made.name.0
+                        ),
+                    );
+                    complete = false;
+                    continue;
+                }
+                arguments.push(made);
             }
-            let initial = argument
-                .el
-                .attr("initialValue")
-                .map(|a| (a.value, a.span))
-                .or(scalar.initial);
+        }
+        complete.then_some(arguments)
+    }
+
+    /// A scalar argument, its default its own initial value or its type's.
+    fn scalar_argument(
+        &mut self,
+        argument: &Declared<'d>,
+        name: (String, Span),
+        scalar: &Scalar<'d>,
+    ) -> Option<Vec<Argument<'d>>> {
+        let initial = argument
+            .el
+            .attr("initialValue")
+            .map(|a| (a.value, a.span))
+            .or(scalar.initial);
+        let default = match initial {
+            Some((text, span)) => {
+                Some((self.default_value(scalar, argument.xtce, text, span)?, span))
+            }
+            None => None,
+        };
+        Some(vec![Argument {
+            name,
+            el: argument.el,
+            scalar: scalar.clone(),
+            default,
+            description: description(argument.el),
+            list: None,
+        }])
+    }
+
+    /// An aggregate argument's members, each a catalog argument named
+    /// `<argument>_<member>`. A member's default is what the argument's
+    /// initial value (a JSON object) gives it, completed as Yamcs completes
+    /// a value. An aggregate type's initial value isn't one Yamcs reads.
+    fn member_arguments(
+        &mut self,
+        argument: &Declared<'d>,
+        name: &(String, Span),
+        shape: &Shape<'d>,
+    ) -> Option<Vec<Argument<'d>>> {
+        let leaves = leaves(shape)?;
+        self.check_member_initials(argument.xtce, &leaves)?;
+        let json = match argument.el.attr("initialValue") {
+            Some(attr) => Some((
+                self.json_of(attr.value, attr.span, argument.xtce, &leaves)?,
+                attr.span,
+            )),
+            None => None,
+        };
+        let mut out = Vec::new();
+        for leaf in &leaves {
+            let member = self.member_catalog_name(argument, name, leaf)?;
+            let given = json.as_ref().map(|(json, span)| (json, *span));
+            let initial = self
+                .member_value(leaf, &leaves, argument.xtce, given)
+                .ok()?;
+            let shown = format!("{}.{}", argument.xtce, leaf.shown());
             let default = match initial {
                 Some((text, span)) => {
-                    match self.default_value(&scalar, argument.xtce, text, span) {
-                        Some(value) => Some((value, span)),
-                        None => {
-                            complete = false;
-                            continue;
-                        }
-                    }
+                    Some((self.default_value(&leaf.scalar, &shown, &text, span)?, span))
                 }
                 None => None,
             };
-            arguments.push(Argument {
-                name,
+            out.push(Argument {
+                name: (member, name.1),
                 el: argument.el,
-                scalar,
+                scalar: leaf.scalar.clone(),
                 default,
-                description: description(argument.el),
+                description: leaf
+                    .description
+                    .clone()
+                    .or_else(|| description(argument.el)),
+                list: None,
             });
         }
-        complete.then_some(arguments)
+        Some(out)
+    }
+
+    /// An array argument's list arguments: one, or for an aggregate's
+    /// elements one per member, filling records. A default is what the
+    /// array's initial value, its own or else its type's, gives: a JSON
+    /// array of values, or for records of objects, each completed as an
+    /// aggregate's value is.
+    fn list_arguments(
+        &mut self,
+        argument: &Declared<'d>,
+        name: &(String, Span),
+        array: &ArrayShape<'d>,
+    ) -> Option<Vec<Argument<'d>>> {
+        let leaves = leaves(&array.element)?;
+        // Set when the array was written, which failed if it isn't.
+        let bounds = argument.list?;
+        let initial = argument
+            .el
+            .attr("initialValue")
+            .or_else(|| array.el.attr("initialValue"))
+            .map(|a| (a.value, a.span));
+        let json = match initial {
+            Some((text, span)) => match serde_json::from_str::<Value>(text) {
+                Ok(Value::Array(items)) => Some((items, span)),
+                _ => {
+                    self.report.error(
+                        Code::Invalid,
+                        span,
+                        format!(
+                            "{text:?} isn't a JSON array of argument {}'s values",
+                            argument.xtce
+                        ),
+                    );
+                    return None;
+                }
+            },
+            None => None,
+        };
+        let record = matches!(array.element, Shape::Aggregate(_));
+        if record {
+            self.check_member_initials(argument.xtce, &leaves)?;
+        }
+        if let Some((items, span)) = &json
+            && record
+        {
+            for item in items {
+                if !item.is_object() || unknown_member(item, &leaves).is_some() {
+                    self.report.error(
+                        Code::Invalid,
+                        *span,
+                        format!(
+                            "argument {}'s initial value holds {item}, which isn't an object of \
+                             its elements' members",
+                            argument.xtce
+                        ),
+                    );
+                    return None;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for leaf in &leaves {
+            let list = self.member_catalog_name(argument, name, leaf)?;
+            let shown = match leaf.path.is_empty() {
+                true => argument.xtce.to_string(),
+                false => format!("{}.{}", argument.xtce, leaf.shown()),
+            };
+            let default = match &json {
+                Some((items, span)) => {
+                    let mut values = Vec::with_capacity(items.len());
+                    for (index, item) in items.iter().enumerate() {
+                        let text = if record {
+                            match self.member_value(
+                                leaf,
+                                &leaves,
+                                argument.xtce,
+                                Some((item, *span)),
+                            ) {
+                                Ok(Some((text, _))) => text,
+                                Ok(None) => {
+                                    self.report.error(
+                                        Code::Invalid,
+                                        *span,
+                                        format!(
+                                            "argument {}'s initial value gives value {index} no \
+                                             {}, and the member has no initial value",
+                                            argument.xtce,
+                                            leaf.shown()
+                                        ),
+                                    );
+                                    return None;
+                                }
+                                Err(()) => return None,
+                            }
+                        } else {
+                            json_text(item).into_owned()
+                        };
+                        values.push(self.default_value(&leaf.scalar, &shown, &text, *span)?);
+                    }
+                    Some((Value::Array(values), *span))
+                }
+                None => None,
+            };
+            out.push(Argument {
+                name: (list, name.1),
+                el: argument.el,
+                scalar: leaf.scalar.clone(),
+                default,
+                description: leaf
+                    .description
+                    .clone()
+                    .or_else(|| description(argument.el)),
+                list: Some(bounds),
+            });
+        }
+        Some(out)
+    }
+
+    /// Every member's own initial value, as Yamcs checks them when it loads
+    /// the type, whether a value reaches them or not: an aggregate member's
+    /// a JSON object of its members, another a value of its type.
+    fn check_member_initials(&mut self, argument: &str, leaves: &[Leaf<'d>]) -> Option<()> {
+        let mut complete = true;
+        for leaf in leaves {
+            let last = leaf.path.len().saturating_sub(1);
+            for (level, initial) in leaf.initials.iter().enumerate() {
+                let Some((text, span)) = *initial else {
+                    continue;
+                };
+                let prefix = &leaf.path[..=level];
+                let shown = format!("{argument}.{}", prefix.join("."));
+                complete &= if level == last {
+                    self.default_value(&leaf.scalar, &shown, text, span)
+                        .is_some()
+                } else {
+                    self.member_initial(text, span, argument, prefix, leaves)
+                        .is_ok()
+                };
+            }
+        }
+        complete.then_some(())
+    }
+
+    /// A member's catalog name, or the argument's for a leaf with no
+    /// members.
+    fn member_catalog_name(
+        &mut self,
+        argument: &Declared<'d>,
+        name: &(String, Span),
+        leaf: &Leaf<'d>,
+    ) -> Option<String> {
+        let member = member_name(&name.0, &leaf.path);
+        if member.is_none() {
+            self.report.error(
+                Code::Name,
+                name.1,
+                format!(
+                    "member {} of argument {} has no letters or digits for a catalog name",
+                    leaf.shown(),
+                    argument.xtce
+                ),
+            );
+        }
+        member
     }
 
     /// An initial value as the argument's default, read as Yamcs reads it:
@@ -1465,12 +2289,54 @@ struct Owner<'d> {
 
 /// What reading a container's entries needs from the command: its chain,
 /// the values its criteria give (and whether every comparison was read),
-/// and how many unnamed fixed values came before.
+/// how many unnamed fixed values came before, and the size arguments'
+/// fields written so far, by argument.
 struct Read<'a, 'd> {
     chain: &'a Chain<'d>,
     values: &'a Values<'d>,
     read_whole: bool,
     unnamed: &'a mut usize,
+    sizes: &'a mut Vec<(&'d str, SizeField)>,
+}
+
+/// An argument an entry writes: its XTCE name, field name, catalog name,
+/// the value assigned to it, whether it's another's size, its element, and
+/// where the entry and its reference are.
+struct Written<'d> {
+    xtce: &'d str,
+    /// The meta-command declaring it.
+    meta: &'d str,
+    field: String,
+    catalog: Option<(String, Span)>,
+    assigned: Option<(&'d str, Span, Span)>,
+    size: bool,
+    el: El<'d>,
+    entry: Span,
+    reference: Span,
+}
+
+/// One field writing an argument's value: its name and scalar, the catalog
+/// argument it encodes, the value assigned to it, the argument it's the
+/// size of, where the entry is, and the argument (and member) for
+/// messages.
+struct LeafField<'d> {
+    name: String,
+    scalar: Scalar<'d>,
+    catalog: Option<(String, Span)>,
+    value: Option<(String, Span)>,
+    size_of: Option<&'d str>,
+    span: Span,
+    shown: String,
+}
+
+/// Places an entry at an offset from the start of the packet.
+fn place(entry: &mut Entry<'_>, offset: Option<(u32, Span)>) {
+    match entry {
+        Entry::Field(field) => field.offset = offset,
+        Entry::Array(array) => array.offset = offset,
+        Entry::Struct(inner) => inner.offset = offset,
+        Entry::Padding { .. } => {}
+    }
 }
 
 /// The scalars a parameter's shape holds, with the parameter or member

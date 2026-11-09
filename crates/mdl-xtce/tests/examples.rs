@@ -102,6 +102,8 @@ fn demosat_decodes_its_eps_and_adcs_packets() {
              of catalog params, commands and arguments only",
             "294:28 SpaceSystem ADCS's shortDescription isn't imported: MDL keeps descriptions \
              of catalog params, commands and arguments only",
+            "395:13 argument N of meta-command /DemoSat/ADCS/Track isn't imported: it gives the \
+             size of another argument, which MDL works out from that argument's value",
         ]
     );
     let registry = Bindings::from_toml(
@@ -278,6 +280,30 @@ fn demosat_encodes_its_commands_and_decodes_them_back() {
             ("rate", ArgumentValue::Float(0.25))
         ]
     );
+    // Track: APID 101, opcode 2, the count MDL works out from the lists,
+    // then each waypoint's azimuth and elevation.
+    let angles = |values: &[u64]| {
+        ArgumentValue::List(values.iter().map(|v| ArgumentValue::Uint(*v)).collect())
+    };
+    let track = CommandRequest::new("demosat", "demosat.adcs.track")
+        .with_argument("waypoints_azimuth", angles(&[100, 200]))
+        .with_argument("waypoints_elevation", angles(&[10, 20]));
+    let bytes = encode(track).unwrap();
+    let mut expected = header(101);
+    expected.extend_from_slice(&[2, 2, 0x00, 0x64, 0x00, 0x0A, 0x00, 0xC8, 0x00, 0x14]);
+    assert_eq!(bytes, expected);
+    assert_eq!(
+        decode(&bytes).1,
+        [
+            ("waypoints_azimuth", angles(&[100, 200])),
+            ("waypoints_elevation", angles(&[10, 20]))
+        ]
+    );
+    let uneven = CommandRequest::new("demosat", "demosat.adcs.track")
+        .with_argument("waypoints_azimuth", angles(&[100, 200]))
+        .with_argument("waypoints_elevation", angles(&[10]));
+    assert_eq!(encode(uneven).unwrap_err().code(), "bad_count");
+
     let still = CommandRequest::new("demosat", "demosat.adcs.point")
         .with_argument("target", "SUN")
         .with_argument("rate", 0.0);
