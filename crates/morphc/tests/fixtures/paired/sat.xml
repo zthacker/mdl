@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A small satellite as its vendor describes it. Its bus voltage maps to
+  the mission catalog's eps.bus_voltage through an MDL alias; its other
+  parameters become catalog params of their own.
+-->
+<SpaceSystem name="Sat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="Id" signed="false" shortDescription="Packet id">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="Counter" signed="false" shortDescription="Wrapping counter">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParameterType>
+      <FloatParameterType name="Volts" shortDescription="Centivolts on the wire">
+        <UnitSet><Unit>V</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="16">
+          <DefaultCalibrator>
+            <PolynomialCalibrator>
+              <Term coefficient="0" exponent="0"/>
+              <Term coefficient="0.01" exponent="1"/>
+            </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="PacketId" parameterTypeRef="Id"/>
+      <Parameter name="Count" parameterTypeRef="Counter"/>
+      <Parameter name="BusVoltage" parameterTypeRef="Volts" shortDescription="Bus voltage">
+        <AliasSet><Alias nameSpace="MDL" alias="eps.bus_voltage"/></AliasSet>
+      </Parameter>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer name="HK">
+        <EntryList>
+          <ParameterRefEntry parameterRef="PacketId"/>
+          <ParameterRefEntry parameterRef="Count"/>
+          <ParameterRefEntry parameterRef="BusVoltage"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

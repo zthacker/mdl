@@ -1,0 +1,15 @@
+# The mission's catalog: the names every asset's data maps to. Built
+# before sat.xml, so its descriptions and limits take precedence.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+limits      = { red_low = 24.0, red_high = 34.0 }
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+description = "Battery temperature"

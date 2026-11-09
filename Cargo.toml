@@ -13,6 +13,8 @@ publish = false
 
 [workspace.dependencies]
 mdl = { path = "crates/mdl" }
+mdl-toml = { path = "crates/mdl-toml" }
+mdl-xtce = { path = "crates/mdl-xtce" }
 
 anyhow = "1.0.104"
 chrono = "0.4.45"

@@ -6,7 +6,8 @@
 //! text it came from. Validation reports pointers, and the map turns each
 //! into a [`SourceDiagnostic`] at the nearest place it recorded. A
 //! frontend's own problems (a TOML syntax error, an XTCE construct MDL
-//! can't represent) are `SourceDiagnostic`s from the start.
+//! can't represent) are `SourceDiagnostic`s from the start. [`merge`]
+//! makes the bundles of several frontends one.
 //! `spec/frontends.md` has the rules every frontend follows.
 
 use std::collections::BTreeMap;
@@ -15,6 +16,10 @@ use std::fmt;
 use crate::v2::diagnostics::{Diagnostic, Diagnostics};
 use crate::v2::ir::Bundle;
 use crate::v2::read::ReadError;
+
+mod merge;
+
+pub use merge::merge;
 
 /// The text of every file a build reads, each under a name for people (a
 /// path, usually).

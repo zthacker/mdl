@@ -10,5 +10,5 @@ states its `mdl_version`; a build merges every file of a directory.
 | [`mixed_versions`](mixed_versions) | Two firmware versions on one link. A format byte in every message picks the set that decodes it, so old and new nodes can share the link. |
 
 `cargo test -p mdl-toml --test examples` reads each directory, validates
-and builds it, and decodes sample messages through it. (`morphc build`
-learns TOML in Phase 5.)
+and builds it, and decodes sample messages through it. From the command
+line, `just morphc build examples/toml/mission` builds one.

@@ -1,6 +1,6 @@
 [package]
 name = "morphc"
-description = "The MDL compiler: build, check and inspect MDL definitions"
+description = "The MDL compiler: build MDL definitions from any frontend into content-addressed artifacts"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -12,6 +12,9 @@ publish.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 mdl.workspace = true
+mdl-toml.workspace = true
+mdl-xtce.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]
