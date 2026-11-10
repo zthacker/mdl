@@ -13,8 +13,8 @@ use proptest::prelude::*;
 use serde_json::Value as Json;
 
 /// The bundle validated and built, its artifacts read back (each with the
-/// digest it was written with), and the family assembled from them with
-/// all its sets.
+/// digest it was written with), and a family assembled from them with its
+/// sets.
 pub fn load(bundle: &Json, family: &str) -> Result<FamilySets, TestCaseError> {
     let read = read_bundle_value(bundle)
         .map_err(|error| TestCaseError::fail(format!("read: {error}")))?
@@ -34,12 +34,13 @@ pub fn load(bundle: &Json, family: &str) -> Result<FamilySets, TestCaseError> {
         prop_assert_eq!(&loaded.digest, &written.digest);
         Ok(loaded)
     };
-    let family = reread(&artifacts.families[family])?;
     let sets = artifacts
         .sets
         .values()
+        .filter(|written| matches!(&written.artifact, Artifact::Set { set, .. } if set.family == family))
         .map(reread)
         .collect::<Result<Vec<_>, _>>()?;
+    let family = reread(&artifacts.families[family])?;
     let catalog = reread(&artifacts.catalog)?;
     FamilySets::new(&family, &sets, &[catalog])
         .map_err(|error| TestCaseError::fail(format!("assemble: {error}")))

@@ -1,9 +1,11 @@
-//! A family of several sets and assets, and a stream of messages for it in
-//! ground-time order: routing by alias and version (`spec/decoding.md`
-//! §3), identification by more than one key with the more specific packet
-//! winning (§4), and boot time tied to instants by correlation (§8.2).
+//! Families of several sets and assets, and a stream of messages for them
+//! in arrival order: routing by alias, version and bindings that change,
+//! retire and reuse native ids over time (`spec/decoding.md` §3,
+//! `spec/bindings.md` §4), identification by more than one key with the
+//! more specific packet winning (§4), boot time tied to instants by
+//! correlation (§8.2), and the errors a message can route to.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
@@ -16,27 +18,39 @@ use super::{
     time_scale, to_utc, unit,
 };
 
-/// A family, its sets, its bindings, and messages for it.
+/// Families, their sets and bindings, and messages for them.
 #[derive(Debug, Clone)]
 pub struct Fleet {
     pub bundle: Value,
-    pub family: String,
+    /// The families, by name: `fam`, and with a mirror `fam2`, whose sets
+    /// and bindings are `fam`'s, under the same asset names.
+    pub families: Vec<String>,
     /// The assets, by name.
     pub assets: Vec<String>,
     /// The bindings file, in TOML.
     pub bindings: String,
-    /// In ground-time order.
+    /// In arrival order.
     pub messages: Vec<Sent>,
 }
 
-/// A message sent by an asset, and how it routes and correlates.
+/// A metadata value of a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Meta {
+    Uint(u64),
+    Text(String),
+}
+
+/// A message, where it routes and how it correlates.
 #[derive(Debug, Clone)]
 pub struct Sent {
+    pub family: String,
+    /// Its metadata, by name.
+    pub metadata: Vec<(String, Meta)>,
+    pub message: Message,
+    /// The error it decodes to, by code, if it doesn't decode.
+    pub error: Option<&'static str>,
     pub asset: String,
     pub set: String,
-    /// Its metadata, by name.
-    pub metadata: Vec<(String, u64)>,
-    pub message: Message,
     /// Whether a correlator learns the asset's boot instant from it.
     pub teaches: bool,
     /// The instant a correlator gives it: its event time if absolute, its
@@ -60,31 +74,100 @@ enum Version {
     Metadata,
 }
 
+/// A native id: an integer, the text of one (which reads as that integer),
+/// or other text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Native {
+    Int(u64),
+    IntText(u64),
+    Text(String),
+}
+
+impl Native {
+    /// How a message carries it.
+    fn meta(&self) -> Meta {
+        match self {
+            Native::Int(n) => Meta::Uint(*n),
+            Native::IntText(n) => Meta::Text(n.to_string()),
+            Native::Text(text) => Meta::Text(text.clone()),
+        }
+    }
+
+    /// How a bindings file writes it: an integer as one, whatever its text.
+    fn toml(&self) -> String {
+        match self {
+            Native::Int(n) | Native::IntText(n) => n.to_string(),
+            Native::Text(text) => format!("\"{text}\""),
+        }
+    }
+
+    /// What it is, for comparing: its integer, or its text.
+    fn key(&self) -> Result<u64, String> {
+        match self {
+            Native::Int(n) | Native::IntText(n) => Ok(*n),
+            Native::Text(text) => Err(text.clone()),
+        }
+    }
+}
+
+/// What can go wrong with a message, by design.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fault {
+    /// Its payload is cut to the id byte, before the bits locators.
+    Short,
+    /// It comes from a native id no binding names.
+    Unbound,
+    /// It names a version no set has.
+    UnknownVersion,
+    /// Its id is one no packet has.
+    NoPacket,
+}
+
+#[derive(Debug, Clone)]
+struct MessagePlan {
+    asset: usize,
+    /// The set it names, with a version locator.
+    named: usize,
+    choice: usize,
+    /// A `sub` for the least specific packet.
+    general_sub: u64,
+    /// Milliseconds since the message before; a late message goes back.
+    gap: i64,
+    /// Its family: `fam`, or with a mirror `fam2`.
+    mirror: bool,
+    fault: Option<Fault>,
+    /// A bindings change to arrive at exactly, or 1 ns before.
+    snap: Option<(usize, bool)>,
+}
+
 #[derive(Debug, Clone)]
 struct Plan {
     little: bool,
     alias: Alias,
     version: Version,
+    /// Whether versions are text (`v1`), read from metadata as text.
+    text_versions: bool,
     /// Whether packets are told apart by an id and a `sub` byte.
     two_keys: bool,
+    mirror: bool,
     sets: Vec<SetPlan>,
     /// Each asset's native id.
-    ids: Vec<u64>,
-    /// An asset rebound to another set partway through: the asset, the set,
-    /// and the seconds after the first message.
+    ids: Vec<Native>,
+    /// An asset rebound to another set: the asset, the set, and the
+    /// milliseconds after the first message.
     switch: Option<(usize, usize, i64)>,
-    /// Each message: its asset, the set it names (by version), which packet,
-    /// a `sub` for the least specific packet, and the seconds since the
-    /// message before.
-    messages: Vec<(usize, usize, usize, u64, i64)>,
-    /// The first message's ground time.
+    /// An asset whose native id retires, and maybe goes to a new asset
+    /// later: milliseconds after the first message for each.
+    retire: Option<(usize, i64, Option<i64>)>,
+    messages: Vec<MessagePlan>,
+    /// The first message's ground time, in whole seconds.
     start: i128,
 }
 
 #[derive(Debug, Clone)]
 struct SetPlan {
     time: TimeSource,
-    /// Each packet's fields and count field.
+    /// Each packet's fields and time fields.
     packets: Vec<(Vec<FieldSpec>, TimeFields)>,
     /// Whether there's a packet keyed by the id alone, less specific than
     /// the others.
@@ -92,72 +175,112 @@ struct SetPlan {
     correlation: Option<Correlation>,
 }
 
-/// A family of one to three sets and assets and up to twelve messages.
+/// A row of the bindings file: from an instant on, a native id is an asset
+/// (with a set, without a version locator), or retired.
+#[derive(Debug, Clone)]
+struct Row {
+    id: Native,
+    from: i128,
+    binding: Option<(usize, Option<usize>)>,
+}
+
+/// Families of one to three sets and assets and up to twelve messages.
 pub fn fleet() -> BoxedStrategy<Fleet> {
     let shape = (
-        any::<bool>(),
-        select(&[Alias::Fixed, Alias::Bits, Alias::Metadata][..]),
-        select(&[Version::None, Version::Bits, Version::Metadata][..]),
-        any::<bool>(),
-        1_usize..=3,
-        1_usize..=3,
-        any::<bool>(),
+        (
+            any::<bool>(),
+            select(&[Alias::Fixed, Alias::Bits, Alias::Metadata][..]),
+            select(&[Version::None, Version::Bits, Version::Metadata][..]),
+            any::<bool>(),
+            any::<bool>(),
+        ),
+        (
+            1_usize..=3,
+            1_usize..=3,
+            any::<bool>(),
+            any::<bool>(),
+            any::<bool>(),
+        ),
     );
     shape
-        .prop_flat_map(|(little, alias, version, two_keys, sets, assets, boot)| {
-            let assets = if alias == Alias::Fixed { 1 } else { assets };
-            let ids = match alias {
-                Alias::Fixed => Just(vec![0]).boxed(),
-                Alias::Bits => btree_set(0_u64..=255, assets)
-                    .prop_map(|ids| ids.into_iter().collect())
-                    .boxed(),
-                Alias::Metadata => btree_set(0_u64..1 << 32, assets)
-                    .prop_map(|ids| ids.into_iter().collect())
-                    .boxed(),
-            };
-            let switch = if version == Version::None && sets > 1 {
-                proptest::option::of((0..assets, 0..sets, 1_i64..100_000)).boxed()
-            } else {
-                Just(None).boxed()
-            };
-            let messages = vec(
-                (
+        .prop_flat_map(
+            |((little, alias, version, two_keys, mirror), (sets, assets, boot, text, faults))| {
+                let assets = if alias == Alias::Fixed { 1 } else { assets };
+                let text_versions = text && version == Version::Metadata;
+                let ids = native_ids(alias, assets, text);
+                let switch = if version == Version::None && sets > 1 {
+                    proptest::option::of((0..assets, 0..sets, 1_i64..100_000_000)).boxed()
+                } else {
+                    Just(None).boxed()
+                };
+                let retire = proptest::option::of((
                     0..assets,
-                    0..sets,
-                    any::<usize>(),
-                    4_u64..=255,
-                    0_i64..50_000,
-                ),
-                1..=12,
-            );
-            (
-                Just((little, alias, version, two_keys)),
-                vec(set_plan(boot), sets),
-                ids,
-                switch,
-                messages,
-                // Whole seconds, as a rebinding instant is written.
-                (label((1995, 1, 1), (0, 0, 0), 0) / SECOND
-                    ..label((2030, 1, 1), (0, 0, 0), 0) / SECOND)
-                    .prop_map(|seconds| seconds * SECOND),
-            )
-        })
+                    1_i64..100_000_000,
+                    proptest::option::of(1_i64..100_000_000),
+                ))
+                .prop_map(|retire| {
+                    retire.map(|(asset, after, reuse)| (asset, after, reuse.map(|r| after + r)))
+                });
+                let message = (
+                    (0..assets, 0..sets, any::<usize>(), 4_u64..=255),
+                    (-20_000_000_i64..50_000_000, any::<bool>()),
+                    fault(alias, version, faults),
+                    proptest::option::weighted(0.2, (0_usize..4, any::<bool>())),
+                )
+                    .prop_map(
+                        move |((asset, named, choice, general_sub), (gap, other), fault, snap)| {
+                            MessagePlan {
+                                asset,
+                                named,
+                                choice,
+                                general_sub,
+                                gap,
+                                mirror: mirror && other,
+                                fault,
+                                snap,
+                            }
+                        },
+                    );
+                (
+                    Just((little, alias, version, text_versions, two_keys, mirror)),
+                    vec(set_plan(boot), sets),
+                    ids,
+                    (switch, retire),
+                    vec(message, 1..=12),
+                    // Whole seconds; bindings instants add milliseconds.
+                    (label((1995, 1, 1), (0, 0, 0), 0) / SECOND
+                        ..label((2030, 1, 1), (0, 0, 0), 0) / SECOND)
+                        .prop_map(|seconds| seconds * SECOND),
+                )
+            },
+        )
         .prop_map(
-            |((little, alias, version, two_keys), sets, ids, switch, messages, start)| Plan {
+            |(
+                (little, alias, version, text_versions, two_keys, mirror),
+                sets,
+                ids,
+                (switch, retire),
+                messages,
+                start,
+            )| Plan {
                 little,
                 alias,
                 version,
+                text_versions,
                 two_keys,
+                mirror,
                 sets,
                 ids,
                 switch,
+                retire,
                 messages,
                 start,
             },
         )
         .prop_flat_map(|plan| {
             let layouts = layouts(&plan);
-            let routed = route(&plan, &layouts);
+            let rows = rows(&plan);
+            let routed = route(&plan, &layouts, &rows);
             let messages: Vec<BoxedStrategy<Message>> = routed
                 .iter()
                 .map(|routed| {
@@ -169,10 +292,68 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                     )
                 })
                 .collect();
-            (Just(plan), Just(layouts), Just(routed), messages)
+            (
+                Just(plan),
+                Just(layouts),
+                Just(rows),
+                Just(routed),
+                messages,
+            )
         })
-        .prop_map(|(plan, layouts, routed, messages)| assemble(&plan, &layouts, routed, messages))
+        .prop_map(|(plan, layouts, rows, routed, messages)| {
+            assemble(&plan, &layouts, &rows, routed, messages)
+        })
         .boxed()
+}
+
+/// Distinct native ids: bytes for a bits alias; for a metadata alias,
+/// integers, or with `text` integers written as text and other text
+/// (`007` isn't an integer's one spelling, so it stays text).
+fn native_ids(alias: Alias, assets: usize, text: bool) -> BoxedStrategy<Vec<Native>> {
+    match alias {
+        Alias::Fixed => Just(vec![Native::Text("A1".into())]).boxed(),
+        Alias::Bits => btree_set(0_u64..=255, assets)
+            .prop_map(|ids| ids.into_iter().map(Native::Int).collect())
+            .boxed(),
+        Alias::Metadata if text => btree_set(0_u64..1000, assets)
+            .prop_flat_map(|numbers| {
+                let count = numbers.len();
+                (Just(numbers), vec(0_u8..3, count))
+            })
+            .prop_map(|(numbers, forms)| {
+                numbers
+                    .into_iter()
+                    .zip(forms)
+                    .map(|(n, form)| match form {
+                        0 => Native::IntText(n),
+                        1 => Native::Text(format!("{n:03}x")),
+                        _ => Native::Text(format!("00{n}")),
+                    })
+                    .collect()
+            })
+            .boxed(),
+        Alias::Metadata => btree_set(0_u64..1 << 32, assets)
+            .prop_map(|ids| ids.into_iter().map(Native::Int).collect())
+            .boxed(),
+    }
+}
+
+/// A message's fault, now and then, of a kind the family can have.
+fn fault(alias: Alias, version: Version, faults: bool) -> BoxedStrategy<Option<Fault>> {
+    if !faults {
+        return Just(None).boxed();
+    }
+    let mut kinds = vec![Fault::NoPacket];
+    if alias == Alias::Bits || version == Version::Bits {
+        kinds.push(Fault::Short);
+    }
+    if alias != Alias::Fixed {
+        kinds.push(Fault::Unbound);
+    }
+    if version != Version::None {
+        kinds.push(Fault::UnknownVersion);
+    }
+    proptest::option::weighted(0.25, select(kinds)).boxed()
 }
 
 /// One set: no time or boot time, one to three packets, maybe a least
@@ -226,6 +407,9 @@ fn set_plan(boot: bool) -> BoxedStrategy<SetPlan> {
 
 /// The id a correlation packet is identified by.
 const CORRELATION_ID: u8 = 200;
+
+/// An id no packet has.
+const NO_PACKET_ID: u8 = 250;
 
 /// Each set's packets, laid out: the planned ones, then the least specific
 /// one, then the correlation packet. With two keys, packet `k` is id
@@ -309,41 +493,138 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
         .collect()
 }
 
-/// Where a message goes, and what its header and metadata hold.
+/// An asset's set when its family has no version locator.
+fn bound_set(plan: &Plan, asset: usize) -> Option<usize> {
+    (plan.version == Version::None).then_some(asset % plan.sets.len())
+}
+
+/// The bindings, as rows: each asset from 1980-01-06, then the rebinding,
+/// the retirement and the reuse the plan has, at millisecond instants.
+fn rows(plan: &Plan) -> Vec<Row> {
+    let at = |millis: i64| plan.start + i128::from(millis) * 1_000_000;
+    let mut rows: Vec<Row> = plan
+        .ids
+        .iter()
+        .enumerate()
+        .map(|(asset, id)| Row {
+            id: id.clone(),
+            from: label((1980, 1, 6), (0, 0, 0), 0),
+            binding: Some((asset, bound_set(plan, asset))),
+        })
+        .collect();
+    if let Some((asset, set, after)) = plan.switch {
+        rows.push(Row {
+            id: plan.ids[asset].clone(),
+            from: at(after),
+            binding: Some((asset, Some(set))),
+        });
+    }
+    if let Some((asset, after, reuse)) = plan.retire {
+        rows.push(Row {
+            id: plan.ids[asset].clone(),
+            from: at(after),
+            binding: None,
+        });
+        if let Some(reuse) = reuse {
+            let new = plan.ids.len();
+            rows.push(Row {
+                id: plan.ids[asset].clone(),
+                from: at(reuse),
+                binding: Some((new, bound_set(plan, new))),
+            });
+        }
+    }
+    rows.sort_by_key(|row| (row.id.key(), row.from));
+    // Two rows of one id at one instant would be ambiguous; the later one
+    // in the plan moves a millisecond on.
+    for k in 1..rows.len() {
+        if rows[k].id.key() == rows[k - 1].id.key() && rows[k].from <= rows[k - 1].from {
+            rows[k].from = rows[k - 1].from + 1_000_000;
+        }
+    }
+    rows
+}
+
+/// The asset and set a native id is bound to at an instant, if it is: by
+/// the last row of that id from at or before it.
+fn resolve(rows: &[Row], id: &Native, at: i128) -> Option<(usize, Option<usize>)> {
+    rows.iter()
+        .rev()
+        .find(|row| row.id.key() == id.key() && row.from <= at)
+        .and_then(|row| row.binding)
+}
+
+/// Where a message goes, what its header and metadata hold, and the error
+/// it routes to, if any.
 #[derive(Debug, Clone)]
 struct Routed {
+    family: usize,
     asset: usize,
     set: usize,
     packet: usize,
     ground: i128,
     header: Vec<u64>,
-    metadata: Vec<(String, u64)>,
+    metadata: Vec<(String, Meta)>,
+    fault: Option<Fault>,
+    error: Option<&'static str>,
 }
 
-/// The set that decodes each message, by its version or its asset's
-/// binding at its ground time, and its packet in that set.
-fn route(plan: &Plan, layouts: &[Vec<PacketLayout>]) -> Vec<Routed> {
+/// Each message's route, in the order `spec/decoding.md` §3.3 checks it:
+/// the alias locator, the asset bound at its ground time, the version
+/// locator and the set, then identification (§4).
+fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed> {
     let mut ground = plan.start;
+    let changes: Vec<i128> = rows
+        .iter()
+        .map(|row| row.from)
+        .filter(|from| *from >= plan.start)
+        .collect();
     plan.messages
         .iter()
-        .map(|&(asset, named, choice, general_sub, gap)| {
-            ground += i128::from(gap) * SECOND;
-            let set = match (plan.version, plan.switch) {
-                (Version::None, Some((switched, to, after)))
-                    if switched == asset && ground >= plan.start + i128::from(after) * SECOND =>
-                {
-                    to
+        .map(|message| {
+            ground += i128::from(message.gap) * 1_000_000;
+            let at = match message.snap {
+                Some((k, before)) if !changes.is_empty() => {
+                    changes[k % changes.len()] - i128::from(before)
                 }
-                (Version::None, _) => asset % plan.sets.len(),
-                _ => named,
+                _ => ground,
+            };
+            let id = match message.fault {
+                Some(Fault::Unbound) => match &plan.ids[0] {
+                    Native::Int(_) if plan.alias == Alias::Bits => Native::Int(unbound_byte(plan)),
+                    Native::Int(_) => Native::Int(1 << 40),
+                    _ => Native::Text("unbound".into()),
+                },
+                _ => plan.ids[message.asset].clone(),
+            };
+            let bound = resolve(rows, &id, at);
+            let (asset, set) = match bound {
+                Some((asset, Some(set))) => (asset, set),
+                Some((asset, None)) => (asset, message.named),
+                // Laid out as the asset's own set would be.
+                None => (
+                    message.asset,
+                    bound_set(plan, message.asset).unwrap_or(message.named),
+                ),
+            };
+            let error = match (message.fault, bound) {
+                (Some(Fault::Short), _) if plan.alias == Alias::Bits => Some("unreadable_locator"),
+                (_, None) => Some("unknown_asset"),
+                (Some(Fault::Short), _) => Some("unreadable_locator"),
+                (Some(Fault::UnknownVersion), _) => Some("unknown_version"),
+                (Some(Fault::NoPacket), _) => Some("no_packet"),
+                _ => None,
             };
             let packets = &layouts[set];
-            let packet = choice % packets.len();
+            let packet = message.choice % packets.len();
             let layout = &packets[packet];
-            let version = set as u64 + 1;
+            let version = match message.fault {
+                Some(Fault::UnknownVersion) => 99,
+                _ => set as u64 + 1,
+            };
             let mut header = Vec::new();
             if plan.alias == Alias::Bits {
-                header.push(plan.ids[asset]);
+                header.push(id.key().unwrap_or(0));
             }
             if plan.version == Version::Bits {
                 header.push(version);
@@ -352,41 +633,65 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>]) -> Vec<Routed> {
                 // The least specific packet takes subs no other one has.
                 let sub = match layout.identify.get("sub").and_then(Value::as_u64) {
                     Some(sub) => sub,
-                    None if layout.name == "GENERAL" => general_sub,
+                    None if layout.name == "GENERAL" => message.general_sub,
                     None => 0,
                 };
                 header.push(sub);
             }
             let mut metadata = Vec::new();
             if plan.alias == Alias::Metadata {
-                metadata.push(("node".to_string(), plan.ids[asset]));
+                metadata.push(("node".to_string(), id.meta()));
             }
             if plan.version == Version::Metadata {
-                metadata.push(("ver".to_string(), version));
+                let value = if plan.text_versions {
+                    Meta::Text(format!("v{version}"))
+                } else {
+                    Meta::Uint(version)
+                };
+                metadata.push(("ver".to_string(), value));
             }
             Routed {
+                family: usize::from(message.mirror),
                 asset,
                 set,
                 packet,
-                ground,
+                ground: at,
                 header,
                 metadata,
+                fault: message.fault,
+                error,
             }
         })
         .collect()
+}
+
+/// A byte no asset's native id is.
+fn unbound_byte(plan: &Plan) -> u64 {
+    (0..=255)
+        .find(|n| !plan.ids.contains(&Native::Int(*n)))
+        .unwrap_or(0)
+}
+
+fn family_name(family: usize) -> String {
+    if family == 0 {
+        "fam".to_string()
+    } else {
+        "fam2".to_string()
+    }
 }
 
 fn asset_name(asset: usize) -> String {
     format!("AST{asset}")
 }
 
-fn set_name(set: usize) -> String {
-    format!("fam_v{}", set + 1)
+fn set_name(family: usize, set: usize) -> String {
+    format!("{}_v{}", family_name(family), set + 1)
 }
 
 fn assemble(
     plan: &Plan,
     layouts: &[Vec<PacketLayout>],
+    rows: &[Row],
     routed: Vec<Routed>,
     messages: Vec<Message>,
 ) -> Fleet {
@@ -394,10 +699,10 @@ fn assemble(
     for field in layouts.iter().flatten().flat_map(|packet| &packet.fields) {
         params.insert(field.param.clone(), param_json(&field.meaning));
     }
-    let sets: Vec<Value> = layouts
-        .iter()
-        .enumerate()
-        .map(|(set, packets)| {
+    let families = if plan.mirror { 2 } else { 1 };
+    let mut sets = Vec::new();
+    for family in 0..families {
+        for (set, packets) in layouts.iter().enumerate() {
             let packets: Vec<Value> = packets
                 .iter()
                 .map(|packet| {
@@ -409,51 +714,64 @@ fn assemble(
                     json
                 })
                 .collect();
-            let mut json = json!({ "name": set_name(set), "family": "fam", "packets": packets });
+            let mut json = json!({ "name": set_name(family, set), "family": family_name(family),
+                                   "packets": packets });
             if plan.version != Version::None {
-                json["version"] = json!(set + 1);
+                json["version"] = if plan.text_versions {
+                    json!(format!("v{}", set + 1))
+                } else {
+                    json!(set + 1)
+                };
             }
             if let Some(time) = time_json(&plan.sets[set].time, 8 + 8 * header_length(plan)) {
                 json["time"] = time;
             }
-            json
-        })
-        .collect();
+            sets.push(json);
+        }
+    }
     let bundle = json!({
         "mdl_version": "2.0",
         "catalog": { "params": params },
-        "families": [family_json(plan)],
+        "families": (0..families).map(|family| family_json(plan, family)).collect::<Vec<_>>(),
         "sets": sets
     });
-    let assets: Vec<String> = (0..plan.ids.len()).map(asset_name).collect();
+    let assets: Vec<String> = (0..=plan.ids.len()).map(asset_name).collect();
     let mut sent = Vec::new();
-    let mut booted: BTreeMap<usize, i128> = BTreeMap::new();
-    for (routed, message) in routed.into_iter().zip(messages) {
-        let teaches = correlate(plan, &routed, &message, &mut booted);
-        let absolute = match &message.event_time {
-            EventTime::At(at) => Some(*at),
-            EventTime::SinceBoot { value, .. } => match &plan.sets[routed.set].time {
+    let mut booted: BTreeMap<(usize, usize), i128> = BTreeMap::new();
+    for (routed, mut message) in routed.into_iter().zip(messages) {
+        match routed.fault {
+            Some(Fault::Short) => message.payload.truncate(1),
+            Some(Fault::NoPacket) => message.payload[0] = NO_PACKET_ID,
+            _ => {}
+        }
+        let teaches = routed.error.is_none() && correlate(plan, &routed, &message, &mut booted);
+        let absolute = match (&routed.error, &message.event_time) {
+            (Some(_), _) => None,
+            (None, EventTime::At(at)) => Some(*at),
+            (None, EventTime::SinceBoot { value, .. }) => match &plan.sets[routed.set].time {
                 TimeSource::Boot { unit, .. } => booted
-                    .get(&routed.asset)
+                    .get(&(routed.family, routed.asset))
                     .map(|boot| boot + i128::from(*value) * unit.nanos()),
                 _ => None,
             },
             _ => None,
         };
         sent.push(Sent {
-            asset: asset_name(routed.asset),
-            set: set_name(routed.set),
+            family: family_name(routed.family),
             metadata: routed.metadata,
             message,
+            error: routed.error,
+            asset: asset_name(routed.asset),
+            set: set_name(routed.family, routed.set),
             teaches,
             absolute,
         });
     }
     Fleet {
         bundle,
-        family: "fam".into(),
-        bindings: bindings(plan),
+        families: (0..families).map(family_name).collect(),
         assets,
+        bindings: bindings(plan, rows, families),
         messages: sent,
     }
 }
@@ -469,14 +787,14 @@ fn header_length(plan: &Plan) -> u64 {
     .count() as u64
 }
 
-fn family_json(plan: &Plan) -> Value {
-    let mut family = json!({
-        "name": "fam",
+fn family_json(plan: &Plan, family: usize) -> Value {
+    let mut json = json!({
+        "name": family_name(family),
         "encoding": "binary",
         "byte_order": if plan.little { "little" } else { "big" },
     });
     let mut metadata = Vec::new();
-    family["alias"] = match plan.alias {
+    json["alias"] = match plan.alias {
         Alias::Fixed => json!({ "kind": "fixed", "value": "A1" }),
         Alias::Bits => json!({ "kind": "bits", "offset_bits": 8, "size_bits": 8 }),
         Alias::Metadata => {
@@ -488,27 +806,28 @@ fn family_json(plan: &Plan) -> Value {
         Version::None => {}
         Version::Bits => {
             let offset = if plan.alias == Alias::Bits { 16 } else { 8 };
-            family["version"] = json!({ "kind": "bits", "offset_bits": offset, "size_bits": 8 });
+            json["version"] = json!({ "kind": "bits", "offset_bits": offset, "size_bits": 8 });
         }
         Version::Metadata => {
             metadata.push("ver");
-            family["version"] = json!({ "kind": "metadata", "name": "ver" });
+            json["version"] = json!({ "kind": "metadata", "name": "ver" });
         }
     }
     if !metadata.is_empty() {
-        family["metadata"] = json!(metadata);
+        json["metadata"] = json!(metadata);
     }
-    family
+    json
 }
 
 /// Whether a correlator learns from the message (§8.2): a boot set's
 /// correlation packet whose clocks both read good, giving the asset's boot
-/// instant as the absolute clock's instant less the boot clock.
+/// instant in its family as the absolute clock's instant less the boot
+/// clock.
 fn correlate(
     plan: &Plan,
     routed: &Routed,
     message: &Message,
-    booted: &mut BTreeMap<usize, i128>,
+    booted: &mut BTreeMap<(usize, usize), i128>,
 ) -> bool {
     let TimeSource::Boot {
         unit,
@@ -538,59 +857,55 @@ fn correlate(
         return false;
     }
     let instant = to_utc(epoch.label + i128::from(clock) * clock_unit.nanos(), *scale);
-    booted.insert(routed.asset, instant - i128::from(boot) * unit.nanos());
+    booted.insert(
+        (routed.family, routed.asset),
+        instant - i128::from(boot) * unit.nanos(),
+    );
     true
 }
 
-/// The bindings file: each asset from 1980-01-06, bound to its set when
-/// the family has no version locator, and rebound to another partway
-/// through when the plan says so.
-fn bindings(plan: &Plan) -> String {
+/// The bindings file: every row, for each family.
+fn bindings(plan: &Plan, rows: &[Row], families: usize) -> String {
     let mut text = String::from("mdl_version = \"2.0\"\n");
-    let native = |asset: usize| match plan.alias {
-        Alias::Fixed => "\"A1\"".to_string(),
-        _ => plan.ids[asset].to_string(),
-    };
-    let mut seen = BTreeSet::new();
-    for asset in 0..plan.ids.len() {
-        if !seen.insert(asset) {
-            continue;
-        }
-        text.push_str(&format!(
-            "\n[[binding]]\nfamily = \"fam\"\nnative_id = {}\nasset = \"{}\"\n",
-            native(asset),
-            asset_name(asset)
-        ));
-        if plan.version == Version::None {
+    for family in 0..families {
+        for row in rows {
             text.push_str(&format!(
-                "set = \"{}\"\n",
-                set_name(asset % plan.sets.len())
+                "\n[[binding]]\nfamily = \"{}\"\nnative_id = {}\n",
+                family_name(family),
+                row.id.toml()
+            ));
+            match row.binding {
+                Some((asset, set)) => {
+                    text.push_str(&format!("asset = \"{}\"\n", asset_name(asset)));
+                    if let Some(set) = set.filter(|_| plan.version == Version::None) {
+                        text.push_str(&format!("set = \"{}\"\n", set_name(family, set)));
+                    }
+                }
+                None => text.push_str("retired = true\n"),
+            }
+            text.push_str(&format!(
+                "effective_from = \"{}\"\n",
+                instant_text(row.from)
             ));
         }
-        text.push_str("effective_from = \"1980-01-06T00:00:00Z\"\n");
-    }
-    if let (Version::None, Some((asset, set, after))) = (plan.version, plan.switch) {
-        let at = plan.start + i128::from(after) * SECOND;
-        text.push_str(&format!(
-            "\n[[binding]]\nfamily = \"fam\"\nnative_id = {}\nasset = \"{}\"\nset = \"{}\"\n\
-             effective_from = \"{}\"\n",
-            native(asset),
-            asset_name(asset),
-            set_name(set),
-            instant_text(at)
-        ));
     }
     text
 }
 
-/// A whole-second Unix instant in MDL's spelling.
+/// A Unix instant in MDL's spelling, its fraction without trailing zeros.
 fn instant_text(unix: i128) -> String {
     let seconds = unix.div_euclid(SECOND);
+    let nanos = unix.rem_euclid(SECOND);
     let days = seconds.div_euclid(86_400);
     let of_day = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(i64::try_from(days).unwrap_or(0));
+    let fraction = if nanos == 0 {
+        String::new()
+    } else {
+        format!(".{nanos:09}").trim_end_matches('0').to_string()
+    };
     format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{fraction}Z",
         of_day / 3600,
         of_day % 3600 / 60,
         of_day % 60
@@ -619,18 +934,15 @@ mod tests {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
-    use super::{EventTime, civil_from_days, fleet, instant_text, label};
+    use super::{EventTime, Meta, civil_from_days, fleet, instant_text, label};
 
-    /// Generated fleets reach every routing and correlation case: each
-    /// alias and version locator, a binding that changes set, the least
-    /// specific packet, correlations that teach and ones a sentinel
-    /// spoils, and boot times before and after the first correlation.
+    /// Generated fleets reach every routing and correlation case.
     #[test]
     fn fleets_reach_every_case() {
         let mut runner = TestRunner::deterministic();
         let strategy = fleet();
         let mut seen = BTreeSet::new();
-        for _ in 0..300 {
+        for _ in 0..400 {
             let case = strategy.new_tree(&mut runner).unwrap().current();
             let family = &case.bundle["families"][0];
             seen.insert(format!(
@@ -641,10 +953,28 @@ mod tests {
                 "version:{}",
                 family["version"]["kind"].as_str().unwrap_or("none")
             ));
-            if case.bindings.matches("[[binding]]").count() > case.assets.len() {
-                seen.insert("rebound".to_string());
+            if case.families.len() > 1 {
+                seen.insert("mirror".to_string());
             }
+            if case.bindings.contains("retired = true") {
+                seen.insert("retired".to_string());
+            }
+            if case.bindings.contains(".") && case.bindings.contains("effective_from = \"20") {
+                seen.insert("fractional".to_string());
+            }
+            let mut previous = i128::MIN;
             for sent in &case.messages {
+                if let Some(code) = sent.error {
+                    seen.insert(format!("error:{code}"));
+                    continue;
+                }
+                if sent.message.received < previous {
+                    seen.insert("late".to_string());
+                }
+                previous = sent.message.received;
+                if sent.asset == format!("AST{}", case.assets.len() - 1) {
+                    seen.insert("reused".to_string());
+                }
                 if sent.message.packet == "GENERAL" {
                     seen.insert("general".to_string());
                 }
@@ -653,6 +983,11 @@ mod tests {
                 }
                 if let EventTime::SinceBoot { .. } = sent.message.event_time {
                     seen.insert(format!("correlated:{}", sent.absolute.is_some()));
+                }
+                for (name, value) in &sent.metadata {
+                    if let Meta::Text(_) = value {
+                        seen.insert(format!("text:{name}"));
+                    }
                 }
             }
         }
@@ -663,12 +998,22 @@ mod tests {
             "version:none",
             "version:bits",
             "version:metadata",
-            "rebound",
+            "mirror",
+            "retired",
+            "fractional",
+            "late",
+            "reused",
             "general",
             "teaches:true",
             "teaches:false",
             "correlated:true",
             "correlated:false",
+            "text:node",
+            "text:ver",
+            "error:unreadable_locator",
+            "error:unknown_asset",
+            "error:unknown_version",
+            "error:no_packet",
         ] {
             assert!(seen.contains(case), "no fleet reaches {case}: {seen:?}");
         }
@@ -690,6 +1035,10 @@ mod tests {
         assert_eq!(
             instant_text(label((2016, 12, 31), (23, 59, 59), 0)),
             "2016-12-31T23:59:59Z"
+        );
+        assert_eq!(
+            instant_text(label((2016, 12, 31), (23, 59, 59), 250_000_000)),
+            "2016-12-31T23:59:59.25Z"
         );
     }
 }
