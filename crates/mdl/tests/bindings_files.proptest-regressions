@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 05a2a79344f070f1edbfbfa9f5b1e81f8e895eaf849056f55c23325ea3728bd0 # shrinks to rows = [Row { family: "fam_a", id: BareWide(9313408959832921885), asset: Some("A0"), set: Some("s0"), retired: None, since: At(1577936816958000000) }, Row { family: "fam_a", id: Wide(9313408959832921885), asset: Some("A0"), set: Some("s0"), retired: None, since: At(1577936816958000000) }]
