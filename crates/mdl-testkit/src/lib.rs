@@ -12,7 +12,10 @@
 //!   them all, which the full fixture and the generators must each reach.
 //! - [`layout`]: valid layouts and messages packed for them by this
 //!   crate's own reading of the decoding spec, with what each decodes to.
+//! - [`bindings`]: bindings files, with what they resolve to and the
+//!   diagnostics a reader gives them.
 
+pub mod bindings;
 pub mod coverage;
 pub mod layout;
 pub mod shape;
