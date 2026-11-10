@@ -82,12 +82,14 @@ impl<'a> Report<'a> {
         self.notes.push(note.into());
     }
 
-    /// Print everything and give the exit code: 0 when built, 1 when the
-    /// definitions have errors.
+    /// Print everything and give the exit code: 0 when done, 1 when the
+    /// definitions have errors or the outcome says part of it failed.
     pub fn finish<T: Outcome>(self, outcome: Option<T>) -> ExitCode {
-        let code = match outcome {
-            Some(_) => ExitCode::SUCCESS,
-            None => ExitCode::from(1),
+        let succeeded = outcome.as_ref().is_some_and(|o| !o.failed());
+        let code = if succeeded {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
         };
         let printed = match self.format {
             Format::Human => emit(io::stderr(), &self.human_diagnostics()).and_then(|()| {
@@ -98,7 +100,7 @@ impl<'a> Report<'a> {
             }),
             Format::Json => {
                 let document = Document {
-                    ok: outcome.is_some(),
+                    ok: succeeded,
                     error: None,
                     diagnostics: self
                         .diagnostics
@@ -301,6 +303,12 @@ pub trait Outcome: Serialize {
     const KEY: &'static str;
 
     fn human(&self) -> String;
+
+    /// Whether part of the work failed although the definitions are fine
+    /// (a message that doesn't decode): exit code 1, and `ok` false.
+    fn failed(&self) -> bool {
+        false
+    }
 }
 
 impl Outcome for Built {

@@ -141,6 +141,14 @@ pub struct Stored {
     catalogs: BTreeMap<Digest, String>,
 }
 
+impl Stored {
+    /// The canonical text of every catalog read: the latest, and each
+    /// older one a set pins.
+    pub fn catalogs(&self) -> impl Iterator<Item = &str> {
+        self.catalogs.values().map(String::as_str)
+    }
+}
+
 /// The build `dir`'s manifest names, each artifact checked against the
 /// digest it's stored under, with the older catalogs its sets pin.
 pub fn load(dir: &Path) -> anyhow::Result<Stored> {

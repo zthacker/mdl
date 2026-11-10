@@ -6,24 +6,33 @@
 //! frontend | morphc build -                      an IR bundle on stdin
 //! morphc inspect set vendor_x_v2 store/         a set's datasheet
 //! morphc inspect param eps.v definitions/        who sends a param, and how
+//! morphc decode store/ --hex 0a1b... --meta apid=100
+//! morphc decode store/ --lines capture.txt       one message per line
+//! morphc encode store/ --command eps.set_mode --arg mode=SAFE
 //! ```
 //!
 //! Exit codes: 0 done, 1 the definitions have problems (every one is
 //! reported), 2 morphc couldn't run (unreadable input, a damaged store).
 
 mod build;
+mod decode;
 mod describe;
+mod encode;
 mod inputs;
 mod inspect;
 mod report;
 mod store;
+mod values;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use anyhow::bail;
+use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use mdl::v2::ir::Locator;
+use mdl::v2::artifact::{self, Artifacts};
+use mdl::v2::ir::{Artifact, Bundle, Locator};
+use mdl::v2::read::{Loaded, read_artifact};
+use mdl::v2::route::FamilySets;
 use mdl::v2::source::{Parsed, SourceMap, Sources, merge};
 use mdl::v2::validate::{Validated, validate};
 
@@ -54,6 +63,14 @@ enum Command {
     /// its rebuilds kept. Views come first (`morphc inspect set NAME
     /// INPUT...`); an input named like a view is written ./set.
     Inspect(inspect::InspectArgs),
+    /// Decode messages with definitions or a store, as a ground system
+    /// does: route each to an asset and set, identify its packet, and
+    /// give its catalog samples. With --command, decode command payloads.
+    Decode(decode::DecodeArgs),
+    /// Encode a catalog command and its arguments as a set's command
+    /// packet: the payload, the metadata a link frames it with, and the
+    /// def_version to record.
+    Encode(encode::EncodeArgs),
 }
 
 /// How definitions are read, for every command that reads them.
@@ -84,22 +101,28 @@ struct ReadArgs {
 #[derive(Debug, Args)]
 #[command(next_help_heading = "XTCE import")]
 struct XtceArgs {
-    /// The family's name [default: the root SpaceSystem's, lowercased]
-    #[arg(long, value_name = "NAME")]
+    /// The imported family's name [default: the root SpaceSystem's,
+    /// lowercased]
+    #[arg(id = "import_family", long = "import-family", value_name = "NAME")]
     family: Option<String>,
 
-    /// The set's name [default: the family's]
-    #[arg(long, value_name = "NAME")]
+    /// The imported set's name [default: the family's]
+    #[arg(id = "import_set", long = "import-set", value_name = "NAME")]
     set: Option<String>,
 
-    /// Where an asset's own id is: `fixed:<id>`, `metadata:<name>`,
-    /// `path:<pointer>` or `bits:<offset>:<size>` [default: fixed, the
-    /// root SpaceSystem's name]
-    #[arg(long, value_name = "LOCATOR", value_parser = parse_alias)]
+    /// Where an imported asset's own id is: `fixed:<id>`,
+    /// `metadata:<name>`, `path:<pointer>` or `bits:<offset>:<size>`
+    /// [default: fixed, the root SpaceSystem's name]
+    #[arg(
+        id = "import_alias",
+        long = "import-alias",
+        value_name = "LOCATOR",
+        value_parser = parse_alias
+    )]
     alias: Option<Locator>,
 
     /// How packet, field and type names are made from XTCE names
-    #[arg(long = "xtce-naming", value_enum)]
+    #[arg(id = "xtce_naming", long = "xtce-naming", value_enum)]
     naming: Option<Naming>,
 }
 
@@ -165,6 +188,8 @@ fn main() -> ExitCode {
     let (format, result) = match &cli.command {
         Command::Build(args) => (args.read.format, build::run(args)),
         Command::Inspect(args) => (args.read().format, inspect::run(args)),
+        Command::Decode(args) => (args.read.format, decode::run(args)),
+        Command::Encode(args) => (args.read.format, encode::run(args)),
     };
     match result {
         Ok(code) => code,
@@ -210,5 +235,145 @@ fn definitions(
             report.add(map.locate_all(&diagnostics));
             None
         }
+    }
+}
+
+/// Where a build comes from: one artifact store's latest build, or
+/// definitions built in memory.
+enum Origin {
+    Store(PathBuf),
+    Definitions(Vec<Input>),
+}
+
+impl Origin {
+    /// A store when it's the only input, else definitions.
+    fn of(read: &ReadArgs) -> anyhow::Result<Origin> {
+        if let [only] = read.inputs.as_slice()
+            && only.is_dir()
+            && store::is_store(only)
+        {
+            if read.xtce.given() {
+                bail!(
+                    "{} is an artifact store; the XTCE options apply only to definitions",
+                    only.display()
+                );
+            }
+            return Ok(Origin::Store(only.clone()));
+        }
+        Ok(Origin::Definitions(find_inputs(read)?))
+    }
+
+    /// The text diagnostics point into: the definition files, or none.
+    fn sources(&self) -> anyhow::Result<Sources> {
+        match self {
+            Origin::Store(_) => Ok(Sources::new()),
+            Origin::Definitions(inputs) => inputs::read(inputs),
+        }
+    }
+}
+
+/// A build's artifacts, and the bundle they hold, validated as one.
+struct Opened {
+    validated: Validated,
+    artifacts: Artifacts,
+    /// The canonical text of every catalog its sets pin: its own, and in a
+    /// store the older ones kept sets still pin.
+    catalogs: Vec<String>,
+}
+
+/// The build `origin` holds; none when its definitions have problems,
+/// which are in `report`. Definitions show what a store of them would
+/// hold: the bundle their artifacts carry, sets listing packets by name.
+fn open(
+    origin: &Origin,
+    read: &ReadArgs,
+    sources: &Sources,
+    report: &mut Report,
+) -> anyhow::Result<Option<Opened>> {
+    let (artifacts, catalogs) = match origin {
+        Origin::Store(dir) => {
+            let stored = store::load(dir)
+                .with_context(|| format!("can't read the store at {}", dir.display()))?;
+            let catalogs = stored.catalogs().map(str::to_string).collect();
+            (stored.artifacts, catalogs)
+        }
+        Origin::Definitions(inputs) => {
+            let Some((validated, _)) = definitions(read, inputs, sources, report) else {
+                return Ok(None);
+            };
+            let artifacts = artifact::build(&validated).context("can't write the artifacts")?;
+            let catalogs = vec![artifacts.catalog.canonical.clone()];
+            (artifacts, catalogs)
+        }
+    };
+    let validated = canonical(&artifacts).context("the build doesn't validate as one bundle")?;
+    Ok(Some(Opened {
+        validated,
+        artifacts,
+        catalogs,
+    }))
+}
+
+/// A build's catalog, families and sets, validated together. A set kept
+/// from an older build pins an older catalog the build's own is
+/// compatible with, so it validates against the build's.
+fn canonical(artifacts: &Artifacts) -> anyhow::Result<Validated> {
+    let Artifact::Catalog { catalog, .. } = &artifacts.catalog.artifact else {
+        bail!("its catalog artifact isn't a catalog");
+    };
+    let mut bundle = Bundle::new(catalog.clone());
+    for written in artifacts.families.values() {
+        if let Artifact::Family { family, .. } = &written.artifact {
+            bundle.families.push(family.clone());
+        }
+    }
+    for written in artifacts.sets.values() {
+        if let Artifact::Set { set, .. } = &written.artifact {
+            bundle.sets.push(set.clone());
+        }
+    }
+    validate(bundle).map_err(|diagnostics| anyhow!("{diagnostics}"))
+}
+
+/// The family's sets, assembled from the artifacts as a consumer
+/// assembles them.
+fn family_sets(opened: &Opened, family: &str) -> anyhow::Result<FamilySets> {
+    let load = |canonical: &str| -> anyhow::Result<Loaded<Artifact>> {
+        read_artifact(canonical.as_bytes()).context("an artifact doesn't read back")
+    };
+    let written = opened
+        .artifacts
+        .families
+        .get(family)
+        .with_context(|| format!("there's no family {family}"))?;
+    let family_artifact = load(&written.canonical)?;
+    let mut sets = Vec::new();
+    for written in opened.artifacts.sets.values() {
+        if let Artifact::Set { set, .. } = &written.artifact
+            && set.family == family
+        {
+            sets.push(load(&written.canonical)?);
+        }
+    }
+    let catalogs = opened
+        .catalogs
+        .iter()
+        .map(|text| load(text))
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    FamilySets::new(&family_artifact, &sets, &catalogs)
+        .with_context(|| format!("family {family}'s sets don't assemble"))
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    /// Clap checks the whole command line here (unique names, groups,
+    /// conflicts), not only when a command is first run.
+    #[test]
+    fn the_command_line_is_well_formed() {
+        Cli::command().debug_assert();
     }
 }

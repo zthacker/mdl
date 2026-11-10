@@ -105,7 +105,10 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
 - [x] `morphc inspect`: families and sets with their identities, a set's
       datasheet with every entry's position (from a public layout API), and
       every packet that sends a param or encodes a command
-- [ ] `morphc decode` (hex or file in, JSON out), `encode`, `--set`
+- [x] `morphc decode`: one message or a capture of many, routed with
+      bindings or a stand-in, samples or command arguments out
+- [x] `morphc encode`: a command and typed arguments to a payload, its
+      metadata and def_version
 - [ ] A build file listing inputs with their own options (several XTCE
       imports in one build)
 - [ ] README and examples rewritten around v2

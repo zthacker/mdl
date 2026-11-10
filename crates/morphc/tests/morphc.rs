@@ -467,16 +467,16 @@ fn what_morphc_cant_run_exits_2() {
         (&["build", "README.md"], "isn't a definition file"),
         (&["build", "-", "-"], "`-` (stdin) is given twice"),
         (
-            &["build", "sat.xml", "--alias", "bits:x:8"],
+            &["build", "sat.xml", "--import-alias", "bits:x:8"],
             "isn't a locator",
         ),
         (&["build", "nowhere"], "can't read nowhere"),
         (
-            &["build", "catalog.toml", "--family", "x"],
+            &["build", "catalog.toml", "--import-family", "x"],
             "the XTCE options apply to .xml inputs",
         ),
         (
-            &["build", "sat.xml", "--alias", "serial"],
+            &["build", "sat.xml", "--import-alias", "serial"],
             "isn't a locator",
         ),
     ];
@@ -722,7 +722,12 @@ fn help_groups_the_import_options_apart() {
         assert!(options.contains(flag), "{flag}: {help}");
         assert!(!import.contains(flag), "{flag}: {help}");
     }
-    for flag in ["--family", "--set", "--alias", "--xtce-naming"] {
+    for flag in [
+        "--import-family",
+        "--import-set",
+        "--import-alias",
+        "--xtce-naming",
+    ] {
         assert!(import.contains(flag), "{flag}: {help}");
     }
 }
@@ -1022,7 +1027,7 @@ fn inspect_reads_a_stores_latest_build() {
         stdout(&param)
     );
 
-    let xtce = morphc_in(&dir, &["inspect", "store", "--family", "x"], None);
+    let xtce = morphc_in(&dir, &["inspect", "store", "--import-family", "x"], None);
     assert_eq!(xtce.status.code(), Some(2));
     assert!(
         stderr(&xtce).contains("store is an artifact store"),
@@ -1154,4 +1159,1031 @@ fn inspect_view_words_come_first() {
             .contains("there's no set nope")
     );
     assert!(report.get("inspect").is_none());
+}
+
+// ---- decode ------------------------------------------------------------------------
+
+fn examples(dir: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(dir)
+}
+
+/// EPS_HK as the library's example test builds it: CUC time 0,
+/// spacecraft 101, 28410 mV, 2000 counts, NOMINAL.
+const EPS_HK: &str = "000000000000 0065 6efa 07d0 01";
+
+const BEACON_BINDINGS: &str = "mdl_version = \"2.0\"
+
+[[binding]]
+family = \"beacon\"
+native_id = 7
+asset = \"NODE-7\"
+effective_from = \"2026-01-01T00:00:00Z\"
+";
+
+#[test]
+fn decode_routes_identifies_and_gives_catalog_samples() {
+    let mission = examples("toml");
+    let args = [
+        "decode",
+        "mission",
+        "--set",
+        "ccsds_sat_v1",
+        "--hex",
+        EPS_HK,
+        "--meta",
+        "apid=100",
+        "--time",
+        "2026-06-01T12:00:31Z",
+    ];
+    let out = morphc_in(&mission, &args, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    let (head, table) = text.split_once("  param").unwrap();
+    assert!(
+        head.starts_with(
+            "set ccsds_sat_v1  packet EPS_HK  native id 101 (no bindings)\n  def_version "
+        ),
+        "{text}"
+    );
+    assert!(
+        head.ends_with("  event time 1999-12-31T23:59:28Z\n"),
+        "{text}"
+    );
+    assert_eq!(
+        table,
+        "            value    unit  from
+  eps.bus_voltage  28.41    V     bus_mv
+  eps.batt_temp    30.0     Cel   batt_temp_counts
+  eps.mode         NOMINAL        mode
+"
+    );
+
+    let mut json_args = args.to_vec();
+    json_args.extend(["--format", "json"]);
+    let report: Value =
+        serde_json::from_str(&stdout(&morphc_in(&mission, &json_args, None))).unwrap();
+    let message = &report["decode"]["messages"][0];
+    assert_eq!(message["ok"], true);
+    let telemetry = &message["telemetry"];
+    assert_eq!(telemetry["asset"], "101");
+    assert_eq!(telemetry["native_id"], 101);
+    assert_eq!(telemetry["stand_in"], true);
+    assert_eq!(telemetry["event_time"]["kind"], "at");
+    assert!(
+        telemetry["def_version"]
+            .as_str()
+            .unwrap()
+            .parse::<Digest>()
+            .is_ok()
+    );
+    assert_eq!(telemetry["samples"][0]["param"], "eps.bus_voltage");
+    assert_eq!(telemetry["samples"][0]["value"], 28.41);
+    assert_eq!(telemetry["samples"][0]["unit"], "V");
+    assert_eq!(telemetry["samples"][2]["value"], "NOMINAL");
+}
+
+#[test]
+fn decode_reads_json_payloads_and_shows_raw_entries() {
+    let dir = scratch("decode_json");
+    fs::write(
+        dir.join("line.json"),
+        r#"{"sat":"PX-7","ch":"BATT.T","v":212,"t":"2026-06-01T12:00:30.25Z"}"#,
+    )
+    .unwrap();
+    let mission = examples("toml/mission");
+    let mission_arg = mission.to_str().unwrap();
+    let args = [
+        "decode",
+        mission_arg,
+        "--family",
+        "json_sat",
+        "--payload",
+        "line.json",
+        "--raw",
+        "--format",
+        "json",
+    ];
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let telemetry = &report["decode"]["messages"][0]["telemetry"];
+    assert_eq!(telemetry["asset"], "PX-7");
+    assert_eq!(telemetry["event_time"]["time"], "2026-06-01T12:00:30.25Z");
+    let celsius = telemetry["samples"][0]["value"].as_f64().unwrap();
+    assert!((celsius - 100.0).abs() < 1e-9, "{celsius}");
+    assert_eq!(telemetry["record"]["v"].as_f64(), Some(212.0));
+    assert_eq!(telemetry["engineering"][0]["path"], "v");
+}
+
+#[test]
+fn decode_lines_reports_every_message_and_exits_1_when_one_fails() {
+    let dir = scratch("decode_lines");
+    fs::write(
+        dir.join("capture.txt"),
+        "# beacons\n0007016efa\n00 07 02 0b 19 00 fa\n\n0007\nzz\n",
+    )
+    .unwrap();
+    fs::write(dir.join("bindings.toml"), BEACON_BINDINGS).unwrap();
+    let defs = examples("toml/mixed_versions");
+    let defs = defs.to_str().unwrap();
+    let args = [
+        "decode",
+        defs,
+        "--lines",
+        "capture.txt",
+        "--bindings",
+        "bindings.toml",
+        "--time",
+        "2026-06-01T12:00:00Z",
+    ];
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.starts_with("line 2: set beacon_v1  packet BEACON  asset NODE-7 (native id 7)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nline 3: set beacon_v2  packet BEACON  asset NODE-7 (native id 7)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nline 5: error[unreadable_locator]: "),
+        "{text}"
+    );
+    assert!(
+        text.contains("\nline 6: error[morphc.invalid_hex]: \"zz\" isn't a hex byte\n"),
+        "{text}"
+    );
+    assert!(text.ends_with("\ndecoded 2 of 4 messages\n"), "{text}");
+
+    let mut json = args.to_vec();
+    json.extend(["--format", "json"]);
+    let report: Value = serde_json::from_str(&stdout(&morphc_in(&dir, &json, None))).unwrap();
+    assert_eq!(report["ok"], false);
+    let lines: Vec<(u64, bool)> = report["decode"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| (m["line"].as_u64().unwrap(), m["ok"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(lines, [(2, true), (3, true), (5, false), (6, false)]);
+
+    // Before the binding takes effect, the id is no asset.
+    let early = morphc_in(
+        &dir,
+        &[
+            "decode",
+            defs,
+            "--hex",
+            "0007016efa",
+            "--bindings",
+            "bindings.toml",
+            "--time",
+            "2025-06-01T00:00:00Z",
+        ],
+        None,
+    );
+    assert_eq!(early.status.code(), Some(1));
+    assert!(
+        stdout(&early).starts_with("error[unknown_asset]: "),
+        "{}",
+        stdout(&early)
+    );
+}
+
+#[test]
+fn decode_refuses_bindings_that_dont_fit_the_build() {
+    let dir = scratch("decode_bad_bindings");
+    fs::write(
+        dir.join("bindings.toml"),
+        BEACON_BINDINGS.replace(
+            "asset = \"NODE-7\"",
+            "asset = \"NODE-7\"\nset = \"beacon_v1\"",
+        ),
+    )
+    .unwrap();
+    let defs = examples("toml/mixed_versions");
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            defs.to_str().unwrap(),
+            "--hex",
+            "0007016efa",
+            "--bindings",
+            "bindings.toml",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(
+        err.contains("error[binding_set]: family beacon reads a layout version"),
+        "{err}"
+    );
+    assert!(err.contains("= bindings.toml at /binding/0/set\n"), "{err}");
+    let json = morphc_in(
+        &dir,
+        &[
+            "decode",
+            defs.to_str().unwrap(),
+            "--hex",
+            "0007016efa",
+            "--bindings",
+            "bindings.toml",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    let report: Value = serde_json::from_str(&stdout(&json)).unwrap();
+    let problem = &report["diagnostics"][0];
+    assert_eq!(problem["path"], "/binding/0/set");
+    assert_eq!(problem["context"], "bindings.toml at /binding/0/set");
+}
+
+#[test]
+fn decode_command_gives_the_command_and_its_arguments() {
+    let dir = scratch("decode_command");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    fs::write(
+        dir.join("cmd.json"),
+        r#"{"op":"set_mode","args":{"mode":"NOMINAL","delay":2.5}}"#,
+    )
+    .unwrap();
+    let args = [
+        "decode",
+        "full.json",
+        "--command",
+        "--set",
+        "vendor_j_v1",
+        "--payload",
+        "cmd.json",
+    ];
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.starts_with("set vendor_j_v1  command SET_MODE  encodes eps.set_mode\n"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with("  mode     NOMINAL\n  delay_s  2.5\n"),
+        "{text}"
+    );
+    let mut json = args.to_vec();
+    json.extend(["--format", "json"]);
+    let report: Value = serde_json::from_str(&stdout(&morphc_in(&dir, &json, None))).unwrap();
+    let command = &report["decode"]["messages"][0]["command"];
+    assert_eq!(command["command"], "eps.set_mode");
+    assert_eq!(
+        command["arguments"],
+        serde_json::json!([
+            { "name": "mode", "value": "NOMINAL", "defaulted": false },
+            { "name": "delay_s", "value": 2.5, "defaulted": false }
+        ])
+    );
+}
+
+#[test]
+fn decode_against_a_store_uses_its_identities() {
+    let dir = scratch("decode_store");
+    let mission = examples("toml/mission");
+    let built = morphc_in(
+        &dir,
+        &["build", mission.to_str().unwrap(), "--out", "store"],
+        None,
+    );
+    assert_eq!(built.status.code(), Some(0), "{}", stderr(&built));
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            "store",
+            "--set",
+            "ccsds_sat_v1",
+            "--hex",
+            EPS_HK,
+            "--meta",
+            "apid=100",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(
+        report["decode"]["messages"][0]["telemetry"]["def_version"],
+        manifest(&dir.join("store"))["sets"]["ccsds_sat_v1"]
+    );
+}
+
+#[test]
+fn decode_says_what_it_needs() {
+    let dir = scratch("decode_needs");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    fs::write(dir.join("bindings.toml"), BEACON_BINDINGS).unwrap();
+    let mixed = examples("toml/mixed_versions");
+    let mixed = mixed.to_str().unwrap();
+    let cases: [(&[&str], &str); 8] = [
+        (
+            &["decode", "full.json", "--hex", "00"],
+            "say which with --family or --set",
+        ),
+        (
+            &["decode", "full.json", "--family", "vendor_j", "--hex", "00"],
+            "the family is JSON",
+        ),
+        (
+            &["decode", "full.json", "--set", "nope", "--hex", "00"],
+            "there's no set nope",
+        ),
+        (
+            &["decode", mixed, "--set", "beacon_v1", "--hex", "00"],
+            "picks each message's set by its version, so --set beacon_v1 isn't used",
+        ),
+        (
+            &[
+                "decode",
+                mixed,
+                "--set",
+                "beacon_v1",
+                "--bindings",
+                "bindings.toml",
+                "--hex",
+                "00",
+            ],
+            "with --bindings, each asset's binding names its set",
+        ),
+        (
+            &["decode", "-", "--lines", "-"],
+            "can't both come from stdin",
+        ),
+        (
+            &["decode", mixed, "--hex", "0", "--meta", "apid"],
+            "isn't NAME=VALUE",
+        ),
+        (
+            &["decode", mixed, "--hex", "00", "--time", "noon"],
+            "--time",
+        ),
+    ];
+    for (args, message) in cases {
+        let out = morphc_in(&dir, args, None);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {}", stderr(&out));
+        assert!(stderr(&out).contains(message), "{args:?}: {}", stderr(&out));
+    }
+}
+
+// ---- encode ------------------------------------------------------------------------
+
+#[test]
+fn encode_writes_the_bytes_the_library_pins() {
+    let xtce = examples("xtce");
+    let encode = |args: &[&str]| {
+        let mut all = vec!["encode", "demosat.xml"];
+        all.extend_from_slice(args);
+        morphc_in(&xtce, &all, None)
+    };
+    let set_mode = encode(&[
+        "--command",
+        "eps.set_mode",
+        "--arg",
+        "mode=NOMINAL",
+        "--arg",
+        "delay=30",
+    ]);
+    assert_eq!(set_mode.status.code(), Some(0), "{}", stderr(&set_mode));
+    let text = stdout(&set_mode);
+    assert!(
+        text.starts_with("set demosat  command SetMode  encodes eps.set_mode\n"),
+        "{text}"
+    );
+    assert!(text.ends_with("  payload 1064c00000000102001e\n"), "{text}");
+
+    let track = encode(&[
+        "--command",
+        "demosat.adcs.track",
+        "--arg",
+        "waypoints_azimuth=[100, 200]",
+        "--arg",
+        "waypoints_elevation=[10, 20]",
+        "--format",
+        "json",
+    ]);
+    let report: Value = serde_json::from_str(&stdout(&track)).unwrap();
+    let packet = &report["encode"]["packet"];
+    assert_eq!(packet["payload"], "1065c000000002020064000a00c80014");
+    assert_eq!(packet["encoding"], "binary");
+    assert_eq!(packet["record"]["N"], 2);
+
+    let defaulted = encode(&["--command", "eps.set_mode", "--arg", "mode=SAFE"]);
+    assert!(
+        stdout(&defaulted).ends_with("  payload 1064c000000001010000\n  defaulted delay\n"),
+        "{}",
+        stdout(&defaulted)
+    );
+
+    let late = encode(&[
+        "--command",
+        "demosat.eps.setcharge",
+        "--arg",
+        "current=5.01",
+    ]);
+    assert_eq!(late.status.code(), Some(1));
+    assert!(
+        stdout(&late)
+            .starts_with("error[out_of_range]: command demosat.eps.setcharge, argument current: "),
+        "{}",
+        stdout(&late)
+    );
+    let uneven = encode(&[
+        "--command",
+        "demosat.adcs.track",
+        "--arg",
+        "waypoints_azimuth=[100, 200]",
+        "--arg",
+        "waypoints_elevation=[10]",
+        "--format",
+        "json",
+    ]);
+    assert_eq!(uneven.status.code(), Some(1));
+    let report: Value = serde_json::from_str(&stdout(&uneven)).unwrap();
+    assert_eq!(report["ok"], false);
+    assert_eq!(report["encode"]["error"]["code"], "bad_count");
+}
+
+#[test]
+fn encode_gives_the_metadata_and_decodes_back() {
+    let dir = scratch("encode_round_trip");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    let out = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "vendor_x_v2",
+            "--command",
+            "eps.load_table",
+            "--arg",
+            "table=c0ffee",
+            "--arg",
+            "slot=3",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let packet = &report["encode"]["packet"];
+    assert_eq!(packet["metadata"], serde_json::json!({ "apid": 300 }));
+    assert_eq!(packet["deprecated"], Value::Null);
+    let payload = packet["payload"].as_str().unwrap();
+    assert!(payload.starts_with("0303"), "{payload}");
+
+    let back = morphc_in(
+        &dir,
+        &[
+            "decode",
+            "full.json",
+            "--command",
+            "--set",
+            "vendor_x_v2",
+            "--hex",
+            payload,
+            "--meta",
+            "apid=300",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(back.status.code(), Some(0), "{}", stderr(&back));
+    let report: Value = serde_json::from_str(&stdout(&back)).unwrap();
+    assert_eq!(
+        report["decode"]["messages"][0]["command"]["arguments"],
+        serde_json::json!([
+            { "name": "table", "value": "c0ffee", "defaulted": false },
+            { "name": "slot", "value": 3, "defaulted": false }
+        ])
+    );
+
+    let json = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "vendor_j_v1",
+            "--command",
+            "eps.set_mode",
+            "--arg",
+            "mode=SAFE",
+            "--arg",
+            "delay_s=2.5",
+        ],
+        None,
+    );
+    assert_eq!(json.status.code(), Some(0), "{}", stderr(&json));
+    assert!(
+        stdout(&json).contains(
+            "  payload {\"args\":{\"delay\":2.5,\"mode\":\"SAFE\"},\"op\":\"set_mode\"}\n"
+        ),
+        "{}",
+        stdout(&json)
+    );
+}
+
+#[test]
+fn encode_says_what_it_needs() {
+    let dir = scratch("encode_needs");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    let cases: [(&[&str], &str); 5] = [
+        (
+            &["encode", "full.json", "--command", "nope"],
+            "the catalog has no command nope",
+        ),
+        (
+            &["encode", "full.json", "--command", "eps.set_mode"],
+            "encode command eps.set_mode; say which with --set",
+        ),
+        (
+            &[
+                "encode",
+                "full.json",
+                "--set",
+                "vendor_x_v2",
+                "--command",
+                "eps.load_table",
+                "--arg",
+                "slot=x",
+            ],
+            "--arg slot: \"x\" isn't an unsigned integer",
+        ),
+        (
+            &[
+                "encode",
+                "full.json",
+                "--set",
+                "vendor_x_v2",
+                "--command",
+                "eps.load_table",
+                "--arg",
+                "slot",
+            ],
+            "isn't NAME=VALUE",
+        ),
+        (
+            &[
+                "encode",
+                "full.json",
+                "--set",
+                "nope",
+                "--command",
+                "eps.set_mode",
+            ],
+            "there's no set nope",
+        ),
+    ];
+    for (args, message) in cases {
+        let out = morphc_in(&dir, args, None);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {}", stderr(&out));
+        assert!(stderr(&out).contains(message), "{args:?}: {}", stderr(&out));
+    }
+    let unknown = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "vendor_x_v2",
+            "--command",
+            "eps.load_table",
+            "--arg",
+            "table=00",
+            "--arg",
+            "volume=11",
+        ],
+        None,
+    );
+    assert_eq!(unknown.status.code(), Some(1), "{}", stderr(&unknown));
+    assert!(
+        stdout(&unknown).starts_with("error[unknown_argument]: "),
+        "{}",
+        stdout(&unknown)
+    );
+}
+
+/// vendor_x_v2's HK: time 0, native id 42, 3000 counts (30 V), NOMINAL,
+/// flags 1 (the position is there, the label isn't), two current samples,
+/// position (1, 2, 3), an empty label length, and no blobs.
+const VENDOR_X_HK: &str = "000000000000 002a 0bb8 01 01 02 03e8fc18 00000001 00000002 00000003 00";
+
+#[test]
+fn decode_records_carry_each_messages_own_metadata_and_time() {
+    let dir = scratch("decode_records");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    let hk = VENDOR_X_HK.replace(' ', "");
+    fs::write(
+        dir.join("capture.jsonl"),
+        format!(
+            "# two formats on one link\n\
+             {{\"hex\": \"{hk}\", \"meta\": {{\"apid\": 100}}, \"time\": \"2026-06-01T12:00:00Z\"}}\n\
+             {{\"hex\": \"{hk}\", \"meta\": {{\"apid\": 100, \"fmt\": 9}}}}\n\
+             {{\"json\": {{}}}}\n\
+             not json\n"
+        ),
+    )
+    .unwrap();
+    let args = [
+        "decode",
+        "full.json",
+        "--family",
+        "vendor_x",
+        "--records",
+        "capture.jsonl",
+        "--meta",
+        "fmt=2",
+        "--raw",
+        "--format",
+        "json",
+    ];
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let messages = report["decode"]["messages"].as_array().unwrap();
+    let outcomes: Vec<(u64, Value)> = messages
+        .iter()
+        .map(|m| (m["line"].as_u64().unwrap(), m["error"]["code"].clone()))
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (2, Value::Null),
+            (3, Value::from("unknown_version")),
+            (4, Value::from("morphc.invalid_record")),
+            (5, Value::from("morphc.invalid_record")),
+        ]
+    );
+    let telemetry = &messages[0]["telemetry"];
+    assert_eq!(telemetry["set"], "vendor_x_v2");
+    assert_eq!(telemetry["native_id"], 42);
+    let samples = telemetry["samples"].as_array().unwrap();
+    let value =
+        |param: &str| samples.iter().find(|s| s["param"] == param).unwrap()["value"].clone();
+    assert_eq!(value("eps.bus_voltage"), 30.0);
+    assert_eq!(value("eps.mode"), "NOMINAL");
+    assert_eq!(
+        value("nav.pos_ecef"),
+        serde_json::json!({ "frame": "ECI_J2000", "x": 1.0, "y": 2.0, "z": 3.0 })
+    );
+    let currents: Vec<(Value, Value)> = samples
+        .iter()
+        .filter(|s| s["param"] == "eps.bus_current")
+        .map(|s| (s["index"].clone(), s["value"].clone()))
+        .collect();
+    assert_eq!(
+        currents,
+        [
+            (Value::from(0), Value::from(1.0)),
+            (Value::from(1), Value::from(-1.0))
+        ]
+    );
+    assert_eq!(telemetry["record"]["blobs"], serde_json::json!([]));
+
+    // For people, entries keep the packet's order and an empty array shows.
+    let mut human = args.to_vec();
+    human.truncate(human.len() - 2);
+    let text = stdout(&morphc_in(&dir, &human, None));
+    let entries = text.split_once("  entries\n").unwrap().1;
+    let names: Vec<&str> = entries
+        .lines()
+        .skip(1)
+        .take_while(|line| line.starts_with("  ") && !line.starts_with("  line"))
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "bus_counts",
+            "mode",
+            "flags",
+            "n",
+            "samples[0]",
+            "samples[1]",
+            "pos.x",
+            "pos.y",
+            "pos.z",
+            "label_len",
+            "blobs"
+        ]
+    );
+    assert!(entries.contains("  blobs       []"), "{entries}");
+}
+
+#[test]
+fn decode_lines_read_json_documents_for_a_json_family() {
+    let dir = scratch("decode_json_lines");
+    let mission = examples("toml/mission");
+    fs::write(
+        dir.join("capture.jsonl"),
+        "{\"sat\":\"PX-7\",\"ch\":\"BATT.T\",\"v\":212,\"t\":\"2026-06-01T12:00:30.25Z\"}\n\
+         {\"sat\":\"PX-7\",\"ch\":\"PWR.BUS.V\",\"v\":28400,\"t\":\"2026-06-01T12:00:31Z\"}\n",
+    )
+    .unwrap();
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            mission.to_str().unwrap(),
+            "--family",
+            "json_sat",
+            "--lines",
+            "capture.jsonl",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("line 2: set json_sat_v1  packet PWR_BUS_V  native id PX-7 (no bindings)\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  eps.bus_voltage  28.4   V     v\n"),
+        "{text}"
+    );
+    assert!(text.ends_with("decoded 2 of 2 messages\n"), "{text}");
+}
+
+#[test]
+fn decode_command_refuses_bindings() {
+    let dir = scratch("decode_command_bindings");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    fs::write(dir.join("bindings.toml"), BEACON_BINDINGS).unwrap();
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            "full.json",
+            "--command",
+            "--set",
+            "vendor_j_v1",
+            "--bindings",
+            "bindings.toml",
+            "--hex",
+            "00",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(2));
+    assert!(
+        stderr(&out).contains("command payloads are decoded with --set, not --bindings"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn encode_takes_arguments_as_decode_writes_them_and_reports_the_librarys_codes() {
+    let xtce = examples("xtce");
+    let encode = |args: &[&str]| {
+        let mut all = vec!["encode", "demosat.xml"];
+        all.extend_from_slice(args);
+        morphc_in(&xtce, &all, None)
+    };
+    // Integers in lists as decimal text, as decode writes large ones.
+    let track = encode(&[
+        "--command",
+        "demosat.adcs.track",
+        "--arg",
+        "waypoints_azimuth=[\"100\", 200]",
+        "--arg",
+        "waypoints_elevation=[10, \"20\"]",
+    ]);
+    assert!(
+        stdout(&track).contains("  payload 1065c000000002020064000a00c80014\n"),
+        "{}",
+        stdout(&track)
+    );
+    let cases: [(&[&str], &str); 4] = [
+        (
+            &[
+                "--command",
+                "demosat.adcs.point",
+                "--arg",
+                "target=SUN",
+                "--arg",
+                "rate=NaN",
+            ],
+            "non_finite",
+        ),
+        (
+            &[
+                "--command",
+                "eps.set_mode",
+                "--arg",
+                "mode=SAFE",
+                "--arg",
+                "mode=NOMINAL",
+            ],
+            "duplicate_argument",
+        ),
+        (
+            &["--command", "eps.set_mode", "--arg", "mode=1"],
+            "unknown_state",
+        ),
+        (
+            &["--command", "eps.set_mode", "--arg", "mode=OFF"],
+            "unknown_state",
+        ),
+    ];
+    for (args, code) in cases {
+        let out = encode(args);
+        assert_eq!(out.status.code(), Some(1), "{args:?}: {}", stderr(&out));
+        assert!(
+            stdout(&out).starts_with(&format!("error[{code}]: ")),
+            "{args:?}: {}",
+            stdout(&out)
+        );
+    }
+}
+
+#[test]
+fn encode_writes_the_target_only_where_a_packet_carries_it() {
+    let dir = scratch("encode_target");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    let carried = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "legacy_v1",
+            "--command",
+            "eps.set_mode",
+            "--arg",
+            "mode=NOMINAL",
+            "--target",
+            "SAT-9",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(carried.status.code(), Some(0), "{}", stderr(&carried));
+    let report: Value = serde_json::from_str(&stdout(&carried)).unwrap();
+    assert_eq!(report["encode"]["packet"]["record"]["unit"], "SAT-9");
+
+    let nowhere = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "vendor_x_v2",
+            "--command",
+            "eps.set_mode",
+            "--arg",
+            "mode=SAFE",
+            "--target",
+            "42",
+        ],
+        None,
+    );
+    assert_eq!(nowhere.status.code(), Some(2));
+    assert!(
+        stderr(&nowhere).contains("carries no asset id, so --target goes nowhere"),
+        "{}",
+        stderr(&nowhere)
+    );
+
+    let elsewhere = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "vendor_j_v2",
+            "--command",
+            "eps.set_mode",
+            "--arg",
+            "mode=SAFE",
+        ],
+        None,
+    );
+    assert_eq!(elsewhere.status.code(), Some(1));
+    assert!(
+        stdout(&elsewhere).starts_with("error[unknown_command]: "),
+        "{}",
+        stdout(&elsewhere)
+    );
+}
+
+#[test]
+fn encode_warns_about_a_deprecated_command_and_reads_bytes_with_separators() {
+    let dir = scratch("encode_deprecated");
+    let mut bundle: Value = serde_json::from_str(FULL_BUNDLE).unwrap();
+    bundle["catalog"]["commands"]["eps.load_table"]["deprecated"] = Value::from("use eps.load");
+    fs::write(dir.join("full.json"), bundle.to_string()).unwrap();
+    let out = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "vendor_x_v2",
+            "--command",
+            "eps.load_table",
+            "--arg",
+            "table=0xc0 0xff ee",
+            "--arg",
+            "slot=1",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("  deprecated: use eps.load\n"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains(
+            "warning[morphc.deprecated_command]: command eps.load_table is deprecated: use eps.load"
+        ),
+        "{}",
+        stderr(&out)
+    );
+    let payload = stdout(&out)
+        .lines()
+        .find_map(|line| line.strip_prefix("  payload "))
+        .unwrap()
+        .to_string();
+    assert!(payload.contains("c0ffee"), "{payload}");
+}
+
+#[test]
+fn decode_records_take_a_json_payload_byte_for_byte_and_a_time_each() {
+    let dir = scratch("decode_record_text");
+    fs::write(dir.join("full.json"), FULL_BUNDLE).unwrap();
+    // The payload as sent, with a duplicate key the decoder refuses; the
+    // `json` convenience can't hold one, so it would hide it.
+    let text = r#"{"ch":"THM","heater":1,"heater":2,"t":"2026-06-01T12:00:00Z"}"#;
+    let record = serde_json::json!({ "text": text }).to_string();
+    fs::write(dir.join("capture.jsonl"), format!("{record}\n")).unwrap();
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            "full.json",
+            "--set",
+            "vendor_j_v1",
+            "--records",
+            "capture.jsonl",
+            "--meta",
+            "x=1",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("line 1: error[invalid_json]: "),
+        "{}",
+        stdout(&out)
+    );
+
+    // Each record's time decides its binding.
+    fs::write(dir.join("bindings.toml"), BEACON_BINDINGS).unwrap();
+    fs::write(
+        dir.join("beacons.jsonl"),
+        "{\"hex\": \"0007016efa\", \"time\": \"2025-12-31T23:59:59Z\"}\n\
+         {\"hex\": \"0007016efa\", \"time\": \"2026-01-01T00:00:00Z\"}\n",
+    )
+    .unwrap();
+    let mixed = examples("toml/mixed_versions");
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            mixed.to_str().unwrap(),
+            "--records",
+            "beacons.jsonl",
+            "--bindings",
+            "bindings.toml",
+        ],
+        None,
+    );
+    let text = stdout(&out);
+    assert!(text.starts_with("line 1: error[unknown_asset]: "), "{text}");
+    assert!(
+        text.contains("\nline 2: set beacon_v1  packet BEACON  asset NODE-7 (native id 7)\n"),
+        "{text}"
+    );
 }
