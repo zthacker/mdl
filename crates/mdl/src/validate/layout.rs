@@ -1519,7 +1519,11 @@ fn check_values(
             Conversion::States { states } => {
                 if let Some((low, high)) = range {
                     for (index, state) in states.iter().enumerate() {
-                        let raw = i128::from(state.raw);
+                        // A raw value that isn't an integer is reported
+                        // with the set's conversions.
+                        let Some(raw) = integer_value(&state.raw) else {
+                            continue;
+                        };
                         if !(low..=high).contains(&raw) {
                             report.error(
                                 Code::ValueRange,

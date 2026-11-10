@@ -11,7 +11,7 @@ use crate::Code;
 use crate::calibration::{
     Empty, Holds, SAFE, ToRaw, argument_calibration, engineering_range, worked_out,
 };
-use crate::out::{List, Object};
+use crate::out::{List, Object, integer_json};
 use crate::report::Report;
 use crate::space::{ARGUMENT_TYPES, Kind, Tree};
 use crate::units::{Ucum, ucum};
@@ -1478,7 +1478,7 @@ fn enumerated<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<
             continue;
         }
         let mut state = Object::at(entry.span());
-        state.put("raw", raw, Some(value.span));
+        state.put("raw", integer_json(i128::from(raw)), Some(value.span));
         state.put("name", label.value, Some(label.span));
         conversion_states.push_object(state);
         labels.push((label.value.to_string(), raw));

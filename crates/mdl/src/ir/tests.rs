@@ -679,3 +679,32 @@ fn literals_read_as_canonical_json_writes_them() {
     );
     assert_eq!(Literal::Float(-0.0), Literal::Int(0));
 }
+
+#[test]
+fn integers_convert_to_the_spelling_the_ir_writes() {
+    let safe = (1_i64 << 53) - 1;
+    assert_eq!(Scalar::from(0), Scalar::Int(0));
+    assert_eq!(Scalar::from(safe), Scalar::Int(safe));
+    assert_eq!(Scalar::from(-safe), Scalar::Int(-safe));
+    assert_eq!(
+        Scalar::from(safe + 1),
+        Scalar::Str("9007199254740992".into())
+    );
+    assert_eq!(
+        Scalar::from(-safe - 1),
+        Scalar::Str("-9007199254740992".into())
+    );
+    assert_eq!(
+        Scalar::from(u64::MAX),
+        Scalar::Str("18446744073709551615".into())
+    );
+    // A state of a 64-bit field, as a user builds one.
+    let state = State::new(u64::MAX, "MAX");
+    assert_eq!(state.raw.as_integer(), Some(i128::from(u64::MAX)));
+    // Text is an integer only in its one decimal spelling.
+    assert_eq!(Scalar::Int(-5).as_integer(), Some(-5));
+    assert_eq!(Scalar::from("-12").as_integer(), Some(-12));
+    for text in ["007", "-0", "+1", "1.0", "x", ""] {
+        assert_eq!(Scalar::from(text).as_integer(), None, "{text:?}");
+    }
+}

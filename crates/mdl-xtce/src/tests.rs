@@ -2162,6 +2162,21 @@ fn an_enumeration_label_on_two_values_is_encoded_as_the_first() {
 }
 
 #[test]
+fn an_enumeration_value_past_2_to_the_53_is_a_decimal_string() {
+    let ty = r#"<EnumeratedArgumentType name="A"><IntegerDataEncoding sizeInBits="64"/><EnumerationList>
+        <Enumeration value="1" label="ON"/><Enumeration value="9007199254740993" label="OFF"/>
+      </EnumerationList></EnumeratedArgumentType>"#;
+    let (_, result) = import_all(&[("sat.xml", &go_with(ty, "A"))]);
+    let imported = result.unwrap().bundle;
+    let bundle = serde_json::to_value(&imported).unwrap();
+    assert_eq!(
+        bundle["sets"][0]["commands"][0]["entries"][2]["conversion"]["states"],
+        json!([{"raw": 1, "name": "ON"}, {"raw": "9007199254740993", "name": "OFF"}])
+    );
+    assert!(validate(imported).is_ok());
+}
+
+#[test]
 fn where_yamcs_writes_a_float_argument_otherwise_is_a_warning() {
     let float = |attrs: &str, encoding: &str| {
         format!(r#"<FloatArgumentType name="A"{attrs}>{encoding}</FloatArgumentType>"#)
