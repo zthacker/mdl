@@ -14,7 +14,7 @@ use proptest::prelude::*;
 proptest! {
     #[test]
     fn a_valid_layout_decodes_what_was_packed_for_it(case in telemetry()) {
-        let sets = common::load(&case.bundle, &case.family)?;
+        let sets = common::load(&case.bundle, &case.family, &[])?;
         let bindings = Bindings::from_toml(&format!(
             "mdl_version = \"2.0\"\n\n[[binding]]\nfamily = \"{}\"\nnative_id = \"{}\"\n\
              asset = \"ASSET\"\nset = \"{}\"\neffective_from = \"1980-01-06T00:00:00Z\"\n",

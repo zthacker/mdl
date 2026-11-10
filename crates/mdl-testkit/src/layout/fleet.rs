@@ -14,8 +14,8 @@ use serde_json::{Map, Value, json};
 
 use super::{
     Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND, TimeFields,
-    TimeSource, epoch, field_spec, label, lay_out, message_at, param_json, time_fields, time_json,
-    time_scale, to_utc, unit,
+    TimeSource, epoch, field_spec, instant_text, label, lay_out, message_at, param_json,
+    time_fields, time_json, time_scale, to_utc, unit,
 };
 
 /// Families, their sets and bindings, and messages for them.
@@ -29,6 +29,8 @@ pub struct Fleet {
     pub assets: Vec<String>,
     /// The bindings file, in TOML.
     pub bindings: String,
+    /// The sets a consumer hasn't loaded, by name.
+    pub unloaded: Vec<String>,
     /// In arrival order.
     pub messages: Vec<Sent>,
 }
@@ -37,6 +39,7 @@ pub struct Fleet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Meta {
     Uint(u64),
+    Int(i64),
     Text(String),
 }
 
@@ -74,38 +77,54 @@ enum Version {
     Metadata,
 }
 
-/// A native id: an integer, the text of one (which reads as that integer),
-/// or other text.
+/// A native id: an integer, a negative one, the text of one (which reads
+/// as that integer), or other text.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Native {
     Int(u64),
+    Negative(i64),
     IntText(u64),
     Text(String),
 }
+
+/// A native id as a reader compares it: its integer, or its text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Key {
+    Int(i128),
+    Text(String),
+}
+
+/// The largest integer a bindings file writes as a number, 2^53 − 1.
+const MAX_SAFE: u64 = (1 << 53) - 1;
 
 impl Native {
     /// How a message carries it.
     fn meta(&self) -> Meta {
         match self {
             Native::Int(n) => Meta::Uint(*n),
+            Native::Negative(n) => Meta::Int(*n),
             Native::IntText(n) => Meta::Text(n.to_string()),
             Native::Text(text) => Meta::Text(text.clone()),
         }
     }
 
-    /// How a bindings file writes it: an integer as one, whatever its text.
+    /// How a bindings file writes it (`spec/bindings.md` §3): an integer
+    /// within ±(2^53 − 1) as one, whatever its text; a wider one as its
+    /// decimal string.
     fn toml(&self) -> String {
         match self {
+            Native::Int(n) | Native::IntText(n) if *n > MAX_SAFE => format!("\"{n}\""),
             Native::Int(n) | Native::IntText(n) => n.to_string(),
+            Native::Negative(n) => n.to_string(),
             Native::Text(text) => format!("\"{text}\""),
         }
     }
 
-    /// What it is, for comparing: its integer, or its text.
-    fn key(&self) -> Result<u64, String> {
+    fn key(&self) -> Key {
         match self {
-            Native::Int(n) | Native::IntText(n) => Ok(*n),
-            Native::Text(text) => Err(text.clone()),
+            Native::Int(n) | Native::IntText(n) => Key::Int(i128::from(*n)),
+            Native::Negative(n) => Key::Int(i128::from(*n)),
+            Native::Text(text) => Key::Text(text.clone()),
         }
     }
 }
@@ -121,6 +140,21 @@ enum Fault {
     UnknownVersion,
     /// Its id is one no packet has.
     NoPacket,
+    /// It gives a metadata name its family reads twice, which can't be
+    /// read (§3.1).
+    Twice,
+}
+
+/// How a family with a version locator writes versions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Versions {
+    /// Integers, sent as integers.
+    Int,
+    /// Integers, sent from metadata as their text, which compares by value
+    /// (`"2"` is 2).
+    IntText,
+    /// Text (`v2`), sent from metadata as text.
+    Text,
 }
 
 #[derive(Debug, Clone)]
@@ -145,8 +179,15 @@ struct Plan {
     little: bool,
     alias: Alias,
     version: Version,
-    /// Whether versions are text (`v1`), read from metadata as text.
-    text_versions: bool,
+    versions: Versions,
+    /// The alias's and version's widths, for bits locators.
+    node_bits: u32,
+    version_bits: u32,
+    /// An asset whose rows break §6's rule: naming a set when the family
+    /// reads versions, or none when it doesn't.
+    malformed: Option<usize>,
+    /// A set the consumer hasn't loaded.
+    unloaded: Option<usize>,
     /// Whether packets are told apart by an id and a `sub` byte.
     two_keys: bool,
     mirror: bool,
@@ -201,13 +242,29 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
             any::<bool>(),
             any::<bool>(),
         ),
+        (
+            select(&[8_u32, 16, 32, 64][..]),
+            select(&[8_u32, 16][..]),
+            select(&[Versions::Int, Versions::IntText, Versions::Text][..]),
+            any::<bool>(),
+            any::<bool>(),
+        ),
     );
     shape
         .prop_flat_map(
-            |((little, alias, version, two_keys, mirror), (sets, assets, boot, text, faults))| {
+            |(
+                (little, alias, version, two_keys, mirror),
+                (sets, assets, boot, text, faults),
+                (node_bits, version_bits, versions, malformed, unloaded),
+            )| {
                 let assets = if alias == Alias::Fixed { 1 } else { assets };
-                let text_versions = text && version == Version::Metadata;
-                let ids = native_ids(alias, assets, text);
+                // Text versions come from metadata only.
+                let versions = if version == Version::Metadata {
+                    versions
+                } else {
+                    Versions::Int
+                };
+                let ids = native_ids(alias, assets, text, node_bits);
                 let switch = if version == Version::None && sets > 1 {
                     proptest::option::of((0..assets, 0..sets, 1_i64..100_000_000)).boxed()
                 } else {
@@ -221,6 +278,16 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                 .prop_map(|retire| {
                     retire.map(|(asset, after, reuse)| (asset, after, reuse.map(|r| after + r)))
                 });
+                let malformed = if malformed && faults {
+                    (0..assets).prop_map(Some).boxed()
+                } else {
+                    Just(None).boxed()
+                };
+                let unloaded = if unloaded && faults && sets > 1 {
+                    (0..sets).prop_map(Some).boxed()
+                } else {
+                    Just(None).boxed()
+                };
                 let message = (
                     (0..assets, 0..sets, any::<usize>(), 4_u64..=255),
                     (-20_000_000_i64..50_000_000, any::<bool>()),
@@ -242,7 +309,8 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                         },
                     );
                 (
-                    Just((little, alias, version, text_versions, two_keys, mirror)),
+                    Just((little, alias, version, versions, two_keys, mirror)),
+                    (Just((node_bits, version_bits)), malformed, unloaded),
                     vec(set_plan(boot), sets),
                     ids,
                     (switch, retire),
@@ -256,7 +324,8 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
         )
         .prop_map(
             |(
-                (little, alias, version, text_versions, two_keys, mirror),
+                (little, alias, version, versions, two_keys, mirror),
+                ((node_bits, version_bits), malformed, unloaded),
                 sets,
                 ids,
                 (switch, retire),
@@ -266,7 +335,11 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                 little,
                 alias,
                 version,
-                text_versions,
+                versions,
+                node_bits,
+                version_bits,
+                malformed,
+                unloaded,
                 two_keys,
                 mirror,
                 sets,
@@ -306,15 +379,23 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
         .boxed()
 }
 
-/// Distinct native ids: bytes for a bits alias; for a metadata alias,
-/// integers, or with `text` integers written as text and other text
-/// (`007` isn't an integer's one spelling, so it stays text).
-fn native_ids(alias: Alias, assets: usize, text: bool) -> BoxedStrategy<Vec<Native>> {
+/// Distinct native ids: integers a bits alias of `bits` bits holds (past
+/// i64 for 64 bits); for a metadata alias, integers (some negative), or
+/// with `text` integers written as text and other text (`007` isn't an
+/// integer's one spelling, so it stays text).
+fn native_ids(alias: Alias, assets: usize, text: bool, bits: u32) -> BoxedStrategy<Vec<Native>> {
     match alias {
         Alias::Fixed => Just(vec![Native::Text("A1".into())]).boxed(),
-        Alias::Bits => btree_set(0_u64..=255, assets)
-            .prop_map(|ids| ids.into_iter().map(Native::Int).collect())
-            .boxed(),
+        Alias::Bits => {
+            let most = if bits == 64 {
+                u64::MAX
+            } else {
+                (1 << bits) - 1
+            };
+            btree_set(0..=most, assets)
+                .prop_map(|ids| ids.into_iter().map(Native::Int).collect())
+                .boxed()
+        }
         Alias::Metadata if text => btree_set(0_u64..1000, assets)
             .prop_flat_map(|numbers| {
                 let count = numbers.len();
@@ -332,8 +413,15 @@ fn native_ids(alias: Alias, assets: usize, text: bool) -> BoxedStrategy<Vec<Nati
                     .collect()
             })
             .boxed(),
-        Alias::Metadata => btree_set(0_u64..1 << 32, assets)
-            .prop_map(|ids| ids.into_iter().map(Native::Int).collect())
+        Alias::Metadata => btree_set(-(1_i64 << 40)..1 << 40, assets)
+            .prop_map(|ids| {
+                ids.into_iter()
+                    .map(|n| match u64::try_from(n) {
+                        Ok(n) => Native::Int(n),
+                        Err(_) => Native::Negative(n),
+                    })
+                    .collect()
+            })
             .boxed(),
     }
 }
@@ -352,6 +440,9 @@ fn fault(alias: Alias, version: Version, faults: bool) -> BoxedStrategy<Option<F
     }
     if version != Version::None {
         kinds.push(Fault::UnknownVersion);
+    }
+    if alias == Alias::Metadata || version == Version::Metadata {
+        kinds.push(Fault::Twice);
     }
     proptest::option::weighted(0.25, select(kinds)).boxed()
 }
@@ -416,16 +507,7 @@ const NO_PACKET_ID: u8 = 250;
 /// `k / 2 + 1` and sub `k % 2 + 1`, so packets share ids; the least specific
 /// is id 1 alone, and takes every other sub.
 fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
-    let mut header = Vec::new();
-    if plan.alias == Alias::Bits {
-        header.push("node");
-    }
-    if plan.version == Version::Bits {
-        header.push("ver");
-    }
-    if plan.two_keys {
-        header.push("sub");
-    }
+    let header = header(plan);
     plan.sets
         .iter()
         .enumerate()
@@ -494,8 +576,28 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
 }
 
 /// An asset's set when its family has no version locator.
+/// The header fields after the id: the bits alias, the bits version, the
+/// second identify key.
+fn header(plan: &Plan) -> Vec<(&'static str, u32)> {
+    let mut header = Vec::new();
+    if plan.alias == Alias::Bits {
+        header.push(("node", plan.node_bits));
+    }
+    if plan.version == Version::Bits {
+        header.push(("ver", plan.version_bits));
+    }
+    if plan.two_keys {
+        header.push(("sub", 8));
+    }
+    header
+}
+
+/// The set an asset's rows name: its own when the family has no version
+/// locator, none when it has one, the other way round for a malformed
+/// asset.
 fn bound_set(plan: &Plan, asset: usize) -> Option<usize> {
-    (plan.version == Version::None).then_some(asset % plan.sets.len())
+    let named = plan.version == Version::None;
+    (named != (plan.malformed == Some(asset))).then_some(asset % plan.sets.len())
 }
 
 /// The bindings, as rows: each asset from 1980-01-06, then the rebinding,
@@ -590,41 +692,60 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
                 _ => ground,
             };
             let id = match message.fault {
-                Some(Fault::Unbound) => match &plan.ids[0] {
-                    Native::Int(_) if plan.alias == Alias::Bits => Native::Int(unbound_byte(plan)),
-                    Native::Int(_) => Native::Int(1 << 40),
-                    _ => Native::Text("unbound".into()),
+                Some(Fault::Unbound) => match (plan.alias, &plan.ids[0]) {
+                    (Alias::Bits, _) => Native::Int(unbound_id(plan)),
+                    (_, Native::Text(_) | Native::IntText(_)) => Native::Text("unbound".into()),
+                    _ => Native::Int(1 << 50),
                 },
                 _ => plan.ids[message.asset].clone(),
             };
             let bound = resolve(rows, &id, at);
-            let (asset, set) = match bound {
-                Some((asset, Some(set))) => (asset, set),
-                Some((asset, None)) => (asset, message.named),
-                // Laid out as the asset's own set would be.
-                None => (
-                    message.asset,
-                    bound_set(plan, message.asset).unwrap_or(message.named),
-                ),
+            let versioned = plan.version != Version::None;
+            let short = message.fault == Some(Fault::Short);
+            let twice = message.fault == Some(Fault::Twice);
+            let alias_unreadable =
+                (short && plan.alias == Alias::Bits) || (twice && plan.alias == Alias::Metadata);
+            let version_unreadable = (short && plan.version == Version::Bits)
+                || (twice && plan.alias != Alias::Metadata && plan.version == Version::Metadata);
+            let routing = if alias_unreadable {
+                Some("unreadable_locator")
+            } else {
+                match bound {
+                    None => Some("unknown_asset"),
+                    Some((_, Some(_))) if versioned => Some("unexpected_set"),
+                    Some(_) if versioned && version_unreadable => Some("unreadable_locator"),
+                    // A version no loaded set has.
+                    Some(_)
+                        if versioned
+                            && (message.fault == Some(Fault::UnknownVersion)
+                                || plan.unloaded == Some(message.named)) =>
+                    {
+                        Some("unknown_version")
+                    }
+                    Some((_, None)) if !versioned => Some("missing_set"),
+                    Some((_, Some(set))) if plan.unloaded == Some(set) => Some("unknown_set"),
+                    _ => None,
+                }
             };
-            let error = match (message.fault, bound) {
-                (Some(Fault::Short), _) if plan.alias == Alias::Bits => Some("unreadable_locator"),
-                (_, None) => Some("unknown_asset"),
-                (Some(Fault::Short), _) => Some("unreadable_locator"),
-                (Some(Fault::UnknownVersion), _) => Some("unknown_version"),
-                (Some(Fault::NoPacket), _) => Some("no_packet"),
-                _ => None,
+            let error = routing.or((message.fault == Some(Fault::NoPacket)).then_some("no_packet"));
+            let asset = bound.map_or(message.asset, |(asset, _)| asset);
+            let set = match bound {
+                _ if versioned => message.named,
+                Some((_, Some(set))) => set,
+                // Laid out as the asset's own set would be.
+                _ => message.asset % plan.sets.len(),
             };
             let packets = &layouts[set];
             let packet = message.choice % packets.len();
             let layout = &packets[packet];
-            let version = match message.fault {
-                Some(Fault::UnknownVersion) => 99,
-                _ => set as u64 + 1,
-            };
+            let unknown_version = message.fault == Some(Fault::UnknownVersion);
+            let version = if unknown_version { 99 } else { set as u64 + 1 };
             let mut header = Vec::new();
             if plan.alias == Alias::Bits {
-                header.push(id.key().unwrap_or(0));
+                header.push(match id.key() {
+                    Key::Int(n) => u64::try_from(n).unwrap_or(0),
+                    Key::Text(_) => 0,
+                });
             }
             if plan.version == Version::Bits {
                 header.push(version);
@@ -641,14 +762,22 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
             let mut metadata = Vec::new();
             if plan.alias == Alias::Metadata {
                 metadata.push(("node".to_string(), id.meta()));
+                if twice {
+                    metadata.push(("node".to_string(), id.meta()));
+                }
             }
             if plan.version == Version::Metadata {
-                let value = if plan.text_versions {
-                    Meta::Text(format!("v{version}"))
-                } else {
-                    Meta::Uint(version)
+                let value = match plan.versions {
+                    Versions::Int => Meta::Uint(version),
+                    // "02" isn't 2's one spelling, so it's text no set has.
+                    Versions::IntText if unknown_version => Meta::Text(format!("0{}", set + 1)),
+                    Versions::IntText => Meta::Text(version.to_string()),
+                    Versions::Text => Meta::Text(format!("v{version}")),
                 };
-                metadata.push(("ver".to_string(), value));
+                metadata.push(("ver".to_string(), value.clone()));
+                if twice && plan.alias != Alias::Metadata {
+                    metadata.push(("ver".to_string(), value));
+                }
             }
             Routed {
                 family: usize::from(message.mirror),
@@ -665,8 +794,8 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
         .collect()
 }
 
-/// A byte no asset's native id is.
-fn unbound_byte(plan: &Plan) -> u64 {
+/// A small integer no asset's native id is, which any bits alias holds.
+fn unbound_id(plan: &Plan) -> u64 {
     (0..=255)
         .find(|n| !plan.ids.contains(&Native::Int(*n)))
         .unwrap_or(0)
@@ -717,13 +846,14 @@ fn assemble(
             let mut json = json!({ "name": set_name(family, set), "family": family_name(family),
                                    "packets": packets });
             if plan.version != Version::None {
-                json["version"] = if plan.text_versions {
+                json["version"] = if plan.versions == Versions::Text {
                     json!(format!("v{}", set + 1))
                 } else {
                     json!(set + 1)
                 };
             }
-            if let Some(time) = time_json(&plan.sets[set].time, 8 + 8 * header_length(plan)) {
+            let header: u64 = header(plan).iter().map(|(_, bits)| u64::from(*bits)).sum();
+            if let Some(time) = time_json(&plan.sets[set].time, 8 + header) {
                 json["time"] = time;
             }
             sets.push(json);
@@ -771,20 +901,13 @@ fn assemble(
         bundle,
         families: (0..families).map(family_name).collect(),
         assets,
-        bindings: bindings(plan, rows, families),
+        bindings: bindings(rows, families),
+        unloaded: plan
+            .unloaded
+            .map(|set| (0..families).map(|family| set_name(family, set)).collect())
+            .unwrap_or_default(),
         messages: sent,
     }
-}
-
-fn header_length(plan: &Plan) -> u64 {
-    [
-        plan.alias == Alias::Bits,
-        plan.version == Version::Bits,
-        plan.two_keys,
-    ]
-    .into_iter()
-    .filter(|present| *present)
-    .count() as u64
 }
 
 fn family_json(plan: &Plan, family: usize) -> Value {
@@ -796,7 +919,7 @@ fn family_json(plan: &Plan, family: usize) -> Value {
     let mut metadata = Vec::new();
     json["alias"] = match plan.alias {
         Alias::Fixed => json!({ "kind": "fixed", "value": "A1" }),
-        Alias::Bits => json!({ "kind": "bits", "offset_bits": 8, "size_bits": 8 }),
+        Alias::Bits => json!({ "kind": "bits", "offset_bits": 8, "size_bits": plan.node_bits }),
         Alias::Metadata => {
             metadata.push("node");
             json!({ "kind": "metadata", "name": "node" })
@@ -805,8 +928,13 @@ fn family_json(plan: &Plan, family: usize) -> Value {
     match plan.version {
         Version::None => {}
         Version::Bits => {
-            let offset = if plan.alias == Alias::Bits { 16 } else { 8 };
-            json["version"] = json!({ "kind": "bits", "offset_bits": offset, "size_bits": 8 });
+            let offset = if plan.alias == Alias::Bits {
+                8 + plan.node_bits
+            } else {
+                8
+            };
+            json["version"] =
+                json!({ "kind": "bits", "offset_bits": offset, "size_bits": plan.version_bits });
         }
         Version::Metadata => {
             metadata.push("ver");
@@ -865,7 +993,7 @@ fn correlate(
 }
 
 /// The bindings file: every row, for each family.
-fn bindings(plan: &Plan, rows: &[Row], families: usize) -> String {
+fn bindings(rows: &[Row], families: usize) -> String {
     let mut text = String::from("mdl_version = \"2.0\"\n");
     for family in 0..families {
         for row in rows {
@@ -877,7 +1005,7 @@ fn bindings(plan: &Plan, rows: &[Row], families: usize) -> String {
             match row.binding {
                 Some((asset, set)) => {
                     text.push_str(&format!("asset = \"{}\"\n", asset_name(asset)));
-                    if let Some(set) = set.filter(|_| plan.version == Version::None) {
+                    if let Some(set) = set {
                         text.push_str(&format!("set = \"{}\"\n", set_name(family, set)));
                     }
                 }
@@ -892,41 +1020,6 @@ fn bindings(plan: &Plan, rows: &[Row], families: usize) -> String {
     text
 }
 
-/// A Unix instant in MDL's spelling, its fraction without trailing zeros.
-fn instant_text(unix: i128) -> String {
-    let seconds = unix.div_euclid(SECOND);
-    let nanos = unix.rem_euclid(SECOND);
-    let days = seconds.div_euclid(86_400);
-    let of_day = seconds.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(i64::try_from(days).unwrap_or(0));
-    let fraction = if nanos == 0 {
-        String::new()
-    } else {
-        format!(".{nanos:09}").trim_end_matches('0').to_string()
-    };
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{fraction}Z",
-        of_day / 3600,
-        of_day % 3600 / 60,
-        of_day % 60
-    )
-}
-
-/// The date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`).
-fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let mp = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -934,7 +1027,8 @@ mod tests {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
-    use super::{EventTime, Meta, civil_from_days, fleet, instant_text, label};
+    use super::super::civil_from_days;
+    use super::{EventTime, Meta, fleet, instant_text, label};
 
     /// Generated fleets reach every routing and correlation case.
     #[test]
@@ -942,7 +1036,7 @@ mod tests {
         let mut runner = TestRunner::deterministic();
         let strategy = fleet();
         let mut seen = BTreeSet::new();
-        for _ in 0..400 {
+        for _ in 0..600 {
             let case = strategy.new_tree(&mut runner).unwrap().current();
             let family = &case.bundle["families"][0];
             seen.insert(format!(
@@ -955,6 +1049,13 @@ mod tests {
             ));
             if case.families.len() > 1 {
                 seen.insert("mirror".to_string());
+            }
+            if family["alias"]["size_bits"] == 64 {
+                seen.insert("alias:64".to_string());
+            }
+            if case.bindings.contains("native_id = \"1") || case.bindings.contains("native_id = -")
+            {
+                seen.insert("wide or negative id".to_string());
             }
             if case.bindings.contains("retired = true") {
                 seen.insert("retired".to_string());
@@ -985,8 +1086,17 @@ mod tests {
                     seen.insert(format!("correlated:{}", sent.absolute.is_some()));
                 }
                 for (name, value) in &sent.metadata {
-                    if let Meta::Text(_) = value {
-                        seen.insert(format!("text:{name}"));
+                    match value {
+                        Meta::Text(text) if text.parse::<u64>().is_ok() => {
+                            seen.insert(format!("integer text:{name}"));
+                        }
+                        Meta::Text(_) => {
+                            seen.insert(format!("text:{name}"));
+                        }
+                        Meta::Int(_) => {
+                            seen.insert(format!("negative:{name}"));
+                        }
+                        Meta::Uint(_) => {}
                     }
                 }
             }
@@ -1010,9 +1120,17 @@ mod tests {
             "correlated:false",
             "text:node",
             "text:ver",
+            "integer text:node",
+            "integer text:ver",
+            "negative:node",
+            "alias:64",
+            "wide or negative id",
             "error:unreadable_locator",
             "error:unknown_asset",
             "error:unknown_version",
+            "error:unexpected_set",
+            "error:missing_set",
+            "error:unknown_set",
             "error:no_packet",
         ] {
             assert!(seen.contains(case), "no fleet reaches {case}: {seen:?}");

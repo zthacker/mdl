@@ -14,8 +14,8 @@ use serde_json::Value as Json;
 
 /// The bundle validated and built, its artifacts read back (each with the
 /// digest it was written with), and a family assembled from them with its
-/// sets.
-pub fn load(bundle: &Json, family: &str) -> Result<FamilySets, TestCaseError> {
+/// sets, but for those a consumer hasn't loaded.
+pub fn load(bundle: &Json, family: &str, unloaded: &[String]) -> Result<FamilySets, TestCaseError> {
     let read = read_bundle_value(bundle)
         .map_err(|error| TestCaseError::fail(format!("read: {error}")))?
         .value;
@@ -37,7 +37,10 @@ pub fn load(bundle: &Json, family: &str) -> Result<FamilySets, TestCaseError> {
     let sets = artifacts
         .sets
         .values()
-        .filter(|written| matches!(&written.artifact, Artifact::Set { set, .. } if set.family == family))
+        .filter(|written| {
+            matches!(&written.artifact, Artifact::Set { set, .. }
+                if set.family == family && !unloaded.contains(&set.name))
+        })
         .map(reread)
         .collect::<Result<Vec<_>, _>>()?;
     let family = reread(&artifacts.families[family])?;

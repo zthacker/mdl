@@ -24,7 +24,7 @@ proptest! {
         let families: BTreeMap<&str, FamilySets> = case
             .families
             .iter()
-            .map(|family| Ok((family.as_str(), common::load(&case.bundle, family)?)))
+            .map(|family| Ok((family.as_str(), common::load(&case.bundle, family, &case.unloaded)?)))
             .collect::<Result<_, TestCaseError>>()?;
         let bindings = Bindings::from_toml(&case.bindings).map_err(|error| {
             TestCaseError::fail(format!("bindings: {error}\n{}", case.bindings))
@@ -50,6 +50,7 @@ proptest! {
                 .map(|(name, value)| {
                     let value = match value {
                         Meta::Uint(n) => MetaValue::Uint(*n),
+                        Meta::Int(n) => MetaValue::Int(*n),
                         Meta::Text(text) => MetaValue::Text(text),
                     };
                     (name.as_str(), value)
