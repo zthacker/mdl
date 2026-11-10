@@ -301,7 +301,7 @@ fn note(name: &str, value: &Value, owner: &str, found: &mut BTreeSet<String>) {
     if given(value) && name != "kind" && name != "name" {
         found.insert(format!("key:{owner}.{name}"));
     }
-    if matches!(name, "invalid" | "value" | "values") {
+    if matches!(name, "invalid" | "value" | "values" | "raw") {
         scalar(value, found);
     }
     let Some(text) = value.as_str() else {

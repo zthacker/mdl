@@ -10,6 +10,9 @@
 //!   the IR writes it.
 //! - [`coverage`]: the features of the IR a bundle uses, and the list of
 //!   them all, which the full fixture and the generators must each reach.
+//! - [`layout`]: valid layouts and messages packed for them by this
+//!   crate's own reading of the decoding spec, with what each decodes to.
 
 pub mod coverage;
+pub mod layout;
 pub mod shape;

@@ -824,7 +824,7 @@ fn conversion(given: f64) -> Gen {
     let point = (finite(), finite())
         .prop_map(|(raw, value)| json!({ "raw": raw, "value": value }))
         .boxed();
-    let state = (safe_int(), text())
+    let state = (scalar(), text())
         .prop_map(|(raw, name)| json!({ "raw": raw, "name": name }))
         .boxed();
     prop_oneof![
