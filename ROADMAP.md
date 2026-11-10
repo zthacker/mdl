@@ -111,7 +111,8 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
       metadata and def_version
 - [ ] A build file listing inputs with their own options (several XTCE
       imports in one build)
-- [ ] README and examples rewritten around v2
+- [x] README and examples rewritten around v2: a walkthrough that runs as
+      a test, the README's library example run as a doc test
 - [ ] Remove v1 (`ir`, `validate`, `interpret`, `plan`, `frontend`, `bits`)
       and move `v2::*` up one level
 

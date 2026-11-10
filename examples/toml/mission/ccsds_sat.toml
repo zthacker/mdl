@@ -86,7 +86,6 @@ size_bits  = 8
 conversion = { kind = "states", states = [
     { raw = 0, name = "SAFE" },
     { raw = 1, name = "NOMINAL" },
-    { raw = 2, name = "PAYLOAD" },
 ] }
 argument   = "mode"
 

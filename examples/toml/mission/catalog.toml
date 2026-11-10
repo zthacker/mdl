@@ -27,6 +27,12 @@ unit        = "%"
 limits      = { red_low = 15.0, yellow_low = 30.0 }
 description = "Battery charge remaining"
 
+# One command for every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, and
+# then the delay must be its default.
 [catalog.commands."eps.set_mode"]
 description = "Switch the power mode"
-arguments   = [{ name = "mode", type = "enum", states = ["SAFE", "NOMINAL", "PAYLOAD"] }]
+arguments   = [
+    { name = "mode", type = "enum", states = ["SAFE", "NOMINAL"] },
+    { name = "delay", type = "u64", unit = "s", range = { min = 0, max = 3600 }, default = 0, description = "Seconds to wait before switching" },
+]

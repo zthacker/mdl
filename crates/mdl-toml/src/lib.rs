@@ -84,6 +84,12 @@ impl Code {
     }
 }
 
+/// The repository README's library example, compiled and run with this
+/// crate's doc tests so it can't drift from the API.
+#[cfg(doctest)]
+#[doc = include_str!("../../../README.md")]
+pub struct ReadmeExample;
+
 /// Read a bundle from TOML files, merged in the order given. Every problem
 /// in every file is reported, in file order and then by position.
 pub fn read<'a>(
