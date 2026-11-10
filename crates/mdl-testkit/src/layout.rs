@@ -651,9 +651,10 @@ struct PacketLayout {
     id: u8,
     /// The keys that identify it, as IR JSON.
     identify: Value,
-    /// Byte-wide uint fields right after the id (a native id, a version, a
-    /// second identify key), each message giving their values.
-    header: Vec<&'static str>,
+    /// Uint fields of whole bytes right after the id (a native id, a
+    /// version, a second identify key), by name and width, each message
+    /// giving their values.
+    header: Vec<(&'static str, u32)>,
     /// Whether its family is little-endian.
     little: bool,
     /// Its count field (an elapsed count or a time of week), after a GPS
@@ -679,7 +680,7 @@ struct PacketShape {
     params: String,
     id: u8,
     identify: Value,
-    header: Vec<&'static str>,
+    header: Vec<(&'static str, u32)>,
 }
 
 impl PacketShape {
@@ -709,8 +710,8 @@ struct Correlation {
 
 /// The bit at which a packet's time fields start: after the id and its
 /// header.
-fn time_start(header: usize) -> u64 {
-    8 + 8 * header as u64
+fn time_start(header: &[(&str, u32)]) -> u64 {
+    8 + header.iter().map(|(_, bits)| u64::from(*bits)).sum::<u64>()
 }
 
 /// Whether `size` bits at `offset` lie inside one byte.
@@ -740,11 +741,11 @@ fn lay_out(
     };
     let mut entries =
         vec![json!({ "kind": "field", "name": "id", "type": "uint", "size_bits": 8 })];
-    for name in &shape.header {
-        entries.push(json!({ "kind": "field", "name": name, "type": "uint", "size_bits": 8 }));
+    for (name, bits) in &shape.header {
+        entries.push(json!({ "kind": "field", "name": name, "type": "uint", "size_bits": bits }));
     }
     let mut fields = Vec::new();
-    let mut offset = time_start(shape.header.len());
+    let mut offset = time_start(&shape.header);
     if let Some(correlation) = &correlation {
         let mut clock = json!({ "kind": "field", "name": "clock", "type": "uint",
                                 "size_bits": correlation.clock_bits });
@@ -1096,7 +1097,7 @@ fn message_at(
         None => Just(None).boxed(),
     };
     let timing = (count, week, cuc, correlation);
-    let start = time_start(packet.header.len()) as usize / 8;
+    let start = time_start(&packet.header) as usize / 8;
     (values, vec(any::<u8>(), length), timing)
         .prop_map(move |(raws, mut noise, (count, week, cuc, correlation))| {
             if let (Some(seconds), TimeSource::Cuc { coarse, .. }) = (cuc, &time) {
@@ -1356,11 +1357,14 @@ fn pack(
     } = timing;
     put_bits(&mut payload, 0, 8, u64::from(packet.id), false);
     let mut record = vec![("id".to_string(), Raw::Uint(u64::from(packet.id)))];
-    for (k, (name, value)) in packet.header.iter().zip(&header).enumerate() {
-        put_bits(&mut payload, 8 + 8 * k as u64, 8, *value, false);
+    // In the family's byte order, whole bytes on byte boundaries.
+    let mut at = 8;
+    for ((name, bits), value) in packet.header.iter().zip(&header) {
+        put_bits(&mut payload, at, *bits, *value, packet.little);
         record.push((name.to_string(), Raw::Uint(*value)));
+        at += u64::from(*bits);
     }
-    let start = time_start(packet.header.len());
+    let start = time_start(&packet.header);
     let mut samples = Vec::new();
     if let (Some(fields), Some((clock, boot))) = (&packet.correlation, correlation) {
         put_bits(&mut payload, start, fields.clock_bits, clock, packet.little);
@@ -1715,7 +1719,7 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 }
 
 /// A date and time as a label: nanoseconds since 1970-01-01T00:00:00.
-fn label(date: (i64, i64, i64), time: (i64, i64, i64), nanos: i128) -> i128 {
+pub(crate) fn label(date: (i64, i64, i64), time: (i64, i64, i64), nanos: i128) -> i128 {
     let (year, month, day) = date;
     let (hour, minute, second) = time;
     let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
@@ -2222,6 +2226,41 @@ fn event_time(
             _ => EventTime::Ground,
         },
     }
+}
+
+/// A Unix instant in MDL's spelling, its fraction without trailing zeros.
+pub(crate) fn instant_text(unix: i128) -> String {
+    let seconds = unix.div_euclid(SECOND);
+    let nanos = unix.rem_euclid(SECOND);
+    let days = seconds.div_euclid(86_400);
+    let of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(i64::try_from(days).unwrap_or(0));
+    let fraction = if nanos == 0 {
+        String::new()
+    } else {
+        format!(".{nanos:09}").trim_end_matches('0').to_string()
+    };
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{fraction}Z",
+        of_day / 3600,
+        of_day % 3600 / 60,
+        of_day % 60
+    )
+}
+
+/// The date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`).
+pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
 }
 
 // ---- The bundle -----------------------------------------------------------
