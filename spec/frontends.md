@@ -145,6 +145,9 @@ The JSON frontend reads one bundle document: `{ "mdl_version", "catalog",
 - The text is read with the input rules of `canonical-json.md` §1, then
   typed. A bundle, unlike an artifact, need not be in normal form: it may
   use `null` for an absent value and `[]` or `{}` for an empty list or map.
+  That is the only latitude: every other value is spelled as the IR writes
+  it, so a tagged object's `kind` is the string naming its kind, never a
+  number.
 - Every value's span runs from its first character to its last. An object
   member's pointer gets its value's span.
 - A syntax error is reported where the parser stopped: at the character it

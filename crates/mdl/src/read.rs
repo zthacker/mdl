@@ -166,6 +166,7 @@ fn unsupported(needed: IrVersion, reader: IrVersion) -> String {
 /// Read one artifact (catalog, family or set).
 pub fn read_artifact(bytes: &[u8]) -> Result<Loaded<Artifact>, ReadError> {
     let (value, canonical) = parse(bytes)?;
+    check_tags(&value, Holder::Document, &mut String::new())?;
     // Type each kind as a plain struct rather than through the tagged
     // `Artifact` enum: serde buffers a tagged enum before typing it, which
     // would lose every error's path.
@@ -237,6 +238,7 @@ pub fn read_bundle_value(value: &Value) -> Result<Loaded<Bundle>, ReadError> {
     }
     canonical::check_numbers(value)?;
     let (value, canonical) = canonical_value(value)?;
+    check_tags(&value, Holder::Document, &mut String::new())?;
     let bundle = typed(&value)?;
     Ok(Loaded {
         value: bundle,
@@ -311,6 +313,82 @@ fn deeper_than(value: &Value, limit: usize, path: &mut String) -> Option<String>
         }
     }
     None
+}
+
+/// What an object of an IR document is, as far as telling a tagged object
+/// from a map keyed by names people choose takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Document,
+    Catalog,
+    Set,
+    Packet,
+    CommandPacket,
+    /// A map whose keys are names (params, commands, struct types,
+    /// identify keys, metadata), holding values of the given holder.
+    Names(NamesOf),
+    Other,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NamesOf {
+    Objects,
+    Scalars,
+}
+
+/// Every tagged object's `kind` is a string. serde would also read a
+/// variant's index (`"kind": 0` as the first kind), which isn't IR JSON and
+/// which no other reader takes. Maps keyed by names people choose are
+/// skipped: a param, struct type or identify key may be called `kind`.
+/// Recurses as deep as the document, which is bounded before this runs.
+fn check_tags(value: &Value, holder: Holder, path: &mut String) -> Result<(), ReadError> {
+    let members = match value {
+        Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let parent = path.len();
+                path.push('/');
+                path.push_str(&index.to_string());
+                check_tags(item, holder, path)?;
+                path.truncate(parent);
+            }
+            return Ok(());
+        }
+        Value::Object(members) => members,
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => return Ok(()),
+    };
+    let named = matches!(holder, Holder::Names(_));
+    if !named
+        && let Some(kind) = members.get("kind")
+        && !kind.is_string()
+    {
+        return Err(ReadError::Shape {
+            path: format!("{path}/kind"),
+            message: format!("a kind is a string naming one, not {kind}"),
+        });
+    }
+    for (key, inner) in members {
+        let held = match (holder, key.as_str()) {
+            (Holder::Names(NamesOf::Scalars), _) => continue,
+            (Holder::Names(NamesOf::Objects), _) => Holder::Other,
+            (_, "catalog") => Holder::Catalog,
+            (Holder::Document, "sets" | "set") => Holder::Set,
+            (Holder::Catalog, "params" | "commands") | (Holder::Set, "types") => {
+                Holder::Names(NamesOf::Objects)
+            }
+            (Holder::Set, "packets") => Holder::Packet,
+            (Holder::Set, "commands") => Holder::CommandPacket,
+            (Holder::Packet, "identify") | (Holder::CommandPacket, "metadata") => {
+                Holder::Names(NamesOf::Scalars)
+            }
+            _ => Holder::Other,
+        };
+        let parent = path.len();
+        path.push('/');
+        path.push_str(&escape_pointer_token(key));
+        check_tags(inner, held, path)?;
+        path.truncate(parent);
+    }
+    Ok(())
 }
 
 /// Steps 1 to 3: strict parse, canonical form, the canonical text read back
@@ -802,6 +880,42 @@ mod tests {
         assert!(
             error.starts_with("/families/1/encoding: unknown variant `xml`"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_kind_is_a_string_not_the_index_of_one() {
+        use serde_json::json;
+        // serde would read 0 as the first kind of conversion, linear.
+        let bytes = bundle_with(|v| {
+            v["sets"][0]["packets"][0]["entries"][1]["conversion"] =
+                json!({ "kind": 0, "scale": 2.0, "offset": 0.0 });
+        });
+        assert_eq!(
+            read_bundle(&bytes).unwrap_err().to_string(),
+            "/sets/0/packets/0/entries/1/conversion/kind: a kind is a string naming one, not 0"
+        );
+        let catalog = br#"{"artifact":"catalog","mdl_version":"2.0","catalog":{"params":
+            {"a.b":{"type":"f64"}}},"x":{"kind":1}}"#;
+        assert!(
+            read_artifact(catalog)
+                .unwrap_err()
+                .to_string()
+                .starts_with("/x/kind: a kind is a string")
+        );
+        // Names people choose may be `kind`: a param, a struct type, an
+        // identify key, a metadata name.
+        let bytes = bundle_with(|v| {
+            v["catalog"]["params"]["kind"] = json!({ "type": "f64" });
+            v["sets"][0]["types"] = json!({ "kind": { "entries": [] } });
+            v["sets"][0]["packets"][0]["identify"] = json!({ "kind": 1 });
+            v["sets"][0]["commands"] = json!([{ "name": "C", "canonical": "a.b",
+                                                "metadata": { "kind": 2 } }]);
+        });
+        assert!(
+            read_bundle(&bytes).is_ok(),
+            "{:?}",
+            read_bundle(&bytes).err()
         );
     }
 }
