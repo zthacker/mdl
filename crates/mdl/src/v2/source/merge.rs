@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{Parsed, SourceDiagnostic, SourceMap};
+use super::{CONTAINERS, Parsed, SourceDiagnostic, SourceMap};
 use crate::v2::diagnostics::{Code, escape_pointer_token};
 use crate::v2::ir::{Argument, Bundle, Catalog, Command, Param};
 
@@ -66,17 +66,6 @@ pub fn merge(parts: impl IntoIterator<Item = Parsed>) -> Result<Parsed, Vec<Sour
         Ok(merged)
     }
 }
-
-/// The bundle's own objects, lists and maps, whose spans cover what one
-/// part gave.
-const CONTAINERS: [&str; 6] = [
-    "",
-    "/catalog",
-    "/catalog/params",
-    "/catalog/commands",
-    "/families",
-    "/sets",
-];
 
 fn merge_into(
     merged: &mut Parsed,

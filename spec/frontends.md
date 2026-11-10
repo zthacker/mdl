@@ -68,7 +68,11 @@ the span of source text its value came from. It SHOULD record one for
 every value it takes from a source. A diagnostic whose path has no span of
 its own is reported at its nearest ancestor that has one, so a missing
 field is reported where its object is, and a value the frontend wrote
-itself where the construct it came from is.
+itself where the construct it came from is. The climb stops below the
+bundle's own lists and maps (the bundle, its `catalog`, the catalog's
+`params` and `commands`, `families` and `sets`), whose spans can't stand
+for one definition among many: a diagnostic about something the bundle
+doesn't have, such as a param a newer catalog removed, has no position.
 
 Positions for people are a line and a column, both counted from 1. The
 column counts Unicode scalar values; a tool that needs another count (an
