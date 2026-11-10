@@ -6,6 +6,7 @@ use super::rules::{
     MAX_SAFE_INTEGER, check_finite, check_integer_spelling, check_not_empty, check_scalar,
     check_unit_code, integer_value, is_canonical_name, is_identifier,
 };
+use crate::canonical::format_double;
 use crate::diagnostics::{Code, Place, Report};
 use crate::ir::{
     Argument, ArgumentRange, Catalog, Command, Frame, Limits, ListBounds, Literal, Param,
@@ -369,6 +370,19 @@ fn check_default(argument: &Argument, default: &Literal, place: &Place, report: 
         (ParamType::F64, Literal::Int(n)) => Some(*n as f64),
         (ParamType::F64, Literal::Float(x)) => Some(*x),
         (ParamType::F64, _) => return wrong(report, "a number"),
+        // A whole number past i64 reads as a double (`ir::Literal`).
+        (ParamType::I64 | ParamType::U64, Literal::Float(x)) if x.fract() == 0.0 => {
+            report.error(
+                Code::UnsafeInteger,
+                place,
+                format!(
+                    "default {} is outside ±(2^53 - 1), so some JSON readers would change it; \
+                     write it as a decimal string",
+                    format_double(*x)
+                ),
+            );
+            return;
+        }
         (ParamType::I64 | ParamType::U64, Literal::Int(_) | Literal::Str(_)) => {
             let scalar = match default {
                 Literal::Int(n) => Scalar::Int(*n),

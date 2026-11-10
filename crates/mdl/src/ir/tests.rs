@@ -572,7 +572,8 @@ mod properties {
         prop_oneof![
             any::<bool>().prop_map(Literal::Bool),
             (-(1_i64 << 53) + 1..1_i64 << 53).prop_map(Literal::Int),
-            (-1e9_f64..1e9).prop_map(Literal::Float),
+            // Any finite double, whole ones past i64 included.
+            finite().prop_map(Literal::Float),
             "[a-z0-9]{0,8}".prop_map(Literal::Str),
         ]
     }
@@ -645,8 +646,15 @@ fn literals_read_as_canonical_json_writes_them() {
         Literal::List(vec![Literal::Float(2.0)]),
         Literal::List(vec![Literal::Int(2)])
     );
-    let error = read(json!(u64::MAX)).unwrap_err().to_string();
-    assert!(error.contains("write it as the string"), "{error}");
+    // Past i64 only a double holds a number, as canonical JSON reads it.
+    assert_eq!(read(json!(i64::MAX)).unwrap(), Literal::Int(i64::MAX));
+    assert_eq!(
+        read(json!(10_000_000_000_000_000_000_u64)).unwrap(),
+        Literal::Float(1e19)
+    );
+    assert_eq!(read(json!(-1e19)).unwrap(), Literal::Float(-1e19));
+    assert_eq!(read(json!(1e300)).unwrap(), Literal::Float(1e300));
+    assert_eq!(canonical(&Literal::Float(1e19)), "10000000000000000000");
     assert!(read(json!(null)).is_err());
     assert!(read(json!({ "a": 1 })).is_err());
     assert_eq!(
@@ -659,4 +667,15 @@ fn literals_read_as_canonical_json_writes_them() {
     assert_eq!(Literal::Float(2.0), Literal::Int(2));
     assert_ne!(Literal::Float(2.5), Literal::Int(2));
     assert_ne!(Literal::Float(9.3e18), Literal::Int(i64::MAX));
+    // Past 2^53, the integer a double is written as: exactly ...592, the
+    // double 7.133372679405659e16 is written ...590.
+    assert_eq!(
+        Literal::Float(7.133372679405659e16),
+        Literal::Int(71_333_726_794_056_590)
+    );
+    assert_ne!(
+        Literal::Float(7.133372679405659e16),
+        Literal::Int(71_333_726_794_056_592)
+    );
+    assert_eq!(Literal::Float(-0.0), Literal::Int(0));
 }

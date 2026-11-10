@@ -2377,6 +2377,33 @@ fn argument_ranges_and_defaults_fit_their_argument() {
 }
 
 #[test]
+fn a_whole_number_past_i64_is_an_f64_default_and_not_an_integer_one() {
+    // gain is binary32, which holds 1e21.
+    assert_eq!(
+        problems(|v| {
+            let gain = &mut command(v, "sink.configure")["arguments"][1];
+            gain["range"]["max"] = json!(1e22);
+            gain["default"] = json!(1e21);
+        }),
+        vec![]
+    );
+    // An integer argument's wide values are strings.
+    let slot = "/catalog/commands/eps.load_table/arguments/1/default";
+    let wide = |v: &mut Value| {
+        command(v, "eps.load_table")["arguments"][1]["default"] =
+            json!(10_000_000_000_000_000_000_u64);
+    };
+    assert_one(Code::UnsafeInteger, slot, wide);
+    assert_eq!(
+        messages(wide),
+        [
+            "default 10000000000000000000 is outside ±(2^53 - 1), so some JSON readers would \
+          change it; write it as a decimal string"
+        ]
+    );
+}
+
+#[test]
 fn every_command_field_gets_its_value_from_one_place() {
     let field = |index: usize| format!("/sets/0/commands/1/entries/{index}");
     assert_one(Code::NoValue, &field(0), |v| {

@@ -225,9 +225,11 @@ impl From<&str> for Scalar {
 
 /// A typed constant: a command argument's default. Validation checks it
 /// against the argument's type. A number with no fraction reads as an
-/// integer (`1.0` is `1`), as canonical JSON writes it; integers beyond
-/// ±(2^53 − 1) and bytes (lowercase hex) are strings. Literals compare by
-/// value: `Float(2.0)` equals `Int(2)`, as their canonical JSON does.
+/// integer (`1.0` is `1`), as canonical JSON writes it, unless it's past
+/// the i64 range, where only a double holds it (an f64 default of 1e19 is
+/// written `10000000000000000000`). An integer argument's values beyond
+/// ±(2^53 − 1), and bytes (lowercase hex), are strings. Literals compare
+/// as their canonical JSON does: `Float(2.0)` equals `Int(2)`.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum Literal {
@@ -247,8 +249,10 @@ impl PartialEq for Literal {
             (Literal::Int(a), Literal::Int(b)) => a == b,
             (Literal::Float(a), Literal::Float(b)) => a == b,
             (Literal::Int(n), Literal::Float(x)) | (Literal::Float(x), Literal::Int(n)) => {
-                // Exact both ways: `x` has no fraction and converts back to `n`.
-                x.fract() == 0.0 && i64_from_integral(*x) == Some(*n)
+                // As canonical JSON writes them. Past 2^53 that isn't exact
+                // equality: 7.133372679405659e16 is exactly ...592 and is
+                // written, and so reads back, as the integer ...590.
+                crate::canonical::format_double(*x) == n.to_string()
             }
             (Literal::Str(a), Literal::Str(b)) => a == b,
             (Literal::List(a), Literal::List(b)) => a == b,
@@ -301,23 +305,16 @@ impl<'de> Visitor<'de> for LiteralVisitor {
         Ok(Literal::Int(n))
     }
 
-    fn visit_u64<E: de::Error>(self, n: u64) -> Result<Literal, E> {
-        i64::try_from(n).map(Literal::Int).map_err(|_| {
-            E::custom(format!(
-                "integer {n} is too large for a JSON number here; write it as the string \"{n}\""
-            ))
-        })
+    /// Past i64, a double: canonical JSON keeps integer text up to 2^64 - 1
+    /// only when it's exactly a double's digits. Validation refuses it for
+    /// an integer argument, whose wide values are strings.
+    fn visit_u64<E>(self, n: u64) -> Result<Literal, E> {
+        Ok(i64::try_from(n).map_or(Literal::Float(n as f64), Literal::Int))
     }
 
-    fn visit_f64<E: de::Error>(self, x: f64) -> Result<Literal, E> {
-        if x.fract() != 0.0 {
-            return Ok(Literal::Float(x));
-        }
-        i64_from_integral(x).map(Literal::Int).ok_or_else(|| {
-            E::custom(format!(
-                "integer {x} is outside the 64-bit range; write it as a string"
-            ))
-        })
+    fn visit_f64<E>(self, x: f64) -> Result<Literal, E> {
+        let whole = i64_from_integral(x).filter(|_| x.fract() == 0.0);
+        Ok(whole.map_or(Literal::Float(x), Literal::Int))
     }
 
     fn visit_str<E>(self, s: &str) -> Result<Literal, E> {
@@ -501,6 +498,8 @@ impl Artifact {
 /// Everything a frontend produces in one document. `morphc build`
 /// validates a bundle and writes its artifacts. Families and sets are lists
 /// (names unique, checked by validation) so each name is written once.
+/// Two bundles, like any two IR values, are equal exactly when they write
+/// the same canonical JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
