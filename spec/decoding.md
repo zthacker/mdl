@@ -127,8 +127,8 @@ error:
      [`unexpected_set`]; then the version locator [`invalid_json`,
      `unreadable_locator`], and a loaded set with that version
      [`unknown_version`];
-   - for a family without one, the binding's set [`missing_set`];
-5. the set is loaded [`unknown_set`].
+   - for a family without one, the binding's set [`missing_set`], which
+     is loaded [`unknown_set`].
 
 After routing, a decoder identifies the packet (§4), extracts it (§5),
 then reads its event time (§8); here too, the first failure is the error.
