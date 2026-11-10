@@ -7,11 +7,9 @@ default:
 check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
-    # v2 must build and lint without v1 (see the `v1` feature).
-    cargo clippy -p mdl --all-targets --no-default-features -- -D warnings
     cargo test --workspace
-    # v2 again with serde_json's arbitrary_precision, which any other crate in a consumer's build can turn on
-    cargo test -p mdl --no-default-features --features serde_json/arbitrary_precision
+    # mdl again with serde_json's arbitrary_precision, which any other crate in a consumer's build can turn on
+    cargo test -p morpheus-mdl --features serde_json/arbitrary_precision
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
 
 # Format all code
@@ -21,4 +19,4 @@ fmt:
 # The compiler, e.g. `just morphc build examples/toml/mission`
 [positional-arguments]
 morphc *args:
-    cargo run -q -p morphc -- "$@"
+    cargo run -q -p morpheus-morphc -- "$@"

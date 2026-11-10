@@ -1,8 +1,8 @@
 //! The bundle as JSON, built with the span each value came from, so the
 //! reader's and validation's diagnostics point back into the XTCE.
 
-use mdl::v2::diagnostics::escape_pointer_token;
-use mdl::v2::source::{SourceMap, Span};
+use mdl::diagnostics::escape_pointer_token;
+use mdl::source::{SourceMap, Span};
 use serde_json::{Map, Value};
 
 /// A JSON object and the spans of its values, by pointer relative to it.

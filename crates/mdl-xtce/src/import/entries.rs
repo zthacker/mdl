@@ -1,8 +1,8 @@
 //! A container's entries: parameters (scalars, aggregates, arrays),
 //! repeated entries, embedded containers, and where each goes.
 
-use mdl::v2::source::Span;
-use mdl::v2::validate::MAX_NESTING;
+use mdl::source::Span;
+use mdl::validate::MAX_NESTING;
 use serde_json::{Value, json};
 
 use super::{

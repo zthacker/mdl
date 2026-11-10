@@ -6,7 +6,7 @@ use std::io::{self, Write as _};
 use std::process::ExitCode;
 
 use clap::ValueEnum;
-use mdl::v2::source::{Severity, SourceDiagnostic, Sources, Span};
+use mdl::source::{Severity, SourceDiagnostic, Sources, Span};
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

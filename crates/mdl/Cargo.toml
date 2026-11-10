@@ -1,5 +1,5 @@
 [package]
-name = "mdl"
+name = "morpheus-mdl"
 description = "MDL, the Morpheus Definition Language: describe, validate and decode telemetry from any source into a canonical model"
 edition.workspace = true
 rust-version.workspace = true
@@ -8,14 +8,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-# The library stays small: no CLI, async runtime, database or messaging crates.
-[features]
-default = ["v1"]
-# The v1 IR, compiler and interpreter, removed at the end of Phase 1.
-# `just check` builds the crate without it, which proves v2 never depends
-# on v1.
-v1 = []
+[lib]
+name = "mdl"
 
+# The library stays small: no CLI, async runtime, database or messaging crates.
 [dependencies]
 chrono.workspace = true
 ryu-js.workspace = true

@@ -449,7 +449,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
-name = "mdl"
+name = "memchr"
+version = "2.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "morpheus-mdl"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -464,40 +470,34 @@ dependencies = [
 ]
 
 [[package]]
-name = "mdl-toml"
+name = "morpheus-mdl-toml"
 version = "0.1.0"
 dependencies = [
- "mdl",
+ "morpheus-mdl",
  "proptest",
  "serde_json",
  "toml",
 ]
 
 [[package]]
-name = "mdl-xtce"
+name = "morpheus-mdl-xtce"
 version = "0.1.0"
 dependencies = [
- "mdl",
+ "morpheus-mdl",
  "proptest",
  "roxmltree",
  "serde_json",
 ]
 
 [[package]]
-name = "memchr"
-version = "2.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
-
-[[package]]
-name = "morphc"
+name = "morpheus-morphc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
- "mdl",
- "mdl-toml",
- "mdl-xtce",
+ "morpheus-mdl",
+ "morpheus-mdl-toml",
+ "morpheus-mdl-xtce",
  "serde",
  "serde_json",
 ]

@@ -1,5 +1,5 @@
-use mdl::v2::source::{Parsed, Severity, SourceDiagnostic, Sources};
-use mdl::v2::validate::validate;
+use mdl::source::{Parsed, Severity, SourceDiagnostic, Sources};
+use mdl::validate::validate;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 
@@ -751,7 +751,7 @@ fn names_shared_across_spacesystems_are_qualified() {
         .iter()
         .map(|d| d.code)
         .collect();
-    assert_eq!(codes, [mdl::v2::diagnostics::Code::AmbiguousIdentify]);
+    assert_eq!(codes, [mdl::diagnostics::Code::AmbiguousIdentify]);
     // A qualified name another container already has is still an error.
     let taken = doc(&format!(
         "{}{}{}",
@@ -1034,7 +1034,7 @@ fn options_name_the_family_and_set() {
     let options = Options::new()
         .with_family("vendor_x")
         .with_set("vendor_x_v1")
-        .with_alias(mdl::v2::ir::Locator::metadata("scid"));
+        .with_alias(mdl::ir::Locator::metadata("scid"));
     let bundle = serde_json::to_value(read(sources.iter(), &options).unwrap().bundle).unwrap();
     assert_eq!(bundle["families"][0]["name"], "vendor_x");
     assert_eq!(

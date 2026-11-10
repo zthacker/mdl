@@ -17,7 +17,7 @@
 
 use std::borrow::Cow;
 
-use mdl::v2::source::Span;
+use mdl::source::Span;
 use serde_json::{Value, json};
 
 use super::entries::{from_field, size_tag};

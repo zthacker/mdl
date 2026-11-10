@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mdl::v2::source::{Severity, SourceDiagnostic, SourceFile, SourceId, Span};
+use mdl::source::{Severity, SourceDiagnostic, SourceFile, SourceId, Span};
 
 use crate::Code;
 

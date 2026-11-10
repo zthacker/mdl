@@ -12,12 +12,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use clap::{ArgGroup, Args};
-use mdl::v2::bindings::{Binding, Bindings, BindingsError, NativeId, Resolver};
-use mdl::v2::decode::{Decoded, DecodedCommand, EventTime, Quality, Record, Value};
-use mdl::v2::ir::{Bundle, Encoding};
-use mdl::v2::message::{Message, MetaValue, Payload};
-use mdl::v2::source::SourceDiagnostic;
-use mdl::v2::time::Timestamp;
+use mdl::bindings::{Binding, Bindings, BindingsError, NativeId, Resolver};
+use mdl::decode::{Decoded, DecodedCommand, EventTime, Quality, Record, Value};
+use mdl::ir::{Bundle, Encoding};
+use mdl::message::{Message, MetaValue, Payload};
+use mdl::source::SourceDiagnostic;
+use mdl::time::Timestamp;
 use serde::Serialize;
 use serde_json::{Map, Value as Json};
 

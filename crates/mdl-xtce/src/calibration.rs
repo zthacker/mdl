@@ -10,7 +10,7 @@
 //! algebraic inverse the conversion; a spline that only rises or only
 //! falls is a table with its points swapped, which MDL reads backwards.
 
-use mdl::v2::source::Span;
+use mdl::source::Span;
 
 use crate::Code;
 use crate::out::{List, Object};

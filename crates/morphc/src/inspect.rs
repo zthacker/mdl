@@ -8,13 +8,13 @@ use std::process::ExitCode;
 
 use anyhow::{Context, anyhow, bail};
 use clap::{Args, Subcommand};
-use mdl::v2::artifact::{self, Artifacts};
-use mdl::v2::ir::{
+use mdl::artifact::{self, Artifacts};
+use mdl::ir::{
     Argument, Artifact, Bundle, ByteLength, Command, Composite, Count, Element, Encoding, Entry,
     Family, Param, Set, StructType,
 };
-use mdl::v2::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
-use mdl::v2::validate::Validated;
+use mdl::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
+use mdl::validate::Validated;
 use serde::Serialize;
 
 use crate::describe::{self, ir};
@@ -684,7 +684,7 @@ fn pointer(entry: &Entry) -> Option<String> {
     }
 }
 
-fn condition(entry: &Entry) -> Option<&mdl::v2::ir::Condition> {
+fn condition(entry: &Entry) -> Option<&mdl::ir::Condition> {
     match entry {
         Entry::Field(field) => field.when.as_ref(),
         Entry::Array(array) => array.when.as_ref(),
@@ -831,7 +831,7 @@ fn sends(
     path: &Path,
     found: &mut Vec<Sent>,
 ) {
-    let json = |c: &mdl::v2::ir::Conversion| serde_json::to_value(c).ok();
+    let json = |c: &mdl::ir::Conversion| serde_json::to_value(c).ok();
     for entry in entries {
         match entry {
             Entry::Field(field) if field.canonical.as_deref() == Some(name) => {

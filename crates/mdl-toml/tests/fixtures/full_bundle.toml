@@ -1,4 +1,4 @@
-# crates/mdl/tests/fixtures/v2/full_bundle.json, spelled in TOML (written by
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
 # toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
 # checks that both build identical artifacts.
 

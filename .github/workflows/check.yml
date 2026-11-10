@@ -29,6 +29,9 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: just
+      # Fails if Cargo.lock doesn't match the manifests, so the checks below
+      # build exactly the committed lockfile.
+      - run: cargo fetch --locked
       - run: just check
 
   msrv:

@@ -1,5 +1,5 @@
 [package]
-name = "mdl-toml"
+name = "morpheus-mdl-toml"
 description = "MDL's TOML frontend: definitions written as the MDL IR spelled in TOML"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,9 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+
+[lib]
+name = "mdl_toml"
 
 [dependencies]
 mdl.workspace = true

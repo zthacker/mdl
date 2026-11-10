@@ -10,11 +10,11 @@ operator adds to run it.
 | [`xtce/demosat.xml`](xtce/demosat.xml) | A CCSDS satellite as XTCE tools describe one: inherited headers, APIDs, calibrators, a spline, an enumeration, vectors, commands with defaults, ranges, calibrated currents and a list of waypoint records. Its bus voltage, battery temperature and mode command map to the mission catalog's names through MDL aliases. |
 | [`xtce/imager.xml`](xtce/imager.xml) | A payload whose packets have sizes the data gives: an optional secondary header, a row of pixels counted by the packet, Pascal strings, record arrays. |
 | [`fleet`](fleet) | What an operator adds: a bindings file naming each asset, a drone's capture with each message's own metadata, and a param added to the catalog. |
-| [`definitions`](definitions) | The retired v1 format, which morphc no longer reads; kept until v1 is removed. |
 
 The TOML and XTCE examples are also read, validated and decoded by their
-crates' own tests (`cargo test -p mdl-toml --test examples`, `cargo test
--p mdl-xtce --test examples`); `fleet` is used by the walkthrough below.
+crates' own tests (`cargo test -p morpheus-mdl-toml --test examples`,
+`cargo test -p morpheus-mdl-xtce --test examples`); `fleet` is used by the
+walkthrough below.
 
 ## Walkthrough: a fleet from definitions to commands
 
@@ -22,9 +22,9 @@ Four assets: the mission's CCSDS satellite, JSON satellite and MAVLink
 drone, written by hand in TOML, and DemoSat, described by its vendor in
 XTCE. The commands below run in this directory. Install morphc
 with `cargo install --path crates/morphc` from the repository root, or put
-`cargo run -q -p morphc --` where they say `morphc`. Each one runs in CI
+`cargo run -q -p morpheus-morphc --` where they say `morphc`. Each one runs in CI
 exactly as written, and its output is checked against what's shown here
-(`cargo test -p morphc --test walkthrough`).
+(`cargo test -p morpheus-morphc --test walkthrough`).
 
 ### 1. Build the definitions into a store
 

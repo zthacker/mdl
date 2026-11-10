@@ -2,11 +2,11 @@
 //! `linear scale 0.001 offset 0`. Anything without a short form is shown
 //! as the IR writes it.
 
-use mdl::v2::ir::{
+use mdl::ir::{
     ByteLength, Condition, Conversion, Count, Element, Entry, FromField, Length, Limits, Locator,
     Scalar, ScalarElement, Time,
 };
-use mdl::v2::layout::Placement;
+use mdl::layout::Placement;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -182,10 +182,10 @@ fn from_field(from: &FromField) -> String {
 /// `string(..0x00)`, `bytes(to the end)`, with ` le` or ` be` when it names
 /// its own byte order.
 fn scalar_type(
-    ty: &mdl::v2::ir::ScalarType,
+    ty: &mdl::ir::ScalarType,
     size_bits: Option<u32>,
     length: Option<&ByteLength>,
-    byte_order: Option<&mdl::v2::ir::ByteOrder>,
+    byte_order: Option<&mdl::ir::ByteOrder>,
 ) -> String {
     let name = ir(ty);
     let mut text = match (name.as_str(), length) {

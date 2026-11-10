@@ -3,16 +3,16 @@
 
 use std::path::Path;
 
-use mdl::v2::artifact::{Artifacts, Written, build};
-use mdl::v2::bindings::Bindings;
-use mdl::v2::decode::{Decoded, EventTime, Quality, SampleValue};
-use mdl::v2::ir::Artifact;
-use mdl::v2::message::{Message, MetaValue, Payload};
-use mdl::v2::read::{Loaded, read_artifact};
-use mdl::v2::route::FamilySets;
-use mdl::v2::source::{SourceDiagnostic, Sources};
-use mdl::v2::time::Timestamp;
-use mdl::v2::validate::validate;
+use mdl::artifact::{Artifacts, Written, build};
+use mdl::bindings::Bindings;
+use mdl::decode::{Decoded, EventTime, Quality, SampleValue};
+use mdl::ir::Artifact;
+use mdl::message::{Message, MetaValue, Payload};
+use mdl::read::{Loaded, read_artifact};
+use mdl::route::FamilySets;
+use mdl::source::{SourceDiagnostic, Sources};
+use mdl::time::Timestamp;
+use mdl::validate::validate;
 
 /// Every TOML file of an example, read in name order, validated and built.
 /// A problem fails the test with the diagnostics as a person would see them.

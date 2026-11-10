@@ -8,7 +8,7 @@ TOML is MDL's own authoring format. A TOML file is part of a bundle
 IR's JSON, `kind` tags included. A file that uses only TOML v1.0.0 syntax
 is also TOML v1.1.0, so 1.0 parsers read it too. There are no shorthands:
 whatever the IR says, the TOML says with the same words, so the IR's
-documentation (the `mdl::v2::ir` types) is the reference for both. The
+documentation (the `mdl::ir` types) is the reference for both. The
 reference implementation is the `mdl-toml` crate.
 
 ```toml

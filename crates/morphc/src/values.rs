@@ -1,8 +1,8 @@
 //! Values in reports: decoded and encoded values as JSON, and bytes as
 //! hex both ways.
 
-use mdl::v2::decode::{Record, SampleValue, Value};
-use mdl::v2::encode::ArgumentValue;
+use mdl::decode::{Record, SampleValue, Value};
+use mdl::encode::ArgumentValue;
 use serde::Serialize;
 use serde_json::Value as Json;
 

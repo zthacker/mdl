@@ -1,8 +1,6 @@
 # Canonical JSON and artifact identity
 
-Status: normative from IR v2 (`mdl_version` 2) on. The v1 `def_version`
-in `crates/mdl/src/plan.rs` hashes serde's field-order output, not this
-canonical form; it is replaced when IR v2 lands. The key words MUST,
+Status: normative from IR v2 (`mdl_version` 2) on. The key words MUST,
 MUST NOT, SHOULD and MAY are to be interpreted as described in RFC 2119.
 
 Every MDL artifact (catalog, family, set) is identified by the SHA-256 of

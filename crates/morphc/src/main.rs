@@ -29,12 +29,12 @@ use std::process::ExitCode;
 
 use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use mdl::v2::artifact::{self, Artifacts};
-use mdl::v2::ir::{Artifact, Bundle, Locator};
-use mdl::v2::read::{Loaded, read_artifact};
-use mdl::v2::route::FamilySets;
-use mdl::v2::source::{Parsed, SourceMap, Sources, merge};
-use mdl::v2::validate::{Validated, validate};
+use mdl::artifact::{self, Artifacts};
+use mdl::ir::{Artifact, Bundle, Locator};
+use mdl::read::{Loaded, read_artifact};
+use mdl::route::FamilySets;
+use mdl::source::{Parsed, SourceMap, Sources, merge};
+use mdl::validate::{Validated, validate};
 
 use crate::inputs::{Frontend, Input};
 use crate::report::{Format, Report};

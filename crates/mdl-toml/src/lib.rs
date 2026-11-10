@@ -8,7 +8,7 @@
 //! value keeps its file, line and column for diagnostics.
 //!
 //! ```
-//! use mdl::v2::source::Sources;
+//! use mdl::source::Sources;
 //!
 //! let mut sources = Sources::new();
 //! sources.add("catalog.toml", r#"
@@ -34,10 +34,10 @@
 
 use std::collections::BTreeMap;
 
-use mdl::v2::diagnostics::escape_pointer_token;
-use mdl::v2::ir::IrVersion;
-use mdl::v2::read::read_bundle_value;
-use mdl::v2::source::{Parsed, SourceDiagnostic, SourceFile, SourceMap, Span};
+use mdl::diagnostics::escape_pointer_token;
+use mdl::ir::IrVersion;
+use mdl::read::read_bundle_value;
+use mdl::source::{Parsed, SourceDiagnostic, SourceFile, SourceMap, Span};
 use serde_json::{Map, Value};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};

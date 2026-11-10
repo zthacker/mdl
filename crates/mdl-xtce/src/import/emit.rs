@@ -2,8 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use mdl::v2::ir::IrVersion;
-use mdl::v2::source::{SourceMap, Span};
+use mdl::ir::IrVersion;
+use mdl::source::{SourceMap, Span};
 use serde_json::Value;
 
 use super::commands::{Argument, Command};
