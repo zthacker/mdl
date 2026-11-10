@@ -1,0 +1,5 @@
+# A MAVLink drone's link: each message carries its own msgid, as
+# MAVLink frames it, and the time the ground station received it.
+{"hex": "0000000000000000000000000000603b00000000000000000000000000004c", "meta": {"msgid": 1, "sysid": 1}, "time": "2026-06-01T12:00:00Z"}
+{"hex": "8053dff02f53060060ea0000", "meta": {"msgid": 2, "sysid": 1}, "time": "2026-06-01T12:00:01Z"}
+{"hex": "0000000000000000000000000000603b00000000000000000000000000004c", "meta": {"msgid": 1, "sysid": 2}, "time": "2026-06-01T12:00:02Z"}
