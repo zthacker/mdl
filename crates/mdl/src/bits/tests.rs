@@ -107,12 +107,17 @@ proptest! {
         value in any::<u64>(),
         little in any::<bool>(),
     ) {
-        let value = fit(value, size);
-        // Little-endian values span whole bytes or sit inside one.
-        let order = if little { ByteOrder::Little } else { ByteOrder::Big };
-        let aligned = offset % 8 == 0 && size % 8 == 0;
+        // Little-endian values span whole bytes or sit inside one, so a
+        // little-endian value that would do neither is moved to whole
+        // bytes (rather than rejected, which runs out of rejects).
         let inside_one_byte = offset / 8 == (offset + u64::from(size) - 1) / 8;
-        prop_assume!(!little || aligned || inside_one_byte);
+        let (offset, size) = if little && !inside_one_byte {
+            (offset / 8 * 8, size.div_ceil(8) * 8)
+        } else {
+            (offset, size)
+        };
+        let value = fit(value, size);
+        let order = if little { ByteOrder::Little } else { ByteOrder::Big };
         let mut written = payload.clone();
         let result = write_bits(&mut written, offset, size, value, order);
         let payload_bits = payload.len() as u64 * 8;

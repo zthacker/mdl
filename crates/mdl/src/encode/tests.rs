@@ -1695,7 +1695,8 @@ fn every_command_round_trips_through_its_payload() {
             .filter(|argument| argument.ty != ParamType::F64)
             .map(|argument| argument.name.clone())
             .collect();
-        let mut runner = TestRunner::new(Config::with_cases(128));
+        // Half of PROPTEST_CASES (128 by default) for each of the cases.
+        let mut runner = TestRunner::new(Config::with_cases(Config::default().cases / 2));
         let result = runner.run(&valid_requests(&bundle, set, command), |request| {
             let encoded = sets
                 .encode(&request)
