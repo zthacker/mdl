@@ -1,0 +1,886 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_id.apid": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.type": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "Continuation",
+          "First",
+          "Last",
+          "Standalone"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "demosat.eps.uptime": {
+        "type": "u64",
+        "unit": "s"
+      },
+      "eps.batt_temp": {
+        "type": "f64",
+        "unit": "Cel",
+        "description": "Battery temperature"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage"
+      }
+    },
+    "commands": {
+      "demosat.adcs.point": {
+        "arguments": [
+          {
+            "name": "target",
+            "type": "str"
+          },
+          {
+            "name": "rate",
+            "type": "f64",
+            "unit": "rad/s",
+            "range": {
+              "min": 5e-324,
+              "max": 0.5
+            },
+            "default": 0.1
+          }
+        ],
+        "description": "Slew to a target"
+      },
+      "demosat.adcs.track": {
+        "arguments": [
+          {
+            "name": "waypoints_azimuth",
+            "type": "u64",
+            "range": {
+              "max": 65535.0
+            },
+            "list": {
+              "max": 255
+            }
+          },
+          {
+            "name": "waypoints_elevation",
+            "type": "u64",
+            "range": {
+              "max": 65535.0
+            },
+            "list": {
+              "max": 255
+            }
+          }
+        ],
+        "description": "Follow a list of waypoints"
+      },
+      "demosat.eps.setcharge": {
+        "arguments": [
+          {
+            "name": "current",
+            "type": "f64",
+            "unit": "A",
+            "range": {
+              "min": 0.0,
+              "max": 5.0
+            }
+          }
+        ],
+        "description": "Set the battery charge current"
+      },
+      "demosat.eps.setheater": {
+        "arguments": [
+          {
+            "name": "on",
+            "type": "bool",
+            "default": true
+          },
+          {
+            "name": "minutes",
+            "type": "u64",
+            "unit": "min",
+            "range": {
+              "max": 65535.0
+            }
+          }
+        ]
+      },
+      "eps.set_mode": {
+        "arguments": [
+          {
+            "name": "mode",
+            "type": "enum",
+            "states": [
+              "SAFE",
+              "NOMINAL"
+            ]
+          },
+          {
+            "name": "delay",
+            "type": "u64",
+            "unit": "s",
+            "range": {
+              "min": 0.0,
+              "max": 3600.0
+            },
+            "default": 0,
+            "description": "Seconds to wait before switching"
+          }
+        ],
+        "description": "Switch the power system's mode"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "demosat",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "DemoSat"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "demosat",
+      "family": "demosat",
+      "types": {
+        "Track_Waypoints_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Azimuth",
+              "type": "uint",
+              "size_bits": 16,
+              "argument": "waypoints_azimuth"
+            },
+            {
+              "kind": "field",
+              "name": "Elevation",
+              "type": "uint",
+              "size_bits": 16,
+              "argument": "waypoints_elevation"
+            }
+          ]
+        }
+      },
+      "packets": [
+        {
+          "name": "EPS_HK",
+          "identify": {
+            "CCSDS_Packet_ID_APID": 100,
+            "CCSDS_Packet_ID_Type": 0
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_Version",
+              "type": "uint",
+              "size_bits": 3,
+              "canonical": "demosat.ccsds_packet_id.version"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_Type",
+              "type": "bool",
+              "size_bits": 1,
+              "canonical": "demosat.ccsds_packet_id.type"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_SecHdrFlag",
+              "type": "bool",
+              "size_bits": 1,
+              "canonical": "demosat.ccsds_packet_id.sechdrflag"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_APID",
+              "type": "uint",
+              "size_bits": 11,
+              "canonical": "demosat.ccsds_packet_id.apid"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_Sequence_GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 0,
+                    "name": "Continuation"
+                  },
+                  {
+                    "raw": 1,
+                    "name": "First"
+                  },
+                  {
+                    "raw": 2,
+                    "name": "Last"
+                  },
+                  {
+                    "raw": 3,
+                    "name": "Standalone"
+                  }
+                ]
+              },
+              "canonical": "demosat.ccsds_packet_sequence.groupflags"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_Sequence_Count",
+              "type": "uint",
+              "size_bits": 14,
+              "canonical": "demosat.ccsds_packet_sequence.count"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_Length",
+              "type": "uint",
+              "size_bits": 16,
+              "canonical": "demosat.ccsds_packet_length"
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "type": "uint",
+              "size_bits": 4,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 0,
+                    "name": "OFF"
+                  },
+                  {
+                    "raw": 1,
+                    "name": "SAFE"
+                  },
+                  {
+                    "raw": 2,
+                    "name": "NOMINAL"
+                  }
+                ]
+              },
+              "canonical": "demosat.eps.mode"
+            },
+            {
+              "kind": "field",
+              "name": "BattTemp",
+              "type": "int",
+              "size_bits": 12,
+              "conversion": {
+                "kind": "table",
+                "points": [
+                  {
+                    "raw": -2000.0,
+                    "value": -50.0
+                  },
+                  {
+                    "raw": 2000.0,
+                    "value": 50.0
+                  }
+                ],
+                "extrapolate": true
+              },
+              "unit": "Cel",
+              "canonical": "eps.batt_temp"
+            },
+            {
+              "kind": "field",
+              "name": "BusVoltage",
+              "type": "uint",
+              "size_bits": 16,
+              "conversion": {
+                "kind": "linear",
+                "scale": 0.001,
+                "offset": 0.0
+              },
+              "unit": "V",
+              "canonical": "eps.bus_voltage"
+            },
+            {
+              "kind": "field",
+              "name": "Uptime",
+              "type": "uint",
+              "size_bits": 32,
+              "byte_order": "little",
+              "unit": "s",
+              "canonical": "demosat.eps.uptime"
+            },
+            {
+              "kind": "field",
+              "name": "Heater",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "demosat.eps.heater",
+              "when": {
+                "kind": "compare",
+                "field": "Mode",
+                "op": "eq",
+                "value": 2
+              }
+            }
+          ]
+        },
+        {
+          "name": "ADCS_HK",
+          "identify": {
+            "CCSDS_Packet_ID_APID": 101
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_Version",
+              "type": "uint",
+              "size_bits": 3,
+              "canonical": "demosat.ccsds_packet_id.version"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_Type",
+              "type": "bool",
+              "size_bits": 1,
+              "canonical": "demosat.ccsds_packet_id.type"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_SecHdrFlag",
+              "type": "bool",
+              "size_bits": 1,
+              "canonical": "demosat.ccsds_packet_id.sechdrflag"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_ID_APID",
+              "type": "uint",
+              "size_bits": 11,
+              "canonical": "demosat.ccsds_packet_id.apid"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_Sequence_GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 0,
+                    "name": "Continuation"
+                  },
+                  {
+                    "raw": 1,
+                    "name": "First"
+                  },
+                  {
+                    "raw": 2,
+                    "name": "Last"
+                  },
+                  {
+                    "raw": 3,
+                    "name": "Standalone"
+                  }
+                ]
+              },
+              "canonical": "demosat.ccsds_packet_sequence.groupflags"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_Sequence_Count",
+              "type": "uint",
+              "size_bits": 14,
+              "canonical": "demosat.ccsds_packet_sequence.count"
+            },
+            {
+              "kind": "field",
+              "name": "CCSDS_Packet_Length",
+              "type": "uint",
+              "size_bits": 16,
+              "canonical": "demosat.ccsds_packet_length"
+            },
+            {
+              "kind": "field",
+              "name": "Rate_x",
+              "type": "float",
+              "size_bits": 32,
+              "unit": "rad/s",
+              "canonical": "demosat.adcs.rate.x"
+            },
+            {
+              "kind": "field",
+              "name": "Rate_y",
+              "type": "float",
+              "size_bits": 32,
+              "unit": "rad/s",
+              "canonical": "demosat.adcs.rate.y"
+            },
+            {
+              "kind": "field",
+              "name": "Rate_z",
+              "type": "float",
+              "size_bits": 32,
+              "unit": "rad/s",
+              "canonical": "demosat.adcs.rate.z"
+            }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "SetMode",
+          "canonical": "eps.set_mode",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Version",
+              "type": "uint",
+              "size_bits": 3,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Type",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "SecHdrFlag",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 100
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Length",
+              "type": "uint",
+              "size_bits": 16,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Opcode",
+              "type": "uint",
+              "size_bits": 8,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "type": "uint",
+              "size_bits": 8,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 1,
+                    "name": "SAFE"
+                  },
+                  {
+                    "raw": 2,
+                    "name": "NOMINAL"
+                  }
+                ]
+              },
+              "argument": "mode"
+            },
+            {
+              "kind": "field",
+              "name": "Delay",
+              "type": "uint",
+              "size_bits": 16,
+              "unit": "s",
+              "argument": "delay"
+            }
+          ]
+        },
+        {
+          "name": "SetHeater",
+          "canonical": "demosat.eps.setheater",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Version",
+              "type": "uint",
+              "size_bits": 3,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Type",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "SecHdrFlag",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 100
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Length",
+              "type": "uint",
+              "size_bits": 16,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Opcode",
+              "type": "uint",
+              "size_bits": 8,
+              "value": 2
+            },
+            {
+              "kind": "field",
+              "name": "On",
+              "type": "uint",
+              "size_bits": 8,
+              "argument": "on"
+            },
+            {
+              "kind": "field",
+              "name": "Minutes",
+              "type": "uint",
+              "size_bits": 16,
+              "unit": "min",
+              "argument": "minutes"
+            }
+          ]
+        },
+        {
+          "name": "SetCharge",
+          "canonical": "demosat.eps.setcharge",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Version",
+              "type": "uint",
+              "size_bits": 3,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Type",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "SecHdrFlag",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 100
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Length",
+              "type": "uint",
+              "size_bits": 16,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Opcode",
+              "type": "uint",
+              "size_bits": 8,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Current",
+              "type": "uint",
+              "size_bits": 16,
+              "conversion": {
+                "kind": "poly",
+                "coefficients": [
+                  0.0,
+                  0.01
+                ]
+              },
+              "unit": "A",
+              "argument": "current",
+              "inverse": {
+                "kind": "linear",
+                "scale": 100.0,
+                "offset": 0.0
+              }
+            }
+          ]
+        },
+        {
+          "name": "Point",
+          "canonical": "demosat.adcs.point",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Version",
+              "type": "uint",
+              "size_bits": 3,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Type",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "SecHdrFlag",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 101
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Length",
+              "type": "uint",
+              "size_bits": 16,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Opcode",
+              "type": "uint",
+              "size_bits": 8,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "Target",
+              "type": "string",
+              "length": {
+                "kind": "fixed",
+                "bytes": 8,
+                "terminator": 0
+              },
+              "text": "ascii",
+              "argument": "target"
+            },
+            {
+              "kind": "field",
+              "name": "Rate",
+              "type": "float",
+              "size_bits": 32,
+              "unit": "rad/s",
+              "argument": "rate"
+            }
+          ]
+        },
+        {
+          "name": "Track",
+          "canonical": "demosat.adcs.track",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Version",
+              "type": "uint",
+              "size_bits": 3,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Type",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "SecHdrFlag",
+              "type": "uint",
+              "size_bits": 1,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 101
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Length",
+              "type": "uint",
+              "size_bits": 16,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Opcode",
+              "type": "uint",
+              "size_bits": 8,
+              "value": 2
+            },
+            {
+              "kind": "field",
+              "name": "N",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "array",
+              "name": "Waypoints",
+              "count": {
+                "kind": "field",
+                "field": "N"
+              },
+              "element": {
+                "kind": "struct",
+                "name": "Track_Waypoints_element"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

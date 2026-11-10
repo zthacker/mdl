@@ -1,0 +1,258 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "unit": "Cel",
+              "canonical": "imager.detector"
+            },
+            {
+              "kind": "padding",
+              "size_bits": 8
+            }
+          ]
+        },
+        "Targets_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.targets.id"
+            },
+            {
+              "kind": "field",
+              "name": "Range",
+              "type": "uint",
+              "size_bits": 16,
+              "unit": "m",
+              "canonical": "imager.targets.range"
+            }
+          ]
+        },
+        "Timing": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Time",
+              "type": "uint",
+              "size_bits": 32,
+              "unit": "s",
+              "canonical": "imager.time"
+            }
+          ]
+        }
+      },
+      "packets": [
+        {
+          "name": "Frame",
+          "identify": {
+            "Kind": 1
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Kind",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.kind"
+            },
+            {
+              "kind": "field",
+              "name": "HasTime",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.hastime"
+            },
+            {
+              "kind": "struct",
+              "name": "Timing",
+              "struct": "Timing",
+              "when": {
+                "kind": "compare",
+                "field": "HasTime",
+                "op": "eq",
+                "value": 1
+              }
+            },
+            {
+              "kind": "field",
+              "name": "Pixels",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.pixels"
+            },
+            {
+              "kind": "array",
+              "name": "Pixel",
+              "count": {
+                "kind": "field",
+                "field": "Pixels"
+              },
+              "element": {
+                "kind": "scalar",
+                "type": "uint",
+                "size_bits": 16,
+                "conversion": {
+                  "kind": "linear",
+                  "scale": 0.5,
+                  "offset": 0.0
+                }
+              },
+              "canonical": "imager.pixel"
+            },
+            {
+              "kind": "field",
+              "name": "Name_size",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "field",
+              "name": "Name",
+              "type": "string",
+              "length": {
+                "kind": "field",
+                "field": "Name_size"
+              },
+              "text": "ascii",
+              "canonical": "imager.name"
+            }
+          ]
+        },
+        {
+          "name": "TargetReport",
+          "identify": {
+            "Kind": 2
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Kind",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.kind"
+            },
+            {
+              "kind": "field",
+              "name": "HasTime",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.hastime"
+            },
+            {
+              "kind": "struct",
+              "name": "Timing",
+              "struct": "Timing",
+              "when": {
+                "kind": "compare",
+                "field": "HasTime",
+                "op": "eq",
+                "value": 1
+              }
+            },
+            {
+              "kind": "field",
+              "name": "Found",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.found"
+            },
+            {
+              "kind": "array",
+              "name": "Targets",
+              "count": {
+                "kind": "field",
+                "field": "Found"
+              },
+              "element": {
+                "kind": "struct",
+                "name": "Targets_element"
+              }
+            },
+            {
+              "kind": "array",
+              "name": "Detector",
+              "count": {
+                "kind": "fixed",
+                "count": 3
+              },
+              "element": {
+                "kind": "struct",
+                "name": "Detector_element_gap8"
+              }
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.mode"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
