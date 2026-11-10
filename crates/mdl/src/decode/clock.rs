@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use serde_json::Value as Json;
 
+use super::meaning::is_sentinel;
 use super::{Decoded, Quality, Record, Value};
 use crate::bits::read_bits;
-use crate::ir::{ByteOrder, Correlate, Packet, Set, Time, TimeScale, TimeUnit};
+use crate::ir::{ByteOrder, Correlate, Entry, Packet, Set, Time, TimeScale, TimeUnit};
 use crate::route::Readable;
 use crate::time::{Timestamp, leap};
 
@@ -62,6 +63,9 @@ pub(super) fn event_time(
             let Some(field) = &packet.time_field else {
                 return Ok(EventTime::Ground);
             };
+            if no_reading(packet, record, field) {
+                return Ok(EventTime::Ground);
+            }
             let since = count_nanos(record.get(field), *unit, field)?;
             instant(*scale, epoch_label(epoch)? + since)
         }
@@ -73,6 +77,9 @@ pub(super) fn event_time(
             let Some(field) = &packet.time_field else {
                 return Ok(EventTime::Ground);
             };
+            if no_reading(packet, record, field) || no_reading(packet, record, week_field) {
+                return Ok(EventTime::Ground);
+            }
             let Some(Value::Uint(week)) = record.get(week_field) else {
                 return Err(format!("week field {week_field} has no unsigned value"));
             };
@@ -94,6 +101,7 @@ pub(super) fn event_time(
         }
         Some(Time::Boot { unit, .. }) => match &packet.time_field {
             None => Ok(EventTime::Ground),
+            Some(field) if no_reading(packet, record, field) => Ok(EventTime::Ground),
             Some(field) => match record.get(field) {
                 Some(Value::Uint(value)) => Ok(EventTime::SinceBoot {
                     value: *value,
@@ -102,6 +110,21 @@ pub(super) fn event_time(
                 _ => Err(format!("time field {field} has no unsigned value")),
             },
         },
+    }
+}
+
+/// Whether the packet's top-level field `name` holds one of its sentinels
+/// (§7.2): no reading, so the packet has ground time only (§8). Only the
+/// top-level entries are searched: validation guarantees time fields are
+/// there, unconditional.
+fn no_reading(packet: &Packet, record: &Record<'_>, name: &str) -> bool {
+    let invalid = packet.entries.iter().find_map(|entry| match entry {
+        Entry::Field(field) if field.name == name => Some(&field.invalid),
+        _ => None,
+    });
+    match (invalid, record.get(name)) {
+        (Some(invalid), Some(value)) => is_sentinel(invalid, value),
+        _ => false,
     }
 }
 

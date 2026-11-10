@@ -17,7 +17,7 @@ use crate::diagnostics::{Code, Place, Report};
 use crate::ir::{
     ArrayEntry, Bundle, ByteOrder, Catalog, Checksum, ChecksumEntry, Condition, Conversion,
     Element, Encoding, Entry, Family, Field, Interpolation, Locator, Packet, Point, Scalar,
-    ScalarElement, ScalarType, Set, StructType, TextEncoding, Time,
+    ScalarElement, ScalarType, Set, StructType, TextEncoding, Time, TimeUnit,
 };
 use crate::layout::{ContainerLayout, Placement, SetLayout};
 use crate::time::Timestamp;
@@ -325,6 +325,7 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
     let Some(time) = &set.time else {
         return;
     };
+    let set_place = place;
     let place = place.key("time");
     match time {
         Time::Cuc {
@@ -383,7 +384,7 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
             }
             check_pointer(pointer, &place.key("pointer"), report);
         }
-        Time::Boot { correlate, .. } => {
+        Time::Boot { correlate, unit } => {
             let correlate_place = place.key("correlate");
             check_epoch(&correlate.epoch, &correlate_place.key("epoch"), report);
             if correlate.clock_field == correlate.boot_field {
@@ -397,7 +398,12 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                     ),
                 );
             }
-            match set.packets.iter().find(|p| p.name == correlate.packet) {
+            match set
+                .packets
+                .iter()
+                .enumerate()
+                .find(|(_, p)| p.name == correlate.packet)
+            {
                 None => report.error(
                     Code::UnknownPacket,
                     &correlate_place.key("packet"),
@@ -406,18 +412,25 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                         correlate.packet, set.name
                     ),
                 ),
-                Some(packet) => {
-                    for (key, field) in [
-                        ("clock_field", &correlate.clock_field),
-                        ("boot_field", &correlate.boot_field),
+                Some((packet_index, packet)) => {
+                    let packet_place =
+                        set_place.item("packets", packet_index, "packet", &packet.name);
+                    for (key, field, counts) in [
+                        (
+                            "clock_field",
+                            &correlate.clock_field,
+                            unit_code(correlate.clock_unit),
+                        ),
+                        ("boot_field", &correlate.boot_field, unit_code(*unit)),
                     ] {
                         let field_place = correlate_place.key(key);
                         match top_level_field(packet, field) {
-                            Some((_, field)) => check_clock_field(
+                            Some((index, field)) => check_clock_field(
                                 field,
                                 key,
-                                &[ScalarType::Uint],
+                                (&[ScalarType::Uint], counts),
                                 &field_place,
+                                &packet_place.item("entries", index, "field", &field.name),
                                 report,
                             ),
                             None => report.error(
@@ -448,25 +461,63 @@ fn check_epoch(epoch: &str, place: &Place, report: &mut Report) {
 
 /// The field types a packet's `time_field` may have, by time source:
 /// `None` when the source reads no `time_field`.
-fn clock_types(time: Option<&Time>) -> Option<&'static [ScalarType]> {
+fn clock_types(time: Option<&Time>) -> Option<(&'static [ScalarType], &'static str)> {
     match time? {
-        Time::Boot { .. } => Some(&[ScalarType::Uint]),
-        Time::Elapsed { .. } => Some(&[ScalarType::Uint, ScalarType::Int, ScalarType::Float]),
-        Time::Gps { .. } => Some(&[ScalarType::Uint, ScalarType::Float]),
+        Time::Boot { unit, .. } => Some((&[ScalarType::Uint], unit_code(*unit))),
+        Time::Elapsed { unit, .. } => Some((
+            &[ScalarType::Uint, ScalarType::Int, ScalarType::Float],
+            unit_code(*unit),
+        )),
+        Time::Gps { unit, .. } => Some((&[ScalarType::Uint, ScalarType::Float], unit_code(*unit))),
         Time::Cuc { .. } | Time::Iso8601 { .. } => None,
+    }
+}
+
+/// A time unit's UCUM code.
+fn unit_code(unit: TimeUnit) -> &'static str {
+    match unit {
+        TimeUnit::S => "s",
+        TimeUnit::Ms => "ms",
+        TimeUnit::Us => "us",
+        TimeUnit::Ns => "ns",
     }
 }
 
 /// A clock (a packet's `time_field`, a GPS week, a correlation's two
 /// clocks) is read from every message it's in, so it's a number of one of
-/// `types` that's always there.
+/// `types` that's always there. It's read raw, as a count of `unit` (§8),
+/// so it has no conversion, and no unit but that one, which it may restate
+/// so it can map to a param in another unit. `place` is where the source
+/// names it; `entry` is the field itself.
 fn check_clock_field(
     field: &Field,
     what: &str,
-    types: &[ScalarType],
+    (types, unit): (&[ScalarType], &str),
     place: &Place,
+    entry: &Place,
     report: &mut Report,
 ) {
+    if field.conversion.is_some() {
+        report.error(
+            Code::ReferenceType,
+            &entry.key("conversion"),
+            format!(
+                "{what} {} is read raw, as a count, so it has no conversion",
+                field.name
+            ),
+        );
+    }
+    if let Some(given) = field.unit.as_deref().filter(|given| *given != unit) {
+        report.error(
+            Code::ReferenceType,
+            &entry.key("unit"),
+            format!(
+                "{what} {} is read raw, as a count of {unit:?}, so its unit is {unit:?} or none, \
+                 not {given:?}",
+                field.name
+            ),
+        );
+    }
     let problem = if !types.contains(&field.ty) {
         Some(format!("a {} field", type_name(field.ty)))
     } else if field.when.is_some() {
@@ -577,9 +628,14 @@ fn check_packets(
                     "time_field only applies when the set's time is boot, elapsed or gps",
                 ),
                 Some(types) => match top_level_field(packet, time_field) {
-                    Some((_, field)) => {
-                        check_clock_field(field, "time_field", types, &field_place, report)
-                    }
+                    Some((index, field)) => check_clock_field(
+                        field,
+                        "time_field",
+                        types,
+                        &field_place,
+                        &packet_place.item("entries", index, "field", &field.name),
+                        report,
+                    ),
                     None => report.error(
                         Code::UnknownEntry,
                         &field_place,
@@ -591,11 +647,12 @@ fn check_packets(
             // every timed packet.
             if let Some(Time::Gps { week_field, .. }) = &set.time {
                 match top_level_field(packet, week_field) {
-                    Some((_, field)) => check_clock_field(
+                    Some((index, field)) => check_clock_field(
                         field,
                         "week field",
-                        &[ScalarType::Uint],
+                        (&[ScalarType::Uint], "wk"),
                         &field_place,
+                        &packet_place.item("entries", index, "field", &field.name),
                         report,
                     ),
                     None => report.error(

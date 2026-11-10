@@ -508,7 +508,16 @@ A set's `time` gives each message's event time, a UTC instant (or, for
 
 A `time_field` and a GPS week field are top-level fields that are
 unconditional and not optional; validation refuses anything else
-(`reference_type`). By source, a `time_field` is a `uint` (`boot`); a
+(`reference_type`). They, and a correlation's `clock_field` and
+`boot_field`, are read raw, as counts: validation refuses a `conversion`
+on them, and any `unit` but the one the source counts them in
+(`reference_type`): a `time_field`'s and a `boot_field`'s the source's
+`unit`, a `clock_field`'s the correlation's `clock_unit`, a GPS week
+field's `wk`. Restating it lets a time field map to a param in another
+unit (uptime in `ms` to a param in `s`) while event time reads the count.
+A `time_field` or GPS week field that holds one of its sentinels (§7.2)
+has no reading, so the packet has ground time only, whatever the other
+field holds: the sentinel check comes first. By source, a `time_field` is a `uint` (`boot`); a
 `uint`, `int` or `float` (`elapsed`); a `uint` or `float` (`gps`); a GPS
 week field and a correlation's `clock_field` and `boot_field` are `uint`.
 Every packet with a `time_field` in a `gps` set has the week field.
@@ -583,11 +592,14 @@ label on a scale is the instant plus the TAI − UTC in effect at it (less
 Turning boot time into an instant takes state across messages, which a
 decoder doesn't keep. A consumer that does (MDL offers one) keeps, per
 family and asset, the instant the asset booted, from the latest
-`correlate` packet: the instant its `clock_field` gives, a count of
-`clock_unit`s since the correlation's `epoch` on its `scale` (converted as
-§8.1; Unix time is `1970-01-01T00:00:00Z` on `utc`), minus its
-`boot_field` (in the time source's unit), both read at one moment. If
-either clock's quality (§7.3) isn't `good`, the packet teaches nothing. A
+`correlate` packet it has observed, in the order messages arrive: the
+instant its `clock_field` gives, a count of `clock_unit`s since the
+correlation's `epoch` on its `scale` (converted as §8.1; Unix time is
+`1970-01-01T00:00:00Z` on `utc`), minus its `boot_field` (in the time
+source's unit), both read at one moment. If either clock's quality isn't
+`good`, the packet teaches nothing: its engineering quality (§7.5),
+whether or not it's mapped, which for these unconverted fields is
+`invalid` when it holds one of its sentinels and `good` otherwise. A
 boot time's instant is the boot instant plus the boot time. Messages
 before an asset's first correlation have no instant; those between a
 reboot and the next correlation get the previous boot's. Boot instants
