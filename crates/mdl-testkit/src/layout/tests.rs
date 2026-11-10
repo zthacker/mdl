@@ -2,7 +2,7 @@
 //! on agreeing with `mdl`. The whole-byte vectors are what Python's
 //! `struct.pack` gives (`<H`, `>H`, `<Q`, `>f`, `<f`).
 
-use super::{fit, put_bits, sign_extend};
+use super::{convert_unit, fit, put_bits, reference, sign_extend, spline, table};
 
 fn packed(length: usize, offset: u64, size: u32, value: u64, little: bool) -> Vec<u8> {
     let mut payload = vec![0; length];
@@ -51,4 +51,109 @@ fn writing_leaves_every_other_bit_as_it_was() {
     let mut payload = vec![0xff; 2];
     put_bits(&mut payload, 4, 8, 0, false);
     assert_eq!(payload, [0xf0, 0x0f]);
+}
+
+/// Generated layouts reach every meaning the oracle computes: each
+/// conversion kind and option, units, sentinels, and every quality a
+/// binary field can have.
+#[test]
+fn layouts_reach_every_meaning() {
+    use std::collections::BTreeSet;
+
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+
+    use super::telemetry;
+    use crate::coverage::features;
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = telemetry();
+    let mut found = BTreeSet::new();
+    let mut qualities = BTreeSet::new();
+    for _ in 0..300 {
+        let case = strategy.new_tree(&mut runner).unwrap().current();
+        found.extend(features(&case.bundle));
+        for message in &case.messages {
+            qualities.extend(message.samples.iter().map(|sample| sample.quality));
+        }
+    }
+    for feature in [
+        "conversion:linear",
+        "conversion:poly",
+        "conversion:states",
+        "conversion:table",
+        "conversion:table/step",
+        "conversion:table/extrapolate",
+        "conversion:spline",
+        "conversion:spline/extrapolate",
+        "key:entry.unit",
+        "key:entry.invalid",
+        "key:entry.byte_order",
+        "text:ascii",
+        "text:latin1",
+        "length:fixed/terminator",
+        "byte_order:little",
+        "byte_order:big",
+    ] {
+        assert!(found.contains(feature), "no layout uses {feature}");
+    }
+    for quality in [
+        "good",
+        "invalid",
+        "non_finite",
+        "out_of_calibration",
+        "unknown_state",
+    ] {
+        assert!(qualities.contains(quality), "no sample is {quality}");
+    }
+}
+
+/// Equal to the reference within what two different algorithms' rounding
+/// leaves at `scale`: a relative 1e-10 of it, or of 1 near zero.
+fn close(got: f64, want: f64, scale: f64) -> bool {
+    (got - want).abs() <= 1e-10 * scale.abs().max(want.abs()).max(1.0)
+}
+
+/// A curve's scale: its largest value. SciPy evaluates its polynomials even
+/// at the points, which the spec gives exactly, so it rounds there at this
+/// scale.
+fn scale(points: &[(f64, f64)]) -> f64 {
+    points
+        .iter()
+        .map(|(_, value)| value.abs())
+        .fold(0.0, f64::max)
+}
+
+/// The oracle's splines, tables and unit conversions agree with SciPy's and
+/// pint's (`reference/generate.py`), so its arithmetic doesn't rest only on
+/// agreeing with `mdl`.
+#[test]
+fn the_oracle_agrees_with_third_party_libraries() {
+    for curve in reference::SPLINES {
+        for &(x, want) in curve.values {
+            let got = spline(curve.points, true, x);
+            assert!(
+                got.is_some_and(|got| close(got, want, scale(curve.points))),
+                "spline {:?} at {x}: {got:?}, SciPy {want}",
+                curve.points
+            );
+        }
+    }
+    for curve in reference::TABLES {
+        for &(x, want) in curve.values {
+            let got = table(curve.points, false, true, x);
+            assert!(
+                got.is_some_and(|got| close(got, want, scale(curve.points))),
+                "table {:?} at {x}: {got:?}, SciPy {want}",
+                curve.points
+            );
+        }
+    }
+    for &(from, to, value, want) in reference::UNITS {
+        let got = convert_unit(value, from, to);
+        assert!(
+            close(got, want, want),
+            "{value} {from} in {to}: {got}, pint {want}"
+        );
+    }
 }
