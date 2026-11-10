@@ -12,6 +12,11 @@ check:
     cargo test -p morpheus-mdl --features serde_json/arbitrary_precision
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
 
+# Every test, with the property tests at 10,000 cases each (`check` runs
+# 256), optimized but with overflow checks and debug assertions on
+props:
+    PROPTEST_CASES=10000 cargo test --workspace --profile props
+
 # Format all code
 fmt:
     cargo fmt --all

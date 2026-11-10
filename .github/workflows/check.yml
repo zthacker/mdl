@@ -1,7 +1,8 @@
 # What `just check` runs (formatting, clippy, every test including the
 # examples walkthrough and the README's example, and the docs), on every
 # push to main and every pull request, plus the tests on the oldest Rust
-# the workspace supports.
+# the workspace supports. On pushes to main, `just props` also runs the
+# property tests at 10,000 cases each.
 
 name: check
 
@@ -42,3 +43,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace --locked
+
+  props:
+    name: property tests at 10,000 cases
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just
+      - run: cargo fetch --locked
+      - run: just props
