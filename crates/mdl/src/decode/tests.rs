@@ -1567,3 +1567,28 @@ fn a_gps_elapsed_time_counts_nanoseconds_from_the_gps_epoch() {
         EventTime::At(instant("2011-09-14T01:46:25Z"))
     );
 }
+
+#[test]
+fn a_time_field_holding_a_sentinel_has_ground_time_only() {
+    let mut bundle = bundle();
+    let legacy = bundle["sets"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|set| set["name"] == "legacy_v3")
+        .unwrap();
+    legacy["packets"][0]["entries"][0]["invalid"] = json!([0]);
+    let artifacts = artifacts_of(&bundle);
+    let sets = family_sets(&artifacts, "legacy");
+    let registry = sink_registry();
+    let event_time = |count: u64| {
+        let payload = count.to_le_bytes();
+        let message = Message::new(Payload::Binary(&payload), now());
+        sets.decode(&message, &registry).unwrap().event_time
+    };
+    assert_eq!(event_time(0), EventTime::Ground);
+    assert_eq!(
+        event_time(1_000_000_000_000_000_000),
+        EventTime::At(instant("2011-09-14T01:46:25Z"))
+    );
+}

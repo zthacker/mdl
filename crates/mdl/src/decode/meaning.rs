@@ -372,7 +372,7 @@ fn integer(value: &Value<'_>) -> Option<i128> {
 
 /// Does `value` match one of `invalid`? Integers compare by value, a float
 /// with an integer sentinel by numeric value, and strings exactly.
-fn is_sentinel(invalid: &[Scalar], value: &Value<'_>) -> bool {
+pub(super) fn is_sentinel(invalid: &[Scalar], value: &Value<'_>) -> bool {
     // The value's type picks the comparison: a string field's sentinel
     // "9999" is the text 9999, not a number.
     invalid.iter().any(|sentinel| match value {

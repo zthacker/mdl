@@ -670,6 +670,56 @@ fn epochs_have_one_spelling() {
 }
 
 #[test]
+fn time_fields_are_read_raw() {
+    // An elapsed count, a GPS week and a correlation clock are counts of
+    // their source's unit: they may restate it, so they can map to a param
+    // in another unit, but take no other unit and no conversion.
+    let unit = |set: usize, given: &str| {
+        let given = given.to_string();
+        move |v: &mut Value| v["sets"][set]["packets"][0]["entries"][0]["unit"] = json!(given)
+    };
+    assert_eq!(problems(unit(3, "ms")), vec![]);
+    assert_one(
+        Code::ReferenceType,
+        "/sets/3/packets/0/entries/0/unit",
+        unit(3, "s"),
+    );
+    assert_eq!(
+        messages(unit(3, "s")),
+        [
+            "time_field t_ms is read raw, as a count of \"ms\", so its unit is \"ms\" or none, \
+          not \"s\""
+        ]
+    );
+    assert_eq!(problems(unit(4, "wk")), vec![]);
+    assert_one(
+        Code::ReferenceType,
+        "/sets/4/packets/0/entries/0/conversion",
+        |v| {
+            v["sets"][4]["packets"][0]["entries"][0]["conversion"] =
+                json!({ "kind": "linear", "scale": 2.0, "offset": 0.0 })
+        },
+    );
+    assert_eq!(problems(unit(2, "us")), vec![]);
+    assert_one(
+        Code::ReferenceType,
+        "/sets/2/packets/0/entries/0/unit",
+        unit(2, "ms"),
+    );
+    // Uptime in milliseconds, its time_field and boot_field, maps to a
+    // param in seconds.
+    assert_eq!(
+        problems(|v| {
+            v["catalog"]["params"]["sys.uptime"] = json!({ "type": "f64", "unit": "s" });
+            let boot = &mut v["sets"][2]["packets"][0]["entries"][1];
+            boot["unit"] = json!("ms");
+            boot["canonical"] = json!("sys.uptime");
+        }),
+        vec![]
+    );
+}
+
+#[test]
 fn correlation_needs_two_fields() {
     assert_one(Code::CorrelateFields, "/sets/2/time/correlate", |v| {
         v["sets"][2]["time"]["correlate"]["clock_field"] = json!("boot_ms");
