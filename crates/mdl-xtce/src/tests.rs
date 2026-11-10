@@ -2435,6 +2435,9 @@ fn initial_values_are_defaults_read_as_yamcs_reads_them() {
     assert_eq!(default(binary, &argument("A", "T")), json!("0abc"));
     let float = r#"<FloatArgumentType name="T" sizeInBits="64" initialValue="2.5"><FloatDataEncoding sizeInBits="64"/></FloatArgumentType>"#;
     assert_eq!(default(float, &argument("A", "T")), json!(2.5));
+    // A whole number past i64 is a double like any other.
+    let wide = float.replace("2.5", "1e21");
+    assert_eq!(default(&wide, &argument("A", "T")), json!(1e21));
     let enumerated = r#"<EnumeratedArgumentType name="T" initialValue="Off"><IntegerDataEncoding sizeInBits="8"/><EnumerationList><Enumeration value="0" label="OFF"/></EnumerationList></EnumeratedArgumentType>"#;
     assert_eq!(
         one_error(&doc(&commands(

@@ -60,7 +60,10 @@ Anything else is [`wrong_type`]. A double for an `f64` argument MUST be
 finite [`non_finite`].
 Defaults are values like any other: a bytes default is written in the
 catalog as lowercase hex, and an integer past ±(2^53 − 1) as a decimal
-string. A list argument's default is a JSON array of them (§2.5).
+string. A list argument's default is a JSON array of them (§2.5). A
+number with no fraction is an integer when it's in the i64 range and a
+double past it, as canonical JSON reads it, so an `f64` default of 1e21
+is written as a number and an integer argument's wide default as a string.
 
 Validation guarantees that a default encodes in every command packet that
 encodes its argument: it becomes a raw value its field holds (§3.1 to
