@@ -2853,6 +2853,388 @@ fn a_string_constant_fits_its_field() {
     });
 }
 
+/// The sink's CONFIGURE packet: op, enable (a bool bit and 7 of padding),
+/// gain (binary32), label (exactly 2 ASCII bytes), n, then taps (uint16
+/// elements counted by n).
+fn configure(v: &mut Value) -> &mut Value {
+    let sets = v["sets"].as_array_mut().unwrap();
+    let sink = sets
+        .iter_mut()
+        .find(|set| set["name"] == "sink_v1")
+        .unwrap();
+    &mut sink["commands"][0]
+}
+
+/// Where entry `index` of the sink's CONFIGURE packet is, then `rest`.
+fn configure_entry(index: usize, rest: &str) -> String {
+    let sink = fixture()["sets"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|set| set["name"] == "sink_v1")
+        .unwrap();
+    format!("/sets/{sink}/commands/0/entries/{index}{rest}")
+}
+
+/// Gives argument `index` of sink.configure (enable, gain, label, taps)
+/// this default.
+fn sink_default(v: &mut Value, index: usize, default: Value) {
+    command(v, "sink.configure")["arguments"][index]["default"] = default;
+}
+
+/// The messages of the diagnostics for the fixture after `edit`.
+fn messages(edit: impl FnOnce(&mut Value)) -> Vec<String> {
+    let mut value = fixture();
+    edit(&mut value);
+    validate(bundle(value))
+        .err()
+        .map(|diagnostics| diagnostics.iter().map(|d| d.message.clone()).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_text_default_is_one_its_field_can_write() {
+    let label = configure_entry(4, "/argument");
+    let labelled = |default: &'static str, length: Value| {
+        move |v: &mut Value| {
+            sink_default(v, 2, json!(default));
+            configure(v)["entries"][4]["length"] = length;
+        }
+    };
+    let exact = || json!({ "kind": "fixed", "bytes": 2 });
+    // Exactly 2 bytes, which the caller pads to; ASCII only.
+    assert_eq!(problems(labelled("ON", exact())), vec![]);
+    assert_one(Code::DefaultValue, &label, labelled("OFF", exact()));
+    assert_one(Code::DefaultValue, &label, labelled("é", exact()));
+    assert_eq!(
+        messages(labelled("OFF", exact())),
+        [
+            "argument label's default, \"OFF\", can't be written by field label, so a request \
+          that leaves label out can't be sent: a value of 3 bytes doesn't fit: the field is \
+          exactly 2 bytes"
+        ]
+    );
+    // Up to 4 bytes, ended by a NUL.
+    let buffer = || json!({ "kind": "fixed", "bytes": 4, "terminator": 0 });
+    assert_eq!(problems(labelled("ON", buffer())), vec![]);
+    assert_one(Code::DefaultValue, &label, labelled("ONOFF", buffer()));
+    assert_one(Code::DefaultValue, &label, labelled("O\0N", buffer()));
+    // Ended by a ';'.
+    let ended = || json!({ "kind": "terminator", "byte": 59 });
+    assert_eq!(problems(labelled("A,B", ended())), vec![]);
+    assert_one(Code::DefaultValue, &label, labelled("A;B", ended()));
+}
+
+#[test]
+fn a_default_whose_length_another_field_holds_fits_that_field() {
+    // label_len holds label's length in 2-byte units, up to 3 of them.
+    let measured = |default: &'static str| {
+        move |v: &mut Value| {
+            sink_default(v, 2, json!(default));
+            let entries = configure(v)["entries"].as_array_mut().unwrap();
+            entries[4]["length"] = json!({ "kind": "field", "field": "label_len", "multiply": 2 });
+            entries.insert(
+                4,
+                json!({ "kind": "field", "name": "label_len", "type": "uint", "size_bits": 2 }),
+            );
+            entries.insert(5, json!({ "kind": "padding", "size_bits": 6 }));
+        }
+    };
+    let label = configure_entry(6, "/argument");
+    assert_eq!(problems(measured("ON")), vec![]);
+    assert_eq!(problems(measured("ONOFFO")), vec![]);
+    assert_one(Code::DefaultValue, &label, measured("ONE"));
+    assert_one(Code::DefaultValue, &label, measured("ONOFFONO"));
+}
+
+#[test]
+fn a_bytes_default_is_one_its_field_can_write() {
+    // LOAD_TABLE's table, exactly 2 bytes in place of a length field.
+    let table = |default: &'static str| {
+        move |v: &mut Value| {
+            command(v, "eps.load_table")["arguments"][0]["default"] = json!(default);
+            let entries = set_x(v)["commands"][0]["entries"].as_array_mut().unwrap();
+            entries.remove(2);
+            entries[2]["length"] = json!({ "kind": "fixed", "bytes": 2 });
+        }
+    };
+    assert_eq!(problems(table("0a1b")), vec![]);
+    assert_one(
+        Code::DefaultValue,
+        "/sets/0/commands/0/entries/2/argument",
+        table("0a1b2c"),
+    );
+}
+
+#[test]
+fn a_list_default_is_written_value_by_value() {
+    // Binary32 elements at 1e-37 a count, so a value past about 34 is a
+    // count past binary32's largest, and rounds to infinity.
+    let float_taps = |default: Value| {
+        move |v: &mut Value| {
+            let taps = &mut command(v, "sink.configure")["arguments"][3];
+            taps.as_object_mut().unwrap().remove("range");
+            taps["default"] = default;
+            configure(v)["entries"][6]["element"] = json!({
+                "kind": "scalar", "type": "float", "size_bits": 32,
+                "conversion": { "kind": "linear", "scale": 1e-37, "offset": 0.0 } });
+        }
+    };
+    assert_eq!(problems(float_taps(json!([1.5, 34]))), vec![]);
+    assert_one(
+        Code::DefaultValue,
+        &configure_entry(6, "/argument"),
+        float_taps(json!([1.5, 35])),
+    );
+    // A record's field writes its list's values: waypoint tags of up to 4
+    // bytes, ended by a NUL.
+    let tagged = |default: Value| {
+        move |v: &mut Value| {
+            with_lists(v);
+            v["catalog"]["commands"]["nav.route"]["arguments"]
+                .as_array_mut()
+                .unwrap()
+                .push(
+                    json!({ "name": "tag", "type": "str", "list": { "min": 1, "max": 4 },
+                              "default": default }),
+                );
+            set_x(v)["types"]["waypoint"]["entries"]
+                .as_array_mut()
+                .unwrap()
+                .push(
+                    json!({ "kind": "field", "name": "tag", "type": "string", "text": "ascii",
+                              "length": { "kind": "fixed", "bytes": 4, "terminator": 0 },
+                              "argument": "tag" }),
+                );
+        }
+    };
+    let tag = format!("{WAYPOINT}/entries/4/argument");
+    assert_eq!(problems(tagged(json!(["AB", "ABCD"]))), vec![]);
+    assert_one(Code::DefaultValue, &tag, tagged(json!(["AB", "ABCDE"])));
+    assert_eq!(
+        messages(tagged(json!(["AB", "ABCDE"]))),
+        [
+            "value 1 of argument tag's default, \"ABCDE\", can't be written by field tag, so a \
+          request that leaves tag out can't be sent: a value of 5 bytes doesn't fit: the field \
+          holds at most 4 bytes"
+        ]
+    );
+    // Each value that can't be written is its own problem.
+    assert_eq!(
+        problems(tagged(json!(["ABCDE", "AB", "ABCDE"]))),
+        vec![(Code::DefaultValue, tag.clone()), (Code::DefaultValue, tag)]
+    );
+}
+
+#[test]
+fn every_state_of_an_enum_argument_fits_the_string_field_that_writes_it() {
+    let named = |length: Value| {
+        move |v: &mut Value| {
+            set_mode_packet(v)["entries"][1] = json!({
+                "kind": "field", "name": "mode", "type": "string", "text": "ascii",
+                "length": length, "argument": "mode" });
+        }
+    };
+    // SAFE and NOMINAL, in a buffer of up to 8 bytes, or exactly 4.
+    assert_eq!(
+        problems(named(
+            json!({ "kind": "fixed", "bytes": 8, "terminator": 0 })
+        )),
+        vec![]
+    );
+    let mode = "/sets/0/commands/1/entries/1/argument";
+    assert_one(
+        Code::ValueRange,
+        mode,
+        named(json!({ "kind": "fixed", "bytes": 4 })),
+    );
+    // A default that is that state is the same problem, reported once.
+    assert_one(Code::ValueRange, mode, |v| {
+        named(json!({ "kind": "fixed", "bytes": 4 }))(v);
+        command(v, "eps.set_mode")["arguments"][0]["default"] = json!("NOMINAL");
+    });
+    // Ended by an 'N', which NOMINAL holds.
+    assert_one(
+        Code::ValueRange,
+        mode,
+        named(json!({ "kind": "terminator", "byte": 78 })),
+    );
+}
+
+#[test]
+fn a_bool_argument_is_written_by_a_field_that_holds_1() {
+    let enable = |ty: &str| {
+        let ty = ty.to_string();
+        move |v: &mut Value| {
+            configure(v)["entries"][1]["type"] = json!(ty);
+        }
+    };
+    assert_eq!(problems(enable("uint")), vec![]);
+    // A 1-bit int holds -1 and 0, so neither true nor the default can be
+    // sent; that's one problem.
+    assert_one(
+        Code::ValueRange,
+        &configure_entry(1, "/argument"),
+        enable("int"),
+    );
+}
+
+#[test]
+fn a_default_isnt_reported_where_the_range_already_is() {
+    // An 8-bit delay can't hold 3600 s through the inverse, nor so the
+    // default of 3600 s; the range is the problem.
+    assert_one(
+        Code::ValueRange,
+        "/sets/0/commands/1/entries/2/argument",
+        |v| {
+            set_mode_packet(v)["entries"][2]["size_bits"] = json!(8);
+            command(v, "eps.set_mode")["arguments"][1]["default"] = json!(3600);
+        },
+    );
+}
+
+#[test]
+fn a_default_is_reported_beside_its_fields_other_problems() {
+    // canonical is telemetry's key, which has nothing to do with writing.
+    assert_eq!(
+        problems(|v| {
+            sink_default(v, 2, json!("OFF"));
+            configure(v)["entries"][4]["canonical"] = json!("sink.label");
+        }),
+        vec![
+            (Code::DefaultValue, configure_entry(4, "/argument")),
+            (Code::CommandShape, configure_entry(4, "/canonical")),
+        ]
+    );
+    // A problem with how the field writes is the problem.
+    let codes: Vec<Code> = problems(|v| {
+        sink_default(v, 2, json!("OFF"));
+        configure(v)["entries"][4]["size_bits"] = json!(16);
+    })
+    .into_iter()
+    .map(|(code, _)| code)
+    .collect();
+    assert!(
+        !codes.is_empty() && !codes.contains(&Code::DefaultValue),
+        "{codes:?}"
+    );
+}
+
+#[test]
+fn a_struct_types_field_is_checked_for_each_packet_that_holds_its_records() {
+    // ROUTE (nav.route, which has no tag) and then LOOP (nav.loop, whose
+    // tag defaults to a value too long) both hold waypoints, whose tag
+    // field takes tag. ROUTE's problem there doesn't hide LOOP's.
+    let looped = |v: &mut Value| {
+        with_lists(v);
+        set_x(v)["types"]["waypoint"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                json!({ "kind": "field", "name": "tag", "type": "string", "text": "ascii",
+                          "length": { "kind": "fixed", "bytes": 4, "terminator": 0 },
+                          "argument": "tag" }),
+            );
+        let mut arguments = v["catalog"]["commands"]["nav.route"]["arguments"].clone();
+        arguments.as_array_mut().unwrap().push(
+            json!({ "name": "tag", "type": "str", "list": { "min": 1, "max": 4 },
+                    "default": ["ABCDE"] }),
+        );
+        v["catalog"]["commands"]["nav.loop"] = json!({ "arguments": arguments });
+        let mut packet = route(v).clone();
+        packet["name"] = json!("LOOP");
+        packet["canonical"] = json!("nav.loop");
+        packet["entries"][0]["value"] = json!(42);
+        set_x(v)["commands"].as_array_mut().unwrap().push(packet);
+    };
+    let tag = format!("{WAYPOINT}/entries/4/argument");
+    assert_eq!(
+        problems(looped),
+        vec![
+            (Code::DefaultValue, tag.clone()),
+            (Code::UnknownArgument, tag)
+        ]
+    );
+}
+
+#[test]
+fn a_bool_default_isnt_checked_in_a_field_that_cant_take_a_bool() {
+    assert_one(Code::CanonicalType, &configure_entry(1, "/argument"), |v| {
+        let entries = configure(v)["entries"].as_array_mut().unwrap();
+        entries[1] = json!({ "kind": "field", "name": "enable", "type": "string",
+                                 "length": { "kind": "fixed", "bytes": 1 },
+                                 "argument": "enable" });
+        entries.remove(2);
+    });
+}
+
+#[test]
+fn a_float_fields_range_ends_are_finite_raw_values() {
+    let gain = configure_entry(3, "/argument");
+    let reaching = |max: f64| {
+        move |v: &mut Value| {
+            command(v, "sink.configure")["arguments"][1]["range"]["max"] = json!(max);
+        }
+    };
+    // Binary32's largest is about 3.4e38.
+    assert_eq!(problems(reaching(3e38)), vec![]);
+    assert_one(Code::ValueRange, &gain, reaching(1e39));
+    assert_eq!(
+        messages(reaching(1e39)),
+        [
+            "argument gain's range reaches 1e+39, which field gain can't write: it holds finite \
+          binary32 numbers, up to 3.4028234663852886e+38; narrow the range"
+        ]
+    );
+    // Through a conversion: at 1e-30 a count, 4 is 4e30 counts, which a
+    // binary64 holds and a binary32 does too.
+    assert_eq!(
+        problems(|v| {
+            configure(v)["entries"][3]["conversion"] =
+                json!({ "kind": "linear", "scale": 1e-30, "offset": 0.0 });
+        }),
+        vec![]
+    );
+    // At 1e-38 a count, 4 is 4e38 counts, past binary32.
+    assert_one(Code::ValueRange, &gain, |v| {
+        configure(v)["entries"][3]["conversion"] =
+            json!({ "kind": "linear", "scale": 1e-38, "offset": 0.0 });
+    });
+}
+
+#[test]
+fn a_json_integer_field_holds_64_bits() {
+    // vendor_j's delay as an int at 1e-15 s a count holds 3600 s as
+    // 3.6e18 counts; at 1e-16 s, 3.6e19 counts is past an i64.
+    let delay = |scale: f64| {
+        move |v: &mut Value| {
+            v["sets"][1]["commands"][0]["entries"][2] = json!({
+                "kind": "field", "name": "delay", "type": "int", "pointer": "/args/delay",
+                "unit": "s", "conversion": { "kind": "linear", "scale": scale, "offset": 0.0 },
+                "argument": "delay_s" });
+        }
+    };
+    assert_eq!(problems(delay(1e-15)), vec![]);
+    assert_one(
+        Code::ValueRange,
+        "/sets/1/commands/0/entries/2/argument",
+        delay(1e-16),
+    );
+    // A constant, too: a JSON uint holds 0 to 2^64 - 1.
+    let op = |value: Value| {
+        move |v: &mut Value| {
+            v["sets"][1]["commands"][0]["entries"][0] = json!({ "kind": "field", "name": "op", "type": "uint", "pointer": "/op",
+                        "value": value });
+        }
+    };
+    assert_eq!(problems(op(json!("18446744073709551615"))), vec![]);
+    assert_one(
+        Code::ValueRange,
+        "/sets/1/commands/0/entries/0/value",
+        op(json!(-1)),
+    );
+}
+
 #[test]
 fn text_tags_tell_command_packets_apart_by_their_bytes() {
     // Both packets start with a 4-byte tag in place of an opcode.

@@ -642,11 +642,12 @@ fn from_hex(hex: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-fn show_literal(literal: &Literal) -> String {
+/// A catalog literal for a message, as the catalog's JSON writes it.
+pub(crate) fn show_literal(literal: &Literal) -> String {
     match literal {
         Literal::Bool(value) => value.to_string(),
         Literal::Int(value) => value.to_string(),
-        Literal::Float(value) => value.to_string(),
+        Literal::Float(value) => show_double(*value),
         Literal::Str(value) => format!("{value:?}"),
         Literal::List(items) => {
             let shown: Vec<String> = items.iter().map(show_literal).collect();
@@ -1230,6 +1231,31 @@ pub(crate) fn raw_unchecked(
         ScalarType::Float if binary && field.size_bits == Some(32) => f64::from(raw as f32),
         _ => raw,
     })
+}
+
+/// Why `field` of `packet` can't write `literal`, a value the catalog gives
+/// `argument` (its default, one value of a list default, a state's name),
+/// as encoding would find it: §3.1 to §3.4, then §3.5 for a field whose
+/// length another field holds. `None` when it can, and when the catalog
+/// doesn't allow the value, which validation reports on the catalog.
+pub(crate) fn write_problem(
+    packet: &CommandPacket,
+    field: &Field,
+    argument: &Argument,
+    literal: &Literal,
+    binary: bool,
+) -> Option<FieldProblem> {
+    let value = from_literal(argument, literal).ok()?;
+    let checked = check(argument, &value).ok()?;
+    let source = Source::Argument(&checked, argument.unit.as_deref());
+    let raw = match scalar_raw(field, source, binary) {
+        Ok(raw) => raw,
+        Err(problem) => return Some(problem),
+    };
+    match (&field.length, binary) {
+        (Some(ByteLength::Field(from)), true) => length_raw(packet, from, raw.bytes.len()).err(),
+        _ => None,
+    }
 }
 
 /// The nearest integer to `x`, ties away from zero, if `x` is finite and

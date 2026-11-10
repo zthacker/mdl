@@ -141,6 +141,46 @@ fn validation_diagnostics_point_into_the_file_that_says_it() {
 }
 
 #[test]
+fn a_default_a_command_packet_cant_write_is_reported_where_the_packet_takes_it() {
+    let text = r#"mdl_version = "2.0"
+
+[catalog.commands."sink.label"]
+arguments = [{ name = "label", type = "str", default = "OFF" }]
+
+[[families]]
+name = "sink"
+encoding = "binary"
+byte_order = "big"
+alias = { kind = "fixed", value = "S1" }
+
+[[sets]]
+name = "sink_v1"
+family = "sink"
+
+[[sets.commands]]
+name = "LABEL"
+canonical = "sink.label"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "label"
+type = "string"
+length = { kind = "fixed", bytes = 2 }
+argument = "label"
+"#;
+    let sources = sources(&[("sink.toml", text)]);
+    let parsed = read(sources.iter()).unwrap();
+    let diagnostics = validate(parsed.bundle).unwrap_err();
+    let located = parsed.map.locate_all(&diagnostics);
+    let codes: Vec<&str> = located.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["default_value"]);
+    let span = located[0].span.unwrap();
+    assert_eq!(&text[span.start..span.end], "\"label\"");
+    let taken = text.find("argument = \"label\"").unwrap() + "argument = ".len();
+    assert_eq!(span.start, taken);
+}
+
+#[test]
 fn a_param_in_two_files_is_a_conflict_naming_the_first() {
     let again =
         "mdl_version = \"2.0\"\n\n[catalog.params]\n\"eps.bus_voltage\" = { type = \"i64\" }\n";

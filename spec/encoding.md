@@ -62,6 +62,12 @@ Defaults are values like any other: a bytes default is written in the
 catalog as lowercase hex, and an integer past ±(2^53 − 1) as a decimal
 string. A list argument's default is a JSON array of them (§2.5).
 
+Validation guarantees that a default encodes in every command packet that
+encodes its argument: it becomes a raw value its field holds (§3.1 to
+§3.4), and a length its length field holds (§3.5); each value of a list
+default does so in the array's element, or in its record's field. So a
+request that leaves an argument out never fails on the argument's default.
+
 ### 2.3 Ranges
 
 A numeric argument with a `range` MUST lie within it, ends included
@@ -144,11 +150,16 @@ that its values never both increase and decrease from one input to the
 next, the inputs being, for a `table`, `min`, the raw value of every point
 strictly between `min` and `max`, and `max` (which checks it exactly), and
 for a `poly`, the 4097 points `min + (k × (max − min)) / 4096`, for k from
-0 to 4096. A `linear` inverse always qualifies. It also guarantees that the range's ends, through the inverse and
-rounded as below, fit an integer field, so every value in range does. An
-absent end is the argument type's own, which for an unconverted `u64` or
-`i64` argument is compared as the integer it is: such an argument needs no
-range to fill a 64-bit field.
+0 to 4096. A `linear` inverse always qualifies. It also guarantees that the
+range's ends, through the inverse and rounded as below, fit an integer
+field (its size in a binary payload, 64 bits in a JSON one), so every
+value in range does. An absent end is the argument type's own, which for an
+unconverted `u64` or `i64` argument is compared as the integer it is: such
+an argument needs no range to fill a 64-bit field. A `bool` argument's
+integer field holds 1, which a 1-bit `int` doesn't. In a float field, each
+end the range gives becomes a finite raw value, a finite binary32 for a
+32-bit field; an absent end isn't checked, so an argument without a range
+can still be [`raw_range`] past binary32's largest.
 
 A result for an integer field is rounded to the nearest integer, ties away
 from zero (0.25 s at 0.1 s per count is raw 3; the two results above are
@@ -186,6 +197,11 @@ Then, by the field's length:
   [`contains_terminator`], which is written after them;
 - `field`: any length the length field can give (§3.5);
 - `remaining`: any length.
+
+Validation guarantees that the name of every state of an `enum` argument
+that a string field writes is text the field can hold, as above. The
+catalog doesn't bound a `str` or `bytes` argument's length, so a caller's
+value can still be [`bad_length`].
 
 ### 3.5 Lengths
 
