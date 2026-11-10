@@ -81,7 +81,7 @@ fn layouts_reach_every_meaning() {
             match message.event_time {
                 super::EventTime::At(at) => inside_leap |= leap_starts.contains(&(at + 1)),
                 super::EventTime::Invalid => unreadable = true,
-                super::EventTime::Ground => {}
+                super::EventTime::Ground | super::EventTime::SinceBoot { .. } => {}
             }
         }
     }
