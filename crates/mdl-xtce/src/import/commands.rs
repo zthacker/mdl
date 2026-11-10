@@ -28,6 +28,7 @@ use super::{ArrayField, Element, Entry, Field, Import, ParamKey, StructType, Typ
 use crate::Code;
 use crate::calibration::duration_seconds;
 use crate::names::{catalog_part, identifier};
+use crate::out::integer_json;
 use crate::space::Kind;
 use crate::types::{
     ArrayShape, Count, Length, Order, Raw, Scalar, Shape, Wanted, description, raw_value,
@@ -2449,20 +2450,6 @@ fn argument_integer(text: &str) -> Option<i128> {
     let magnitude = u64::from_str_radix(&digits, radix).ok()?;
     let value = i128::from(magnitude);
     Some(if negative { -value } else { value })
-}
-
-/// An integer as the IR writes it: a JSON number within ±(2^53 − 1), where
-/// every reader holds it exactly, else a decimal string.
-fn integer_json(value: i128) -> Value {
-    const SAFE: u128 = (1 << 53) - 1;
-    if value.unsigned_abs() <= SAFE {
-        match i64::try_from(value) {
-            Ok(n) => json!(n),
-            Err(_) => Value::String(value.to_string()),
-        }
-    } else {
-        Value::String(value.to_string())
-    }
 }
 
 #[cfg(test)]

@@ -1189,7 +1189,10 @@ fn from_argument(
                     .iter()
                     .find(|state| &state.name == name)
                     .ok_or(cannot)?;
-                integer_raw(field, i128::from(state.raw), binary)
+                let raw = integer_value(&state.raw).ok_or(FieldProblem::Layout(
+                    "a state whose raw value is an integer",
+                ))?;
+                integer_raw(field, raw, binary)
             }
             _ => Err(cannot),
         },

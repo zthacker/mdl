@@ -358,7 +358,7 @@ fn argument_value(
             let n = integer(raw).ok_or_else(wrong)?;
             let state = states
                 .iter()
-                .find(|state| i128::from(state.raw) == n)
+                .find(|state| integer_value(&state.raw) == Some(n))
                 .ok_or_else(|| ArgumentProblem::NoState { raw: n.to_string() })?;
             ArgumentValue::Text(state.name.clone())
         }

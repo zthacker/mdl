@@ -38,7 +38,9 @@ byte 1. A value of 1 to 64 bits at bit `o` is read as an unsigned integer:
 - **big-endian:** bits `o` to `o + size - 1`, most significant first;
 - **little-endian:** whole bytes on byte boundaries, least significant
   byte first, or, for a value inside one byte, as big-endian (byte order
-  doesn't apply within a byte).
+  doesn't apply within a byte). A little-endian value that is neither (8
+  bits from bit 3, 12 bits from a byte boundary) has no reading, and
+  validation refuses it.
 
 A field or scalar array element is read in its own `byte_order` when it
 has one, and in its family's otherwise; the rules above apply by that
@@ -340,7 +342,9 @@ in `cells[2].volts`.
 
 - `linear`: `raw * scale + offset`;
 - `poly`: `c0 + c1·x + c2·x² + …`, evaluated by Horner's rule;
-- `states`: the state whose `raw` equals the raw integer;
+- `states`: the state whose `raw` equals the raw integer (a `raw` past
+  ±(2^53 − 1) is written as a decimal string, and compares as its
+  integer);
 - `table`: through its points (below);
 - `spline`: the natural cubic spline through its points (below).
 

@@ -3,7 +3,7 @@
 
 use mdl::diagnostics::escape_pointer_token;
 use mdl::source::{SourceMap, Span};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 /// A JSON object and the spans of its values, by pointer relative to it.
 #[derive(Debug, Clone, Default)]
@@ -89,4 +89,18 @@ impl List {
 
 fn token(key: &str) -> String {
     format!("/{}", escape_pointer_token(key))
+}
+
+/// An integer as the IR writes it: a JSON number within ±(2^53 − 1), where
+/// every reader holds it exactly, else a decimal string.
+pub(crate) fn integer_json(value: i128) -> Value {
+    const SAFE: u128 = (1 << 53) - 1;
+    if value.unsigned_abs() <= SAFE {
+        match i64::try_from(value) {
+            Ok(n) => json!(n),
+            Err(_) => Value::String(value.to_string()),
+        }
+    } else {
+        Value::String(value.to_string())
+    }
 }

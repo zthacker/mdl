@@ -211,9 +211,72 @@ impl Visitor<'_> for ScalarVisitor {
     }
 }
 
+impl Scalar {
+    /// The integer it holds: a number, or a decimal string in its one
+    /// spelling (an optional `-`, no leading zeros, not `-0`), as integers
+    /// past ±(2^53 − 1) are written. `None` for any other text.
+    pub fn as_integer(&self) -> Option<i128> {
+        match self {
+            Scalar::Int(n) => Some(i128::from(*n)),
+            Scalar::Str(text) => integer_text(text),
+        }
+    }
+
+    /// An integer as the IR writes it: a number within ±(2^53 − 1), a
+    /// decimal string beyond.
+    fn integer(n: i128) -> Scalar {
+        match i64::try_from(n) {
+            Ok(small) if small.unsigned_abs() <= MAX_SAFE_INTEGER => Scalar::Int(small),
+            _ => Scalar::Str(n.to_string()),
+        }
+    }
+}
+
+/// The largest integer every JSON reader holds exactly, 2^53 − 1.
+pub(crate) const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
+
+/// The integer a decimal string spells, in its one spelling: an optional
+/// `-`, no leading zeros, no `-0`, at most 20 digits (every 64-bit value).
+pub(crate) fn integer_text(text: &str) -> Option<i128> {
+    let digits = text.strip_prefix('-').unwrap_or(text);
+    let canonical = !digits.is_empty()
+        && digits.len() <= 20
+        && digits.bytes().all(|b| b.is_ascii_digit())
+        && (digits == "0" || !digits.starts_with('0'))
+        && text != "-0";
+    if canonical { text.parse().ok() } else { None }
+}
+
+/// Integers convert to the IR's spelling, so a constructor can't build an
+/// integer validation refuses for its spelling: `Scalar::from(1_i64 << 60)`
+/// is the string `"1152921504606846976"`.
+impl From<i32> for Scalar {
+    fn from(n: i32) -> Self {
+        Scalar::integer(i128::from(n))
+    }
+}
+
+impl From<u32> for Scalar {
+    fn from(n: u32) -> Self {
+        Scalar::integer(i128::from(n))
+    }
+}
+
 impl From<i64> for Scalar {
     fn from(n: i64) -> Self {
-        Scalar::Int(n)
+        Scalar::integer(i128::from(n))
+    }
+}
+
+impl From<u64> for Scalar {
+    fn from(n: u64) -> Self {
+        Scalar::integer(i128::from(n))
+    }
+}
+
+impl From<i128> for Scalar {
+    fn from(n: i128) -> Self {
+        Scalar::integer(n)
     }
 }
 
@@ -1979,19 +2042,22 @@ impl Conversion {
 }
 
 /// One enum state. A list of these rather than a map, so the raw values
-/// stay JSON numbers (object keys can only be strings).
+/// stay JSON numbers (object keys can only be strings). The raw value is an
+/// integer, written as a [`Scalar`] is: a number within ±(2^53 − 1), a
+/// decimal string beyond it, so a 64-bit field's states can be any of its
+/// values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct State {
-    pub raw: i64,
+    pub raw: Scalar,
     pub name: String,
 }
 
 impl State {
-    pub fn new(raw: i64, name: impl Into<String>) -> Self {
+    pub fn new(raw: impl Into<Scalar>, name: impl Into<String>) -> Self {
         State {
-            raw,
+            raw: raw.into(),
             name: name.into(),
         }
     }

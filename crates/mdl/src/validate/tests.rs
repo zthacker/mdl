@@ -1462,6 +1462,38 @@ fn conversions_and_sentinels_suit_the_field() {
         ),
         vec![(Code::ValueRange, entry(0, "/conversion/states/0"))]
     );
+    // A state's raw value is a scalar integer: a 64-bit field's states can
+    // be any of its values, the wide ones as strings.
+    let wide = |raws: Value| {
+        let states: Vec<Value> = raws
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| json!({ "raw": raw, "name": format!("S{index}") }))
+            .collect();
+        field(
+            json!({ "kind": "field", "name": "w", "type": "uint", "size_bits": 64,
+                      "conversion": { "kind": "states", "states": states } }),
+        )
+    };
+    assert_eq!(wide(json!([0, "18446744073709551615"])), vec![]);
+    assert_eq!(
+        wide(json!([0, "1"])),
+        vec![(Code::IntegerAsString, entry(0, "/conversion/states/1/raw"))]
+    );
+    assert_eq!(
+        wide(json!([0, "x"])),
+        vec![(Code::ReferenceType, entry(0, "/conversion/states/1/raw"))]
+    );
+    assert_eq!(
+        wide(json!([0, "18446744073709551616"])),
+        vec![(Code::ValueRange, entry(0, "/conversion/states/1"))]
+    );
+    assert_eq!(
+        wide(json!(["9007199254740993", "9007199254740993"])),
+        vec![(Code::DuplicateValue, entry(0, "/conversion/states/1"))]
+    );
     let mut sentinel = uint("v", 16);
     sentinel["invalid"] = json!([70000]);
     assert_eq!(

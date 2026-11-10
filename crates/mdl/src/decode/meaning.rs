@@ -247,9 +247,11 @@ pub(super) fn engineering(meaning: ScalarMeaning<'_>, value: &Value<'_>) -> Opti
     let (value, quality) = match meaning.conversion {
         None if number(value).is_some_and(|x| !x.is_finite()) => (raw, Quality::NonFinite),
         None => (raw, Quality::Good),
-        Some(Conversion::States { states }) => match integer(value)
-            .and_then(|n| states.iter().find(|state| i128::from(state.raw) == n))
-        {
+        Some(Conversion::States { states }) => match integer(value).and_then(|n| {
+            states
+                .iter()
+                .find(|state| integer_value(&state.raw) == Some(n))
+        }) {
             Some(state) => (SampleValue::Enum(state.name.clone()), Quality::Good),
             None => (raw, Quality::UnknownState),
         },
@@ -321,7 +323,7 @@ pub(super) fn sample_value(
                 (Some(Conversion::States { states }), _) => integer(value).and_then(|n| {
                     states
                         .iter()
-                        .find(|state| i128::from(state.raw) == n)
+                        .find(|state| integer_value(&state.raw) == Some(n))
                         .map(|state| state.name.clone())
                 }),
                 (None, Value::Str(text)) => Some(text.clone()),

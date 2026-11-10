@@ -8,7 +8,7 @@ use super::command;
 use super::layout::{Container, Layout, Shape, exact_type_sizes, static_offsets, type_name};
 use super::mapping;
 use super::rules::{
-    check_finite, check_int, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
+    check_finite, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
     check_unit_code, integer_value, is_identifier, is_token,
 };
 use crate::checksum;
@@ -1411,13 +1411,24 @@ fn check_conversion(conversion: &Conversion, place: &Place, report: &mut Report)
             let mut raws = BTreeSet::new();
             for (index, state) in states.iter().enumerate() {
                 let state_place = place.at("states", index);
-                check_int(state.raw, "raw value", &state_place, report);
+                let raw_place = state_place.key("raw");
+                check_scalar(&state.raw, "raw value", &raw_place, report);
+                check_integer_spelling(&state.raw, "raw value", &raw_place, report);
                 check_not_empty(&state.name, "a state name", &state_place, report);
-                if !raws.insert(state.raw) {
+                let Some(raw) = integer_value(&state.raw) else {
+                    report.error(
+                        Code::ReferenceType,
+                        &raw_place,
+                        "a state's raw value is an integer: a number, or a decimal string past \
+                         ±(2^53 - 1)",
+                    );
+                    continue;
+                };
+                if !raws.insert(raw) {
                     report.error(
                         Code::DuplicateValue,
                         &state_place,
-                        format!("raw value {} has two states", state.raw),
+                        format!("raw value {raw} has two states"),
                     );
                 }
             }

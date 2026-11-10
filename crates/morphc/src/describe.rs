@@ -145,7 +145,11 @@ pub fn conversion(conversion: &Conversion) -> String {
         Conversion::States { states, .. } => {
             let states: Vec<String> = states
                 .iter()
-                .map(|state| format!("{}={}", state.name, state.raw))
+                .map(|state| match &state.raw {
+                    // A wide raw value is an integer written as a string.
+                    Scalar::Int(n) => format!("{}={n}", state.name),
+                    Scalar::Str(text) => format!("{}={text}", state.name),
+                })
                 .collect();
             format!("states {}", states.join(", "))
         }

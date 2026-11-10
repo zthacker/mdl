@@ -44,26 +44,12 @@ pub(super) fn is_canonical_name(name: &str) -> bool {
     parts >= 2
 }
 
-/// The integer a scalar holds: a JSON number, or a decimal string (how
-/// integers beyond ±(2^53 - 1) are written). `None` for other strings.
+/// The integer a scalar holds ([`Scalar::as_integer`]).
 pub(crate) fn integer_value(scalar: &Scalar) -> Option<i128> {
-    match scalar {
-        Scalar::Int(n) => Some(i128::from(*n)),
-        Scalar::Str(text) => integer_text(text),
-    }
+    scalar.as_integer()
 }
 
-/// The integer a decimal string spells, in its one spelling: an optional
-/// `-`, no leading zeros, no `-0`, at most 20 digits (every 64-bit value).
-pub(crate) fn integer_text(text: &str) -> Option<i128> {
-    let digits = text.strip_prefix('-').unwrap_or(text);
-    let canonical = !digits.is_empty()
-        && digits.len() <= 20
-        && digits.bytes().all(|b| b.is_ascii_digit())
-        && (digits == "0" || !digits.starts_with('0'))
-        && text != "-0";
-    if canonical { text.parse().ok() } else { None }
-}
+pub(crate) use crate::ir::integer_text;
 
 /// An integer that a JSON number holds exactly must be written as one:
 /// `"100"` and `100` would otherwise be two spellings of one value.
