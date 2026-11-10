@@ -2,7 +2,7 @@
 //! on agreeing with `mdl`. The whole-byte vectors are what Python's
 //! `struct.pack` gives (`<H`, `>H`, `<Q`, `>f`, `<f`).
 
-use super::{convert_unit, fit, put_bits, reference, sign_extend, spline, table};
+use super::{Scale, convert_unit, fit, put_bits, reference, sign_extend, spline, table, to_utc};
 
 fn packed(length: usize, offset: u64, size: u32, value: u64, little: bool) -> Vec<u8> {
     let mut payload = vec![0; length];
@@ -70,13 +70,23 @@ fn layouts_reach_every_meaning() {
     let strategy = telemetry();
     let mut found = BTreeSet::new();
     let mut qualities = BTreeSet::new();
+    let leap_starts: Vec<i128> = super::leaps().map(|(start, _)| start).collect();
+    let mut inside_leap = false;
+    let mut unreadable = false;
     for _ in 0..300 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         found.extend(features(&case.bundle));
         for message in &case.messages {
             qualities.extend(message.samples.iter().map(|sample| sample.quality));
+            match message.event_time {
+                super::EventTime::At(at) => inside_leap |= leap_starts.contains(&(at + 1)),
+                super::EventTime::Invalid => unreadable = true,
+                super::EventTime::Ground => {}
+            }
         }
     }
+    assert!(inside_leap, "no event time falls inside a leap second");
+    assert!(unreadable, "no event time is unreadable");
     for feature in [
         "conversion:linear",
         "conversion:poly",
@@ -94,6 +104,19 @@ fn layouts_reach_every_meaning() {
         "length:fixed/terminator",
         "byte_order:little",
         "byte_order:big",
+        "time:cuc",
+        "time:elapsed",
+        "time:gps",
+        "time:gps/week_bits",
+        "scale:utc",
+        "scale:tai",
+        "scale:gps",
+        "scale:tt",
+        "time_unit:s",
+        "time_unit:ms",
+        "time_unit:us",
+        "time_unit:ns",
+        "key:packet.time_field",
     ] {
         assert!(found.contains(feature), "no layout uses {feature}");
     }
@@ -124,9 +147,9 @@ fn scale(points: &[(f64, f64)]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// The oracle's splines, tables and unit conversions agree with SciPy's and
-/// pint's (`reference/generate.py`), so its arithmetic doesn't rest only on
-/// agreeing with `mdl`.
+/// The oracle's splines, tables, unit conversions and time scales agree
+/// with SciPy's, pint's and astropy's (`reference/generate.py`), so its
+/// arithmetic doesn't rest only on agreeing with `mdl`.
 #[test]
 fn the_oracle_agrees_with_third_party_libraries() {
     for curve in reference::SPLINES {
@@ -148,6 +171,20 @@ fn the_oracle_agrees_with_third_party_libraries() {
                 curve.points
             );
         }
+    }
+    // astropy rounds to the nanosecond through two doubles, so allow ten.
+    for &(scale, label, want) in reference::TIMES {
+        let on = match scale {
+            "tai" => Scale::Tai,
+            "gps" => Scale::Gps,
+            "tt" => Scale::Tt,
+            _ => Scale::Utc,
+        };
+        let got = to_utc(label, on);
+        assert!(
+            (got - want).abs() <= 10,
+            "label {label} on {scale}: {got}, astropy {want}"
+        );
     }
     for &(from, to, value, want) in reference::UNITS {
         let got = convert_unit(value, from, to);

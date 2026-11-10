@@ -5,13 +5,14 @@
 
 use mdl::artifact::{Written, build};
 use mdl::bindings::Bindings;
-use mdl::decode::{SampleValue, Value};
+use mdl::decode::{EventTime, SampleValue, Value};
 use mdl::ir::Artifact;
 use mdl::message::{Message, Payload};
 use mdl::read::{Loaded, read_artifact, read_bundle_value};
 use mdl::route::FamilySets;
+use mdl::time::Timestamp;
 use mdl::validate::validate;
-use mdl_testkit::layout::{Expected, Raw, Sample, Telemetry, telemetry};
+use mdl_testkit::layout::{self, Expected, Raw, Sample, Telemetry, telemetry};
 use proptest::prelude::*;
 
 proptest! {
@@ -20,15 +21,21 @@ proptest! {
         let sets = load(&case)?;
         let bindings = Bindings::from_toml(&format!(
             "mdl_version = \"2.0\"\n\n[[binding]]\nfamily = \"{}\"\nnative_id = \"{}\"\n\
-             asset = \"ASSET\"\nset = \"{}\"\neffective_from = \"2000-01-01T00:00:00Z\"\n",
+             asset = \"ASSET\"\nset = \"{}\"\neffective_from = \"1980-01-06T00:00:00Z\"\n",
             case.family, case.native_id, case.set
         ))
         .unwrap();
-        let received = "2026-06-01T12:00:00Z".parse().unwrap();
         for message in &case.messages {
-            let decoded = sets
-                .decode(&Message::new(Payload::Binary(&message.payload), received), &bindings)
-                .map_err(|error| TestCaseError::fail(format!("{error}: {message:?}")))?;
+            let received = Timestamp::from_unix_nanos(i64::try_from(message.received).unwrap());
+            let result =
+                sets.decode(&Message::new(Payload::Binary(&message.payload), received), &bindings);
+            // An event time that can't be read is the message's error.
+            if message.event_time == layout::EventTime::Invalid {
+                prop_assert_eq!(result.err().map(|error| error.code()), Some("invalid_time"));
+                continue;
+            }
+            let decoded =
+                result.map_err(|error| TestCaseError::fail(format!("{error}: {message:?}")))?;
             prop_assert_eq!(&decoded.packet.name, &message.packet);
             let record: Vec<(String, Raw)> = decoded
                 .record
@@ -46,6 +53,13 @@ proptest! {
                 })
                 .collect();
             prop_assert_eq!(&samples, &message.samples);
+            let event_time = match decoded.event_time {
+                EventTime::At(at) => {
+                    layout::EventTime::At(i128::from(at.seconds()) * 1_000_000_000 + i128::from(at.nanos()))
+                }
+                _ => layout::EventTime::Ground,
+            };
+            prop_assert_eq!(&event_time, &message.event_time, "{}", case.bundle["sets"][0]["time"]);
         }
     }
 }
