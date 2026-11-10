@@ -32,7 +32,18 @@
         "type": "vec3",
         "unit": "m",
         "frame": "ECEF"
-      }
+      },
+      "sink.armed": { "type": "bool" },
+      "sink.attitude": { "type": "quat", "frame": "BODY" },
+      "sink.count": {
+        "type": "i64",
+        "description": "Events counted since boot",
+        "limits": { "red_low": -100.0, "yellow_low": -50.0, "yellow_high": 50.0, "red_high": 100.0 }
+      },
+      "sink.label": { "type": "str" },
+      "sink.raw": { "type": "bytes" },
+      "sink.temps": { "type": "f64", "unit": "Cel" },
+      "sink.velocity": { "type": "vec3", "unit": "m/s", "frame": "NED" }
     },
     "commands": {
       "eps.load_table": {
@@ -52,6 +63,22 @@
             "unit": "s",
             "range": { "min": 0, "max": 3600 },
             "default": 0
+          }
+        ]
+      },
+      "sink.configure": {
+        "description": "Configure the sink",
+        "deprecated": "firmware 3 configures the sink at boot",
+        "arguments": [
+          { "name": "enable", "type": "bool", "default": true },
+          { "name": "gain", "type": "f64", "range": { "min": 0.5, "max": 4.0 }, "default": 1.5, "description": "Amplifier gain" },
+          { "name": "label", "type": "str", "default": "ON" },
+          {
+            "name": "taps",
+            "type": "f64",
+            "range": { "min": 0, "max": 131070 },
+            "list": { "min": 1, "max": 4 },
+            "default": [1, 2]
           }
         ]
       }
@@ -92,6 +119,18 @@
         "kind": "fixed",
         "value": "box-1"
       }
+    },
+    {
+      "name": "sink",
+      "encoding": "binary",
+      "byte_order": "little",
+      "alias": { "kind": "metadata", "name": "node" },
+      "metadata": ["msg", "node"]
+    },
+    {
+      "name": "sink_json",
+      "encoding": "json",
+      "alias": { "kind": "path", "pointer": "/node" }
     }
   ],
   "sets": [
@@ -572,6 +611,152 @@
             { "kind": "field", "name": "week", "type": "uint", "size_bits": 16 },
             { "kind": "field", "name": "tow", "type": "uint", "size_bits": 32 }
           ]
+        }
+      ]
+    },
+    {
+      "name": "sink_v1",
+      "family": "sink",
+      "time": {
+        "kind": "cuc",
+        "offset_bits": 0,
+        "coarse_bytes": 4,
+        "fine_bytes": 0,
+        "epoch": "1958-01-01T00:00:00Z",
+        "scale": "tai"
+      },
+      "packets": [
+        {
+          "name": "MIXED",
+          "identify": { "msg": 1 },
+          "entries": [
+            { "kind": "field", "name": "count", "type": "int", "size_bits": 16, "offset_bits": 32, "byte_order": "big", "canonical": "sink.count" },
+            { "kind": "field", "name": "armed", "type": "bool", "size_bits": 1, "canonical": "sink.armed" },
+            { "kind": "padding", "size_bits": 7 },
+            { "kind": "field", "name": "label", "type": "string", "length": { "kind": "fixed", "bytes": 8, "terminator": 0 }, "text": "latin1", "canonical": "sink.label" },
+            { "kind": "field", "name": "name_len", "type": "uint", "size_bits": 8 },
+            { "kind": "field", "name": "name", "type": "string", "length": { "kind": "field", "field": "name_len", "multiply": 2, "add": 1 } },
+            { "kind": "array", "name": "q", "count": { "kind": "fixed", "count": 4 }, "element": { "kind": "scalar", "type": "float", "size_bits": 32 } },
+            { "kind": "field", "name": "ve", "type": "float", "size_bits": 32, "unit": "m/s" },
+            { "kind": "field", "name": "vn", "type": "float", "size_bits": 32, "unit": "m/s" },
+            { "kind": "field", "name": "vu", "type": "float", "size_bits": 32, "unit": "m/s" },
+            { "kind": "field", "name": "lat", "type": "int", "size_bits": 32, "unit": "deg", "conversion": { "kind": "linear", "scale": 1e-7, "offset": 0 } },
+            { "kind": "field", "name": "lon", "type": "int", "size_bits": 32, "unit": "deg", "conversion": { "kind": "linear", "scale": 1e-7, "offset": 0 } },
+            { "kind": "field", "name": "alt", "type": "int", "size_bits": 32, "unit": "m" },
+            {
+              "kind": "array",
+              "name": "temps",
+              "count": { "kind": "fixed", "count": 3 },
+              "element": {
+                "kind": "scalar",
+                "type": "int",
+                "size_bits": 8,
+                "unit": "Cel",
+                "invalid": [-128],
+                "conversion": {
+                  "kind": "spline",
+                  "points": [{ "raw": -50, "value": -50 }, { "raw": 0, "value": 0 }, { "raw": 50, "value": 60 }],
+                  "extrapolate": true
+                }
+              },
+              "canonical": "sink.temps"
+            },
+            { "kind": "field", "name": "flags", "type": "uint", "size_bits": 8 },
+            { "kind": "field", "name": "ne1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "ne", "value": 0 } },
+            { "kind": "field", "name": "lt1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "lt", "value": 10 } },
+            { "kind": "field", "name": "le1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "le", "value": 10 } },
+            { "kind": "field", "name": "gt1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "gt", "value": 10 } },
+            { "kind": "field", "name": "ge1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "ge", "value": 10 } },
+            {
+              "kind": "field",
+              "name": "any1",
+              "type": "uint",
+              "size_bits": 8,
+              "when": {
+                "kind": "any",
+                "conditions": [
+                  { "kind": "compare", "field": "flags", "op": "mask_all", "value": 3 },
+                  { "kind": "compare", "field": "flags", "op": "eq", "value": 255 }
+                ]
+              }
+            },
+            {
+              "kind": "array",
+              "name": "tags",
+              "count": { "kind": "fixed", "count": 2 },
+              "element": { "kind": "scalar", "type": "string", "length": { "kind": "fixed", "bytes": 3 }, "text": "ascii" }
+            },
+            { "kind": "field", "name": "rest", "type": "bytes", "length": { "kind": "remaining" }, "canonical": "sink.raw" }
+          ],
+          "composites": [
+            { "canonical": "sink.attitude", "frame": "BODY", "members": ["q[0]", "q[1]", "q[2]", "q[3]"] },
+            { "canonical": "sink.velocity", "frame": "ENU", "members": ["ve", "vn", "vu"] },
+            { "canonical": "nav.pos_ecef", "frame": "GEODETIC", "members": ["lat", "lon", "alt"] }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "CONFIGURE",
+          "canonical": "sink.configure",
+          "metadata": { "msg": 9 },
+          "entries": [
+            { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 7 },
+            { "kind": "field", "name": "enable", "type": "bool", "size_bits": 1, "argument": "enable" },
+            { "kind": "padding", "size_bits": 7 },
+            { "kind": "field", "name": "gain", "type": "float", "size_bits": 32, "argument": "gain" },
+            { "kind": "field", "name": "label", "type": "string", "length": { "kind": "fixed", "bytes": 2 }, "text": "ascii", "argument": "label" },
+            { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+            {
+              "kind": "array",
+              "name": "taps",
+              "count": { "kind": "field", "field": "n", "add": 1 },
+              "element": {
+                "kind": "scalar",
+                "type": "uint",
+                "size_bits": 16,
+                "byte_order": "big",
+                "conversion": { "kind": "poly", "coefficients": [0, 2] },
+                "inverse": { "kind": "linear", "scale": 0.5, "offset": 0 }
+              },
+              "argument": "taps"
+            },
+            { "kind": "field", "name": "node", "type": "uint", "size_bits": 8, "target": true },
+            {
+              "kind": "checksum",
+              "name": "crc",
+              "from_bits": 8,
+              "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535, "reflect_in": true, "reflect_out": true, "xor_out": 65535 }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sink_json_v1",
+      "family": "sink_json",
+      "time": { "kind": "elapsed", "unit": "s", "epoch": "2000-01-01T12:00:00Z", "scale": "tt" },
+      "packets": [
+        {
+          "name": "STATUS",
+          "identify": { "/type": "status" },
+          "time_field": "t",
+          "entries": [
+            { "kind": "field", "name": "t", "type": "float", "pointer": "/t" },
+            { "kind": "field", "name": "armed", "type": "bool", "pointer": "/armed", "optional": true, "canonical": "sink.armed" }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "legacy_v3",
+      "family": "legacy",
+      "time": { "kind": "elapsed", "unit": "ns", "epoch": "1980-01-06T00:00:00Z", "scale": "gps" },
+      "packets": [
+        {
+          "name": "TICK",
+          "time_field": "t_ns",
+          "entries": [{ "kind": "field", "name": "t_ns", "type": "uint", "size_bits": 64 }]
         }
       ]
     }

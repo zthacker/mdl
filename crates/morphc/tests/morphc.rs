@@ -1104,7 +1104,12 @@ fn inspect_param_shows_a_composites_frame_and_conditions() {
     );
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
-    let composite = &report["inspect"]["uses"][0];
+    let composite = report["inspect"]["uses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|use_| use_["set"] == "vendor_x_v2")
+        .unwrap();
     assert_eq!(composite["entry"], Value::Null);
     assert_eq!(
         composite["members"],

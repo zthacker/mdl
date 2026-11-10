@@ -40,6 +40,46 @@ unit = "s"
 max = 3600
 min = 0
 
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true
+name = "enable"
+type = "bool"
+
+[[catalog.commands."sink.configure".arguments]]
+default = 1.5
+description = "Amplifier gain"
+name = "gain"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.range]
+max = 4.0
+min = 0.5
+
+[[catalog.commands."sink.configure".arguments]]
+default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+    2,
+]
+name = "taps"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.list]
+max = 4
+min = 1
+
+[catalog.commands."sink.configure".arguments.range]
+max = 131070
+min = 0
+
 [catalog.params."eps.bus_current"]
 description = "Bus current, sampled at 10 Hz"
 type = "f64"
@@ -70,6 +110,38 @@ unit = "V"
 frame = "ECEF"
 type = "vec3"
 unit = "m"
+
+[catalog.params."sink.armed"]
+type = "bool"
+
+[catalog.params."sink.attitude"]
+frame = "BODY"
+type = "quat"
+
+[catalog.params."sink.count"]
+description = "Events counted since boot"
+type = "i64"
+
+[catalog.params."sink.count".limits]
+red_high = 100.0
+red_low = -100.0
+yellow_high = 50.0
+yellow_low = -50.0
+
+[catalog.params."sink.label"]
+type = "str"
+
+[catalog.params."sink.raw"]
+type = "bytes"
+
+[catalog.params."sink.temps"]
+type = "f64"
+unit = "Cel"
+
+[catalog.params."sink.velocity"]
+frame = "NED"
+type = "vec3"
+unit = "m/s"
 
 [[families]]
 byte_order = "big"
@@ -105,6 +177,27 @@ name = "legacy"
 [families.alias]
 kind = "fixed"
 value = "box-1"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+metadata = [
+    "msg",
+    "node",
+]
+name = "sink"
+
+[families.alias]
+kind = "metadata"
+name = "node"
+
+[[families]]
+encoding = "json"
+name = "sink_json"
+
+[families.alias]
+kind = "path"
+pointer = "/node"
 
 [[sets]]
 family = "vendor_x"
@@ -663,3 +756,457 @@ kind = "gps"
 unit = "ms"
 week_bits = 10
 week_field = "week"
+
+[[sets]]
+family = "sink"
+name = "sink_v1"
+
+[[sets.commands]]
+canonical = "sink.configure"
+name = "CONFIGURE"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "op"
+size_bits = 8
+type = "uint"
+value = 7
+
+[[sets.commands.entries]]
+argument = "enable"
+kind = "field"
+name = "enable"
+size_bits = 1
+type = "bool"
+
+[[sets.commands.entries]]
+kind = "padding"
+size_bits = 7
+
+[[sets.commands.entries]]
+argument = "gain"
+kind = "field"
+name = "gain"
+size_bits = 32
+type = "float"
+
+[[sets.commands.entries]]
+argument = "label"
+kind = "field"
+name = "label"
+text = "ascii"
+type = "string"
+
+[sets.commands.entries.length]
+bytes = 2
+kind = "fixed"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "n"
+size_bits = 8
+type = "uint"
+
+[[sets.commands.entries]]
+argument = "taps"
+kind = "array"
+name = "taps"
+
+[sets.commands.entries.count]
+add = 1
+field = "n"
+kind = "field"
+
+[sets.commands.entries.element]
+byte_order = "big"
+kind = "scalar"
+size_bits = 16
+type = "uint"
+
+[sets.commands.entries.element.conversion]
+coefficients = [
+    0,
+    2,
+]
+kind = "poly"
+
+[sets.commands.entries.element.inverse]
+kind = "linear"
+offset = 0
+scale = 0.5
+
+[[sets.commands.entries]]
+kind = "field"
+name = "node"
+size_bits = 8
+target = true
+type = "uint"
+
+[[sets.commands.entries]]
+from_bits = 8
+kind = "checksum"
+name = "crc"
+
+[sets.commands.entries.algorithm]
+init = 65535
+kind = "crc"
+poly = 4129
+reflect_in = true
+reflect_out = true
+width = 16
+xor_out = 65535
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.composites]]
+canonical = "sink.attitude"
+frame = "BODY"
+members = [
+    "q[0]",
+    "q[1]",
+    "q[2]",
+    "q[3]",
+]
+
+[[sets.packets.composites]]
+canonical = "sink.velocity"
+frame = "ENU"
+members = [
+    "ve",
+    "vn",
+    "vu",
+]
+
+[[sets.packets.composites]]
+canonical = "nav.pos_ecef"
+frame = "GEODETIC"
+members = [
+    "lat",
+    "lon",
+    "alt",
+]
+
+[[sets.packets.entries]]
+byte_order = "big"
+canonical = "sink.count"
+kind = "field"
+name = "count"
+offset_bits = 32
+size_bits = 16
+type = "int"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+name = "armed"
+size_bits = 1
+type = "bool"
+
+[[sets.packets.entries]]
+kind = "padding"
+size_bits = 7
+
+[[sets.packets.entries]]
+canonical = "sink.label"
+kind = "field"
+name = "label"
+text = "latin1"
+type = "string"
+
+[sets.packets.entries.length]
+bytes = 8
+kind = "fixed"
+terminator = 0
+
+[[sets.packets.entries]]
+kind = "field"
+name = "name_len"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "name"
+type = "string"
+
+[sets.packets.entries.length]
+add = 1
+field = "name_len"
+kind = "field"
+multiply = 2
+
+[[sets.packets.entries]]
+kind = "array"
+name = "q"
+
+[sets.packets.entries.count]
+count = 4
+kind = "fixed"
+
+[sets.packets.entries.element]
+kind = "scalar"
+size_bits = 32
+type = "float"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "ve"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "vn"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "vu"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "lat"
+size_bits = 32
+type = "int"
+unit = "deg"
+
+[sets.packets.entries.conversion]
+kind = "linear"
+offset = 0
+scale = 0.0000001
+
+[[sets.packets.entries]]
+kind = "field"
+name = "lon"
+size_bits = 32
+type = "int"
+unit = "deg"
+
+[sets.packets.entries.conversion]
+kind = "linear"
+offset = 0
+scale = 0.0000001
+
+[[sets.packets.entries]]
+kind = "field"
+name = "alt"
+size_bits = 32
+type = "int"
+unit = "m"
+
+[[sets.packets.entries]]
+canonical = "sink.temps"
+kind = "array"
+name = "temps"
+
+[sets.packets.entries.count]
+count = 3
+kind = "fixed"
+
+[sets.packets.entries.element]
+invalid = [-128]
+kind = "scalar"
+size_bits = 8
+type = "int"
+unit = "Cel"
+
+[sets.packets.entries.element.conversion]
+extrapolate = true
+kind = "spline"
+
+[[sets.packets.entries.element.conversion.points]]
+raw = -50
+value = -50
+
+[[sets.packets.entries.element.conversion.points]]
+raw = 0
+value = 0
+
+[[sets.packets.entries.element.conversion.points]]
+raw = 50
+value = 60
+
+[[sets.packets.entries]]
+kind = "field"
+name = "flags"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "ne1"
+size_bits = 8
+type = "uint"
+
+[sets.packets.entries.when]
+field = "flags"
+kind = "compare"
+op = "ne"
+value = 0
+
+[[sets.packets.entries]]
+kind = "field"
+name = "lt1"
+size_bits = 8
+type = "uint"
+
+[sets.packets.entries.when]
+field = "flags"
+kind = "compare"
+op = "lt"
+value = 10
+
+[[sets.packets.entries]]
+kind = "field"
+name = "le1"
+size_bits = 8
+type = "uint"
+
+[sets.packets.entries.when]
+field = "flags"
+kind = "compare"
+op = "le"
+value = 10
+
+[[sets.packets.entries]]
+kind = "field"
+name = "gt1"
+size_bits = 8
+type = "uint"
+
+[sets.packets.entries.when]
+field = "flags"
+kind = "compare"
+op = "gt"
+value = 10
+
+[[sets.packets.entries]]
+kind = "field"
+name = "ge1"
+size_bits = 8
+type = "uint"
+
+[sets.packets.entries.when]
+field = "flags"
+kind = "compare"
+op = "ge"
+value = 10
+
+[[sets.packets.entries]]
+kind = "field"
+name = "any1"
+size_bits = 8
+type = "uint"
+
+[sets.packets.entries.when]
+kind = "any"
+
+[[sets.packets.entries.when.conditions]]
+field = "flags"
+kind = "compare"
+op = "mask_all"
+value = 3
+
+[[sets.packets.entries.when.conditions]]
+field = "flags"
+kind = "compare"
+op = "eq"
+value = 255
+
+[[sets.packets.entries]]
+kind = "array"
+name = "tags"
+
+[sets.packets.entries.count]
+count = 2
+kind = "fixed"
+
+[sets.packets.entries.element]
+kind = "scalar"
+text = "ascii"
+type = "string"
+
+[sets.packets.entries.element.length]
+bytes = 3
+kind = "fixed"
+
+[[sets.packets.entries]]
+canonical = "sink.raw"
+kind = "field"
+name = "rest"
+type = "bytes"
+
+[sets.packets.entries.length]
+kind = "remaining"
+
+[sets.packets.identify]
+msg = 1
+
+[sets.time]
+coarse_bytes = 4
+epoch = "1958-01-01T00:00:00Z"
+fine_bytes = 0
+kind = "cuc"
+offset_bits = 0
+scale = "tai"
+
+[[sets]]
+family = "sink_json"
+name = "sink_json_v1"
+
+[[sets.packets]]
+name = "STATUS"
+time_field = "t"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t"
+pointer = "/t"
+type = "float"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+name = "armed"
+optional = true
+pointer = "/armed"
+type = "bool"
+
+[sets.packets.identify]
+"/type" = "status"
+
+[sets.time]
+epoch = "2000-01-01T12:00:00Z"
+kind = "elapsed"
+scale = "tt"
+unit = "s"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v3"
+
+[[sets.packets]]
+name = "TICK"
+time_field = "t_ns"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t_ns"
+size_bits = 64
+type = "uint"
+
+[sets.time]
+epoch = "1980-01-06T00:00:00Z"
+kind = "elapsed"
+scale = "gps"
+unit = "ns"

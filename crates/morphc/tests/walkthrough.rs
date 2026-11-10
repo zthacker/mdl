@@ -169,6 +169,12 @@ fn the_walkthrough_runs_as_written() {
         copy_dir(&examples.join(part), &dir.join(part));
     }
     let update = std::env::var_os("UPDATE_WALKTHROUGH").is_some();
+    // Never in CI, where a stray variable would pass the test by rewriting
+    // what it checks.
+    assert!(
+        !(update && std::env::var_os("CI").is_some()),
+        "UPDATE_WALKTHROUGH is set in CI"
+    );
     let steps = steps(&readme);
     assert!(steps.len() >= 10, "{} steps", steps.len());
     let mut blocks = Vec::new();
