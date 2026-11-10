@@ -362,7 +362,9 @@ increasing raw order; validation guarantees at least two. A raw value `x`:
   `out_of_calibration`, §7.3). With it, the first or last segment's formula
   continues past its end, as below.
 
-NaN is never outside: it goes through as NaN (quality `non_finite`).
+NaN is never outside: it goes through as NaN (quality `non_finite`). An
+infinity is outside, below `r₀` or above `rₙ`, but as a value read its
+quality is `non_finite`, which ranks above `out_of_calibration` (§7.3).
 
 A `table` with `linear` interpolation (the default) gives, in segment `i`
 (and extrapolated, in the first or last segment),
@@ -392,8 +394,10 @@ straight line; it is still that formula, not the table's.
 operation rounded to nearest, ties to even, on its own and in the order
 written: a linear conversion multiplies, then adds; Horner's rule
 multiplies, then adds, coefficient by coefficient from the highest;
-tables and splines evaluate their formulas left to right, parentheses
-first. An
+tables and splines evaluate their formulas with the usual precedence
+(× and ÷ before + and −), parentheses first, and left to right among
+operations of equal precedence: `Mᵢ × L × L × L` is
+`((Mᵢ × L) × L) × L`. An
 implementation MUST NOT fuse a multiply and an add into one operation,
 reorder operations, or replace a division with a multiplication by a
 reciprocal; any of these changes the last bit of some results.
