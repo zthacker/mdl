@@ -546,7 +546,10 @@ seconds.
   32.184 s, converted as `tai`.
 
 Before the table's first entry, its offset (10 s) applies; after its last,
-the last. Implementations MUST use this table, which follows IERS
+the last. MDL doesn't reproduce UTC before 1972-01-01, whose offsets were
+fractional and drifting (and 0 at the 1958 TAI epoch): instants on `tai`,
+`gps` or `tt` before then apply 10 s, and may differ from historical UTC
+by up to 10 s. Implementations MUST use this table, which follows IERS
 Bulletin C 72 (July 2026): no leap second at the end of 2026, and 37 s
 from 2017 on. It is known to be right until **2027-07-01T00:00:00Z**, the
 next date a leap second could be inserted; event times on `tai`, `gps` or
