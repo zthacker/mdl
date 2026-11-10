@@ -109,7 +109,7 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
       bindings or a stand-in, samples or command arguments out
 - [x] `morphc encode`: a command and typed arguments to a payload, its
       metadata and def_version
-- [ ] A build file listing inputs with their own options (several XTCE
+- [x] A build file listing inputs with their own options (several XTCE
       imports in one build)
 - [x] README and examples rewritten around v2: a walkthrough that runs as
       a test, the README's library example run as a doc test

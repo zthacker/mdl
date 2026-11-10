@@ -98,7 +98,7 @@ pub fn run(args: &InspectArgs) -> anyhow::Result<ExitCode> {
     })?;
     let sources = origin.sources()?;
     let mut report = Report::new(&sources, read.format, read.all_warnings);
-    let Some(opened) = open(&origin, read, &sources, &mut report)? else {
+    let Some(opened) = open(&origin, &sources, &mut report)? else {
         return Ok(report.finish::<Inspected>(None));
     };
     let inspected = inspect(&opened.validated, &opened.artifacts, args.view.as_ref())?;

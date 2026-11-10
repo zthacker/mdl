@@ -500,6 +500,7 @@ dependencies = [
  "morpheus-mdl-xtce",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]

@@ -54,7 +54,7 @@ pub fn run(args: &EncodeArgs) -> anyhow::Result<ExitCode> {
     let origin = Origin::of(read)?;
     let sources = origin.sources()?;
     let mut report = Report::new(&sources, read.format, read.all_warnings);
-    let Some(opened) = open(&origin, read, &sources, &mut report)? else {
+    let Some(opened) = open(&origin, &sources, &mut report)? else {
         return Ok(report.finish::<Encode>(None));
     };
     let bundle = opened.validated.bundle();

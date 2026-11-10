@@ -176,7 +176,7 @@ pub fn run(args: &DecodeArgs) -> anyhow::Result<ExitCode> {
     let origin = Origin::of(read)?;
     let sources = origin.sources()?;
     let mut report = Report::new(&sources, read.format, read.all_warnings);
-    let Some(opened) = open(&origin, read, &sources, &mut report)? else {
+    let Some(opened) = open(&origin, &sources, &mut report)? else {
         return Ok(report.finish::<Decoding>(None));
     };
     let family = choose_family(&opened, args)?;

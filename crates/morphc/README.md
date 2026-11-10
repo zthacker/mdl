@@ -33,7 +33,12 @@ problem is reported with its file and position.
 - An XTCE import's family, set and alias are set with `--import-family`,
   `--import-set` and `--import-alias` (`fixed:<id>`, `metadata:<name>`,
   `path:<pointer>`, `bits:<offset>:<size>`), its naming with
-  `--xtce-naming`.
+  `--xtce-naming`. On the command line every XTCE document is part of one
+  import.
+- A build file ([spec](../../spec/build-files.md)) lists the inputs in
+  their place, each XTCE input an import of its own with its own options:
+  `-c FILE`, or `morphc.toml` in the working directory when no inputs are
+  given. Directory walks leave build files out.
 - `inspect`, `decode` and `encode` also take one store, whose latest build
   they use.
 - Warnings of one kind are shown once with a count; `--all-warnings` shows

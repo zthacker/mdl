@@ -15,6 +15,7 @@
 //! reported), 2 morphc couldn't run (unreadable input, a damaged store).
 
 mod build;
+mod buildfile;
 mod decode;
 mod describe;
 mod encode;
@@ -24,7 +25,7 @@ mod report;
 mod store;
 mod values;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, anyhow, bail};
@@ -33,7 +34,7 @@ use mdl::artifact::{self, Artifacts};
 use mdl::ir::{Artifact, Bundle, Locator};
 use mdl::read::{Loaded, read_artifact};
 use mdl::route::FamilySets;
-use mdl::source::{Parsed, SourceMap, Sources, merge};
+use mdl::source::{Parsed, SourceDiagnostic, SourceMap, Sources, Span, merge};
 use mdl::validate::{Validated, validate};
 
 use crate::inputs::{Frontend, Input};
@@ -80,9 +81,16 @@ struct ReadArgs {
     /// and .json (an MDL IR bundle); `-` reads a bundle from stdin.
     /// Bundles merge in the order of their first file, earlier ones taking
     /// precedence. A directory gives its TOML files, then its JSON, then
-    /// its XTCE, each kind in name order.
-    #[arg(required = true, value_name = "INPUT")]
+    /// its XTCE, each kind in name order. Without inputs, morphc reads the
+    /// build file given with -c, or ./morphc.toml.
+    #[arg(value_name = "INPUT")]
     inputs: Vec<PathBuf>,
+
+    /// A build file listing the inputs, each with its own import options
+    /// (spec/build-files.md), in place of INPUT [default: ./morphc.toml
+    /// when no INPUT is given]
+    #[arg(short = 'c', long = "build-file", value_name = "FILE")]
+    build_file: Option<PathBuf>,
 
     /// Show every warning, not just the first of each code.
     #[arg(long)]
@@ -126,13 +134,23 @@ struct XtceArgs {
     naming: Option<Naming>,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, ValueEnum, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 enum Naming {
     /// As XTCE has them, qualified by SpaceSystem only where two share one
     Short,
     /// Always qualified by SpaceSystem, so names don't change as
     /// documents grow
     Qualified,
+}
+
+impl Naming {
+    fn xtce(self) -> mdl_xtce::Naming {
+        match self {
+            Naming::Short => mdl_xtce::Naming::Short,
+            Naming::Qualified => mdl_xtce::Naming::Qualified,
+        }
+    }
 }
 
 impl XtceArgs {
@@ -152,10 +170,7 @@ impl XtceArgs {
             options = options.with_alias(alias.clone());
         }
         if let Some(naming) = self.naming {
-            options = options.with_naming(match naming {
-                Naming::Short => mdl_xtce::Naming::Short,
-                Naming::Qualified => mdl_xtce::Naming::Qualified,
-            });
+            options = options.with_naming(naming.xtce());
         }
         options
     }
@@ -193,29 +208,166 @@ fn main() -> ExitCode {
     };
     match result {
         Ok(code) => code,
-        Err(err) => report::failed(format, &err),
+        Err(err) => match err.downcast_ref::<buildfile::Invalid>() {
+            Some(invalid) => {
+                let mut sources = Sources::new();
+                let file = sources.add(invalid.file.display().to_string(), invalid.text.clone());
+                let mut problem =
+                    SourceDiagnostic::error("morphc.build_file", invalid.message.clone());
+                if let Some(span) = &invalid.span {
+                    problem = problem.with_span(Span::new(file, span.start, span.end));
+                }
+                report::failed_at(format, &sources, problem)
+            }
+            None => report::failed(format, &err),
+        },
     }
 }
 
-/// The definition files `read` names.
-fn find_inputs(read: &ReadArgs) -> anyhow::Result<Vec<Input>> {
-    let inputs = inputs::find(&read.inputs)?;
-    if read.xtce.given() && !inputs.iter().any(|i| i.frontend == Frontend::Xtce) {
-        bail!("the XTCE options apply to .xml inputs, and none were given");
+/// What a run reads, from the command line or a build file: each path
+/// with the XTCE import its documents belong to, each import's options,
+/// and the build file, if any.
+struct Given {
+    paths: Vec<(PathBuf, usize)>,
+    imports: Vec<mdl_xtce::Options>,
+    build_file: Option<PathBuf>,
+    /// For each import, whether it was given options (which only XTCE
+    /// documents can use).
+    optioned: Vec<bool>,
+    /// What to tell people about how the inputs were found and ordered.
+    notes: Vec<String>,
+}
+
+impl Given {
+    fn of(read: &ReadArgs) -> anyhow::Result<Given> {
+        let build_file = match (&read.build_file, read.inputs.is_empty()) {
+            (Some(_), false) => bail!("give inputs or a build file (-c), not both"),
+            (Some(file), true) => Some(file.clone()),
+            (None, true) if Path::new(buildfile::NAME).is_file() => {
+                Some(PathBuf::from(buildfile::NAME))
+            }
+            (None, true) => bail!(
+                "give definition files or directories, a build file with -c, or run where a {} \
+                 is",
+                buildfile::NAME
+            ),
+            (None, false) => None,
+        };
+        let Some(file) = build_file else {
+            return Ok(Given {
+                paths: read.inputs.iter().map(|path| (path.clone(), 0)).collect(),
+                imports: vec![read.xtce.options()],
+                build_file: None,
+                optioned: vec![read.xtce.given()],
+                notes: Vec::new(),
+            });
+        };
+        let mut notes = Vec::new();
+        if read.build_file.is_none() {
+            notes.push(format!(
+                "no inputs were given, so the definitions are the ones ./{} lists",
+                buildfile::NAME
+            ));
+        }
+        if read.xtce.given() {
+            bail!(
+                "with a build file, each input's import options are written in it ({})",
+                file.display()
+            );
+        }
+        let listed = buildfile::read(&file)?;
+        Ok(Given {
+            paths: listed
+                .iter()
+                .enumerate()
+                .map(|(index, input)| (input.path.clone(), index))
+                .collect(),
+            optioned: listed.iter().map(|input| input.has_options).collect(),
+            imports: listed.into_iter().map(|input| input.options).collect(),
+            build_file: Some(file),
+            notes,
+        })
     }
-    Ok(inputs)
+
+    /// The definition files it names; import options only where there are
+    /// XTCE documents to use them.
+    fn find(&mut self) -> anyhow::Result<Vec<Input>> {
+        let inputs = inputs::find(&self.paths)?;
+        self.notes.extend(self.toml_order(&inputs));
+        for (import, optioned) in self.optioned.iter().enumerate() {
+            let xtce = inputs
+                .iter()
+                .any(|i| i.frontend == Frontend::Xtce && i.import == import);
+            if !optioned || xtce {
+                continue;
+            }
+            match (&self.build_file, self.paths.get(import)) {
+                (Some(file), Some((path, _))) => bail!(
+                    "{}: input {} has import options but no .xml files",
+                    file.display(),
+                    inputs::shown_path(path)
+                ),
+                _ => bail!("the XTCE options apply to .xml inputs, and none were given"),
+            }
+        }
+        Ok(inputs)
+    }
+
+    /// Every TOML file is one bundle, placed where the first one is, so a
+    /// build file's TOML input listed after an XTCE or JSON input that
+    /// itself follows an earlier TOML input still takes precedence over
+    /// it: worth saying, since the list reads otherwise.
+    fn toml_order(&self, inputs: &[Input]) -> Vec<String> {
+        if self.build_file.is_none() {
+            return Vec::new();
+        }
+        let kinds = |import: usize| {
+            let of = |kind: Frontend| {
+                inputs
+                    .iter()
+                    .any(|input| input.import == import && input.frontend == kind)
+            };
+            (of(Frontend::Toml), of(Frontend::Xtce) || of(Frontend::Json))
+        };
+        let name = |import: usize| {
+            self.paths
+                .get(import)
+                .map_or_else(String::new, |(path, _)| inputs::shown_path(path))
+        };
+        let mut notes = Vec::new();
+        let mut first_toml = None;
+        let mut other_since = None;
+        for import in 0..self.paths.len() {
+            let (toml, other) = kinds(import);
+            match (first_toml, other_since) {
+                (None, _) if toml => first_toml = Some(import),
+                (Some(first), Some(other)) if toml => notes.push(format!(
+                    "{} comes after {} in the build file, but every TOML file is read as one \
+                     bundle where the first TOML input ({}) is, so it takes precedence over it",
+                    name(import),
+                    name(other),
+                    name(first)
+                )),
+                _ => {}
+            }
+            if first_toml.is_some() && other && other_since.is_none() {
+                other_since = Some(import);
+            }
+        }
+        notes
+    }
 }
 
 /// The definitions in `sources`, merged and validated, with where each
 /// value came from; or none, with every problem in `report`. Warnings go
 /// to `report` either way.
 fn definitions(
-    read: &ReadArgs,
+    imports: &[mdl_xtce::Options],
     inputs: &[Input],
     sources: &Sources,
     report: &mut Report,
 ) -> Option<(Validated, SourceMap)> {
-    let parsed = inputs::parse(sources, inputs, &read.xtce.options()).and_then(merge);
+    let parsed = inputs::parse(sources, inputs, imports).and_then(merge);
     let Parsed {
         bundle,
         map,
@@ -224,6 +376,18 @@ fn definitions(
     } = match parsed {
         Ok(parsed) => parsed,
         Err(problems) => {
+            let xtce_imports: std::collections::BTreeSet<usize> = inputs
+                .iter()
+                .filter(|input| input.frontend == Frontend::Xtce)
+                .map(|input| input.import)
+                .collect();
+            if xtce_imports.len() > 1 && problems.iter().any(|p| p.code == "xtce.reference") {
+                report.note(
+                    "references between XTCE documents resolve within one import: documents \
+                     that refer to each other are one input in the build file (their \
+                     directory, say)",
+                );
+            }
             report.add(problems);
             return None;
         }
@@ -242,11 +406,15 @@ fn definitions(
 /// definitions built in memory.
 enum Origin {
     Store(PathBuf),
-    Definitions(Vec<Input>),
+    Definitions {
+        inputs: Vec<Input>,
+        imports: Vec<mdl_xtce::Options>,
+        notes: Vec<String>,
+    },
 }
 
 impl Origin {
-    /// A store when it's the only input, else definitions.
+    /// A store when it's the only input given, else definitions.
     fn of(read: &ReadArgs) -> anyhow::Result<Origin> {
         if let [only] = read.inputs.as_slice()
             && only.is_dir()
@@ -260,14 +428,20 @@ impl Origin {
             }
             return Ok(Origin::Store(only.clone()));
         }
-        Ok(Origin::Definitions(find_inputs(read)?))
+        let mut given = Given::of(read)?;
+        let inputs = given.find()?;
+        Ok(Origin::Definitions {
+            inputs,
+            imports: given.imports,
+            notes: given.notes,
+        })
     }
 
     /// The text diagnostics point into: the definition files, or none.
     fn sources(&self) -> anyhow::Result<Sources> {
         match self {
             Origin::Store(_) => Ok(Sources::new()),
-            Origin::Definitions(inputs) => inputs::read(inputs),
+            Origin::Definitions { inputs, .. } => inputs::read(inputs),
         }
     }
 }
@@ -284,12 +458,7 @@ struct Opened {
 /// The build `origin` holds; none when its definitions have problems,
 /// which are in `report`. Definitions show what a store of them would
 /// hold: the bundle their artifacts carry, sets listing packets by name.
-fn open(
-    origin: &Origin,
-    read: &ReadArgs,
-    sources: &Sources,
-    report: &mut Report,
-) -> anyhow::Result<Option<Opened>> {
+fn open(origin: &Origin, sources: &Sources, report: &mut Report) -> anyhow::Result<Option<Opened>> {
     let (artifacts, catalogs) = match origin {
         Origin::Store(dir) => {
             let stored = store::load(dir)
@@ -297,8 +466,15 @@ fn open(
             let catalogs = stored.catalogs().map(str::to_string).collect();
             (stored.artifacts, catalogs)
         }
-        Origin::Definitions(inputs) => {
-            let Some((validated, _)) = definitions(read, inputs, sources, report) else {
+        Origin::Definitions {
+            inputs,
+            imports,
+            notes,
+        } => {
+            for note in notes {
+                report.note(note.clone());
+            }
+            let Some((validated, _)) = definitions(imports, inputs, sources, report) else {
                 return Ok(None);
             };
             let artifacts = artifact::build(&validated).context("can't write the artifacts")?;
