@@ -91,7 +91,8 @@ pub enum Code {
     ReferenceType,
     /// A conversion the field's type can't take.
     ConversionType,
-    /// A sentinel or state value the field can never hold.
+    /// A sentinel, constant or state value the field can never hold, or
+    /// an argument value the catalog allows that its field can't write.
     ValueRange,
     /// A field or array that can't produce what its canonical param holds.
     CanonicalType,
@@ -131,7 +132,8 @@ pub enum Code {
     UnknownArgument,
     /// A command argument no field of the command packet encodes.
     UnmappedArgument,
-    /// An argument default that doesn't fit the argument.
+    /// An argument default that doesn't fit the argument, or that a
+    /// command packet encoding the argument can't write.
     DefaultValue,
     /// A command-only key (`value`, `argument`, `inverse`) in telemetry.
     CommandOnly,
@@ -457,6 +459,28 @@ impl Report {
             first,
         };
         self.diagnostics.push((place.segments.clone(), diagnostic));
+    }
+
+    /// Whether nothing has been reported.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+
+    /// Takes in what `other` reported, each problem once, as `push` does.
+    /// A check reports into a report of its own when what it finds decides
+    /// whether a later check runs.
+    pub(crate) fn absorb(&mut self, other: Report) {
+        for (segments, diagnostic) in other.diagnostics {
+            let key = (
+                diagnostic.code,
+                diagnostic.path.clone(),
+                diagnostic.message.clone(),
+                diagnostic.first.clone(),
+            );
+            if self.seen.insert(key) {
+                self.diagnostics.push((segments, diagnostic));
+            }
+        }
     }
 
     /// Whether anything at or under `place` was reported, so a later check

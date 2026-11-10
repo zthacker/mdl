@@ -525,7 +525,10 @@ same kind are (§4), with these differences:
   a JSON object of its members), outermost first, then the member's
   type's. A member's value that should be an object of its members and
   isn't, and a member an object names that the aggregate doesn't have,
-  are errors [`xtce.invalid`].
+  are errors [`xtce.invalid`]. An initial value its encoding can't write
+  (text longer than its buffer, a size its size tag can't hold) is the
+  document's to fix, and validation reports it (`encoding.md` §2.2), where
+  Yamcs refuses only the commands that would send it.
 - **Text.** A fixed-size string is padded with NULs, as Yamcs pads it:
   `Fixed` alone, or with a `TerminationChar` of `00`, is a fixed buffer
   with a NUL terminator (`encoding.md` §3.4). A fixed buffer with another

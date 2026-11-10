@@ -74,7 +74,7 @@ pub(super) fn check_all(
         let heights = check_types(set, &scope, &place, report);
         let type_sizes = exact_type_sizes(&set.types, &heights);
         check_packets(set, family, &scope, &type_sizes, &place, report);
-        command::check_packets(set, family, &bundle.catalog, &place, report);
+        let writes = command::check_packets(set, family, &bundle.catalog, &place, report);
         command::check_record_uses(set, &place, report);
         for (index, packet) in set.commands.iter().enumerate() {
             let packet_place = place.item("commands", index, "command", &packet.name);
@@ -89,6 +89,7 @@ pub(super) fn check_all(
         if let Some(family) = family {
             check_layout(set, family, &bundle.catalog, &heights, &place, report);
             command::check_distinct(set, family, &type_sizes, &place, report);
+            command::check_writes(&writes, family, report);
         }
     }
 }

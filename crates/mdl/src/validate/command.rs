@@ -10,9 +10,10 @@ use super::rules::{
     check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
 };
 use super::set::{KeyId, KeyValue, by_value, exact, key_order, used_types};
+use crate::canonical::format_double;
 use crate::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::diagnostics::{Code, Place, Report};
-use crate::encode::raw_unchecked;
+use crate::encode::{FieldProblem, raw_unchecked, show_literal, write_problem};
 use crate::ir::{
     Argument, ArrayEntry, ByteLength, Catalog, CommandPacket, Conversion, Count, Element, Encoding,
     Entry, Family, Field, Literal, ParamType, Scalar, ScalarElement, ScalarType, Set, StructType,
@@ -22,14 +23,16 @@ use crate::units::convert_between;
 
 /// Every command packet of a set: names, the command it encodes, link
 /// metadata, and its fields. Positions and references are checked with
-/// the set's layout.
-pub(super) fn check_packets(
-    set: &Set,
+/// the set's layout, and what each field writes with [`check_writes`],
+/// which takes the writes this returns.
+pub(super) fn check_packets<'a>(
+    set: &'a Set,
     family: Option<&Family>,
-    catalog: &Catalog,
-    place: &Place,
+    catalog: &'a Catalog,
+    place: &'a Place,
     report: &mut Report,
-) {
+) -> Vec<Write<'a>> {
+    let mut writes = Vec::new();
     let mut names: BTreeMap<&str, usize> = BTreeMap::new();
     let mut commands: BTreeMap<&str, usize> = BTreeMap::new();
     for (index, packet) in set.commands.iter().enumerate() {
@@ -86,8 +89,131 @@ pub(super) fn check_packets(
             set_place: place,
             computed: computed_fields(packet, &packet_place, report),
             encoded: BTreeMap::new(),
+            writes: Vec::new(),
         };
         sources.check_entries(&packet_place, report);
+        writes.append(&mut sources.writes);
+    }
+    writes
+}
+
+/// A field, or an array's element taken as a field, that writes an
+/// argument's values in one command packet, and whose checks against the
+/// argument found nothing.
+pub(super) struct Write<'a> {
+    packet: &'a CommandPacket,
+    /// Owned, since an element is taken as a field.
+    field: Field,
+    argument: &'a Argument,
+    /// How messages name it: `field x`, `array x's elements`.
+    what: String,
+    /// Where it names the argument.
+    at: Place,
+    /// Where its own keys are.
+    own: Place,
+}
+
+/// The keys of a field, or an element, that decide whether it can write a
+/// value.
+const WRITE_KEYS: [&str; 7] = [
+    "type",
+    "size_bits",
+    "length",
+    "text",
+    "conversion",
+    "inverse",
+    "unit",
+];
+
+/// What the catalog gives each write, written as encoding would write it:
+/// the name of every state of an enum argument a string field writes, then
+/// the argument's default. Runs after every other check of the set, so a
+/// write whose field has a problem of its own, which would only echo here,
+/// is left out.
+pub(super) fn check_writes(writes: &[Write<'_>], family: &Family, report: &mut Report) {
+    let binary = family.encoding == Encoding::Binary;
+    for write in writes {
+        let echoes = WRITE_KEYS
+            .iter()
+            .any(|key| report.reported_under(&write.own.key(key)));
+        // A default that is a state already reported is the same problem.
+        if !echoes && write.check_states(binary, report) {
+            write.check_default(binary, report);
+        }
+    }
+}
+
+impl Write<'_> {
+    /// Each state of an enum argument that a string field writes is text
+    /// the field can hold, so every state the catalog lists can be sent.
+    /// Whether they all are.
+    fn check_states(&self, binary: bool, report: &mut Report) -> bool {
+        if self.argument.ty != ParamType::Enum || self.field.ty != ScalarType::String {
+            return true;
+        }
+        let mut written = true;
+        for state in &self.argument.states {
+            let Some(problem) = self.problem(&Literal::Str(state.clone()), binary) else {
+                continue;
+            };
+            written = false;
+            report.error(
+                Code::ValueRange,
+                &self.at,
+                format!(
+                    "argument {}'s state {state:?} can't be written by {}, so it can't be sent: \
+                     {problem}",
+                    self.argument.name, self.what
+                ),
+            );
+        }
+        written
+    }
+
+    /// An argument's default encodes where the packet writes it: a single
+    /// value through its field, each value of a list through the array's
+    /// element or record field. Otherwise a request that leaves it out
+    /// could never be sent with this set.
+    fn check_default(&self, binary: bool, report: &mut Report) {
+        let argument = self.argument;
+        // A default of the wrong shape is reported on the catalog.
+        let values: Vec<(Option<usize>, &Literal)> = match (&argument.default, argument.list) {
+            (Some(Literal::List(items)), Some(_)) => items
+                .iter()
+                .enumerate()
+                .map(|(index, item)| (Some(index), item))
+                .collect(),
+            (Some(Literal::List(_)), None) | (Some(_), Some(_)) | (None, _) => return,
+            (Some(value), None) => vec![(None, value)],
+        };
+        for (index, value) in values {
+            let Some(problem) = self.problem(value, binary) else {
+                continue;
+            };
+            let which = match index {
+                Some(index) => format!("value {index} of argument {}'s default", argument.name),
+                None => format!("argument {}'s default", argument.name),
+            };
+            report.error(
+                Code::DefaultValue,
+                &self.at,
+                format!(
+                    "{which}, {}, can't be written by {}, so a request that leaves {} out can't \
+                     be sent: {problem}",
+                    show_literal(value),
+                    self.what,
+                    argument.name
+                ),
+            );
+        }
+    }
+
+    /// Why the field can't write `value`, as encoding would find it; `None`
+    /// when it can, or for a problem with the layout, which is reported
+    /// with the layout.
+    fn problem(&self, value: &Literal, binary: bool) -> Option<FieldProblem> {
+        write_problem(self.packet, &self.field, self.argument, value, binary)
+            .filter(|problem| !matches!(problem, FieldProblem::Layout(_)))
     }
 }
 
@@ -356,6 +482,8 @@ struct Sources<'a> {
     computed: BTreeSet<&'a str>,
     /// Each argument encoded so far, and what encodes it.
     encoded: BTreeMap<&'a str, String>,
+    /// What [`check_writes`] checks once the set's other checks have run.
+    writes: Vec<Write<'a>>,
 }
 
 /// Where a field is: at the top of the packet, or in the records of an
@@ -839,9 +967,9 @@ impl<'a> Sources<'a> {
         })
     }
 
-    /// The argument an encoder names: the command has it, nothing else
-    /// encodes it, it's a list exactly when the encoder is an array's, and
-    /// its type fits the encoder.
+    /// The argument an encoder names: the command has it, and it fits the
+    /// encoder ([`Sources::check_argument`]). An encoder that fits is kept
+    /// for [`check_writes`].
     fn check_encoded(
         &mut self,
         name: &'a str,
@@ -861,6 +989,37 @@ impl<'a> Sources<'a> {
             );
             return;
         };
+        // What this packet's checks of the encoder find, apart: its values
+        // are checked only when they find nothing, since those values would
+        // only echo it. A struct type's field is checked for each packet
+        // whose arrays hold its records, against that packet's command, so
+        // another packet's findings there don't count.
+        let mut found = Report::default();
+        self.check_argument(name, argument, encoder, in_array, at, &mut found);
+        if found.is_empty() {
+            self.writes.push(Write {
+                packet: self.packet,
+                field: encoder.field.clone(),
+                argument,
+                what: encoder.what.clone(),
+                at: encoder.argument.clone(),
+                own: encoder.own.clone(),
+            });
+        }
+        report.absorb(found);
+    }
+
+    /// The argument is encoded once, a list exactly by an array, and its
+    /// type fits the encoder.
+    fn check_argument(
+        &mut self,
+        name: &'a str,
+        argument: &Argument,
+        encoder: &Encoder<'_>,
+        in_array: bool,
+        at: String,
+        report: &mut Report,
+    ) {
         if let Some(first) = self.encoded.get(name) {
             report.error(
                 Code::DuplicateMapping,
@@ -1168,19 +1327,20 @@ fn check_text_value(field: &Field, value: &str, place: &Place, report: &mut Repo
     }
 }
 
-/// The integers a binary integer or bool field holds; `None` without a
-/// size (a JSON field, or a size reported elsewhere).
+/// The integers an integer or bool field holds: by its size in a binary
+/// payload, 64 bits in a JSON one, where fields have no size (a binary
+/// field without one is reported with the layout). `None` for a size out
+/// of range, reported elsewhere.
 fn integer_range(field: &Field) -> Option<(i128, i128)> {
+    let size = match field.size_bits {
+        None => 64,
+        Some(size) if (1..=64).contains(&size) => size,
+        Some(_) => return None,
+    };
     match field.ty {
         ScalarType::Bool => Some((0, 1)),
-        ScalarType::Int => {
-            let size = field.size_bits.filter(|s| (1..=64).contains(s))?;
-            Some((-(1_i128 << (size - 1)), (1_i128 << (size - 1)) - 1))
-        }
-        ScalarType::Uint => {
-            let size = field.size_bits.filter(|s| (1..=64).contains(s))?;
-            Some((0, (1_i128 << size) - 1))
-        }
+        ScalarType::Int => Some((-(1_i128 << (size - 1)), (1_i128 << (size - 1)) - 1)),
+        ScalarType::Uint => Some((0, (1_i128 << size) - 1)),
         _ => None,
     }
 }
@@ -1544,14 +1704,34 @@ fn monotonic_over(
 /// conversion, fits the field: checked for integer fields with a size, at
 /// the range's ends through the encoder's inverse (which bound every value
 /// in range: `check_inverse` makes sure the inverse is monotonic). An
-/// argument without a range promises every value of its type.
+/// argument without a range promises every value of its type, and a bool
+/// is 0 or 1. A float field is checked by [`check_float_coverage`].
 fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) {
     let field = encoder.field;
+    if field.ty == ScalarType::Float {
+        check_float_coverage(encoder, argument, report);
+        return;
+    }
     let Some((field_low, field_high)) =
         integer_range(field).filter(|_| field.ty != ScalarType::Bool)
     else {
         return;
     };
+    // A bool is written as 0 or 1, which only a 1-bit int can't hold.
+    if argument.ty == ParamType::Bool {
+        if field_high < 1 {
+            report.error(
+                Code::ValueRange,
+                &encoder.argument,
+                format!(
+                    "argument {} is a bool, written as 0 or 1, but {} holds raw {field_low} to \
+                     {field_high}",
+                    argument.name, encoder.what
+                ),
+            );
+        }
+        return;
+    }
     let (type_low, type_high) = match argument.ty {
         ParamType::U64 => (0.0, u64::MAX as f64),
         ParamType::I64 => (i64::MIN as f64, i64::MAX as f64),
@@ -1613,6 +1793,50 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
             argument.name, encoder.what
         ),
     );
+}
+
+/// Each end an f64 argument's range gives encodes to a finite raw value in
+/// a float field, rounded to binary32 for a 32-bit one, so every value in
+/// range does. An end left out isn't checked: most f64 arguments have no
+/// range, and refusing them all for a binary32 field would refuse what
+/// most definitions mean.
+fn check_float_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) {
+    let field = encoder.field;
+    let Some(range) = argument.range.filter(|_| argument.ty == ParamType::F64) else {
+        return;
+    };
+    // A field has a size only in a binary payload.
+    let binary = field.size_bits.is_some();
+    let single = binary && field.size_bits == Some(32);
+    for end in [range.min, range.max].into_iter().flatten() {
+        // A unit that doesn't convert is reported on its own.
+        let Some(raw) = raw_unchecked(field, end, argument.unit.as_deref(), binary) else {
+            continue;
+        };
+        if raw.is_finite() {
+            continue;
+        }
+        let holds = if single {
+            format!(
+                "finite binary32 numbers, up to {}",
+                format_double(f64::from(f32::MAX))
+            )
+        } else {
+            "finite numbers".to_string()
+        };
+        report.error(
+            Code::ValueRange,
+            &encoder.argument,
+            format!(
+                "argument {}'s range reaches {}, which {} can't write: it holds {holds}; narrow \
+                 the range",
+                argument.name,
+                format_double(end),
+                encoder.what
+            ),
+        );
+        return;
+    }
 }
 
 fn type_label(ty: ParamType) -> &'static str {
