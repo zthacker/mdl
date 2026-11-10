@@ -14,13 +14,12 @@ use mdl::v2::ir::{
     Family, Param, Set, StructType,
 };
 use mdl::v2::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
-use mdl::v2::source::Sources;
-use mdl::v2::validate::{Validated, validate};
+use mdl::v2::validate::Validated;
 use serde::Serialize;
 
 use crate::describe::{self, ir};
 use crate::report::{Outcome, Report};
-use crate::{ReadArgs, definitions, find_inputs, inputs, store};
+use crate::{Origin, ReadArgs, open};
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -90,43 +89,19 @@ impl InspectArgs {
 
 pub fn run(args: &InspectArgs) -> anyhow::Result<ExitCode> {
     let read = args.read();
-    if let [only] = read.inputs.as_slice()
-        && only.is_dir()
-        && store::is_store(only)
-    {
-        if read.xtce.given() {
-            bail!(
-                "{} is an artifact store; the XTCE options apply only to definitions",
-                only.display()
-            );
-        }
-        let stored = store::load(only)
-            .with_context(|| format!("can't read the store at {}", only.display()))?;
-        let validated = validated_store(&stored.artifacts).with_context(|| {
-            format!("the store at {} doesn't hold a valid build", only.display())
-        })?;
-        let inspected = inspect(&validated, &stored.artifacts, args.view.as_ref())?;
-        let sources = Sources::new();
-        let report = Report::new(&sources, read.format, read.all_warnings);
-        return Ok(report.finish(Some(inspected)));
-    }
-    let inputs = find_inputs(read).map_err(|err| match view_word(read) {
+    let origin = Origin::of(read).map_err(|err| match view_word(read) {
         Some(word) => err.context(format!(
             "views come before the inputs (`morphc inspect {word} NAME INPUT...`), and an \
              input named {word} is written ./{word}"
         )),
         None => err,
     })?;
-    let sources = inputs::read(&inputs)?;
+    let sources = origin.sources()?;
     let mut report = Report::new(&sources, read.format, read.all_warnings);
-    let Some((validated, _)) = definitions(read, &inputs, &sources, &mut report) else {
+    let Some(opened) = open(&origin, read, &sources, &mut report)? else {
         return Ok(report.finish::<Inspected>(None));
     };
-    // What the artifacts hold, so definitions show what a store of them
-    // would (sets list their packets by name there).
-    let artifacts = artifact::build(&validated).context("can't write the artifacts")?;
-    let canonical = validated_store(&artifacts).context("the built artifacts don't validate")?;
-    let inspected = inspect(&canonical, &artifacts, args.view.as_ref())?;
+    let inspected = inspect(&opened.validated, &opened.artifacts, args.view.as_ref())?;
     Ok(report.finish(Some(inspected)))
 }
 
@@ -136,28 +111,6 @@ fn view_word(read: &ReadArgs) -> Option<&'static str> {
     ["set", "param", "command"]
         .into_iter()
         .find(|word| read.inputs.iter().any(|input| input.as_os_str() == *word))
-}
-
-/// A store's latest build as one bundle: its catalog, families and sets,
-/// validated together. A set kept from an older build pins an older
-/// catalog the latest one is compatible with, so it validates against the
-/// latest.
-fn validated_store(artifacts: &Artifacts) -> anyhow::Result<Validated> {
-    let Artifact::Catalog { catalog, .. } = &artifacts.catalog.artifact else {
-        bail!("its manifest's catalog isn't a catalog");
-    };
-    let mut bundle = Bundle::new(catalog.clone());
-    for written in artifacts.families.values() {
-        if let Artifact::Family { family, .. } = &written.artifact {
-            bundle.families.push(family.clone());
-        }
-    }
-    for written in artifacts.sets.values() {
-        if let Artifact::Set { set, .. } = &written.artifact {
-            bundle.sets.push(set.clone());
-        }
-    }
-    validate(bundle).map_err(|diagnostics| anyhow!("{diagnostics}"))
 }
 
 fn inspect(
