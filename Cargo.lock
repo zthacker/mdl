@@ -449,6 +449,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
+name = "mdl-testkit"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "serde_json",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -459,6 +467,7 @@ name = "morpheus-mdl"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "mdl-testkit",
  "proptest",
  "ryu-js",
  "serde",
@@ -473,6 +482,7 @@ dependencies = [
 name = "morpheus-mdl-toml"
 version = "0.1.0"
 dependencies = [
+ "mdl-testkit",
  "morpheus-mdl",
  "proptest",
  "serde_json",

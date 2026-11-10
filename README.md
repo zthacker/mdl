@@ -155,7 +155,9 @@ This example runs as a test of the TOML crate.
 ## Contributing
 
 `just check` runs what CI runs: formatting, clippy, every test (including
-the walkthrough and the README's example) and the docs. Issues and pull
+the walkthrough and the README's example) and the docs. `just props` runs
+the property tests at 10,000 cases each, as CI does on pushes to main.
+Issues and pull
 requests are welcome at <https://github.com/zthacker/mdl>.
 [`ROADMAP.md`](ROADMAP.md) says what's next, such as build files for
 several imports.
@@ -168,6 +170,7 @@ several imports.
 | `crates/mdl-toml` | the TOML frontend: definitions written as the IR spelled in TOML |
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the command line: build, inspect, decode, encode |
+| `crates/mdl-testkit` | IR generators and the list of IR features, for the property tests (never published) |
 | `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
 
