@@ -93,7 +93,8 @@ pub struct Decoded<'a> {
     /// Every entry, raw.
     pub record: Record<'a>,
     /// The canonical values: mapped fields and array elements in record
-    /// order, then composites in definition order.
+    /// order, then composites by canonical name, as set artifacts list
+    /// them.
     pub samples: Vec<Sample<'a>>,
 }
 
