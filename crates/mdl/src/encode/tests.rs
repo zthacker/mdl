@@ -2079,3 +2079,46 @@ fn a_list_default_is_encoded_when_the_list_is_left_out() {
     assert_eq!(decoded.defaulted, ["names"]);
     assert_eq!(decoded.arguments[1].1.to_string(), "a list of 2 values");
 }
+
+#[test]
+fn the_kitchen_sink_command_encodes_and_decodes_back_to_its_request() {
+    let artifacts = artifacts_of(&fixture());
+    let sets = family_sets(&artifacts, "sink");
+    let taps = || ArgumentValue::List(vec![ArgumentValue::Float(4.0), ArgumentValue::Float(258.0)]);
+    let request = CommandRequest::new("sink_v1", "sink.configure")
+        .with_argument("taps", taps())
+        .with_target(4_u64);
+    let encoded = sets.encode(&request).unwrap();
+    // The opcode; enable in the top bit, then padding; gain 1.5 as a
+    // little-endian binary32; "ON"; the count of taps less one, written
+    // for them; each tap halved, as a big-endian u16; the target's native
+    // id; then CRC-16/X-25 of everything after the opcode, little-endian
+    // like the family.
+    assert_eq!(
+        encoded.payload,
+        [
+            7, 0x80, 0x00, 0x00, 0xC0, 0x3F, b'O', b'N', 1, 0x00, 0x02, 0x00, 0x81, 4, 0x48, 0x1F
+        ]
+    );
+    assert_eq!(encoded.defaulted, ["enable", "gain", "label"]);
+    assert_eq!(
+        encoded.deprecated,
+        Some("firmware 3 configures the sink at boot")
+    );
+    assert_eq!(encoded.metadata(), [("msg", MetaValue::Int(9))]);
+
+    let metadata = encoded.metadata();
+    let message = binary(&encoded.payload).with_metadata(&metadata);
+    let decoded = sets.decode_command("sink_v1", &message).unwrap();
+    assert_eq!(decoded.packet.name, "CONFIGURE");
+    assert_eq!(
+        arguments(&decoded),
+        vec![
+            ("enable".to_string(), ArgumentValue::Bool(true)),
+            ("gain".to_string(), ArgumentValue::Float(1.5)),
+            ("label".to_string(), ArgumentValue::Text("ON".to_string())),
+            ("taps".to_string(), taps()),
+        ]
+    );
+    assert_eq!(decoded.target, Some(4_u64.into()));
+}

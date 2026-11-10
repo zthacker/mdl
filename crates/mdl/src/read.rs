@@ -522,7 +522,11 @@ mod tests {
     #[test]
     fn the_full_bundle_reads_and_its_digest_covers_the_canonical_form() {
         let loaded = read_bundle(FULL_BUNDLE.as_bytes()).unwrap();
-        assert_eq!(loaded.value.sets.len(), 5);
+        let value: Value = serde_json::from_str(FULL_BUNDLE).unwrap();
+        assert_eq!(
+            loaded.value.sets.len(),
+            value["sets"].as_array().unwrap().len()
+        );
         assert_eq!(loaded.digest, Digest::of_canonical(&loaded.canonical));
         // Formatting doesn't change identity: compact input, same digest.
         let compact = bundle_with(|_| {});

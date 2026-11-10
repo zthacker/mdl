@@ -1403,3 +1403,167 @@ fn a_sample_is_in_its_params_unit_and_an_engineering_value_in_its_fields() {
         SampleValue::I64(1500)
     );
 }
+
+/// The kitchen sink's assets: one per family the fixture adds for it.
+fn sink_registry() -> Bindings {
+    Bindings::from_toml(
+        r#"
+mdl_version = "2.0"
+
+[[binding]]
+family = "sink"
+native_id = 4
+asset = "SINK-4"
+set = "sink_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "sink_json"
+native_id = "N1"
+asset = "SINK-N1"
+set = "sink_json_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-1"
+asset = "BOX-1"
+set = "legacy_v3"
+effective_from = "2026-01-01T00:00:00Z"
+"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_kitchen_sink_packet_decodes_every_kind_of_entry() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "sink");
+    let mut payload = Vec::new();
+    // CUC seconds, big-endian whatever the family's order: 2026-06-01
+    // 12:00:37 TAI is 12:00:00 UTC.
+    payload.extend_from_slice(&2_159_006_437_u32.to_be_bytes());
+    // count: its own big-endian order.
+    payload.extend_from_slice(&(-42_i16).to_be_bytes());
+    // armed in the top bit, then seven bits of padding.
+    payload.push(0b1000_0000);
+    // label: "Aé" in Latin-1, terminated inside its eight bytes.
+    payload.extend_from_slice(&[b'A', 0xE9, 0, 0, 0, 0, 0, 0]);
+    // name: name_len * 2 + 1 bytes of UTF-8.
+    payload.push(2);
+    payload.extend_from_slice("naïf".as_bytes());
+    for x in [0.5_f32, 0.5, 0.5, 0.5, 1.5, -2.25, 0.125] {
+        payload.extend_from_slice(&x.to_le_bytes());
+    }
+    for x in [383_000_000_i32, -770_000_000, 120] {
+        payload.extend_from_slice(&x.to_le_bytes());
+    }
+    // temps: -128 is no reading.
+    payload.extend_from_slice(&[(-128_i8).to_le_bytes()[0], 25, 100]);
+    // flags 11: ne1, gt1 and ge1 are there, lt1 and le1 aren't, and any1
+    // is, by its mask (11 & 3 == 3).
+    payload.extend_from_slice(&[11, 1, 2, 3, 4]);
+    payload.extend_from_slice(b"TX1RX2");
+    payload.extend_from_slice(&[0xDE, 0xAD]);
+    let metadata = [("msg", MetaValue::Uint(1)), ("node", MetaValue::Uint(4))];
+    let message = Message::new(Payload::Binary(&payload), now()).with_metadata(&metadata);
+    let decoded = sets.decode(&message, &sink_registry()).unwrap();
+
+    assert_eq!(decoded.route.binding.asset, "SINK-4");
+    assert_eq!(decoded.packet.name, "MIXED");
+    assert_eq!(
+        decoded.event_time,
+        EventTime::At(instant("2026-06-01T12:00:00Z"))
+    );
+    let names: Vec<&str> = decoded.record.iter().map(|(name, _)| name).collect();
+    assert_eq!(
+        names,
+        [
+            "count", "armed", "label", "name_len", "name", "q", "ve", "vn", "vu", "lat", "lon",
+            "alt", "temps", "flags", "ne1", "gt1", "ge1", "any1", "tags", "rest"
+        ]
+    );
+    assert_eq!(
+        decoded.record.get("name").map(show).as_deref(),
+        Some("\"naïf\"")
+    );
+    assert_eq!(
+        decoded.record.get("tags").map(show).as_deref(),
+        Some("[\"TX1\", \"RX2\"]")
+    );
+    // The spline through (-50, -50), (0, 0) and (50, 60) is natural: no
+    // curvature at its ends, 0.006 at 0. At 25 that's 29.0625; past 50 it
+    // goes on straight at 60/50 + 50 * 0.006 / 6 = 1.25, so 100 is 122.5.
+    assert_eq!(
+        decoded.samples.iter().map(sample_text).collect::<Vec<_>>(),
+        triples(&[
+            ("sink.count", "I64(-42) at count", "good"),
+            ("sink.armed", "Bool(true) at armed", "good"),
+            ("sink.label", "Str(\"Aé\") at label", "good"),
+            ("sink.temps", "I64(-128) at temps[0]", "invalid"),
+            ("sink.temps", "F64(29.0625) at temps[1]", "good"),
+            ("sink.temps", "F64(122.5) at temps[2]", "good"),
+            ("sink.raw", "Bytes([222, 173]) at rest", "good"),
+            // Composites follow, by canonical name.
+            (
+                "nav.pos_ecef",
+                "Vec3 { frame: Geodetic, x: 38.3, y: -77.0, z: 120.0 } at lat,lon,alt",
+                "good"
+            ),
+            (
+                "sink.attitude",
+                "Quat { frame: Body, w: 0.5, x: 0.5, y: 0.5, z: 0.5 } at q[0],q[1],q[2],q[3]",
+                "good"
+            ),
+            (
+                "sink.velocity",
+                "Vec3 { frame: Enu, x: 1.5, y: -2.25, z: 0.125 } at ve,vn,vu",
+                "good"
+            ),
+        ])
+    );
+}
+
+#[test]
+fn the_kitchen_sink_json_packet_keeps_time_on_the_tt_scale() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "sink_json");
+    let decode = |text: &str| {
+        let message = Message::new(Payload::Json(text.as_bytes()), now());
+        let decoded = sets.decode(&message, &sink_registry()).unwrap();
+        (
+            decoded.event_time,
+            decoded.samples.iter().map(sample_text).collect::<Vec<_>>(),
+        )
+    };
+    // J2000: 2000-01-01T12:00:00 TT is 32.184 s after TAI, which was 32 s
+    // after UTC.
+    assert_eq!(
+        decode(r#"{"type": "status", "node": "N1", "t": 0, "armed": true}"#),
+        (
+            EventTime::At(instant("2000-01-01T11:58:55.816Z")),
+            triples(&[("sink.armed", "Bool(true) at armed", "good")])
+        )
+    );
+    // armed is optional.
+    assert_eq!(
+        decode(r#"{"type": "status", "node": "N1", "t": 1.5}"#),
+        (EventTime::At(instant("2000-01-01T11:58:57.316Z")), vec![])
+    );
+}
+
+#[test]
+fn a_gps_elapsed_time_counts_nanoseconds_from_the_gps_epoch() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "legacy");
+    // 10^18 ns after 1980-01-06 is 2011-09-14T01:46:40 GPS, 15 leap seconds
+    // ahead of UTC.
+    let payload = 1_000_000_000_000_000_000_u64.to_le_bytes();
+    let message = Message::new(Payload::Binary(&payload), now());
+    let decoded = sets.decode(&message, &sink_registry()).unwrap();
+    assert_eq!(decoded.packet.name, "TICK");
+    assert_eq!(
+        decoded.event_time,
+        EventTime::At(instant("2011-09-14T01:46:25Z"))
+    );
+}

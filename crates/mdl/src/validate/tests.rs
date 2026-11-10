@@ -40,10 +40,26 @@ fn hk(v: &mut Value) -> &mut Value {
     &mut v["sets"][0]["packets"][0]
 }
 
+/// Where a family pushed onto the fixture's lands.
+fn pushed_family() -> String {
+    format!(
+        "/families/{}",
+        fixture()["families"].as_array().unwrap().len()
+    )
+}
+
+/// Where a set pushed onto the fixture's lands.
+fn pushed_set() -> String {
+    format!("/sets/{}", fixture()["sets"].as_array().unwrap().len())
+}
+
 #[test]
 fn the_full_fixture_is_valid() {
     let validated = validate(bundle(fixture())).unwrap();
-    assert_eq!(validated.bundle().sets.len(), 5);
+    assert_eq!(
+        validated.bundle().sets.len(),
+        fixture()["sets"].as_array().unwrap().len()
+    );
 }
 
 #[test]
@@ -94,7 +110,7 @@ fn family_rules() {
         v["families"][0]["name"] = json!("Vendor-X");
         set_x(v)["family"] = json!("Vendor-X");
     });
-    assert_one(Code::DuplicateName, "/families/3", |v| {
+    assert_one(Code::DuplicateName, &pushed_family(), |v| {
         let copy = v["families"][1].clone();
         v["families"].as_array_mut().unwrap().push(copy);
     });
@@ -135,7 +151,7 @@ fn set_names_and_versions() {
     assert_one(Code::UnknownFamily, "/sets/0/family", |v| {
         set_x(v)["family"] = json!("vendor_q");
     });
-    assert_one(Code::DuplicateName, "/sets/5", |v| {
+    assert_one(Code::DuplicateName, &pushed_set(), |v| {
         let mut copy = v["sets"][1].clone();
         copy["family"] = json!("legacy");
         copy.as_object_mut().unwrap().remove("time");
@@ -158,11 +174,15 @@ fn set_names_and_versions() {
     assert_one(Code::SetVersion, "/sets/1/version", |v| {
         v["sets"][1]["version"] = json!(1);
     });
-    assert_one(Code::SetVersion, "/sets/5/version", |v| {
-        let mut copy = v["sets"][0].clone();
-        copy["name"] = json!("vendor_x_v2_copy");
-        v["sets"].as_array_mut().unwrap().push(copy);
-    });
+    assert_one(
+        Code::SetVersion,
+        &format!("{}/version", pushed_set()),
+        |v| {
+            let mut copy = v["sets"][0].clone();
+            copy["name"] = json!("vendor_x_v2_copy");
+            v["sets"].as_array_mut().unwrap().push(copy);
+        },
+    );
     assert_one(Code::UnsafeInteger, "/sets/0/version", |v| {
         set_x(v)["version"] = json!(1_i64 << 53);
     });
@@ -618,8 +638,8 @@ fn set_versions_are_compared_by_value_and_fit_their_locator() {
             v["sets"].as_array_mut().unwrap().push(copy);
         }),
         vec![
-            (Code::IntegerAsString, "/sets/5/version".to_string()),
-            (Code::SetVersion, "/sets/5/version".to_string()),
+            (Code::IntegerAsString, format!("{}/version", pushed_set())),
+            (Code::SetVersion, format!("{}/version", pushed_set())),
         ]
     );
     let bits = |v: &mut Value, version: Value| {
@@ -3260,14 +3280,14 @@ fn a_duplicate_points_at_its_first_definition() {
     let family = fixture()["families"][1].clone();
     assert_eq!(
         firsts(&|v| v["families"].as_array_mut().unwrap().push(family.clone())),
-        pair("/families/3", "/families/1")
+        pair(&pushed_family(), "/families/1")
     );
     let set = fixture()["sets"][0].clone();
     let mut renamed = set.clone();
     renamed["version"] = json!(3);
     assert_eq!(
         firsts(&|v| v["sets"].as_array_mut().unwrap().push(renamed.clone())),
-        pair("/sets/5", "/sets/0")
+        pair(&pushed_set(), "/sets/0")
     );
     let packet = hk(&mut fixture()).clone();
     let mut same_name = packet.clone();

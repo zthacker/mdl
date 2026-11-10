@@ -24,13 +24,16 @@ fn a_bundle_becomes_one_artifact_per_catalog_family_and_set() {
     let artifacts = built(&fixture());
     assert_eq!(
         artifacts.families.keys().collect::<Vec<_>>(),
-        ["legacy", "vendor_j", "vendor_x"]
+        ["legacy", "sink", "sink_json", "vendor_j", "vendor_x"]
     );
     assert_eq!(
         artifacts.sets.keys().collect::<Vec<_>>(),
         [
             "legacy_v1",
             "legacy_v2",
+            "legacy_v3",
+            "sink_json_v1",
+            "sink_v1",
             "vendor_j_v1",
             "vendor_j_v2",
             "vendor_x_v2"
