@@ -44,9 +44,33 @@ fn a_pointer_finds_itself_or_its_nearest_recorded_ancestor() {
         Some(Span::new(id, 12, 14))
     );
     assert_eq!(map.find("/sets/0/packets/0"), Some(Span::new(id, 10, 20)));
-    assert_eq!(map.find("/families/2"), Some(Span::new(id, 0, 2)));
+    // Not the bundle's span: it can't stand for a family it doesn't have.
+    assert_eq!(map.find("/families/2"), None);
     assert_eq!(map.get("/sets"), None);
     assert_eq!(SourceMap::new().find("/sets/0"), None);
+}
+
+#[test]
+fn the_climb_stops_below_the_bundles_own_lists_and_maps() {
+    let mut sources = Sources::new();
+    let file = sources.add("catalog.toml", "a\nb\nc\n");
+    let mut map = SourceMap::new();
+    let first = Span::new(file, 0, 1);
+    let b = Span::new(file, 2, 3);
+    // As TOML records a map from one file: at its first definition.
+    map.insert("/catalog/params", first);
+    map.insert("/catalog/params/b", b);
+    map.insert("", first);
+    // A changed definition is still found; a removed one isn't pinned on
+    // whichever definition the map's span happens to cover.
+    assert_eq!(map.find("/catalog/params/b/unit"), Some(b));
+    assert_eq!(map.find("/catalog/params/gone"), None);
+    assert_eq!(map.find("/catalog/params/gone/unit"), None);
+    assert_eq!(map.find("/sets/0"), None);
+    assert_eq!(map.find("/mdl_version"), None);
+    // The lists and maps themselves are found exactly.
+    assert_eq!(map.find("/catalog/params"), Some(first));
+    assert_eq!(map.find(""), Some(first));
 }
 
 #[test]

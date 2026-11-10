@@ -181,6 +181,18 @@ pub struct Location {
     pub column: usize,
 }
 
+/// The bundle, its catalog, the catalog's params and commands, and the
+/// families and sets: the bundle's own objects, lists and maps, which hold
+/// definitions from anywhere (several files, several frontends).
+const CONTAINERS: [&str; 6] = [
+    "",
+    "/catalog",
+    "/catalog/params",
+    "/catalog/commands",
+    "/families",
+    "/sets",
+];
+
 /// For each JSON Pointer into a bundle, the span of text its value came
 /// from.
 #[derive(Debug, Clone, Default)]
@@ -205,15 +217,23 @@ impl SourceMap {
     }
 
     /// The span of the value at `pointer`, or else of its nearest ancestor
-    /// that has one: a missing field is reported where its object is.
+    /// that has one: a missing field is reported where its object is. The
+    /// climb stops below the bundle's own lists and maps (the bundle, its
+    /// catalog, the catalog's params and commands, the families and the
+    /// sets), whose spans can't stand for one definition among many, so a
+    /// pointer to something the bundle doesn't have (a param a newer
+    /// catalog removed) has none.
     pub fn find(&self, pointer: &str) -> Option<Span> {
-        let mut pointer = pointer;
+        let mut at = pointer;
         loop {
-            if let Some(span) = self.spans.get(pointer) {
+            if let Some(span) = self.spans.get(at) {
                 return Some(*span);
             }
-            let parent = pointer.rfind('/')?;
-            pointer = pointer.get(..parent)?;
+            let parent = at.rfind('/')?;
+            at = at.get(..parent)?;
+            if CONTAINERS.contains(&at) {
+                return None;
+            }
         }
     }
 
