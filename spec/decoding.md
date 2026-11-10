@@ -407,8 +407,9 @@ with integer sentinels by value (a decimal string is its integer).
 
 Each present field or scalar array element mapped to a catalog param
 (through any depth of structs, and through arrays of structs) gives one
-sample, in record order; composites follow, in definition order. A sample
-is `{param, value, path, index, time_offset, quality}`:
+sample, in record order; composites follow, in the order the set artifact
+lists them, by canonical name. A sample is
+`{param, value, path, index, time_offset, quality}`:
 
 - `path` is the record path of the value, every index included; `index`
   is its position in its innermost array, for array elements.
