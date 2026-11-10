@@ -9,7 +9,7 @@ operator adds to run it.
 | [`toml/mixed_versions`](toml/mixed_versions) | Two firmware versions on one link. A format byte in every message picks the set that decodes it. |
 | [`xtce/demosat.xml`](xtce/demosat.xml) | A CCSDS satellite as XTCE tools describe one: inherited headers, APIDs, calibrators, a spline, an enumeration, vectors, commands with defaults, ranges, calibrated currents and a list of waypoint records. Its bus voltage, battery temperature and mode command map to the mission catalog's names through MDL aliases. |
 | [`xtce/imager.xml`](xtce/imager.xml) | A payload whose packets have sizes the data gives: an optional secondary header, a row of pixels counted by the packet, Pascal strings, record arrays. |
-| [`fleet`](fleet) | What an operator adds: a bindings file naming each asset, a drone's capture with each message's own metadata, and a param added to the catalog. |
+| [`fleet`](fleet) | What an operator adds: a build file listing the fleet's definitions, a bindings file naming each asset, a drone's capture with each message's own metadata, and a param added to the catalog. |
 
 The TOML and XTCE examples are also read, validated and decoded by their
 crates' own tests (`cargo test -p morpheus-mdl-toml --test examples`,
@@ -271,4 +271,32 @@ set demosat       aaba1c63ceedf56546115fcb909204a46c023548ea92dbcb09d185366637e1
 set drone_v1      9cdb54d367681f74df4f0223c2b3cbbb8cbdd5909ca64839dc2dcfc8d7458617  unchanged
 set json_sat_v1   0121b63b4ecd51ef2d7ad449785df82eab1b0fbf227a7c5a0d0fb864236fa00d  unchanged
 ok: 17 params, 5 commands, 4 families, 4 sets (MDL IR 2.0); 0 new artifacts written to store
+```
+
+### 6. Several vendors' XTCE in one build
+
+On the command line, every XTCE document is part of one import, so DemoSat's
+and the imager's packets would share one family and set, and collide.
+[`fleet/morphc.toml`](fleet/morphc.toml) lists the inputs instead
+([spec/build-files.md](../spec/build-files.md)), each XTCE input an import
+of its own with its own options, so the imager joins as a family next to
+DemoSat. Its params are new names, a compatible change, so
+the fleet's sets keep their identities.
+
+```console
+$ morphc build -c fleet/morphc.toml --out store
+...
+morphc: 6 warnings (4 xtce.ignored, 2 overridden)
+catalog           3c23957ef63980c72006ecfd8fcde71339419746d8e3201d1c784d04e0b641d9  changed  (written)
+family ccsds_sat  74cc510c26ac7222d96e9b55facd66f5a961b36782835ff363a83ac1ac676846  unchanged
+family demosat    3bec4e53d0c57acc228cfd6bb6645eb2bd240ff95804513d7706ac860b809597  unchanged
+family drone      1ae855cd51e6c6e1c42f03330f733d6e1fb77e8919a16eca2345b22dff3c699f  unchanged
+family imager     1c196f2c7eab2ffbd80957564a3303fbeb2724f5be15c67625abb0b18c59100f  new  (written)
+family json_sat   797620de34906b6d4570b7f0fdacdeabf930e9279c3609e1fb57276dc624132c  unchanged
+set ccsds_sat_v1  6293e3d77620f2f6f26f359bddb24e4c71a7d87e623947aa7d644378d8f365aa  unchanged
+set demosat       aaba1c63ceedf56546115fcb909204a46c023548ea92dbcb09d185366637e15d  unchanged
+set drone_v1      9cdb54d367681f74df4f0223c2b3cbbb8cbdd5909ca64839dc2dcfc8d7458617  unchanged
+set imager        4ebda139934f13204474433f2d6e5733a8cb088721f779b94392ffb8e5319ca9  new  (written)
+set json_sat_v1   0121b63b4ecd51ef2d7ad449785df82eab1b0fbf227a7c5a0d0fb864236fa00d  unchanged
+ok: 28 params, 5 commands, 5 families, 5 sets (MDL IR 2.0); 3 new artifacts written to store
 ```

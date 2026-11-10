@@ -3,12 +3,12 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read as _;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
 use mdl::source::{Parsed, SourceDiagnostic, SourceFile, Sources};
 
-use crate::store;
+use crate::{buildfile, store};
 
 /// Which frontend reads a file, chosen by its extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +49,11 @@ impl Frontend {
 pub struct Input {
     pub path: PathBuf,
     pub frontend: Frontend,
+    /// Which XTCE import an XTCE document belongs to (an index into the
+    /// imports' options): one import per build-file input, else one.
+    pub import: usize,
+    /// How diagnostics name it.
+    shown: String,
 }
 
 impl Input {
@@ -57,11 +62,7 @@ impl Input {
     }
 
     fn name(&self) -> String {
-        if self.is_stdin() {
-            "<stdin>".to_string()
-        } else {
-            self.path.display().to_string()
-        }
+        self.shown.clone()
     }
 }
 
@@ -74,10 +75,13 @@ impl Input {
 /// `.`) and artifact stores are left out, so a store kept beside the
 /// definitions isn't read as bundles. A link given as an input is
 /// followed; inside a directory, links to files are and links to
-/// directories aren't.
-pub fn find(paths: &[PathBuf]) -> anyhow::Result<Vec<Input>> {
+/// directories aren't, and a build file in a directory is left out.
+///
+/// Each path comes with the XTCE import its documents belong to.
+pub fn find(paths: &[(PathBuf, usize)]) -> anyhow::Result<Vec<Input>> {
     let mut found = Found::default();
-    for path in paths {
+    for (path, import) in paths {
+        let import = *import;
         if path.as_os_str() == "-" {
             if found.stdin {
                 bail!("`-` (stdin) is given twice");
@@ -86,12 +90,20 @@ pub fn find(paths: &[PathBuf]) -> anyhow::Result<Vec<Input>> {
             found.inputs.push(Input {
                 path: path.clone(),
                 frontend: Frontend::Json,
+                import,
+                shown: "<stdin>".to_string(),
             });
             continue;
         }
         let metadata =
             fs::metadata(path).with_context(|| format!("can't read {}", path.display()))?;
         if !metadata.is_dir() {
+            if path.file_name().is_some_and(|name| name == buildfile::NAME) {
+                bail!(
+                    "{} is a build file, not definitions; give it with -c",
+                    path.display()
+                );
+            }
             let Some(frontend) = Frontend::of(path) else {
                 bail!(
                     "{} isn't a definition file: morphc reads .toml (MDL TOML), .xml (XTCE) \
@@ -99,7 +111,7 @@ pub fn find(paths: &[PathBuf]) -> anyhow::Result<Vec<Input>> {
                     path.display()
                 );
             };
-            found.add(path, frontend)?;
+            found.add(path, frontend, import)?;
             continue;
         }
         if store::is_store(path) {
@@ -115,7 +127,7 @@ pub fn find(paths: &[PathBuf]) -> anyhow::Result<Vec<Input>> {
         }
         files.sort_by_key(|(_, frontend)| frontend.rank());
         for (file, frontend) in files {
-            found.add(&file, frontend)?;
+            found.add(&file, frontend, import)?;
         }
     }
     Ok(found.inputs)
@@ -130,16 +142,43 @@ struct Found {
 }
 
 impl Found {
-    fn add(&mut self, path: &Path, frontend: Frontend) -> anyhow::Result<()> {
+    fn add(&mut self, path: &Path, frontend: Frontend, import: usize) -> anyhow::Result<()> {
         let canonical =
             fs::canonicalize(path).with_context(|| format!("can't read {}", path.display()))?;
+        let shown = shown(path, &canonical);
         if self.seen.insert(canonical) {
             self.inputs.push(Input {
                 path: path.to_path_buf(),
                 frontend,
+                import,
+                shown,
             });
         }
         Ok(())
+    }
+}
+
+/// A path's name for people, as [`shown`] gives it.
+pub fn shown_path(path: &Path) -> String {
+    match fs::canonicalize(path) {
+        Ok(canonical) => shown(path, &canonical),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+/// A file's name for people: as given, unless that's absolute or climbs
+/// with `..` (as a build file's inputs do), when the real path relative to
+/// the working directory reads better, if the file is below it.
+fn shown(path: &Path, canonical: &Path) -> String {
+    let roundabout =
+        path.is_absolute() || path.components().any(|part| part == Component::ParentDir);
+    let below = std::env::current_dir()
+        .and_then(fs::canonicalize)
+        .ok()
+        .and_then(|dir| canonical.strip_prefix(dir).ok().map(Path::to_path_buf));
+    match below {
+        Some(relative) if roundabout => relative.display().to_string(),
+        _ => path.display().to_string(),
     }
 }
 
@@ -152,7 +191,8 @@ fn walk(dir: &Path, files: &mut Vec<(PathBuf, Frontend)>) -> anyhow::Result<()> 
         .with_context(listing)?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        if entry.file_name().to_string_lossy().starts_with('.') {
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') || name == buildfile::NAME {
             continue;
         }
         let path = entry.path();
@@ -203,37 +243,41 @@ pub fn read(inputs: &[Input]) -> anyhow::Result<Sources> {
 }
 
 /// One bundle per frontend in the order of its first file: the TOML files
-/// as one, the XTCE documents as one, and each JSON bundle alone. On
-/// failure, every problem and every warning, in file order.
+/// as one, each XTCE import's documents as one (with `imports[i]` as
+/// import `i`'s options), and each JSON bundle alone. On failure, every
+/// problem and every warning, in file order.
 pub fn parse(
     sources: &Sources,
     inputs: &[Input],
-    xtce: &mdl_xtce::Options,
+    imports: &[mdl_xtce::Options],
 ) -> Result<Vec<Parsed>, Vec<SourceDiagnostic>> {
-    let files: Vec<(Frontend, SourceFile<'_>)> = inputs
-        .iter()
-        .map(|input| input.frontend)
-        .zip(sources.iter())
-        .collect();
-    let of = |frontend: Frontend| {
+    let files: Vec<(&Input, SourceFile<'_>)> = inputs.iter().zip(sources.iter()).collect();
+    let toml = || {
         files
             .iter()
-            .filter(move |(f, _)| *f == frontend)
+            .filter(|(input, _)| input.frontend == Frontend::Toml)
+            .map(|(_, file)| *file)
+    };
+    let import = |index: usize| {
+        files
+            .iter()
+            .filter(move |(input, _)| input.frontend == Frontend::Xtce && input.import == index)
             .map(|(_, file)| *file)
     };
     let mut parts = Vec::new();
     let mut problems = Vec::new();
     let mut failed = false;
-    let (mut toml_read, mut xtce_read) = (false, false);
-    for (frontend, file) in &files {
-        let result = match frontend {
+    let mut toml_read = false;
+    let mut imports_read = BTreeSet::new();
+    for (input, file) in &files {
+        let result = match input.frontend {
             Frontend::Toml if !toml_read => {
                 toml_read = true;
-                mdl_toml::read(of(Frontend::Toml))
+                mdl_toml::read(toml())
             }
-            Frontend::Xtce if !xtce_read => {
-                xtce_read = true;
-                mdl_xtce::read(of(Frontend::Xtce), xtce)
+            Frontend::Xtce if imports_read.insert(input.import) => {
+                let options = imports.get(input.import).cloned().unwrap_or_default();
+                mdl_xtce::read(import(input.import), &options)
             }
             Frontend::Json => mdl::json::read(*file),
             Frontend::Toml | Frontend::Xtce => continue,

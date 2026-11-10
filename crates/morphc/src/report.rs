@@ -178,6 +178,32 @@ pub fn failed(format: Format, err: &anyhow::Error) -> ExitCode {
     }
 }
 
+/// What morphc prints when a file it reads before any definitions (a
+/// build file) is invalid: the problem, located as a definition's would
+/// be, and exit code 2, since it's how morphc was asked to run that's
+/// wrong.
+pub fn failed_at(format: Format, sources: &Sources, problem: SourceDiagnostic) -> ExitCode {
+    let mut report = Report::new(sources, format, false);
+    report.add([problem.clone()]);
+    let printed = match format {
+        Format::Human => emit(io::stderr(), &report.human_diagnostics()),
+        Format::Json => {
+            let document: Document<'_, Built> = Document {
+                ok: false,
+                error: Some(problem.message.clone()),
+                diagnostics: vec![JsonDiagnostic::of(&problem, sources)],
+                notes: &[],
+                outcome: None,
+            };
+            emit(io::stdout(), &json(&document))
+        }
+    };
+    match printed {
+        Ok(()) => ExitCode::from(2),
+        Err(err) => output_failed(&err),
+    }
+}
+
 /// Write all of `text`. A reader that went away (`morphc build ... |
 /// head`) isn't an error.
 fn emit(mut to: impl io::Write, text: &str) -> io::Result<()> {

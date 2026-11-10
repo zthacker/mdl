@@ -12,7 +12,7 @@ use mdl::ir::Digest;
 
 use crate::report::{Built, Report, Row};
 use crate::store::{self, Found, Manifest, Stored};
-use crate::{ReadArgs, definitions, find_inputs, inputs};
+use crate::{Given, ReadArgs, definitions, inputs};
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {
@@ -40,13 +40,13 @@ pub struct BuildArgs {
 }
 
 pub fn run(args: &BuildArgs) -> anyhow::Result<ExitCode> {
+    let mut given = Given::of(&args.read)?;
     if let Some(out) = &args.out
         && let Ok(out) = fs::canonicalize(out)
-        && args
-            .read
-            .inputs
+        && given
+            .paths
             .iter()
-            .any(|input| fs::canonicalize(input).is_ok_and(|input| input == out))
+            .any(|(input, _)| fs::canonicalize(input).is_ok_and(|input| input == out))
     {
         bail!(
             "--out {} is an input directory; put the store somewhere else, a store beside \
@@ -54,10 +54,13 @@ pub fn run(args: &BuildArgs) -> anyhow::Result<ExitCode> {
             out.display()
         );
     }
-    let inputs = find_inputs(&args.read)?;
+    let inputs = given.find()?;
     let sources = inputs::read(&inputs)?;
     let mut report = Report::new(&sources, args.read.format, args.read.all_warnings);
-    let Some((validated, map)) = definitions(&args.read, &inputs, &sources, &mut report) else {
+    for note in &given.notes {
+        report.note(note.clone());
+    }
+    let Some((validated, map)) = definitions(&given.imports, &inputs, &sources, &mut report) else {
         return Ok(report.finish::<Built>(None));
     };
 

@@ -2187,3 +2187,350 @@ fn decode_records_take_a_json_payload_byte_for_byte_and_a_time_each() {
         "{text}"
     );
 }
+
+// ---- build files ---------------------------------------------------------------------
+
+/// A project with a TOML catalog and two XTCE systems, each its own
+/// import in the build file.
+fn project(test: &str) -> PathBuf {
+    let dir = scratch(test);
+    let defs = dir.join("defs");
+    fs::create_dir_all(defs.join("vendors")).unwrap();
+    copy_file(
+        &examples("toml/mission/catalog.toml"),
+        &defs.join("catalog.toml"),
+    );
+    copy_file(
+        &examples("xtce/demosat.xml"),
+        &defs.join("vendors/demosat.xml"),
+    );
+    copy_file(
+        &examples("xtce/imager.xml"),
+        &defs.join("vendors/imager.xml"),
+    );
+    fs::write(
+        defs.join("morphc.toml"),
+        "[[input]]\npath = \"catalog.toml\"\n\n\
+         [[input]]\npath = \"vendors/demosat.xml\"\n\n\
+         [[input]]\npath = \"vendors/imager.xml\"\nfamily = \"camera\"\nnaming = \"qualified\"\n",
+    )
+    .unwrap();
+    dir
+}
+
+fn copy_file(from: &Path, to: &Path) {
+    fs::copy(from, to).unwrap();
+}
+
+#[test]
+fn a_build_file_imports_each_xtce_input_as_a_family() {
+    let dir = project("buildfile_imports");
+    let out = morphc_in(&dir, &["build", "-c", "defs/morphc.toml"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let rows = artifacts(&out);
+    assert!(rows.contains(&"family camera".to_string()), "{rows:?}");
+    assert!(rows.contains(&"family demosat".to_string()), "{rows:?}");
+    // Paths are relative to the build file, and the file names it.
+    assert!(
+        stderr(&out).contains("--> defs/vendors/demosat.xml:"),
+        "{}",
+        stderr(&out)
+    );
+
+    // On the command line, every XTCE document is one import: one family,
+    // whose single set holds both vendors' packets, which collide.
+    let flat = morphc_in(
+        &dir,
+        &[
+            "build",
+            "defs/catalog.toml",
+            "defs/vendors/demosat.xml",
+            "defs/vendors/imager.xml",
+        ],
+        None,
+    );
+    assert_eq!(flat.status.code(), Some(1), "{}", stderr(&flat));
+    assert!(
+        stderr(&flat).contains("error[ambiguous_identify]"),
+        "{}",
+        stderr(&flat)
+    );
+
+    // inspect, decode and encode read it too.
+    let inspect = morphc_in(&dir, &["inspect", "-c", "defs/morphc.toml"], None);
+    assert_eq!(inspect.status.code(), Some(0), "{}", stderr(&inspect));
+    assert!(
+        stdout(&inspect).contains("\nfamily camera  "),
+        "{}",
+        stdout(&inspect)
+    );
+}
+
+#[test]
+fn a_build_file_in_the_working_directory_is_found_and_left_out_of_walks() {
+    let dir = project("buildfile_found");
+    let defs = dir.join("defs");
+    let found = morphc_in(&defs, &["build"], None);
+    assert_eq!(found.status.code(), Some(0), "{}", stderr(&found));
+    assert!(artifacts(&found).contains(&"family camera".to_string()));
+
+    // Walking a directory reads its definitions, not its build file.
+    let walk = dir.join("walk");
+    fs::create_dir(&walk).unwrap();
+    copy_file(
+        &examples("toml/mission/catalog.toml"),
+        &walk.join("catalog.toml"),
+    );
+    fs::write(
+        walk.join("morphc.toml"),
+        "[[input]]\npath = \"catalog.toml\"\n",
+    )
+    .unwrap();
+    let walked = morphc_in(&dir, &["build", "walk"], None);
+    assert_eq!(walked.status.code(), Some(0), "{}", stderr(&walked));
+    let named = morphc_in(&dir, &["build", "defs/morphc.toml"], None);
+    assert_eq!(named.status.code(), Some(2));
+    assert!(
+        stderr(&named).contains("is a build file, not definitions; give it with -c"),
+        "{}",
+        stderr(&named)
+    );
+
+    let empty = scratch("buildfile_none");
+    let none = morphc_in(&empty, &["build"], None);
+    assert_eq!(none.status.code(), Some(2));
+    assert!(
+        stderr(&none).contains("or run where a morphc.toml is"),
+        "{}",
+        stderr(&none)
+    );
+}
+
+#[test]
+fn a_build_file_says_what_it_needs() {
+    let dir = project("buildfile_needs");
+    let write = |text: &str| fs::write(dir.join("bad.toml"), text).unwrap();
+    let build = |args: &[&str]| morphc_in(&dir, args, None);
+
+    let both = build(&["build", "defs/catalog.toml", "-c", "defs/morphc.toml"]);
+    assert!(
+        stderr(&both).contains("give inputs or a build file (-c), not both"),
+        "{}",
+        stderr(&both)
+    );
+    let flags = build(&["build", "-c", "defs/morphc.toml", "--import-family", "x"]);
+    assert!(
+        stderr(&flags).contains("each input's import options are written in it"),
+        "{}",
+        stderr(&flags)
+    );
+
+    write("[[input]]\npath = \"defs/catalog.toml\"\nfamilly = \"x\"\n");
+    let unknown = build(&["build", "-c", "bad.toml"]);
+    let err = stderr(&unknown);
+    assert!(
+        err.contains("error[morphc.build_file]: unknown field `familly`"),
+        "{err}"
+    );
+    assert!(err.contains(" --> bad.toml:3:1\n"), "{err}");
+
+    write("input = []\n");
+    assert!(stderr(&build(&["build", "-c", "bad.toml"])).contains("it lists no inputs"));
+    write("[[input]]\npath = \"-\"\n");
+    assert!(stderr(&build(&["build", "-c", "bad.toml"])).contains("not stdin"));
+    write("[[input]]\npath = \"defs/catalog.toml\"\nfamily = \"x\"\n");
+    let options = build(&["build", "-c", "bad.toml"]);
+    assert!(
+        stderr(&options).contains("input defs/catalog.toml has import options but no .xml files"),
+        "{}",
+        stderr(&options)
+    );
+    write(
+        "[[input]]\npath = \"defs/vendors/imager.xml\"\nalias = { kind = \"metadata\", name = \"apid\" }\n",
+    );
+    let alias = build(&["build", "-c", "bad.toml"]);
+    // The alias reads metadata the imported family doesn't declare: a
+    // definitions problem, located like any other.
+    assert_eq!(alias.status.code(), Some(1), "{}", stderr(&alias));
+    for out in [both, flags, unknown] {
+        assert_eq!(out.status.code(), Some(2));
+    }
+}
+
+#[test]
+fn a_build_file_error_is_located_for_tools_too() {
+    let dir = scratch("buildfile_json_error");
+    fs::write(
+        dir.join("morphc.toml"),
+        "[[input]]\npath = \"x\"\nfamilly = \"y\"\n",
+    )
+    .unwrap();
+    let out = morphc_in(&dir, &["build", "--format", "json"], None);
+    assert_eq!(out.status.code(), Some(2));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let problem = &report["diagnostics"][0];
+    assert_eq!(problem["code"], "morphc.build_file");
+    assert_eq!(problem["location"]["file"], "morphc.toml");
+    assert_eq!(problem["location"]["line"], 3);
+    assert!(report["error"].as_str().unwrap().contains("familly"));
+
+    for (text, message) in [
+        (
+            "version = 2\n[[input]]\npath = \"x\"\nwhatever = 1\n",
+            "build file format 2; this morphc reads format 1",
+        ),
+        (
+            "version = \"1\"\n[[input]]\npath = \"x\"\n",
+            "version is an integer, 1",
+        ),
+    ] {
+        fs::write(dir.join("morphc.toml"), text).unwrap();
+        let out = morphc_in(&dir, &["build"], None);
+        assert_eq!(out.status.code(), Some(2));
+        assert!(stderr(&out).contains(message), "{}", stderr(&out));
+    }
+    let dir_given = morphc_in(&dir, &["build", "-c", "."], None);
+    assert!(
+        stderr(&dir_given).contains("is a directory; -c takes a build file"),
+        "{}",
+        stderr(&dir_given)
+    );
+}
+
+#[test]
+fn a_build_file_says_when_the_order_it_lists_isnt_the_order_of_precedence() {
+    let dir = project("buildfile_order");
+    let defs = dir.join("defs");
+    copy_file(
+        &examples("toml/mission/drone.toml"),
+        &defs.join("drone.toml"),
+    );
+    fs::write(
+        defs.join("order.toml"),
+        "version = 1\n\n[[input]]\npath = \"drone.toml\"\n\n[[input]]\npath = \"vendors/demosat.xml\"\n\n\
+         [[input]]\npath = \"catalog.toml\"\n",
+    )
+    .unwrap();
+    let out = morphc_in(&dir, &["build", "-c", "defs/order.toml"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("catalog.toml comes after "), "{err}");
+    assert!(err.contains("so it takes precedence over it"), "{err}");
+    // The catalog's text wins, as the note says.
+    assert!(
+        err.contains("the earlier definition's \"Main power bus voltage\" takes precedence"),
+        "{err}"
+    );
+    // Found in the working directory, it says so.
+    let found = morphc_in(&defs, &["build"], None);
+    assert!(
+        stderr(&found).contains(
+            "note: no inputs were given, so the definitions are the ones ./morphc.toml lists"
+        ),
+        "{}",
+        stderr(&found)
+    );
+}
+
+#[test]
+fn a_build_file_keeps_an_xtce_system_whole_and_reads_a_file_once() {
+    let dir = scratch("buildfile_split");
+    let xtce = "http://www.omg.org/spec/XTCE/20180204";
+    fs::write(
+        dir.join("a.xml"),
+        format!(r#"<SpaceSystem name="Root" xmlns="{xtce}"><TelemetryMetaData><ParameterTypeSet><IntegerParameterType name="U8" signed="false"><IntegerDataEncoding sizeInBits="8"/></IntegerParameterType></ParameterTypeSet></TelemetryMetaData></SpaceSystem>"#),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("b.xml"),
+        format!(r#"<SpaceSystem name="Other" xmlns="{xtce}"><TelemetryMetaData><ParameterSet><Parameter name="X" parameterTypeRef="/Root/U8"/></ParameterSet><ContainerSet><SequenceContainer name="HK"><EntryList><ParameterRefEntry parameterRef="X"/></EntryList></SequenceContainer></ContainerSet></TelemetryMetaData></SpaceSystem>"#),
+    )
+    .unwrap();
+    let together = morphc_in(&dir, &["build", "a.xml", "b.xml"], None);
+    assert_eq!(together.status.code(), Some(0), "{}", stderr(&together));
+    fs::write(
+        dir.join("morphc.toml"),
+        "[[input]]\npath = \"a.xml\"\n\n[[input]]\npath = \"b.xml\"\n",
+    )
+    .unwrap();
+    let split = morphc_in(&dir, &["build"], None);
+    assert_eq!(split.status.code(), Some(1), "{}", stderr(&split));
+    let err = stderr(&split);
+    assert!(err.contains("error[xtce.reference]"), "{err}");
+    assert!(
+        err.contains("note: references between XTCE documents resolve within one import"),
+        "{err}"
+    );
+
+    // A file listed twice is read once, with its first input's options.
+    let fleet = scratch("buildfile_twice");
+    copy_dir_all(&examples("xtce"), &fleet.join("xtce"));
+    fs::write(
+        fleet.join("morphc.toml"),
+        "[[input]]\npath = \"xtce/imager.xml\"\nfamily = \"a\"\n\n[[input]]\npath = \"xtce\"\nfamily = \"b\"\n",
+    )
+    .unwrap();
+    let twice = morphc_in(&fleet, &["build"], None);
+    assert_eq!(twice.status.code(), Some(0), "{}", stderr(&twice));
+    let rows = artifacts(&twice);
+    assert!(
+        rows.contains(&"family a".to_string()) && rows.contains(&"family b".to_string()),
+        "{rows:?}"
+    );
+}
+
+#[test]
+fn a_build_file_takes_aliases_absolute_paths_and_links() {
+    let dir = project("buildfile_forms");
+    let defs = dir.join("defs");
+    let demosat = defs.join("vendors/demosat.xml");
+    fs::write(
+        dir.join("forms.toml"),
+        format!(
+            "[[input]]\npath = {:?}\nalias = {{ kind = \"fixed\", value = \"SAT-9\" }}\n",
+            demosat.to_str().unwrap()
+        ),
+    )
+    .unwrap();
+    let fixed = morphc_in(&dir, &["inspect", "-c", "forms.toml"], None);
+    assert_eq!(fixed.status.code(), Some(0), "{}", stderr(&fixed));
+    assert!(
+        stdout(&fixed).contains("asset id: fixed SAT-9;"),
+        "{}",
+        stdout(&fixed)
+    );
+    fs::write(
+        dir.join("forms.toml"),
+        "[[input]]\npath = \"defs/vendors/demosat.xml\"\nalias = { kind = \"bits\", offset_bits = 0, size_bits = 8 }\n",
+    )
+    .unwrap();
+    let bits = morphc_in(&dir, &["inspect", "-c", "forms.toml"], None);
+    assert_eq!(bits.status.code(), Some(0), "{}", stderr(&bits));
+    assert!(
+        stdout(&bits).contains("asset id: bits 0..8;"),
+        "{}",
+        stdout(&bits)
+    );
+
+    #[cfg(unix)]
+    {
+        // A link reads the inputs the file it points at lists.
+        std::os::unix::fs::symlink(defs.join("morphc.toml"), dir.join("link.toml")).unwrap();
+        let linked = morphc_in(&dir, &["build", "-c", "link.toml"], None);
+        assert_eq!(linked.status.code(), Some(0), "{}", stderr(&linked));
+        assert!(artifacts(&linked).contains(&"family camera".to_string()));
+    }
+}
+
+fn copy_dir_all(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let path = entry.unwrap().path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_dir_all(&path, &target);
+        } else {
+            fs::copy(&path, &target).unwrap();
+        }
+    }
+}

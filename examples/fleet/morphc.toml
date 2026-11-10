@@ -1,0 +1,13 @@
+# The fleet's definitions as one build: the curated catalog first, so it
+# takes precedence, then each vendor's XTCE as an import of its own.
+# Paths are relative to this file (spec/build-files.md).
+
+[[input]]
+path = "../toml/mission"
+
+[[input]]
+path = "../xtce/demosat.xml"
+
+[[input]]
+path   = "../xtce/imager.xml"
+family = "imager"

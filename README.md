@@ -37,6 +37,7 @@ cargo install --path crates/morphc
 cd examples
 
 morphc build toml/mission xtce/demosat.xml --out store    # definitions to artifacts
+morphc build -c fleet/morphc.toml --out store              # or a build file listing them
 morphc inspect param eps.bus_voltage store                 # who sends it, and how
 morphc encode store --set demosat --command eps.set_mode --arg mode=SAFE
 
@@ -168,7 +169,7 @@ several imports.
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the command line: build, inspect, decode, encode |
 | `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
-| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md) |
+| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
 
 ## License
 
