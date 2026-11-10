@@ -17,6 +17,7 @@
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
+pub use fleet::{Fleet, Sent, fleet};
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -128,7 +129,16 @@ pub fn telemetry() -> BoxedStrategy<Telemetry> {
             let packets: Vec<PacketLayout> = packets
                 .into_iter()
                 .enumerate()
-                .map(|(index, (fields, count))| lay_out(index, little, &time, count, fields))
+                .map(|(index, (fields, count))| {
+                    lay_out(
+                        PacketShape::single(index),
+                        little,
+                        &time,
+                        count,
+                        None,
+                        fields,
+                    )
+                })
                 .collect();
             let messages: Vec<BoxedStrategy<Vec<Message>>> = packets
                 .iter()
@@ -639,15 +649,63 @@ struct PacketLayout {
     name: String,
     /// The value of its first byte, which identifies it.
     id: u8,
+    /// The keys that identify it, as IR JSON.
+    identify: Value,
+    /// Byte-wide uint fields right after the id (a native id, a version, a
+    /// second identify key), each message giving their values.
+    header: Vec<&'static str>,
     /// Whether its family is little-endian.
     little: bool,
     /// Its count field (an elapsed count or a time of week), after a GPS
-    /// week field, right after the id.
+    /// week field, right after the header.
     count: Option<Count>,
+    /// For a boot set's correlation packet: its clock and boot fields,
+    /// right after the header.
+    correlation: Option<Correlation>,
     fields: Vec<Placed>,
     /// Its entries, padding included, as IR JSON.
     entries: Vec<Value>,
     bits: u64,
+}
+
+/// What a packet is called and how it's told apart.
+#[derive(Debug, Clone)]
+struct PacketShape {
+    name: String,
+    /// What its params' names start with.
+    params: String,
+    id: u8,
+    identify: Value,
+    header: Vec<&'static str>,
+}
+
+impl PacketShape {
+    /// Packet `index` of a set of packets told apart by their id alone.
+    fn single(index: usize) -> PacketShape {
+        let id = u8::try_from(index + 1).unwrap_or(u8::MAX);
+        PacketShape {
+            name: format!("P{index}"),
+            params: format!("p{index}"),
+            id,
+            identify: json!({ "id": id }),
+            header: Vec::new(),
+        }
+    }
+}
+
+/// A boot set's correlation fields (§8.2): the absolute clock, in whole
+/// bytes, and the boot clock (32 bits), with any sentinels.
+#[derive(Debug, Clone, PartialEq)]
+struct Correlation {
+    clock_bits: u32,
+    clock_invalid: Vec<u64>,
+    boot_invalid: Vec<u64>,
+}
+
+/// The bit at which a packet's time fields start: after the id and its
+/// header.
+fn time_start(header: usize) -> u64 {
+    8 + 8 * header as u64
 }
 
 /// Whether `size` bits at `offset` lie inside one byte.
@@ -656,18 +714,35 @@ fn inside_one_byte(offset: u64, size: u32) -> bool {
 }
 
 fn lay_out(
-    index: usize,
+    shape: PacketShape,
     family_little: bool,
     time: &TimeSource,
     count: Option<Count>,
+    correlation: Option<Correlation>,
     specs: Vec<FieldSpec>,
 ) -> PacketLayout {
-    let id = u8::try_from(index + 1).unwrap_or(u8::MAX);
     let mut entries =
         vec![json!({ "kind": "field", "name": "id", "type": "uint", "size_bits": 8 })];
+    for name in &shape.header {
+        entries.push(json!({ "kind": "field", "name": name, "type": "uint", "size_bits": 8 }));
+    }
     let mut fields = Vec::new();
-    let mut offset: u64 = 8;
-    // The CUC time code sits right after the id, in every packet.
+    let mut offset = time_start(shape.header.len());
+    if let Some(correlation) = &correlation {
+        let mut clock = json!({ "kind": "field", "name": "clock", "type": "uint",
+                                "size_bits": correlation.clock_bits });
+        if !correlation.clock_invalid.is_empty() {
+            clock["invalid"] = json!(correlation.clock_invalid);
+        }
+        let mut boot = json!({ "kind": "field", "name": "boot", "type": "uint", "size_bits": 32 });
+        if !correlation.boot_invalid.is_empty() {
+            boot["invalid"] = json!(correlation.boot_invalid);
+        }
+        entries.push(clock);
+        entries.push(boot);
+        offset += u64::from(correlation.clock_bits) + 32;
+    }
+    // The CUC time code sits right after the header, in every packet.
     if let TimeSource::Cuc { coarse, fine, .. } = time {
         let bits = u64::from(8 * (coarse + fine));
         entries.push(json!({ "kind": "padding", "size_bits": bits }));
@@ -720,7 +795,7 @@ fn lay_out(
         }
         let field = Placed {
             name: format!("f{position}"),
-            param: format!("p{index}.f{position}"),
+            param: format!("{}.f{position}", shape.params),
             kind,
             meaning,
             invalid: spec.invalid,
@@ -732,10 +807,13 @@ fn lay_out(
         fields.push(field);
     }
     PacketLayout {
-        name: format!("P{index}"),
-        id,
+        name: shape.name,
+        id: shape.id,
+        identify: shape.identify,
+        header: shape.header,
         little: family_little,
         count,
+        correlation,
         fields,
         entries,
         bits: offset,
@@ -900,6 +978,19 @@ fn integer_json(n: i128) -> Value {
 /// A message for `packet`: a raw value for each field, packed over random
 /// bytes, so padding and trailing bits are noise the decoder must skip.
 fn message(packet: PacketLayout, time: TimeSource) -> BoxedStrategy<Message> {
+    received()
+        .prop_flat_map(move |ground| message_at(packet.clone(), time.clone(), ground, Vec::new()))
+        .boxed()
+}
+
+/// A message of `packet` received at `ground`, its header fields holding
+/// `header`.
+fn message_at(
+    packet: PacketLayout,
+    time: TimeSource,
+    ground: i128,
+    header: Vec<u64>,
+) -> BoxedStrategy<Message> {
     let values: Vec<BoxedStrategy<Raw>> = packet.fields.iter().map(raw_value).collect();
     let length = usize::try_from(packet.bits.div_ceil(8)).unwrap_or(0);
     let count = match packet.count {
@@ -927,22 +1018,56 @@ fn message(packet: PacketLayout, time: TimeSource) -> BoxedStrategy<Message> {
         }
         _ => Just(None).boxed(),
     };
-    let ground = {
-        let time = time.clone();
-        received().prop_flat_map(move |ground| (Just(ground), week_value(&time, ground)))
+    let correlation = match &packet.correlation {
+        Some(correlation) => (
+            clock_value(correlation.clock_bits, &correlation.clock_invalid),
+            clock_value(32, &correlation.boot_invalid),
+        )
+            .prop_map(Some)
+            .boxed(),
+        None => Just(None).boxed(),
     };
-    let timing = (count, ground, cuc);
+    let timing = (count, week_value(&time, ground), cuc, correlation);
+    let start = time_start(packet.header.len()) as usize / 8;
     (values, vec(any::<u8>(), length), timing)
-        .prop_map(move |(raws, mut noise, (count, (received, week), cuc))| {
+        .prop_map(move |(raws, mut noise, (count, week, cuc, correlation))| {
             if let (Some(seconds), TimeSource::Cuc { coarse, .. }) = (cuc, &time) {
                 for k in 0..*coarse as usize {
                     let shift = 8 * (*coarse as usize - 1 - k);
-                    noise[1 + k] = (seconds >> shift) as u8;
+                    noise[start + k] = (seconds >> shift) as u8;
                 }
             }
-            pack(&packet, &time, raws, noise, count, week, received)
+            let timing = Timing {
+                count,
+                week,
+                received: ground,
+                header: header.clone(),
+                correlation,
+            };
+            pack(&packet, &time, raws, noise, timing)
         })
         .boxed()
+}
+
+/// A correlation clock's value: any its field holds, one of its sentinels
+/// now and then.
+fn clock_value(bits: u32, invalid: &[u64]) -> BoxedStrategy<u64> {
+    let any_value = any::<u64>().prop_map(move |n| fit(n, bits)).boxed();
+    if invalid.is_empty() {
+        return any_value;
+    }
+    prop_oneof![4 => any_value, 1 => select(invalid.to_vec())].boxed()
+}
+
+/// What a message holds besides its fields' values.
+#[derive(Debug, Clone)]
+struct Timing {
+    count: Option<Raw>,
+    week: u16,
+    received: i128,
+    header: Vec<u64>,
+    /// A correlation packet's clock and boot values.
+    correlation: Option<(u64, u64)>,
 }
 
 /// A raw value for the field: any it holds, with its states, calibration
@@ -1152,21 +1277,43 @@ fn pack(
     time: &TimeSource,
     raws: Vec<Raw>,
     mut payload: Vec<u8>,
-    count: Option<Raw>,
-    week: u16,
-    received: i128,
+    timing: Timing,
 ) -> Message {
+    let Timing {
+        count,
+        week,
+        received,
+        header,
+        correlation,
+    } = timing;
     put_bits(&mut payload, 0, 8, u64::from(packet.id), false);
     let mut record = vec![("id".to_string(), Raw::Uint(u64::from(packet.id)))];
+    for (k, (name, value)) in packet.header.iter().zip(&header).enumerate() {
+        put_bits(&mut payload, 8 + 8 * k as u64, 8, *value, false);
+        record.push((name.to_string(), Raw::Uint(*value)));
+    }
+    let start = time_start(packet.header.len());
     let mut samples = Vec::new();
+    if let (Some(fields), Some((clock, boot))) = (&packet.correlation, correlation) {
+        put_bits(&mut payload, start, fields.clock_bits, clock, packet.little);
+        put_bits(
+            &mut payload,
+            start + u64::from(fields.clock_bits),
+            32,
+            boot,
+            packet.little,
+        );
+        record.push(("clock".to_string(), Raw::Uint(clock)));
+        record.push(("boot".to_string(), Raw::Uint(boot)));
+    }
     // The count field comes after the CUC code or the GPS week, in the
     // family's byte order.
     if let (Some(field), Some(raw)) = (packet.count, &count) {
-        let mut at = 8;
+        let mut at = start;
         if matches!(time, TimeSource::Gps { .. }) {
-            put_bits(&mut payload, 8, 16, u64::from(week), packet.little);
+            put_bits(&mut payload, start, 16, u64::from(week), packet.little);
             record.push(("week".to_string(), Raw::Uint(u64::from(week))));
-            at = 24;
+            at = start + 16;
         }
         let bits = field.bits();
         let value = match raw {
@@ -1227,7 +1374,13 @@ fn pack(
         samples.push(sample(field, &raw));
         record.push((field.name.clone(), raw));
     }
-    let event_time = event_time(time, &payload, count.as_ref(), u64::from(week), received);
+    let event_time = event_time(
+        time,
+        &payload[start as usize / 8..],
+        count.as_ref(),
+        u64::from(week),
+        received,
+    );
     Message {
         packet: packet.name.clone(),
         payload,
@@ -1345,6 +1498,11 @@ pub enum EventTime {
     /// It can't be read: a count that isn't a number, or an instant
     /// outside years 0001 to 9999 (`invalid_time`).
     Invalid,
+    /// Time since the asset booted, in the source's unit.
+    SinceBoot {
+        value: u64,
+        unit: &'static str,
+    },
 }
 
 const SECOND: i128 = 1_000_000_000;
@@ -1434,6 +1592,15 @@ enum TimeSource {
     Gps {
         unit: Unit,
         week_bits: Option<u32>,
+    },
+    /// Time since boot in each timed packet's `t`, which a correlation
+    /// packet's absolute clock (in `clock_unit` from `epoch` on `scale`)
+    /// and boot clock tie to an instant (§8.2).
+    Boot {
+        unit: Unit,
+        clock_unit: Unit,
+        epoch: Epoch,
+        scale: Scale,
     },
 }
 
@@ -1670,6 +1837,9 @@ fn count(time: &TimeSource) -> BoxedStrategy<Option<Count>> {
     let widths = |least: u32, most: u32| -> Vec<u32> { (least..=most).step_by(8).collect() };
     match time {
         TimeSource::None | TimeSource::Cuc { .. } => Just(None).boxed(),
+        TimeSource::Boot { .. } => {
+            proptest::option::of(select(widths(8, 32)).prop_map(Count::Uint)).boxed()
+        }
         // Now and then 64 bits, whose counts can run past year 9999.
         TimeSource::Elapsed { unit, .. } => {
             let bits = widths(8, unit.count_bits());
@@ -1839,8 +2009,8 @@ fn near_leap(scale: Scale) -> BoxedStrategy<i128> {
         .boxed()
 }
 
-/// The set's time source as IR JSON.
-fn time_json(time: &TimeSource) -> Option<Value> {
+/// The set's time source as IR JSON, a CUC code at `cuc_offset`.
+fn time_json(time: &TimeSource, cuc_offset: u64) -> Option<Value> {
     Some(match time {
         TimeSource::None => return None,
         TimeSource::Cuc {
@@ -1849,7 +2019,7 @@ fn time_json(time: &TimeSource) -> Option<Value> {
             epoch,
             scale,
         } => json!({
-            "kind": "cuc", "offset_bits": 8, "coarse_bytes": coarse, "fine_bytes": fine,
+            "kind": "cuc", "offset_bits": cuc_offset, "coarse_bytes": coarse, "fine_bytes": fine,
             "epoch": epoch.text, "scale": scale.name()
         }),
         TimeSource::Elapsed { unit, epoch, scale } => json!({
@@ -1862,10 +2032,23 @@ fn time_json(time: &TimeSource) -> Option<Value> {
             }
             gps
         }
+        TimeSource::Boot {
+            unit,
+            clock_unit,
+            epoch,
+            scale,
+        } => json!({
+            "kind": "boot", "unit": unit.name(),
+            "correlate": {
+                "packet": "CORR", "clock_field": "clock", "clock_unit": clock_unit.name(),
+                "epoch": epoch.text, "scale": scale.name(), "boot_field": "boot"
+            }
+        }),
     })
 }
 
-/// A packet's event time (§8, §8.1).
+/// A packet's event time (§8, §8.1); `payload` starts where its time
+/// fields do.
 fn event_time(
     time: &TimeSource,
     payload: &[u8],
@@ -1882,8 +2065,8 @@ fn event_time(
             scale,
         } => {
             let big = |bytes: &[u8]| bytes.iter().fold(0_i128, |n, b| (n << 8) | i128::from(*b));
-            let coarse_end = 1 + *coarse as usize;
-            let seconds = big(&payload[1..coarse_end]);
+            let coarse_end = *coarse as usize;
+            let seconds = big(&payload[..coarse_end]);
             let fraction = big(&payload[coarse_end..coarse_end + *fine as usize]);
             let nanos = fraction * SECOND / (1_i128 << (8 * fine));
             instant(Some(epoch.label + seconds * SECOND + nanos), *scale)
@@ -1903,6 +2086,13 @@ fn event_time(
             }
             None => EventTime::Ground,
         },
+        TimeSource::Boot { unit, .. } => match count {
+            Some(Raw::Uint(value)) => EventTime::SinceBoot {
+                value: *value,
+                unit: unit.name(),
+            },
+            _ => EventTime::Ground,
+        },
     }
 }
 
@@ -1921,7 +2111,7 @@ fn assemble(
     let packet_json: Vec<Value> = packets
         .iter()
         .map(|packet| {
-            let mut json = json!({ "name": packet.name, "identify": { "id": packet.id },
+            let mut json = json!({ "name": packet.name, "identify": packet.identify,
                                    "entries": packet.entries });
             if packet.count.is_some() {
                 json["time_field"] = json!("t");
@@ -1930,7 +2120,7 @@ fn assemble(
         })
         .collect();
     let mut set = json!({ "name": "fam_v1", "family": "fam", "packets": packet_json });
-    if let Some(time) = time_json(time) {
+    if let Some(time) = time_json(time, 8) {
         set["time"] = time;
     }
     let bundle = json!({
@@ -1953,6 +2143,7 @@ fn assemble(
     }
 }
 
+mod fleet;
 #[cfg(test)]
 mod reference;
 #[cfg(test)]
