@@ -17,7 +17,7 @@
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
-pub use fleet::{Fleet, Sent, fleet};
+pub use fleet::{Fleet, Meta, Sent, fleet};
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::select;
