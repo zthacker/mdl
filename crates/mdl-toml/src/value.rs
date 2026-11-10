@@ -1,8 +1,8 @@
 //! TOML values as the JSON values of the IR, with each value's span
 //! recorded under its JSON Pointer.
 
-use mdl::v2::diagnostics::escape_pointer_token;
-use mdl::v2::source::{SourceDiagnostic, SourceFile, SourceMap, Span};
+use mdl::diagnostics::escape_pointer_token;
+use mdl::source::{SourceDiagnostic, SourceFile, SourceMap, Span};
 use serde_json::{Number, Value};
 use toml::Spanned;
 use toml::de::{DeInteger, DeValue};

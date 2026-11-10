@@ -113,7 +113,7 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
       imports in one build)
 - [x] README and examples rewritten around v2: a walkthrough that runs as
       a test, the README's library example run as a doc test
-- [ ] Remove v1 (`ir`, `validate`, `interpret`, `plan`, `frontend`, `bits`)
+- [x] Remove v1 (`ir`, `validate`, `interpret`, `plan`, `frontend`, `bits`)
       and move `v2::*` up one level
 
 ## Phase 6: hardening

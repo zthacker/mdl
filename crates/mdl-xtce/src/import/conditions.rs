@@ -7,8 +7,8 @@
 
 use std::borrow::Cow;
 
-use mdl::v2::source::Span;
-use mdl::v2::validate::MAX_NESTING;
+use mdl::source::Span;
+use mdl::validate::MAX_NESTING;
 
 use super::{Import, Known, ParamKey};
 use crate::Code;

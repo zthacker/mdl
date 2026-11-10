@@ -9,7 +9,7 @@
 
 use std::borrow::Cow;
 
-use mdl::v2::source::{SourceFile, Span};
+use mdl::source::{SourceFile, Span};
 use roxmltree::{Document, Node, ParsingOptions, TextPos};
 
 use crate::Code;

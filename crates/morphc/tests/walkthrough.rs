@@ -6,7 +6,7 @@
 //! diagnostic, note and tally before its results.
 //!
 //! After an intended change to what morphc prints (or to an identity),
-//! `UPDATE_WALKTHROUGH=1 cargo test -p morphc --test walkthrough` rewrites
+//! `UPDATE_WALKTHROUGH=1 cargo test -p morpheus-morphc --test walkthrough` rewrites
 //! each block from the real output, keeping a block's leading `...`, for
 //! the diff to be reviewed.
 

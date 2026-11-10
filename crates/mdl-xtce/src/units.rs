@@ -1,6 +1,6 @@
 //! XTCE units, which are free text, as UCUM codes.
 
-use mdl::v2::units::Unit;
+use mdl::units::Unit;
 
 /// Spellings XTCE documents use for units MDL knows, lowercase, and the
 /// UCUM code for each.

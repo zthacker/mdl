@@ -18,8 +18,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mdl::v2::ir::Locator;
-use mdl::v2::source::{SourceId, SourceMap, Span};
+use mdl::ir::Locator;
+use mdl::source::{SourceId, SourceMap, Span};
 use serde_json::Value;
 
 use crate::names::{catalog_part, identifier, qualified, token};

@@ -66,17 +66,21 @@ or later and [`just`](https://github.com/casey/just).
 
 morphc is a thin layer over the `mdl` crate, which any ground software can
 use directly: read definitions, validate and build them, then decode with
-the artifacts as a consumer loads them.
+the artifacts as a consumer loads them. The packages are named
+`morpheus-mdl`, `morpheus-mdl-toml`, `morpheus-mdl-xtce` and
+`morpheus-morphc`, since `mdl` and `morphc` are taken on crates.io; code
+imports them as `mdl`, `mdl_toml` and `mdl_xtce`, and the binary is
+`morphc`.
 
 ```rust
-use mdl::v2::artifact::{self, Written};
-use mdl::v2::bindings::Bindings;
-use mdl::v2::decode::SampleValue;
-use mdl::v2::message::{Message, Payload};
-use mdl::v2::read::read_artifact;
-use mdl::v2::route::FamilySets;
-use mdl::v2::source::Sources;
-use mdl::v2::validate::validate;
+use mdl::artifact::{self, Written};
+use mdl::bindings::Bindings;
+use mdl::decode::SampleValue;
+use mdl::message::{Message, Payload};
+use mdl::read::read_artifact;
+use mdl::route::FamilySets;
+use mdl::source::Sources;
+use mdl::validate::validate;
 
 // A beacon: a node id, then the bus voltage in millivolts.
 let definitions = r#"
@@ -153,7 +157,7 @@ This example runs as a test of the TOML crate.
 the walkthrough and the README's example) and the docs. Issues and pull
 requests are welcome at <https://github.com/zthacker/mdl>.
 [`ROADMAP.md`](ROADMAP.md) says what's next, such as build files for
-several imports and the removal of v1.
+several imports.
 
 ## Layout
 
@@ -164,7 +168,6 @@ several imports and the removal of v1.
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the command line: build, inspect, decode, encode |
 | `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
-| `examples/definitions`, v1 modules in `crates/mdl` | the retired v1 format and its compiler, kept until v1 is removed |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md) |
 
 ## License

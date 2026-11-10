@@ -16,7 +16,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mdl::v2::source::Span;
+use mdl::source::Span;
 use serde_json::{Value, json};
 
 use super::arguments::{

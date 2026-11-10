@@ -1,5 +1,5 @@
 [package]
-name = "morphc"
+name = "morpheus-morphc"
 description = "The MDL compiler: build MDL definitions from any frontend into content-addressed artifacts"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,10 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+
+[[bin]]
+name = "morphc"
+path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true

@@ -1,12 +1,12 @@
 //! The same bundle written in TOML and in JSON builds the same artifacts,
 //! whether the TOML is one file or many.
 
-use mdl::v2::artifact::{Artifacts, build};
-use mdl::v2::source::{Parsed, Sources};
-use mdl::v2::validate::validate;
+use mdl::artifact::{Artifacts, build};
+use mdl::source::{Parsed, Sources};
+use mdl::validate::validate;
 use serde_json::{Map, Value, json};
 
-const JSON: &str = include_str!("../../mdl/tests/fixtures/v2/full_bundle.json");
+const JSON: &str = include_str!("../../mdl/tests/fixtures/full_bundle.json");
 const TOML: &str = include_str!("fixtures/full_bundle.toml");
 
 fn artifacts(parsed: Parsed) -> Artifacts {
@@ -16,7 +16,7 @@ fn artifacts(parsed: Parsed) -> Artifacts {
 fn from_json() -> Artifacts {
     let mut sources = Sources::new();
     let id = sources.add("full_bundle.json", JSON);
-    artifacts(mdl::v2::json::read(sources.get(id).unwrap()).unwrap())
+    artifacts(mdl::json::read(sources.get(id).unwrap()).unwrap())
 }
 
 fn from_toml(files: &[(String, String)]) -> Artifacts {

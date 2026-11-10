@@ -7,11 +7,11 @@ use std::process::ExitCode;
 
 use anyhow::{Context, bail};
 use clap::Args;
-use mdl::v2::bindings::NativeId;
-use mdl::v2::encode::{ArgumentValue, CommandRequest, Encoded};
-use mdl::v2::ir::{Argument, Element, Encoding, Entry, ParamType, StructType};
-use mdl::v2::message::MetaValue;
-use mdl::v2::source::SourceDiagnostic;
+use mdl::bindings::NativeId;
+use mdl::encode::{ArgumentValue, CommandRequest, Encoded};
+use mdl::ir::{Argument, Element, Encoding, Entry, ParamType, StructType};
+use mdl::message::MetaValue;
+use mdl::source::SourceDiagnostic;
 use serde::Serialize;
 use serde_json::{Map, Value as Json};
 

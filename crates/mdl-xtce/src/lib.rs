@@ -14,7 +14,7 @@
 //! would change a decoded or encoded value, as a warning otherwise.
 //!
 //! ```
-//! use mdl::v2::source::Sources;
+//! use mdl::source::Sources;
 //!
 //! let mut sources = Sources::new();
 //! sources.add("sat.xml", r#"
@@ -62,9 +62,9 @@
 //! assert!(parsed.bundle.catalog.params.contains_key("sat.busvoltage"));
 //! ```
 
-use mdl::v2::ir::Locator;
-use mdl::v2::read::read_bundle_value;
-use mdl::v2::source::{Parsed, SourceDiagnostic, SourceFile};
+use mdl::ir::Locator;
+use mdl::read::read_bundle_value;
+use mdl::source::{Parsed, SourceDiagnostic, SourceFile};
 
 mod calibration;
 mod import;

@@ -1,5 +1,5 @@
-use mdl::v2::source::{Location, Sources};
-use mdl::v2::validate::validate;
+use mdl::source::{Location, Sources};
+use mdl::validate::validate;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 

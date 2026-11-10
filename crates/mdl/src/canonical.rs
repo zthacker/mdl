@@ -28,9 +28,9 @@
 //!   beyond that range are read as doubles, as every double-only parser
 //!   reads them.
 //!
-//! IR v2 validation is stricter still for numbers the IR means as integers
+//! Validation is stricter still for numbers the IR means as integers
 //! (identify values, sentinels, states): they must be within ±(2^53 − 1),
-//! with wider values written as strings (see `v2::ir::Scalar`).
+//! with wider values written as strings (see `ir::Scalar`).
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;

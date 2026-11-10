@@ -7,10 +7,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use mdl::v2::ir::Digest;
+use mdl::ir::Digest;
 use serde_json::Value;
 
-const FULL_BUNDLE: &str = include_str!("../../mdl/tests/fixtures/v2/full_bundle.json");
+const FULL_BUNDLE: &str = include_str!("../../mdl/tests/fixtures/full_bundle.json");
 
 /// The paired fixtures: a TOML catalog and an XTCE satellite whose bus
 /// voltage maps to the catalog's name.

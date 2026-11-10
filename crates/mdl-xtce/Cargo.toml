@@ -1,5 +1,5 @@
 [package]
-name = "mdl-xtce"
+name = "morpheus-mdl-xtce"
 description = "MDL's XTCE importer: OMG XTCE space system definitions as MDL bundles"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +7,9 @@ version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+
+[lib]
+name = "mdl_xtce"
 
 [dependencies]
 mdl.workspace = true

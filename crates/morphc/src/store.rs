@@ -17,9 +17,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, anyhow, bail};
-use mdl::v2::artifact::{Artifacts, Written};
-use mdl::v2::ir::{Artifact, Digest};
-use mdl::v2::read::{Loaded, read_artifact};
+use mdl::artifact::{Artifacts, Written};
+use mdl::ir::{Artifact, Digest};
+use mdl::read::{Loaded, read_artifact};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

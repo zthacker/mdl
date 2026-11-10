@@ -8,13 +8,15 @@ rust-version = "1.88"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/zthacker/mdl"
-# Not on crates.io yet: `mdl` and `morphc` are taken there, so names are TBD.
+# `mdl` and `morphc` are taken on crates.io, so the packages are named
+# `morpheus-*`; the libraries keep their import names (`mdl`, `mdl_toml`,
+# `mdl_xtce`) and the binary its name (`morphc`). Not published yet.
 publish = false
 
 [workspace.dependencies]
-mdl = { path = "crates/mdl" }
-mdl-toml = { path = "crates/mdl-toml" }
-mdl-xtce = { path = "crates/mdl-xtce" }
+mdl = { path = "crates/mdl", package = "morpheus-mdl" }
+mdl-toml = { path = "crates/mdl-toml", package = "morpheus-mdl-toml" }
+mdl-xtce = { path = "crates/mdl-xtce", package = "morpheus-mdl-xtce" }
 
 anyhow = "1.0.104"
 chrono = "0.4.45"

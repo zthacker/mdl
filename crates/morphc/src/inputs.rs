@@ -6,7 +6,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use mdl::v2::source::{Parsed, SourceDiagnostic, SourceFile, Sources};
+use mdl::source::{Parsed, SourceDiagnostic, SourceFile, Sources};
 
 use crate::store;
 
@@ -235,7 +235,7 @@ pub fn parse(
                 xtce_read = true;
                 mdl_xtce::read(of(Frontend::Xtce), xtce)
             }
-            Frontend::Json => mdl::v2::json::read(*file),
+            Frontend::Json => mdl::json::read(*file),
             Frontend::Toml | Frontend::Xtce => continue,
         };
         match result {
