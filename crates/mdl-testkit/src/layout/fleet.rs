@@ -11,8 +11,8 @@ use proptest::sample::select;
 use serde_json::{Map, Value, json};
 
 use super::{
-    Correlation, Count, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND,
-    TimeSource, count, epoch, field_spec, label, lay_out, message_at, param_json, time_json,
+    Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND, TimeFields,
+    TimeSource, epoch, field_spec, label, lay_out, message_at, param_json, time_fields, time_json,
     time_scale, to_utc, unit,
 };
 
@@ -85,7 +85,7 @@ struct Plan {
 struct SetPlan {
     time: TimeSource,
     /// Each packet's fields and count field.
-    packets: Vec<(Vec<FieldSpec>, Option<Count>)>,
+    packets: Vec<(Vec<FieldSpec>, TimeFields)>,
     /// Whether there's a packet keyed by the id alone, less specific than
     /// the others.
     general: bool,
@@ -191,7 +191,7 @@ fn set_plan(boot: bool) -> BoxedStrategy<SetPlan> {
         Just(TimeSource::None).boxed()
     };
     time.prop_flat_map(|time| {
-        let packets = vec((vec(field_spec(), 1..=4), count(&time)), 1..=3);
+        let packets = vec((vec(field_spec(), 1..=4), time_fields(&time)), 1..=3);
         let correlation = match &time {
             TimeSource::Boot { clock_unit, .. } => {
                 let widths: Vec<u32> = (8..=clock_unit.count_bits()).step_by(8).collect();
@@ -199,12 +199,14 @@ fn set_plan(boot: bool) -> BoxedStrategy<SetPlan> {
                     select(widths),
                     btree_set(any::<u8>(), 0..=1),
                     btree_set(any::<u8>(), 0..=1),
+                    any::<bool>(),
                 )
-                    .prop_map(|(clock_bits, clock, boot)| {
+                    .prop_map(|(clock_bits, clock, boot, units)| {
                         Some(Correlation {
                             clock_bits,
                             clock_invalid: clock.into_iter().map(u64::from).collect(),
                             boot_invalid: boot.into_iter().map(u64::from).collect(),
+                            units,
                         })
                     })
                     .boxed()
@@ -245,8 +247,8 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
         .enumerate()
         .map(|(set, planned)| {
             let mut packets = Vec::new();
-            let mut shapes: Vec<(PacketShape, Option<Count>, Vec<FieldSpec>)> = Vec::new();
-            for (index, (fields, count)) in planned.packets.iter().enumerate() {
+            let mut shapes: Vec<(PacketShape, TimeFields, Vec<FieldSpec>)> = Vec::new();
+            for (index, (fields, timed)) in planned.packets.iter().enumerate() {
                 let (id, identify) = if plan.two_keys {
                     let id = u8::try_from(index / 2 + 1).unwrap_or(1);
                     let sub = index % 2 + 1;
@@ -262,7 +264,7 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
                     identify,
                     header: header.clone(),
                 };
-                shapes.push((shape, *count, fields.clone()));
+                shapes.push((shape, timed.clone(), fields.clone()));
             }
             if plan.two_keys && planned.general {
                 let shape = PacketShape {
@@ -273,14 +275,14 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
                     header: header.clone(),
                 };
                 let fields = planned.packets[0].0.clone();
-                shapes.push((shape, planned.packets[0].1, fields));
+                shapes.push((shape, planned.packets[0].1.clone(), fields));
             }
-            for (shape, count, fields) in shapes {
+            for (shape, timed, fields) in shapes {
                 packets.push(lay_out(
                     shape,
                     plan.little,
                     &planned.time,
-                    count,
+                    timed,
                     None,
                     fields,
                 ));
@@ -297,7 +299,7 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
                     shape,
                     plan.little,
                     &planned.time,
-                    None,
+                    TimeFields::default(),
                     Some(correlation.clone()),
                     Vec::new(),
                 ));

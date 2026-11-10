@@ -122,7 +122,7 @@ impl PartialEq for Expected {
 pub fn telemetry() -> BoxedStrategy<Telemetry> {
     (any::<bool>(), time_source())
         .prop_flat_map(|(little, time)| {
-            let packet = (vec(field_spec(), 1..=8), count(&time));
+            let packet = (vec(field_spec(), 1..=8), time_fields(&time));
             (Just(little), Just(time), vec(packet, 1..=3))
         })
         .prop_flat_map(|(little, time, packets)| {
@@ -659,6 +659,9 @@ struct PacketLayout {
     /// Its count field (an elapsed count or a time of week), after a GPS
     /// week field, right after the header.
     count: Option<Count>,
+    /// The count's and the week's sentinels, which mean ground time.
+    count_invalid: Vec<i128>,
+    week_invalid: Vec<u64>,
     /// For a boot set's correlation packet: its clock and boot fields,
     /// right after the header.
     correlation: Option<Correlation>,
@@ -700,6 +703,8 @@ struct Correlation {
     clock_bits: u32,
     clock_invalid: Vec<u64>,
     boot_invalid: Vec<u64>,
+    /// Whether the clocks restate the units they count in.
+    units: bool,
 }
 
 /// The bit at which a packet's time fields start: after the id and its
@@ -717,10 +722,22 @@ fn lay_out(
     shape: PacketShape,
     family_little: bool,
     time: &TimeSource,
-    count: Option<Count>,
+    timed: TimeFields,
     correlation: Option<Correlation>,
     specs: Vec<FieldSpec>,
 ) -> PacketLayout {
+    let TimeFields {
+        count,
+        count_invalid,
+        week_invalid,
+        units,
+    } = timed;
+    let source_unit = match time {
+        TimeSource::Elapsed { unit, .. }
+        | TimeSource::Gps { unit, .. }
+        | TimeSource::Boot { unit, .. } => Some(unit.name()),
+        _ => None,
+    };
     let mut entries =
         vec![json!({ "kind": "field", "name": "id", "type": "uint", "size_bits": 8 })];
     for name in &shape.header {
@@ -738,6 +755,16 @@ fn lay_out(
         if !correlation.boot_invalid.is_empty() {
             boot["invalid"] = json!(correlation.boot_invalid);
         }
+        if let (
+            true,
+            TimeSource::Boot {
+                unit, clock_unit, ..
+            },
+        ) = (correlation.units, time)
+        {
+            clock["unit"] = json!(clock_unit.name());
+            boot["unit"] = json!(unit.name());
+        }
         entries.push(clock);
         entries.push(boot);
         offset += u64::from(correlation.clock_bits) + 32;
@@ -750,8 +777,15 @@ fn lay_out(
     }
     if let Some(count) = count {
         if matches!(time, TimeSource::Gps { .. }) {
-            entries
-                .push(json!({ "kind": "field", "name": "week", "type": "uint", "size_bits": 16 }));
+            let mut week =
+                json!({ "kind": "field", "name": "week", "type": "uint", "size_bits": 16 });
+            if !week_invalid.is_empty() {
+                week["invalid"] = json!(week_invalid);
+            }
+            if units {
+                week["unit"] = json!("wk");
+            }
+            entries.push(week);
             offset += 16;
         }
         let ty = match count {
@@ -759,8 +793,15 @@ fn lay_out(
             Count::Int(_) => "int",
             Count::Float(_) => "float",
         };
-        entries
-            .push(json!({ "kind": "field", "name": "t", "type": ty, "size_bits": count.bits() }));
+        let mut t = json!({ "kind": "field", "name": "t", "type": ty, "size_bits": count.bits() });
+        if !count_invalid.is_empty() {
+            let invalid: Vec<Value> = count_invalid.iter().map(|n| integer_json(*n)).collect();
+            t["invalid"] = json!(invalid);
+        }
+        if let (true, Some(unit)) = (units, source_unit) {
+            t["unit"] = json!(unit);
+        }
+        entries.push(t);
         offset += u64::from(count.bits());
     }
     for (position, spec) in specs.into_iter().enumerate() {
@@ -813,6 +854,8 @@ fn lay_out(
         header: shape.header,
         little: family_little,
         count,
+        count_invalid,
+        week_invalid,
         correlation,
         fields,
         entries,
@@ -993,9 +1036,34 @@ fn message_at(
 ) -> BoxedStrategy<Message> {
     let values: Vec<BoxedStrategy<Raw>> = packet.fields.iter().map(raw_value).collect();
     let length = usize::try_from(packet.bits.div_ceil(8)).unwrap_or(0);
+    // Now and then a sentinel, which means ground time.
     let count = match packet.count {
+        Some(count) if !packet.count_invalid.is_empty() => {
+            let sentinels: Vec<Raw> = packet
+                .count_invalid
+                .iter()
+                .map(|n| match count {
+                    Count::Uint(_) => Raw::Uint(u64::try_from(*n).unwrap_or(0)),
+                    Count::Int(_) => Raw::Int(i64::try_from(*n).unwrap_or(0)),
+                    Count::Float(_) => Raw::Float(*n as f64),
+                })
+                .collect();
+            prop_oneof![4 => count_value(&time, count), 1 => select(sentinels)]
+                .prop_map(Some)
+                .boxed()
+        }
         Some(count) => count_value(&time, count).prop_map(Some).boxed(),
         None => Just(None).boxed(),
+    };
+    let week = if packet.week_invalid.is_empty() {
+        week_value(&time, ground)
+    } else {
+        let sentinels: Vec<u16> = packet
+            .week_invalid
+            .iter()
+            .map(|n| u16::try_from(*n).unwrap_or(0))
+            .collect();
+        prop_oneof![4 => week_value(&time, ground), 1 => select(sentinels)].boxed()
     };
     // A CUC code lands near a leap second often: its seconds from the
     // epoch to one, written over the noise where the code holds them.
@@ -1027,7 +1095,7 @@ fn message_at(
             .boxed(),
         None => Just(None).boxed(),
     };
-    let timing = (count, week_value(&time, ground), cuc, correlation);
+    let timing = (count, week, cuc, correlation);
     let start = time_start(packet.header.len()) as usize / 8;
     (values, vec(any::<u8>(), length), timing)
         .prop_map(move |(raws, mut noise, (count, week, cuc, correlation))| {
@@ -1374,13 +1442,28 @@ fn pack(
         samples.push(sample(field, &raw));
         record.push((field.name.clone(), raw));
     }
-    let event_time = event_time(
-        time,
-        &payload[start as usize / 8..],
-        count.as_ref(),
-        u64::from(week),
-        received,
-    );
+    // A count or a week holding a sentinel has no reading: ground time.
+    let sentinel = count.as_ref().is_some_and(|raw| {
+        packet.count_invalid.iter().any(|n| match raw {
+            Raw::Uint(m) => i128::from(*m) == *n,
+            Raw::Int(m) => i128::from(*m) == *n,
+            Raw::Float(x) => *x == *n as f64,
+            _ => false,
+        })
+    }) || (matches!(time, TimeSource::Gps { .. })
+        && count.is_some()
+        && packet.week_invalid.contains(&u64::from(week)));
+    let event_time = if sentinel {
+        EventTime::Ground
+    } else {
+        event_time(
+            time,
+            &payload[start as usize / 8..],
+            count.as_ref(),
+            u64::from(week),
+            received,
+        )
+    };
     Message {
         packet: packet.name.clone(),
         payload,
@@ -1831,6 +1914,47 @@ fn time_source() -> BoxedStrategy<TimeSource> {
     .boxed()
 }
 
+/// A packet's time fields for the source: its count field, if it has one,
+/// and up to one sentinel each for the count and a GPS week.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct TimeFields {
+    count: Option<Count>,
+    count_invalid: Vec<i128>,
+    week_invalid: Vec<u64>,
+    /// Whether the count and week restate the unit their source counts
+    /// them in, which validation allows (§8).
+    units: bool,
+}
+
+fn time_fields(time: &TimeSource) -> BoxedStrategy<TimeFields> {
+    let gps = matches!(time, TimeSource::Gps { .. });
+    count(time)
+        .prop_flat_map(move |count| {
+            let range = match count {
+                Some(Count::Uint(bits)) => 0..=(1_i128 << bits) - 1,
+                Some(Count::Int(bits)) => -(1_i128 << (bits - 1))..=(1_i128 << (bits - 1)) - 1,
+                _ => -1000..=1000,
+            };
+            let count_invalid = match count {
+                Some(_) => btree_set(range, 0..=1).boxed(),
+                None => Just(BTreeSet::new()).boxed(),
+            };
+            let week_invalid = if gps && count.is_some() {
+                btree_set(0_u64..=u64::from(u16::MAX), 0..=1).boxed()
+            } else {
+                Just(BTreeSet::new()).boxed()
+            };
+            (Just(count), count_invalid, week_invalid, any::<bool>())
+        })
+        .prop_map(|(count, count_invalid, week_invalid, units)| TimeFields {
+            count,
+            count_invalid: count_invalid.into_iter().collect(),
+            week_invalid: week_invalid.into_iter().collect(),
+            units,
+        })
+        .boxed()
+}
+
 /// A packet's count field for the source, if it has one: whole bytes, wide
 /// enough for the source's counts and no wider than keeps them in range.
 fn count(time: &TimeSource) -> BoxedStrategy<Option<Count>> {
@@ -1934,7 +2058,11 @@ fn count_value(time: &TimeSource, count: Count) -> BoxedStrategy<Raw> {
                     Raw::Float(x) => *x >= low && *x < span,
                     _ => true,
                 }),
-            1 => unreadable,
+            // ±1e300 is an infinity in binary32.
+            1 => unreadable.prop_map(|raw| match raw {
+                Raw::Float(x) => Raw::Float(f64::from(x as f32)),
+                other => other,
+            }),
         ]
         .boxed(),
         Count::Float(_) => prop_oneof![
