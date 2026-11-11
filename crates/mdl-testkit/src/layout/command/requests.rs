@@ -1,12 +1,14 @@
 //! Requests, the payload each encodes to (`spec/encoding.md` §3, §4), and
 //! what decoding that payload gives back (§7.4).
 
+use proptest::collection::vec;
 use proptest::prelude::*;
+use proptest::sample::select;
 
-use super::values::{spell, text_for, to_argument, unrounded, value, value_of};
+use super::values::{list_value, spell, text_for, to_argument, unrounded, value, value_of};
 use super::{
-    Arg, ArgType, Const, Decoded, Encoder, Given, Layout, Len, Placed, Request, Shape, Source,
-    Target, Through,
+    Arg, ArgType, Const, Counted, Decoded, Elements, Encoder, Given, Layout, Len, Placed, Request,
+    Shape, Source, Target, Through,
 };
 use crate::layout::{Raw, convert, encode, fit, put_bits};
 
@@ -29,30 +31,29 @@ pub(super) fn request(layout: Layout) -> BoxedStrategy<Request> {
 }
 
 /// A valid request's parts: values the catalog allows, arguments with
-/// defaults sometimes left out, in any order.
+/// defaults sometimes left out, in any order. The lists of a group take one
+/// count, their defaults' when the request leaves one of them out, each
+/// list as long as that count makes its array.
 pub(super) fn parts(layout: &Layout) -> BoxedStrategy<Parts> {
-    let given: Vec<BoxedStrategy<Option<Given>>> = layout
-        .arguments
+    let choices: Vec<BoxedStrategy<(i64, Vec<bool>)>> = layout
+        .groups
         .iter()
-        .map(|(encoder, encoded)| {
-            let spelled = |values: BoxedStrategy<Arg>| {
-                (values, any::<u8>()).prop_map(|(value, how)| spell(&value, how))
-            };
-            match (&encoder.default, *encoded) {
-                (None, _) => spelled(value(encoder)).prop_map(Some).boxed(),
-                (Some(_), true) => proptest::option::of(spelled(value(encoder))).boxed(),
-                // A set that leaves an argument out takes only its default.
-                (Some(default), false) => {
-                    proptest::option::of(spelled(Just(default.clone()).boxed())).boxed()
-                }
-            }
+        .map(|group| {
+            let leave = vec(any::<bool>(), group.members.len());
+            (select(group.counts.clone()), leave).boxed()
         })
         .collect();
     let target = match layout.target() {
         Some(shape) => target_value(shape).prop_map(Some).boxed(),
         None => Just(None).boxed(),
     };
-    (given, target)
+    (Just(layout.clone()), choices, target)
+        .prop_flat_map(|(layout, choices, target)| {
+            let given: Vec<BoxedStrategy<Option<Given>>> = (0..layout.arguments.len())
+                .map(|index| given_value(&layout, &choices, index))
+                .collect();
+            (given, Just(target))
+        })
         .prop_flat_map(|(given, target)| {
             let named: Vec<(String, Given)> = given
                 .iter()
@@ -69,6 +70,59 @@ pub(super) fn parts(layout: &Layout) -> BoxedStrategy<Parts> {
             named,
         })
         .boxed()
+}
+
+/// The value a request gives an argument, or none: a list of the length its
+/// group's count gives it, unless the request leaves it out.
+fn given_value(
+    layout: &Layout,
+    choices: &[(i64, Vec<bool>)],
+    index: usize,
+) -> BoxedStrategy<Option<Given>> {
+    let (encoder, encoded) = &layout.arguments[index];
+    let spelled = |values: BoxedStrategy<Arg>| {
+        (values, any::<u8>())
+            .prop_map(|(value, how)| spell(&value, how))
+            .boxed()
+    };
+    let in_group = layout
+        .groups
+        .iter()
+        .zip(choices)
+        .find_map(|(group, choice)| {
+            let place = group
+                .members
+                .iter()
+                .position(|(member, _)| *member == index)?;
+            Some((group, choice, place))
+        });
+    if let Some((group, (count, leave), place)) = in_group {
+        // A list with a default may be left out, and takes it; the group's
+        // other lists then take the count it gives.
+        let left_out = |at: usize| {
+            let (member, _) = group.members[at];
+            leave[at] && layout.arguments[member].0.default.is_some()
+        };
+        if left_out(place) {
+            return Just(None).boxed();
+        }
+        let count = match group.default {
+            Some(default) if (0..group.members.len()).any(left_out) => default,
+            _ => *count,
+        };
+        let (_, scale) = group.members[place];
+        return spelled(list_value(encoder, scale.length(count)))
+            .prop_map(Some)
+            .boxed();
+    }
+    match (&encoder.default, *encoded) {
+        (None, _) => spelled(value(encoder)).prop_map(Some).boxed(),
+        (Some(_), true) => proptest::option::of(spelled(value(encoder))).boxed(),
+        // A set that leaves an argument out takes only its default.
+        (Some(default), false) => {
+            proptest::option::of(spelled(Just(default.clone()).boxed())).boxed()
+        }
+    }
 }
 
 /// A native id a target field holds: an integer it holds (maybe spelled as
@@ -243,25 +297,115 @@ pub(super) struct Packed {
     pub(super) places: Vec<Option<(u64, u64)>>,
 }
 
-/// Packs a packet (`spec/encoding.md` §3, §4): each field's raw value, a
-/// length field's from the entry after it, written bit by bit in place,
-/// then each checksum in order of position over the bytes it covers.
+/// Packs a packet (`spec/encoding.md` §3, §4): each field's raw value, an
+/// array's elements or records, a length field's from the field it
+/// measures and a count field's from the arrays it counts, written bit by
+/// bit in place, then each checksum in order of position over the bytes it
+/// covers.
 pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
+    let field_raw = |shape: &Shape, source: &Source, item: Option<usize>| match source {
+        Source::Constant(value) => Some(constant_raw(shape, value)),
+        Source::Argument(index) => {
+            let value = values[*index].as_ref()?;
+            let value = match (value, item) {
+                (Arg::List(items), Some(item)) => items.get(item)?,
+                (value, _) => value,
+            };
+            Some(raw_of(&layout.arguments[*index].0, shape, value))
+        }
+        Source::Target => target.map(|target| target_raw(shape, target)),
+        Source::Length(_) | Source::Count => None,
+    };
     let mut raws: Vec<Option<Raw>> = layout
         .entries
         .iter()
         .map(|entry| match entry {
-            Placed::Field { shape, source, .. } => match source {
-                Source::Constant(value) => Some(constant_raw(shape, value)),
-                Source::Argument(index) => values[*index]
-                    .as_ref()
-                    .map(|value| raw_of(&layout.arguments[*index].0, shape, value)),
-                Source::Target => target.map(|target| target_raw(shape, target)),
-                Source::Length(_) => None,
-            },
+            Placed::Field { shape, source, .. } => field_raw(shape, source, None),
+            Placed::Array { elements, .. } => Some(Raw::Array(match elements {
+                Elements::Scalar {
+                    argument, shape, ..
+                } => match &values[*argument] {
+                    Some(Arg::List(items)) => items
+                        .iter()
+                        .map(|item| raw_of(&layout.arguments[*argument].0, shape, item))
+                        .collect(),
+                    _ => Vec::new(),
+                },
+                Elements::Records { entries, .. } => {
+                    // As many records as its lists have values, which is
+                    // one length.
+                    let count = entries
+                        .iter()
+                        .find_map(|entry| match entry {
+                            Placed::Field {
+                                source: Source::Argument(index),
+                                ..
+                            } => match &values[*index] {
+                                Some(Arg::List(items)) => Some(items.len()),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                    (0..count)
+                        .map(|item| {
+                            Raw::Record(
+                                entries
+                                    .iter()
+                                    .filter_map(|entry| match entry {
+                                        Placed::Field {
+                                            name,
+                                            shape,
+                                            source,
+                                            ..
+                                        } => Some((
+                                            name.clone(),
+                                            field_raw(shape, source, Some(item))?,
+                                        )),
+                                        _ => None,
+                                    })
+                                    .collect(),
+                            )
+                        })
+                        .collect()
+                }
+            })),
             _ => None,
         })
         .collect();
+    // A count field holds the number of elements of the arrays it counts,
+    // which is one number.
+    for k in 0..layout.entries.len() {
+        let Placed::Field {
+            name: field,
+            source: Source::Count,
+            ..
+        } = &layout.entries[k]
+        else {
+            continue;
+        };
+        let counted =
+            layout
+                .entries
+                .iter()
+                .zip(&raws)
+                .find_map(|(entry, raw)| match (entry, raw) {
+                    (
+                        Placed::Array {
+                            count:
+                                Counted::Field {
+                                    name,
+                                    multiply,
+                                    add,
+                                },
+                            ..
+                        },
+                        Some(Raw::Array(items)),
+                    ) if name == field => Some((items.len() as i64 - add) / i64::from(*multiply)),
+                    _ => None,
+                });
+        raws[k] = counted.map(|raw| Raw::Uint(raw as u64));
+    }
     // A length field holds the byte length of the field it names.
     for k in 0..layout.entries.len() {
         let Placed::Field {
@@ -288,35 +432,52 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
     let mut at = 0_u64;
     let mut places = vec![None; layout.entries.len()];
     for (k, entry) in layout.entries.iter().enumerate() {
-        match entry {
-            Placed::Padding(bits) => at += bits,
-            Placed::Field { shape, little, .. } => {
-                let Some(raw) = &raws[k] else { continue };
-                match shape {
-                    Shape::Text(_, len) | Shape::Bytes(len) => {
-                        let bytes = buffer(value_bytes(raw, shape), len);
-                        grow(&mut payload, at + 8 * bytes.len() as u64);
-                        let first = (at / 8) as usize;
-                        payload[first..first + bytes.len()].copy_from_slice(&bytes);
-                        places[k] = Some((at, 8 * bytes.len() as u64));
-                        at += 8 * bytes.len() as u64;
-                    }
-                    _ => {
-                        let size = shape.bits().unwrap_or(0);
-                        grow(&mut payload, at + u64::from(size));
-                        put_bits(&mut payload, at, size, pattern(raw, shape), *little);
-                        places[k] = Some((at, u64::from(size)));
-                        at += u64::from(size);
+        let start = at;
+        match (entry, &raws[k]) {
+            (Placed::Padding(bits), _) => at += bits,
+            (Placed::Field { shape, little, .. }, Some(raw)) => {
+                at += write(&mut payload, at, shape, *little, raw);
+            }
+            (Placed::Field { .. }, None) => continue,
+            (Placed::Checksum { algorithm, .. }, _) => {
+                let size = u64::from(algorithm.bits());
+                grow(&mut payload, at + size);
+                at += size;
+            }
+            (Placed::Array { elements, .. }, Some(Raw::Array(items))) => {
+                for item in items {
+                    match (elements, item) {
+                        (Elements::Scalar { shape, little, .. }, raw) => {
+                            at += write(&mut payload, at, shape, *little, raw)
+                        }
+                        (Elements::Records { entries, .. }, Raw::Record(fields)) => {
+                            // A record's entries in order, from its start,
+                            // each field's raw value found by its name.
+                            for entry in entries {
+                                match entry {
+                                    Placed::Padding(bits) => at += bits,
+                                    Placed::Field {
+                                        name,
+                                        shape,
+                                        little,
+                                        ..
+                                    } => {
+                                        let raw = fields.iter().find(|(field, _)| field == name);
+                                        if let Some((_, raw)) = raw {
+                                            at += write(&mut payload, at, shape, *little, raw);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
-            Placed::Checksum { algorithm, .. } => {
-                let size = u64::from(algorithm.bits());
-                grow(&mut payload, at + size);
-                places[k] = Some((at, size));
-                at += size;
-            }
+            (Placed::Array { .. }, _) => continue,
         }
+        places[k] = Some((start, at - start));
     }
     grow(&mut payload, at);
     for (k, value) in write_checksums(layout, &mut payload, &places) {
@@ -336,6 +497,12 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
                 (name, raw)
             }
             (Placed::Checksum { name, .. }, Some(raw)) => (name, raw),
+            (Placed::Array { name, elements, .. }, Some(raw)) => {
+                if let Raw::Array(items) = &raw {
+                    lists(elements, items, &mut arguments);
+                }
+                (name, raw)
+            }
             _ => continue,
         };
         record.push((name.clone(), raw));
@@ -376,6 +543,58 @@ pub(super) fn write_checksums(
         }
     }
     values
+}
+
+/// Each list argument an array holds, as the raw values it takes: a scalar
+/// array's elements, or a record field's value in each record.
+fn lists(elements: &Elements, items: &[Raw], arguments: &mut [Option<Raw>]) {
+    match elements {
+        Elements::Scalar { argument, .. } => {
+            arguments[*argument] = Some(Raw::Array(items.to_vec()))
+        }
+        Elements::Records { entries, .. } => {
+            for entry in entries {
+                if let Placed::Field {
+                    name,
+                    source: Source::Argument(index),
+                    ..
+                } = entry
+                {
+                    let values = items
+                        .iter()
+                        .filter_map(|item| match item {
+                            Raw::Record(fields) => fields
+                                .iter()
+                                .find(|(field, _)| field == name)
+                                .map(|(_, raw)| raw.clone()),
+                            _ => None,
+                        })
+                        .collect();
+                    arguments[*index] = Some(Raw::Array(values));
+                }
+            }
+        }
+    }
+}
+
+/// Writes a raw value at `at` as a field of `shape` writes it, and gives
+/// the bits it takes.
+fn write(payload: &mut Vec<u8>, at: u64, shape: &Shape, little: bool, raw: &Raw) -> u64 {
+    match shape {
+        Shape::Text(_, len) | Shape::Bytes(len) => {
+            let bytes = buffer(value_bytes(raw, shape), len);
+            grow(payload, at + 8 * bytes.len() as u64);
+            let first = (at / 8) as usize;
+            payload[first..first + bytes.len()].copy_from_slice(&bytes);
+            8 * bytes.len() as u64
+        }
+        _ => {
+            let size = shape.bits().unwrap_or(0);
+            grow(payload, at + u64::from(size));
+            put_bits(payload, at, size, pattern(raw, shape), little);
+            u64::from(size)
+        }
+    }
 }
 
 /// Makes the payload at least `bits` long, in whole bytes of zeros.
@@ -455,6 +674,12 @@ pub(super) fn raw_of(encoder: &Encoder, shape: &Shape, value: &Arg) -> Raw {
             _ => Raw::Str(name.clone()),
         },
         Arg::Bytes(bytes) => Raw::Bytes(bytes.clone()),
+        Arg::List(items) => Raw::Array(
+            items
+                .iter()
+                .map(|item| raw_of(encoder, shape, item))
+                .collect(),
+        ),
     }
 }
 
@@ -477,6 +702,15 @@ fn target_raw(shape: &Shape, target: &Target) -> Raw {
 /// f64 through the field's conversion, into the argument's unit, held to
 /// its range.
 pub(super) fn decoded_value(encoder: &Encoder, raw: &Raw) -> Arg {
+    // A list argument, each element as a value of the argument's type.
+    if let Raw::Array(items) = raw {
+        return Arg::List(
+            items
+                .iter()
+                .map(|item| decoded_value(encoder, item))
+                .collect(),
+        );
+    }
     let integer = match raw {
         Raw::Uint(n) => i128::from(*n),
         Raw::Int(n) => i128::from(*n),

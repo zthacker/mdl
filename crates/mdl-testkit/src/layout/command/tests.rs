@@ -156,10 +156,12 @@ fn labels(case: &Commands) -> BTreeSet<String> {
     };
     let catalog = &case.bundle["catalog"]["commands"];
     let mut types: BTreeMap<(String, String), String> = BTreeMap::new();
+    let mut lists: BTreeSet<(String, String)> = BTreeSet::new();
     let packets = case.bundle["sets"][0]["commands"]
         .as_array()
         .cloned()
         .unwrap_or_default();
+    let structs = &case.bundle["sets"][0]["types"];
     for packet in &packets {
         let command = packet["canonical"].as_str().unwrap_or("");
         let arguments = catalog[command]["arguments"]
@@ -190,7 +192,87 @@ fn labels(case: &Commands) -> BTreeSet<String> {
             if range["min"].is_number() && range["min"] == range["max"] {
                 note("range:one_value".into());
             }
+            if argument.get("list").is_some() {
+                lists.insert((command.to_string(), name.clone()));
+                if !entries.iter().any(|entry| encodes(entry, structs, &name)) {
+                    note("argument:left_out/list".into());
+                }
+            }
             types.insert((command.to_string(), name), ty);
+        }
+        // Arrays: two counted by one field (by different scales), a count's
+        // adjustment, records' fields and their sizes, and lists that go
+        // together, some with defaults and some without.
+        let mut counts: Vec<(&str, &Value, &Value)> = Vec::new();
+        let mut together: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for entry in entries.iter().filter(|entry| entry["kind"] == "array") {
+            let count = &entry["count"];
+            if let Some(field) = count["field"].as_str() {
+                if let Some((_, multiply, add)) = counts.iter().find(|(f, ..)| *f == field) {
+                    note("list:shared_count".into());
+                    if **multiply != count["multiply"] || **add != count["add"] {
+                        note("list:shared_count/scaled".into());
+                    }
+                }
+                counts.push((field, &count["multiply"], &count["add"]));
+            }
+            let group = count["field"]
+                .as_str()
+                .or(entry["name"].as_str())
+                .unwrap_or("")
+                .to_string();
+            together
+                .entry(group)
+                .or_default()
+                .extend(lists_of(entry, structs));
+            if count.get("multiply").is_some() {
+                note("list:count.multiply".into());
+            }
+            let element = &entry["element"];
+            if let Some(name) = element["name"].as_str() {
+                let fields = structs[name]["entries"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let bits: u64 = fields.iter().filter_map(|f| f["size_bits"].as_u64()).sum();
+                let sized = fields
+                    .iter()
+                    .all(|f| f["size_bits"].is_u64() || f["kind"] == "padding");
+                if sized && !bits.is_multiple_of(8) {
+                    note("list:record/bits".into());
+                }
+                for field in &fields {
+                    if field.get("argument").is_some() {
+                        note("list:record/argument".into());
+                    }
+                    if field.get("value").is_some() {
+                        note("list:record/constant".into());
+                    }
+                }
+            } else if let Some(name) = entry["argument"].as_str() {
+                let ty = types
+                    .get(&(command.to_string(), name.to_string()))
+                    .cloned()
+                    .unwrap_or_default();
+                let field = element["type"].as_str().unwrap_or("");
+                match element["conversion"]["kind"].as_str() {
+                    Some("states") => note(format!("element:{ty}>{field}/states")),
+                    _ => note(format!("element:{ty}>{field}")),
+                }
+            }
+        }
+        for lists in together.values() {
+            let defaulted = lists
+                .iter()
+                .filter(|name| {
+                    arguments.iter().any(|argument| {
+                        argument["name"] == **name && argument.get("default").is_some()
+                    })
+                })
+                .count();
+            if defaulted > 0 && defaulted < lists.len() {
+                note("list:default/partial".into());
+            }
         }
         let key = &entries[0];
         note(format!("key:{}", key["type"].as_str().unwrap_or("")));
@@ -271,6 +353,9 @@ fn labels(case: &Commands) -> BTreeSet<String> {
                 .get(&(request.command.clone(), name.clone()))
                 .cloned()
                 .unwrap_or_default();
+            if let Given::List(values) = given {
+                note(format!("list:given/{}", values.len().min(3)));
+            }
             let spelled = match given {
                 Given::Int(_) => "Int",
                 Given::Uint(_) => "Uint",
@@ -291,6 +376,18 @@ fn labels(case: &Commands) -> BTreeSet<String> {
         if !request.defaulted.is_empty() {
             note("request:defaulted".into());
         }
+        let defaulted_list = request
+            .decoded
+            .defaulted
+            .iter()
+            .chain(&request.defaulted)
+            .any(|name| lists.contains(&(request.command.clone(), name.clone())));
+        let unnamed_list = lists.iter().any(|(command, name)| {
+            *command == request.command && !request.arguments.iter().any(|(given, _)| given == name)
+        });
+        if defaulted_list || unnamed_list {
+            note("list:defaulted".into());
+        }
         if !request.metadata.is_empty() {
             note("request:metadata".into());
         }
@@ -302,6 +399,37 @@ fn labels(case: &Commands) -> BTreeSet<String> {
         note(format!("again:{again}"));
     }
     found
+}
+
+/// The list arguments an array encodes: its scalar elements' one, or those
+/// its records' fields name.
+fn lists_of(entry: &Value, structs: &Value) -> Vec<String> {
+    if let Some(name) = entry["argument"].as_str() {
+        return vec![name.to_string()];
+    }
+    let fields = entry["element"]["name"]
+        .as_str()
+        .and_then(|name| structs[name]["entries"].as_array())
+        .cloned()
+        .unwrap_or_default();
+    fields
+        .iter()
+        .filter_map(|field| field["argument"].as_str().map(str::to_string))
+        .collect()
+}
+
+/// Whether a packet entry encodes the argument: a field or an array that
+/// names it, or an array of records one of whose fields does.
+fn encodes(entry: &Value, structs: &Value, argument: &str) -> bool {
+    if entry["argument"] == argument {
+        return true;
+    }
+    let Some(name) = entry["element"]["name"].as_str() else {
+        return false;
+    };
+    structs[name]["entries"]
+        .as_array()
+        .is_some_and(|fields| fields.iter().any(|field| field["argument"] == argument))
 }
 
 #[test]
@@ -420,6 +548,44 @@ fn commands_reach_every_feature() {
         "request:metadata",
         "again:same",
         "again:differs",
+        "entry:array",
+        "element:scalar",
+        "element:struct",
+        "count:fixed",
+        "count:field",
+        "count:remaining",
+        "key:count.add",
+        "key:set.types",
+        "key:argument.list",
+        "default:list",
+        "key:element.byte_order",
+        "key:element.conversion",
+        "key:element.inverse",
+        "key:element.unit",
+        "key:element.length",
+        "key:element.text",
+        "list:shared_count",
+        "list:shared_count/scaled",
+        "list:default/partial",
+        "list:count.multiply",
+        "list:record/argument",
+        "list:record/constant",
+        "list:record/bits",
+        "list:given/0",
+        "list:given/1",
+        "list:given/3",
+        "list:defaulted",
+        "argument:left_out/list",
+        "element:bool>bool",
+        "element:bool>uint",
+        "element:u64>uint",
+        "element:i64>int",
+        "element:f64>float",
+        "element:f64>uint",
+        "element:enum>uint/states",
+        "element:enum>string",
+        "element:str>string",
+        "element:bytes>bytes",
     ];
     let missing: Vec<&str> = required
         .into_iter()

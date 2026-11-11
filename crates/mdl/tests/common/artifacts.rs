@@ -66,6 +66,8 @@ fn raw(value: &Value<'_>) -> Raw {
         Value::Bool(b) => Raw::Bool(*b),
         Value::Str(text) => Raw::Str(text.clone()),
         Value::Bytes(bytes) => Raw::Bytes(bytes.clone()),
+        Value::Array(values) => Raw::Array(values.iter().map(raw).collect()),
+        Value::Record(fields) => Raw::Record(record(fields)),
         other => Raw::Str(format!("not generated: {other:?}")),
     }
 }

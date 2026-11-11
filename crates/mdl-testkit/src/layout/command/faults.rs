@@ -13,7 +13,7 @@ use proptest::prelude::*;
 use proptest::sample::{Index, select};
 
 use super::requests::{Packed, Parts, buffer, pack, parts, values, write_checksums};
-use super::values::{spell, unrounded, value};
+use super::values::{list_value, spell, unrounded, value};
 use super::{
     Arg, ArgType, Const, Encoder, Encoding, Fault, Garbled, Given, Layout, Len, Placed, Refused,
     Shape, Source, Stage, Target, Through,
@@ -269,7 +269,11 @@ fn plants(layout: &Layout) -> Vec<(Stage, BoxedStrategy<Plant>)> {
         ),
     ];
     for (argument, (encoder, encoded)) in layout.arguments.iter().enumerate() {
-        let valid = (value(encoder), any::<u8>()).prop_map(|(value, how)| spell(&value, how));
+        let valid = match encoder.list {
+            Some(bounds) => list_value(encoder, bounds.min.unwrap_or(0) as usize),
+            None => value(encoder),
+        };
+        let valid = (valid, any::<u8>()).prop_map(|(value, how)| spell(&value, how));
         plants.push((
             Stage::Name(0),
             (valid, any::<Index>())
@@ -285,6 +289,10 @@ fn plants(layout: &Layout) -> Vec<(Stage, BoxedStrategy<Plant>)> {
                 Stage::Argument(argument),
                 Just(Plant::Missing { argument }).boxed(),
             ));
+        }
+        // A list's values aren't given faults here.
+        if encoder.list.is_some() {
+            continue;
         }
         let refused_value = |values: BoxedStrategy<Given>, stage: Stage, code: &'static str| {
             let plant = values
@@ -766,7 +774,8 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
     }
     // Cut short inside an entry after the keys (§7.3): every constant at a
     // place each payload has is a key (§7.2), which a cut would leave
-    // unread, so that no packet matched.
+    // unread, so that no packet matched. The cut is at the entry's start or
+    // past it, so no entry before it is cut short.
     let key_bytes = (0..layout.entries.len())
         .filter(|entry| {
             layout.statics[*entry]
@@ -787,10 +796,10 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
             let fixed = match &layout.entries[entry] {
                 Placed::Field { shape, .. } => shape.bits().is_some(),
                 Placed::Checksum { .. } => true,
-                Placed::Padding(_) => false,
+                Placed::Padding(_) | Placed::Array { .. } => false,
             };
             let (start, size) = packed.places[entry]?;
-            let low = key_bytes.max(start / 8);
+            let low = key_bytes.max(start.div_ceil(8));
             let high = (start + size).div_ceil(8).checked_sub(1)?;
             (fixed && size > 0 && low <= high).then_some((low, high))
         })
