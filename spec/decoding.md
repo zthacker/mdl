@@ -308,7 +308,9 @@ other checksum is verified when the decoder reaches it.
   order is reversed if `reflect_out`, and it is exclusive-ored with
   `xor_out`. For the bytes `123456789`, `width` 16, `poly` 0x1021, `init`
   0xFFFF, no reflection and `xor_out` 0 (CRC-16/IBM-3740), the result is
-  0x29B1.
+  0x29B1. Reflected, the register still starts at `init` as written: with
+  `init` 0xB2AA, `reflect_in` and `reflect_out` and the rest the same
+  (CRC-16/RIELLO), the result is 0x63D0.
 - `sum`, with `width` (8 to 64 bits, whole bytes): the bytes added as
   unsigned integers, modulo 2^width.
 - `xor`: the bytes exclusive-ored together, 8 bits.
