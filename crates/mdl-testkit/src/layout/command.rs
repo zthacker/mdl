@@ -333,8 +333,12 @@ struct Encoder {
     /// The argument's unit and the field's: the same code but for an f64
     /// argument.
     units: Option<(&'static str, &'static str)>,
+    /// An f64 argument's range.
     min: Option<f64>,
     max: Option<f64>,
+    /// A u64 or i64 argument's range, exactly: its ends past ±(2^53 − 1)
+    /// are written as decimal strings.
+    integer_range: (Option<i128>, Option<i128>),
     default: Option<Arg>,
     shape: Shape,
     through: Through,
@@ -346,6 +350,7 @@ fn encoder_of(ty: ArgType, shape: Shape) -> Encoder {
         units: None,
         min: None,
         max: None,
+        integer_range: (None, None),
         default: None,
         shape,
         through: Through::Plain,

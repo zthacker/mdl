@@ -353,6 +353,7 @@ fn commands_reach_every_feature() {
         "key:argument.unit",
         "key:argument.states",
         "key:argument.range",
+        "range:string_integer",
         "default:bool",
         "default:int",
         "default:float",

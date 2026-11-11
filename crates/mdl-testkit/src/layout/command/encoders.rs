@@ -8,7 +8,7 @@ use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::select;
 
-use super::values::{double_at_least, double_at_most, to_argument, unrounded, value};
+use super::values::{to_argument, unrounded, value};
 use super::{Arg, ArgType, Encoder, Len, Shape, TEXTS, Through, encoder_of};
 use crate::layout::{Numeric, UNIT_GROUPS, scale, units};
 
@@ -68,9 +68,9 @@ pub(super) fn unit() -> BoxedStrategy<&'static str> {
 }
 
 /// A u64 or i64 argument, unconverted, in its field's unit if it has one.
-/// Each end of its range is one the field holds (the field's own, or a
-/// small integer) within ±(2^53 − 1), as the IR writes bounds, and is left
-/// out only where the type's own end fits the field.
+/// Each end of its range is one the field holds (the field's own, exactly,
+/// or a small integer), and is left out only where the type's own end fits
+/// the field.
 fn integer_encoder(ty: ArgType) -> BoxedStrategy<Encoder> {
     // Any size, and often 64 bits, which a whole-range argument fills.
     let sizes = prop_oneof![3 => 1_u32..=64, 1 => Just(64_u32)];
@@ -94,12 +94,7 @@ fn integer_encoder(ty: ArgType) -> BoxedStrategy<Encoder> {
             let types = ty.integers();
             let low = (*field.start()).max(*types.start());
             let high = (*field.end()).min(*types.end());
-            const SAFE: i128 = (1 << 53) - 1;
-            let bound = prop_oneof![
-                Just(double_at_least(low.max(-SAFE))),
-                Just(double_at_most(high.min(SAFE))),
-                (low.max(-1000)..=high.min(1000)).prop_map(|n| n as f64),
-            ];
+            let bound = prop_oneof![Just(low), Just(high), low.max(-1000)..=high.min(1000)];
             let needs = (types.start() < field.start(), types.end() > field.end());
             (
                 Just(encoder_of(ty, shape)),
@@ -112,8 +107,10 @@ fn integer_encoder(ty: ArgType) -> BoxedStrategy<Encoder> {
         })
         .prop_map(|(mut encoder, unit, keep, needs, a, b)| {
             encoder.units = unit.map(|code| (code, code));
-            encoder.min = (needs.0 || keep.0).then_some(a.min(b));
-            encoder.max = (needs.1 || keep.1).then_some(a.max(b));
+            encoder.integer_range = (
+                (needs.0 || keep.0).then_some(a.min(b)),
+                (needs.1 || keep.1).then_some(a.max(b)),
+            );
             encoder
         })
         .boxed()
