@@ -163,6 +163,9 @@ struct Facts {
     /// A value of at most 8 bits that names its own byte order: the order
     /// only matters if it can straddle a byte boundary.
     own_narrow: Option<u64>,
+    /// An array that reads to the end of the packet, which ends on a byte,
+    /// so it starts on one.
+    to_end: bool,
     /// For an array: what each element needs where it starts.
     element: Option<ElementFacts>,
 }
@@ -190,6 +193,7 @@ impl Facts {
             holds_narrow: false,
             narrow_le: None,
             own_narrow: None,
+            to_end: false,
             element: None,
         }
     }
@@ -630,6 +634,18 @@ impl<'a> Layout<'a> {
                     );
                     return None;
                 }
+                // A packet ends on a byte, so bits after the last element,
+                // short of a byte, would be read as the start of another.
+                if !element.size_residues.aligned() {
+                    report.error(
+                        Code::Alignment,
+                        &place.key("element"),
+                        "an array that runs to the end of the packet has elements of whole \
+                         bytes: the packet ends on a byte, so bits left after the last element \
+                         would be read as another",
+                    );
+                    return None;
+                }
                 (Size { min: 0, max: None }, None)
             }
         };
@@ -650,6 +666,7 @@ impl<'a> Layout<'a> {
             holds_narrow: false,
             narrow_le: None,
             own_narrow: None,
+            to_end: matches!(array.count, Some(Count::Remaining { .. })),
             element: Some(ElementFacts {
                 size: element.size,
                 step,
@@ -846,6 +863,18 @@ impl<'a> Layout<'a> {
                 Code::Alignment,
                 place,
                 not_on_byte("strings, bytes, whole-byte little-endian values or structs of them"),
+            );
+            return;
+        }
+        if facts.to_end && !start.aligned() {
+            report.error(
+                Code::Alignment,
+                place,
+                format!(
+                    "{name} runs to the end of the packet, which ends on a byte, so it starts on \
+                     one, but it can start at bit {} of a byte",
+                    start.iter().find(|r| *r != 0).unwrap_or(0)
+                ),
             );
             return;
         }

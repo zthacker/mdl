@@ -238,7 +238,9 @@ struct).
   present.
 - **Arrays** decode their elements one after another. The count is
   `fixed`, taken from a field (§5.4), or `remaining`: elements until the
-  packet ends.
+  packet ends. A packet ends on a byte, so an array with a `remaining`
+  count MUST start on a byte and have elements of whole bytes; bits left
+  after its last element would otherwise be read as another.
 - **Padding** skips its bits.
 - **Checksums** are verified (§5.6).
 
