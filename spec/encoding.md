@@ -106,12 +106,13 @@ single value, against the argument's type, states and range; the first
 value that fails is the error, naming its index (counted from 0).
 
 A list argument's default is a list whose length lies within `list`, each
-value one its type, states and range allow. Lists that must have one
-length (§3.6) have defaults that do: those that fill one array's records,
-and those of arrays that share a count field, whose defaults give it one
-count it can hold. Validation guarantees both, so the defaults of a
-command's lists encode together; a caller's list that disagrees with a
-defaulted one is [`bad_count`]. As for any argument with a default, a set
+value one its type, states and range allow. Lists that go together
+(§3.6) have defaults that do: those that fill one array's records have
+one length, and those of arrays that share a count field give it one
+value, which it can hold (one length when the arrays' `multiply` and
+`add` agree). Validation guarantees both, so the defaults of a command's
+lists encode together; a caller's list that disagrees with a defaulted
+one is [`bad_count`]. As for any argument with a default, a set
 may leave a list argument out (§2.4), and then only its default can be
 sent: a list equal to it value by value, in order.
 
