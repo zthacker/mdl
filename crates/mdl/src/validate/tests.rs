@@ -1142,6 +1142,30 @@ fn array_rules() {
         ),
         vec![(Code::ReadsToEnd, entry(1, "/element/length"))]
     );
+    // Reading to the end of a packet, which ends on a byte, an array
+    // starts on one and has elements of whole bytes, or the bits after its
+    // last element would be read as another.
+    let to_end = json!({ "kind": "remaining" });
+    assert_eq!(
+        element(
+            json!({ "kind": "scalar", "type": "uint", "size_bits": 12 }),
+            to_end.clone()
+        ),
+        vec![(Code::Alignment, entry(1, "/element"))]
+    );
+    assert_eq!(
+        one(json!([uint("n", 3),
+            { "kind": "array", "name": "a", "count": to_end.clone(),
+              "element": { "kind": "scalar", "type": "uint", "size_bits": 16 } }])),
+        vec![(Code::Alignment, entry(1, ""))]
+    );
+    assert_eq!(
+        element(
+            json!({ "kind": "scalar", "type": "uint", "size_bits": 24 }),
+            to_end
+        ),
+        vec![]
+    );
 }
 
 /// The diagnostics for legacy_v1's packet (a little-endian family) with
