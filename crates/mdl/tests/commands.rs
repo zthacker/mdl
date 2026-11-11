@@ -4,16 +4,20 @@
 //! decodes back to the command, every argument in catalog order and the
 //! target, as §7.4 says; and the decoded request encodes to the payload the
 //! testkit expects of it, the same one wherever each inverse undoes its
-//! conversion.
+//! conversion. A request with faults planted in it is refused with the
+//! code, and naming the argument or field, of the first problem the spec
+//! reaches; a payload with a fault planted in it fails to decode with the
+//! code the fault gives.
 
 #[path = "common/artifacts.rs"]
 mod artifacts;
 
 use mdl::bindings::NativeId;
-use mdl::encode::{ArgumentValue, CommandRequest};
+use mdl::decode::{CommandDecodeError, DecodeError};
+use mdl::encode::{ArgumentValue, CommandRequest, EncodeError};
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::time::Timestamp;
-use mdl_testkit::layout::command::{Arg, Given, Request, Target, commands};
+use mdl_testkit::layout::command::{Arg, Encoding, Given, Target, commands};
 use proptest::prelude::*;
 
 proptest! {
@@ -22,7 +26,7 @@ proptest! {
         let sets = artifacts::load(&case.bundle, &case.family, &[])?;
         for request in &case.requests {
             let encoded = sets
-                .encode(&sent(&case.set, request)?)
+                .encode(&sent(&case.set, &request.command, &request.arguments, request.target.as_ref())?)
                 .map_err(|error| TestCaseError::fail(format!("{error}: {request:#?}")))?;
             prop_assert_eq!(&encoded.payload, &request.payload, "{:#?}", request);
             prop_assert_eq!(&artifacts::record(&encoded.record), &request.record);
@@ -51,13 +55,49 @@ proptest! {
                 .map_err(|error| TestCaseError::fail(format!("again: {error}: {request:#?}")))?;
             prop_assert_eq!(&again.payload, &request.again, "{:#?}", request);
         }
+        for refused in &case.refused {
+            let request = sent(&refused.set, &refused.command, &refused.arguments, refused.target.as_ref())?;
+            let error = match sets.encode(&request) {
+                Ok(encoded) => {
+                    return Err(TestCaseError::fail(format!("encoded {:?}: {refused:#?}", encoded.payload)));
+                }
+                Err(error) => error,
+            };
+            prop_assert_eq!(error.code(), refused.code, "{}: {:#?}", error, refused);
+            prop_assert_eq!(named(&error), refused.at.clone(), "{}: {:#?}", error, refused);
+        }
+        for garbled in &case.garbled {
+            let metadata: Vec<(&str, MetaValue<'_>)> = garbled
+                .metadata
+                .iter()
+                .map(|(name, n)| (name.as_str(), MetaValue::Int(*n)))
+                .collect();
+            let payload = match garbled.encoding {
+                Encoding::Json => Payload::Json(&garbled.payload),
+                Encoding::Binary => Payload::Binary(&garbled.payload),
+            };
+            let message = Message::new(payload, Timestamp::from_unix_nanos(0)).with_metadata(&metadata);
+            let error = match sets.decode_command(&garbled.set, &message) {
+                Ok(decoded) => {
+                    return Err(TestCaseError::fail(format!("decoded {:?}: {garbled:#?}", decoded.arguments)));
+                }
+                Err(error) => error,
+            };
+            prop_assert_eq!(error.code(), garbled.code, "{}: {:#?}", error, garbled);
+            prop_assert_eq!(decode_named(&error), garbled.at.clone(), "{}: {:#?}", error, garbled);
+        }
     }
 }
 
 /// The request as a caller makes it.
-fn sent(set: &str, request: &Request) -> Result<CommandRequest, TestCaseError> {
-    let mut sent = CommandRequest::new(set, request.command.as_str());
-    for (name, value) in &request.arguments {
+fn sent(
+    set: &str,
+    command: &str,
+    arguments: &[(String, Given)],
+    target: Option<&Target>,
+) -> Result<CommandRequest, TestCaseError> {
+    let mut sent = CommandRequest::new(set, command);
+    for (name, value) in arguments {
         let value = match value {
             Given::Bool(b) => ArgumentValue::Bool(*b),
             Given::Int(n) => ArgumentValue::Int(*n),
@@ -68,7 +108,7 @@ fn sent(set: &str, request: &Request) -> Result<CommandRequest, TestCaseError> {
         };
         sent = sent.with_argument(name.as_str(), value);
     }
-    if let Some(target) = &request.target {
+    if let Some(target) = target {
         sent = sent.with_target(match target {
             Target::Int(n) => match (i64::try_from(*n), u64::try_from(*n)) {
                 (Ok(n), _) => NativeId::from(n),
@@ -79,6 +119,25 @@ fn sent(set: &str, request: &Request) -> Result<CommandRequest, TestCaseError> {
         });
     }
     Ok(sent)
+}
+
+/// The argument, constant or entry a decoding error names.
+fn decode_named(error: &CommandDecodeError) -> Option<String> {
+    match error {
+        CommandDecodeError::Constant { field, .. } => Some(field.clone()),
+        CommandDecodeError::Argument { argument, .. } => Some(argument.clone()),
+        CommandDecodeError::Decode(DecodeError::Entry { path, .. }) => Some(path.clone()),
+        _ => None,
+    }
+}
+
+/// The argument or field an encoding error names.
+fn named(error: &EncodeError) -> Option<String> {
+    match error {
+        EncodeError::Argument { argument, .. } => Some(argument.clone()),
+        EncodeError::Field { field, .. } => Some(field.clone()),
+        _ => None,
+    }
 }
 
 fn names(names: &[&str]) -> Vec<String> {

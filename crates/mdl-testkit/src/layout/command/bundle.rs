@@ -46,6 +46,8 @@ pub(super) fn assemble(
         family: "fam".into(),
         set: "fam_v1".into(),
         requests: requests.into_iter().flatten().collect(),
+        refused: Vec::new(),
+        garbled: Vec::new(),
     }
 }
 

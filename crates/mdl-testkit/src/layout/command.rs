@@ -30,6 +30,7 @@ use crate::checksum::Algorithm;
 use crate::layout::{Numeric, Raw, Text};
 
 use bundle::assemble;
+use faults::{garbling, refusal};
 use packets::{command_spec, key, lay_out};
 use requests::request;
 
@@ -41,6 +42,75 @@ pub struct Commands {
     pub family: String,
     pub set: String,
     pub requests: Vec<Request>,
+    /// Requests with faults planted in them.
+    pub refused: Vec<Refused>,
+    /// Payloads with faults planted in them.
+    pub garbled: Vec<Garbled>,
+}
+
+/// A request with one or two faults planted in it, and the error encoding
+/// gives: the first problem `spec/encoding.md` reaches (the set and
+/// command; §2.1's two passes; §3's entries in order, length fields last).
+#[derive(Debug, Clone)]
+pub struct Refused {
+    pub set: String,
+    pub command: String,
+    /// The arguments it gives, in the order it gives them.
+    pub arguments: Vec<(String, Given)>,
+    pub target: Option<Target>,
+    pub code: &'static str,
+    /// The argument or field the error names, if it names one.
+    pub at: Option<String>,
+    /// Every fault in it, planted or found by §2.1's first pass: the error
+    /// is the one caught first.
+    pub faults: Vec<Fault>,
+}
+
+/// A fault in a request: the code it gives on its own, where encoding
+/// catches it, and the catalog argument it's about, if it's about one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fault {
+    pub code: &'static str,
+    pub stage: Stage,
+    pub argument: Option<usize>,
+}
+
+/// Where encoding catches a fault, in the order it checks things: the
+/// request (§1); a given name, by its place in the request; an argument,
+/// by catalog index; an entry, by index; then a length field, by the index
+/// of the entry it measures (§3.5). Don't reorder the variants: the
+/// derived order is the check order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Stage {
+    Request,
+    Name(usize),
+    Argument(usize),
+    Field(usize),
+    Length(usize),
+}
+
+/// A payload with a fault planted in it, and the code decoding it gives
+/// (`spec/encoding.md` §7).
+#[derive(Debug, Clone)]
+pub struct Garbled {
+    /// The set it's decoded with.
+    pub set: String,
+    pub payload: Vec<u8>,
+    pub encoding: Encoding,
+    /// The metadata the link frames it with.
+    pub metadata: Vec<(String, i64)>,
+    pub code: &'static str,
+    /// The argument or entry the error names, if it names one.
+    pub at: Option<String>,
+    /// What was planted, for a failing case's report.
+    pub planted: String,
+}
+
+/// How a payload is given to the decoder: as bytes, or as JSON text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Binary,
+    Json,
 }
 
 /// A request, what it encodes to, and what decoding that gives back.
@@ -139,6 +209,7 @@ pub fn commands() -> BoxedStrategy<Commands> {
             (Just(little), Just(metadata), Just(specs), key(count), apids)
         })
         .prop_flat_map(|(little, metadata, specs, (key, values), apids)| {
+            let keys = values.clone();
             let layouts: Vec<Layout> = specs
                 .into_iter()
                 .zip(values)
@@ -152,10 +223,28 @@ pub fn commands() -> BoxedStrategy<Commands> {
                 .iter()
                 .map(|layout| vec(request(layout.clone()), 1..=3).boxed())
                 .collect();
-            (Just(little), Just(metadata), Just(layouts), requests)
+            let refused: Vec<BoxedStrategy<Vec<Refused>>> = layouts
+                .iter()
+                .map(|layout| vec(refusal(layout.clone()), 1..=3).boxed())
+                .collect();
+            let garbled: Vec<BoxedStrategy<Vec<Garbled>>> = layouts
+                .iter()
+                .map(|layout| vec(garbling(layout.clone(), keys.clone()), 1..=3).boxed())
+                .collect();
+            (
+                Just(little),
+                Just(metadata),
+                Just(layouts),
+                requests,
+                refused,
+                garbled,
+            )
         })
-        .prop_map(|(little, metadata, layouts, requests)| {
-            assemble(little, metadata, &layouts, requests)
+        .prop_map(|(little, metadata, layouts, requests, refused, garbled)| {
+            let mut case = assemble(little, metadata, &layouts, requests);
+            case.refused = refused.into_iter().flatten().collect();
+            case.garbled = garbled.into_iter().flatten().collect();
+            case
         })
         .boxed()
 }
@@ -406,6 +495,9 @@ struct Layout {
     apid: Option<i64>,
     arguments: Vec<(Encoder, bool)>,
     entries: Vec<Placed>,
+    /// Whether each entry starts where it does in every payload: a
+    /// constant there is a key (`spec/encoding.md` §7.2).
+    statics: Vec<bool>,
 }
 
 impl Layout {
@@ -423,6 +515,7 @@ impl Layout {
 
 mod bundle;
 mod encoders;
+mod faults;
 mod packets;
 mod requests;
 mod values;

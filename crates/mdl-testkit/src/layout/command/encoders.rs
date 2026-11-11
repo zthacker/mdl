@@ -122,11 +122,29 @@ pub(super) fn f64_encoder() -> BoxedStrategy<Encoder> {
         .prop_map(|(scale, offset)| Through::Exact(Numeric::Linear { scale, offset }));
     prop_oneof![
         2 => direct(Just(Through::Plain).boxed()),
-        2 => direct(linear.boxed()),
+        2 => direct(linear.clone().boxed()),
         2 => monotone_table(),
         3 => with_inverse(),
+        1 => unranged_single(linear.boxed()),
     ]
     .boxed()
+}
+
+/// An f64 argument with no range, written as it is or through a linear
+/// conversion into a binary32 field, which a value past binary32's largest
+/// overflows (§3.1's `raw_range`).
+fn unranged_single(linear: BoxedStrategy<Through>) -> BoxedStrategy<Encoder> {
+    (
+        prop_oneof![Just(Through::Plain), linear],
+        proptest::option::of(units()),
+    )
+        .prop_map(|(through, units)| {
+            let mut encoder = encoder_of(ArgType::F64, Shape::Float(32));
+            encoder.through = through;
+            encoder.units = units;
+            encoder
+        })
+        .boxed()
 }
 
 /// Two values from `range`, in order.

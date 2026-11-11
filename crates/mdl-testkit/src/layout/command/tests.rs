@@ -10,7 +10,9 @@ use serde_json::Value;
 use super::encoders::f64_encoder;
 use super::requests::{buffer, decoded_value, native, raw_of};
 use super::values::{unrounded, value};
-use super::{Arg, ArgType, Commands, Given, Len, Shape, Target, Through, commands, encoder_of};
+use super::{
+    Arg, ArgType, Commands, Given, Len, Shape, Stage, Target, Through, commands, encoder_of,
+};
 use crate::coverage::features;
 use crate::layout::{Numeric, Raw};
 
@@ -424,4 +426,95 @@ fn commands_reach_every_feature() {
         .filter(|feature| !found.contains(*feature))
         .collect();
     assert!(missing.is_empty(), "never generated: {missing:?}");
+}
+
+/// Planted faults reach every refusal code §8 lists for single values and
+/// fields, and every decoding refusal this module plants, each by every
+/// route it has.
+#[test]
+fn faults_reach_every_code() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = commands();
+    let mut found = BTreeSet::new();
+    for _ in 0..300 {
+        let case = strategy.new_tree(&mut runner).unwrap().current();
+        for refused in &case.refused {
+            found.insert(format!("refused:{}", refused.code));
+            if refused.faults.len() >= 2 {
+                found.insert("refused:two faults".to_string());
+            }
+            let Some(first) = refused.faults.iter().min_by_key(|fault| fault.stage) else {
+                continue;
+            };
+            if let (Stage::Length(_), "bad_length") = (first.stage, first.code) {
+                found.insert("refused:bad_length/length field".to_string());
+            }
+            if first.code == "raw_range" {
+                let route = if first.argument.is_some() {
+                    "f64"
+                } else {
+                    "target"
+                };
+                found.insert(format!("refused:raw_range/{route}"));
+            }
+            // §3.5: a length field's fault is caught after a later entry's.
+            let length_after_later =
+                refused
+                    .faults
+                    .iter()
+                    .any(|fault| match (fault.stage, first.stage) {
+                        (Stage::Length(measured), Stage::Field(later)) => later > measured,
+                        _ => false,
+                    });
+            if length_after_later {
+                found.insert("refused:length field after a later entry".to_string());
+            }
+        }
+        for garbled in &case.garbled {
+            found.insert(format!("garbled:{}", garbled.code));
+            if garbled.code == "no_packet" {
+                found.insert(format!("garbled:no_packet/{}", garbled.planted));
+            }
+        }
+    }
+    let required = [
+        "refused:unknown_set",
+        "refused:unknown_command",
+        "refused:unknown_argument",
+        "refused:duplicate_argument",
+        "refused:missing_argument",
+        "refused:wrong_type",
+        "refused:non_finite",
+        "refused:unknown_state",
+        "refused:out_of_range",
+        "refused:not_default",
+        "refused:raw_range",
+        "refused:raw_range/f64",
+        "refused:raw_range/target",
+        "refused:missing_target",
+        "refused:target_type",
+        "refused:invalid_text",
+        "refused:contains_terminator",
+        "refused:bad_length",
+        "refused:bad_length/length field",
+        "refused:two faults",
+        "refused:length field after a later entry",
+        "garbled:unknown_set",
+        "garbled:wrong_encoding",
+        "garbled:no_packet",
+        "garbled:no_packet/an empty payload",
+        "garbled:no_packet/no metadata",
+        "garbled:no_packet/a key no packet has",
+        "garbled:bad_checksum",
+        "garbled:wrong_constant",
+        "garbled:unknown_state",
+        "garbled:out_of_range",
+        "garbled:non_finite",
+        "garbled:past_end",
+    ];
+    let missing: Vec<&str> = required
+        .into_iter()
+        .filter(|feature| !found.contains(*feature))
+        .collect();
+    assert!(missing.is_empty(), "never planted: {missing:?}");
 }
