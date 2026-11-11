@@ -10,9 +10,27 @@ use super::{
 };
 use crate::layout::{Raw, convert, encode, fit, put_bits};
 
+/// A valid request, before what it encodes to is worked out: each
+/// argument's spelled value, if given, by catalog index; the target; and
+/// the given arguments in the order the request gives them.
+#[derive(Debug, Clone)]
+pub(super) struct Parts {
+    pub(super) given: Vec<Option<Given>>,
+    pub(super) target: Option<Target>,
+    pub(super) named: Vec<(String, Given)>,
+}
+
 /// A request for a packet's command, with the payload it encodes to and
 /// what decoding that payload gives back.
 pub(super) fn request(layout: Layout) -> BoxedStrategy<Request> {
+    (Just(layout.clone()), parts(&layout))
+        .prop_map(|(layout, parts)| outcome(&layout, &parts.given, parts.target, parts.named))
+        .boxed()
+}
+
+/// A valid request's parts: values the catalog allows, arguments with
+/// defaults sometimes left out, in any order.
+pub(super) fn parts(layout: &Layout) -> BoxedStrategy<Parts> {
     let given: Vec<BoxedStrategy<Option<Given>>> = layout
         .arguments
         .iter()
@@ -34,8 +52,8 @@ pub(super) fn request(layout: Layout) -> BoxedStrategy<Request> {
         Some(shape) => target_value(shape).prop_map(Some).boxed(),
         None => Just(None).boxed(),
     };
-    (Just(layout), given, target)
-        .prop_flat_map(|(layout, given, target)| {
+    (given, target)
+        .prop_flat_map(|(given, target)| {
             let named: Vec<(String, Given)> = given
                 .iter()
                 .enumerate()
@@ -43,14 +61,13 @@ pub(super) fn request(layout: Layout) -> BoxedStrategy<Request> {
                     given.clone().map(|given| (format!("a{index}"), given))
                 })
                 .collect();
-            (
-                Just(layout),
-                Just(given),
-                Just(target),
-                Just(named).prop_shuffle(),
-            )
+            (Just(given), Just(target), Just(named).prop_shuffle())
         })
-        .prop_map(|(layout, given, target, named)| outcome(&layout, &given, target, named))
+        .prop_map(|(given, target, named)| Parts {
+            given,
+            target,
+            named,
+        })
         .boxed()
 }
 
@@ -142,16 +159,7 @@ fn outcome(
     target: Option<Target>,
     named: Vec<(String, Given)>,
 ) -> Request {
-    let values: Vec<Option<Arg>> = layout
-        .arguments
-        .iter()
-        .zip(given)
-        .map(|((encoder, encoded), given)| match (encoded, given) {
-            (false, _) => None,
-            (true, Some(given)) => Some(value_of(given, &encoder.ty)),
-            (true, None) => encoder.default.clone(),
-        })
-        .collect();
+    let values = values(layout, given);
     let packed = pack(layout, &values, target.as_ref());
     let decoded_values: Vec<Option<Arg>> = layout
         .arguments
@@ -209,19 +217,36 @@ fn outcome(
     }
 }
 
+/// Each encoded argument's value, given or its default, by catalog index.
+pub(super) fn values(layout: &Layout, given: &[Option<Given>]) -> Vec<Option<Arg>> {
+    layout
+        .arguments
+        .iter()
+        .zip(given)
+        .map(|((encoder, encoded), given)| match (encoded, given) {
+            (false, _) => None,
+            (true, Some(given)) => Some(value_of(given, &encoder.ty)),
+            (true, None) => encoder.default.clone(),
+        })
+        .collect()
+}
+
 /// A payload and what its fields hold.
-struct Packed {
-    payload: Vec<u8>,
-    record: Vec<(String, Raw)>,
+pub(super) struct Packed {
+    pub(super) payload: Vec<u8>,
+    pub(super) record: Vec<(String, Raw)>,
     /// Each encoded argument's raw value, by argument index.
-    arguments: Vec<Option<Raw>>,
-    target: Option<Raw>,
+    pub(super) arguments: Vec<Option<Raw>>,
+    pub(super) target: Option<Raw>,
+    /// Each field's and checksum's place in the payload, by entry index:
+    /// its first bit and how many bits it takes.
+    pub(super) places: Vec<Option<(u64, u64)>>,
 }
 
 /// Packs a packet (`spec/encoding.md` §3, §4): each field's raw value, a
 /// length field's from the entry after it, written bit by bit in place,
 /// then each checksum in order of position over the bytes it covers.
-fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
+pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
     let mut raws: Vec<Option<Raw>> = layout
         .entries
         .iter()
@@ -261,7 +286,7 @@ fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Pac
     }
     let mut payload = Vec::new();
     let mut at = 0_u64;
-    let mut sums = Vec::new();
+    let mut places = vec![None; layout.entries.len()];
     for (k, entry) in layout.entries.iter().enumerate() {
         match entry {
             Placed::Padding(bits) => at += bits,
@@ -273,34 +298,28 @@ fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Pac
                         grow(&mut payload, at + 8 * bytes.len() as u64);
                         let first = (at / 8) as usize;
                         payload[first..first + bytes.len()].copy_from_slice(&bytes);
+                        places[k] = Some((at, 8 * bytes.len() as u64));
                         at += 8 * bytes.len() as u64;
                     }
                     _ => {
                         let size = shape.bits().unwrap_or(0);
                         grow(&mut payload, at + u64::from(size));
                         put_bits(&mut payload, at, size, pattern(raw, shape), *little);
+                        places[k] = Some((at, u64::from(size)));
                         at += u64::from(size);
                     }
                 }
             }
-            Placed::Checksum {
-                algorithm,
-                from_bits,
-                ..
-            } => {
+            Placed::Checksum { algorithm, .. } => {
                 let size = u64::from(algorithm.bits());
                 grow(&mut payload, at + size);
-                sums.push((k, at, *from_bits, algorithm));
+                places[k] = Some((at, size));
                 at += size;
             }
         }
     }
     grow(&mut payload, at);
-    for (k, start, from, algorithm) in sums {
-        let (start, from) = ((start / 8) as usize, (from / 8) as usize);
-        let value = algorithm.compute(&payload[from..start]);
-        let stored = algorithm.stored(value, layout.little);
-        payload[start..start + stored.len()].copy_from_slice(&stored);
+    for (k, value) in write_checksums(layout, &mut payload, &places) {
         raws[k] = Some(Raw::Uint(value));
     }
     let mut record = Vec::new();
@@ -326,7 +345,37 @@ fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Pac
         record,
         arguments,
         target: target_raw,
+        places,
     }
+}
+
+/// Writes each checksum, in order of position, over the bytes it covers
+/// as they are by then (`spec/encoding.md` §4), and gives each one's value
+/// by entry index.
+pub(super) fn write_checksums(
+    layout: &Layout,
+    payload: &mut [u8],
+    places: &[Option<(u64, u64)>],
+) -> Vec<(usize, u64)> {
+    let mut values = Vec::new();
+    for (k, entry) in layout.entries.iter().enumerate() {
+        if let (
+            Placed::Checksum {
+                algorithm,
+                from_bits,
+                ..
+            },
+            Some((start, _)),
+        ) = (entry, places[k])
+        {
+            let (start, from) = ((start / 8) as usize, (from_bits / 8) as usize);
+            let value = algorithm.compute(&payload[from..start]);
+            let stored = algorithm.stored(value, layout.little);
+            payload[start..start + stored.len()].copy_from_slice(&stored);
+            values.push((k, value));
+        }
+    }
+    values
 }
 
 /// Makes the payload at least `bits` long, in whole bytes of zeros.

@@ -253,13 +253,20 @@ struct Placer {
     /// Byte-aligned positions of earlier entries, in every payload.
     starts: Vec<u64>,
     entries: Vec<Placed>,
+    /// Whether each entry starts where it does in every payload.
+    statics: Vec<bool>,
 }
 
 impl Placer {
+    fn push(&mut self, entry: Placed) {
+        self.statics.push(self.fixed);
+        self.entries.push(entry);
+    }
+
     fn pad_to_byte(&mut self) {
         let skip = (8 - self.at % 8) % 8;
         if skip > 0 {
-            self.entries.push(Placed::Padding(skip));
+            self.push(Placed::Padding(skip));
             self.at += skip;
         }
     }
@@ -306,7 +313,7 @@ impl Placer {
         }
         self.note_start();
         let bits = shape.bits();
-        self.entries.push(Placed::Field {
+        self.push(Placed::Field {
             name,
             shape,
             little,
@@ -335,7 +342,7 @@ impl Placer {
         };
         self.note_start();
         self.at += u64::from(algorithm.bits());
-        self.entries.push(Placed::Checksum {
+        self.push(Placed::Checksum {
             name,
             algorithm,
             from_bits,
@@ -396,6 +403,7 @@ pub(super) fn lay_out(
         fixed: true,
         starts: Vec::new(),
         entries: Vec::new(),
+        statics: Vec::new(),
     };
     placer.field("op".into(), key.0, false, Source::Constant(key.1));
     let early = |position: usize| spec.early.get(position).copied().unwrap_or(false);
@@ -437,5 +445,6 @@ pub(super) fn lay_out(
         apid,
         arguments: spec.arguments,
         entries: placer.entries,
+        statics: placer.statics,
     }
 }
