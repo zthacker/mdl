@@ -81,6 +81,12 @@
             "default": [1, 2]
           }
         ]
+      },
+      "sink.mark": {
+        "description": "Stamp the sink's log with a sequence number",
+        "arguments": [
+          { "name": "stamp", "type": "u64", "range": { "min": 1, "max": "1152921504606846975" } }
+        ]
       }
     }
   },
@@ -728,6 +734,15 @@
               "from_bits": 8,
               "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535, "reflect_in": true, "reflect_out": true, "xor_out": 65535 }
             }
+          ]
+        },
+        {
+          "name": "MARK",
+          "canonical": "sink.mark",
+          "metadata": { "msg": 9 },
+          "entries": [
+            { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 8 },
+            { "kind": "field", "name": "stamp", "type": "uint", "size_bits": 60, "byte_order": "big", "argument": "stamp" }
           ]
         }
       ]

@@ -25,13 +25,16 @@
 //! against the catalog it pins; what a compatible catalog may change
 //! (descriptions, deprecations, limits) is read from the latest catalog.
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 
 use thiserror::Error;
 
 use crate::canonical::{self, CanonicalError};
 use crate::diagnostics::{Code, Diagnostics, Place, Report};
-use crate::ir::{ArgumentRange, Artifact, Bundle, Catalog, Command, Digest, IrVersion, Param, Set};
+use crate::ir::{
+    ArgumentRange, Artifact, Bundle, Catalog, Command, Digest, IrVersion, Literal, Param, Set,
+};
 use crate::read::Loaded;
 use crate::validate::{Validated, validate};
 
@@ -490,7 +493,7 @@ fn compare_command(
                 ),
             );
         }
-        if narrows(argument.range, now.range) {
+        if narrows(argument.range.as_ref(), now.range.as_ref()) {
             changed(
                 at.key("range"),
                 format!(
@@ -528,20 +531,16 @@ fn compare_command(
 
 /// Does `after` refuse a value `before` allowed? An open end allows every
 /// value on its side.
-fn narrows(before: Option<ArgumentRange>, after: Option<ArgumentRange>) -> bool {
-    let before = before.unwrap_or_default();
-    let after = after.unwrap_or_default();
-    let min_raised = match (before.min, after.min) {
+fn narrows(before: Option<&ArgumentRange>, after: Option<&ArgumentRange>) -> bool {
+    let open = ArgumentRange::default();
+    let (before, after) = (before.unwrap_or(&open), after.unwrap_or(&open));
+    let moved = |old: &Option<Literal>, new: &Option<Literal>, inward: Ordering| match (old, new) {
         (_, None) => false,
         (None, Some(_)) => true,
-        (Some(old), Some(new)) => new > old,
+        (Some(old), Some(new)) => new.compare_end(old) == Some(inward),
     };
-    let max_lowered = match (before.max, after.max) {
-        (_, None) => false,
-        (None, Some(_)) => true,
-        (Some(old), Some(new)) => new < old,
-    };
-    min_raised || max_lowered
+    moved(&before.min, &after.min, Ordering::Greater)
+        || moved(&before.max, &after.max, Ordering::Less)
 }
 
 fn compare(name: &str, before: &Param, after: &Param, place: &Place, report: &mut Report) {

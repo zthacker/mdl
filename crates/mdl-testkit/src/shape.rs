@@ -332,7 +332,9 @@ fn command(given: f64) -> Gen {
 }
 
 fn argument(given: f64) -> Gen {
-    let range = (maybe(given, finite()), maybe(given, finite()))
+    // An end is a number, or an integer past ±(2^53 − 1) as a string.
+    let end = || prop_oneof![2 => finite(), 1 => safe_int(), 1 => wide_int_text()].boxed();
+    let range = (maybe(given, end()), maybe(given, end()))
         .prop_map(|(min, max)| object([("min", min), ("max", max)]))
         .boxed();
     let bounds = (maybe(given, u32_value()), maybe(given, u32_value()))

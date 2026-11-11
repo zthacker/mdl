@@ -93,7 +93,7 @@
             "name": "waypoints_azimuth",
             "type": "u64",
             "range": {
-              "max": 65535.0
+              "max": 65535
             },
             "list": {
               "max": 255
@@ -103,7 +103,7 @@
             "name": "waypoints_elevation",
             "type": "u64",
             "range": {
-              "max": 65535.0
+              "max": 65535
             },
             "list": {
               "max": 255
@@ -119,8 +119,8 @@
             "type": "f64",
             "unit": "A",
             "range": {
-              "min": 0.0,
-              "max": 5.0
+              "min": 0,
+              "max": 5
             }
           }
         ],
@@ -138,7 +138,7 @@
             "type": "u64",
             "unit": "min",
             "range": {
-              "max": 65535.0
+              "max": 65535
             }
           }
         ]
@@ -158,8 +158,8 @@
             "type": "u64",
             "unit": "s",
             "range": {
-              "min": 0.0,
-              "max": 3600.0
+              "min": 0,
+              "max": 3600
             },
             "default": 0,
             "description": "Seconds to wait before switching"

@@ -1,16 +1,18 @@
 //! Catalog checks: every canonical param is well formed.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use super::rules::{
-    MAX_SAFE_INTEGER, check_finite, check_integer_spelling, check_not_empty, check_scalar,
-    check_unit_code, integer_value, is_canonical_name, is_identifier,
+    check_finite, check_integer_spelling, check_not_empty, check_scalar, check_unit_code,
+    integer_value, is_canonical_name, is_identifier,
 };
 use crate::canonical::format_double;
 use crate::diagnostics::{Code, Place, Report};
+use crate::encode::show_end;
 use crate::ir::{
     Argument, ArgumentRange, Catalog, Command, Frame, Limits, ListBounds, Literal, Param,
-    ParamType, Scalar,
+    ParamType, RangeEnds, Scalar,
 };
 
 pub(super) fn check(catalog: &Catalog, place: &Place, report: &mut Report) {
@@ -193,7 +195,7 @@ fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
     }
     check_states(argument.ty, &argument.states, "argument", place, report);
     if let Some(range) = &argument.range {
-        check_range(argument.ty, range, &place.key("range"), report);
+        check_range(argument, range, &place.key("range"), report);
     }
     if let Some(list) = &argument.list {
         check_list(list, &place.key("list"), report);
@@ -295,12 +297,13 @@ fn check_list(list: &ListBounds, place: &Place, report: &mut Report) {
     }
 }
 
-fn is_integer_type(ty: ParamType) -> bool {
-    matches!(ty, ParamType::I64 | ParamType::U64)
-}
-
-fn check_range(ty: ParamType, range: &ArgumentRange, place: &Place, report: &mut Report) {
-    if !matches!(ty, ParamType::F64 | ParamType::I64 | ParamType::U64) {
+/// A range's ends are values of the argument's type, written as a default
+/// is, in order.
+fn check_range(argument: &Argument, range: &ArgumentRange, place: &Place, report: &mut Report) {
+    if !matches!(
+        argument.ty,
+        ParamType::F64 | ParamType::I64 | ParamType::U64
+    ) {
         report.error(
             Code::ParamShape,
             place,
@@ -308,7 +311,7 @@ fn check_range(ty: ParamType, range: &ArgumentRange, place: &Place, report: &mut
         );
         return;
     }
-    let bounds = [("min", range.min), ("max", range.max)];
+    let bounds = [("min", &range.min), ("max", &range.max)];
     if bounds.iter().all(|(_, bound)| bound.is_none()) {
         report.error(
             Code::Empty,
@@ -318,37 +321,103 @@ fn check_range(ty: ParamType, range: &ArgumentRange, place: &Place, report: &mut
         return;
     }
     for (name, bound) in bounds {
-        let Some(bound) = bound else {
-            continue;
-        };
-        let bound_place = place.key(name);
-        check_finite(bound, name, &bound_place, report);
-        if is_integer_type(ty) && bound.is_finite() {
-            if bound.fract() != 0.0 {
-                report.error(
-                    Code::ValueRange,
-                    &bound_place,
-                    format!("an integer argument's {name} is an integer, not {bound}"),
-                );
-            } else if bound.abs() > MAX_SAFE_INTEGER as f64 {
-                report.error(
-                    Code::UnsafeInteger,
-                    &bound_place,
-                    format!(
-                        "{name} {bound} is outside ±(2^53 - 1), where every JSON reader agrees"
-                    ),
-                );
-            }
+        if let Some(bound) = bound {
+            check_end(argument, bound, name, &place.key(name), report);
         }
     }
-    if let (Some(min), Some(max)) = (range.min, range.max)
-        && min > max
+    if let (Some(min), Some(max)) = (&range.min, &range.max)
+        && min.compare_end(max) == Some(Ordering::Greater)
     {
         report.error(
             Code::LimitsOrder,
             place,
-            format!("min {min} is greater than max {max}"),
+            format!(
+                "min {} is greater than max {}",
+                show_end(min),
+                show_end(max)
+            ),
         );
+    }
+}
+
+/// One end of a range: a finite number for an f64 argument; for a u64 or
+/// i64 one an integer of the type, a number within ±(2^53 − 1) and a
+/// decimal string beyond, as a default is written.
+fn check_end(argument: &Argument, end: &Literal, name: &str, place: &Place, report: &mut Report) {
+    match (argument.ty, end) {
+        (ParamType::F64, Literal::Int(_)) => {}
+        (ParamType::F64, Literal::Float(x)) => check_finite(*x, name, place, report),
+        (ParamType::F64, _) => report.error(
+            Code::ValueRange,
+            place,
+            format!("an f64 argument's {name} is a number"),
+        ),
+        (_, Literal::Float(x)) if x.fract() != 0.0 => report.error(
+            Code::ValueRange,
+            place,
+            format!(
+                "an integer argument's {name} is an integer, not {}",
+                format_double(*x)
+            ),
+        ),
+        // A whole number past i64 reads as a double (`ir::Literal`).
+        (_, Literal::Float(x)) => report.error(
+            Code::UnsafeInteger,
+            place,
+            format!(
+                "{name} {} is outside ±(2^53 - 1), so some JSON readers would change it; write \
+                 it as a decimal string",
+                format_double(*x)
+            ),
+        ),
+        (_, Literal::Int(n)) => check_scalar(&Scalar::Int(*n), name, place, report),
+        (_, Literal::Str(text)) if end.as_integer().is_some() => {
+            check_integer_spelling(&Scalar::Str(text.clone()), name, place, report);
+        }
+        _ => {
+            return report.error(
+                Code::ValueRange,
+                place,
+                format!(
+                    "an integer argument's {name} is an integer: a number, or a decimal string \
+                     past ±(2^53 - 1)"
+                ),
+            );
+        }
+    }
+    // An integer end is a value of the type, as a default is.
+    if let (Some((low, high, what)), Some(n)) = (integer_type(argument.ty), end.as_integer())
+        && !(low..=high).contains(&n)
+    {
+        report.error(
+            Code::ValueRange,
+            place,
+            format!("argument {} is {what}, so its {name} is too", argument.name),
+        );
+    }
+}
+
+/// The integers a u64 or i64 argument can be, and what it is.
+fn integer_type(ty: ParamType) -> Option<(i128, i128, &'static str)> {
+    match ty {
+        ParamType::U64 => Some((0, i128::from(u64::MAX), "an unsigned 64-bit integer")),
+        ParamType::I64 => Some((
+            i128::from(i64::MIN),
+            i128::from(i64::MAX),
+            "a signed 64-bit integer",
+        )),
+        _ => None,
+    }
+}
+
+/// Whether an argument's range ends are values of its type, in order, so
+/// a default can be judged against them.
+fn usable(argument: &Argument) -> bool {
+    match argument.range_ends() {
+        Some(RangeEnds::Numbers(Some(min), Some(max))) => min <= max,
+        Some(RangeEnds::Integers(Some(min), Some(max))) => min <= max,
+        Some(_) => true,
+        None => false,
     }
 }
 
@@ -364,11 +433,10 @@ fn check_default(argument: &Argument, default: &Literal, place: &Place, report: 
             ),
         );
     };
-    let number = match (argument.ty, default) {
-        (ParamType::Bool, Literal::Bool(_)) => None,
+    let numeric = match (argument.ty, default) {
+        (ParamType::Bool, Literal::Bool(_)) => false,
         (ParamType::Bool, _) => return wrong(report, "a bool"),
-        (ParamType::F64, Literal::Int(n)) => Some(*n as f64),
-        (ParamType::F64, Literal::Float(x)) => Some(*x),
+        (ParamType::F64, Literal::Int(_) | Literal::Float(_)) => true,
         (ParamType::F64, _) => return wrong(report, "a number"),
         // A whole number past i64 reads as a double (`ir::Literal`).
         (ParamType::I64 | ParamType::U64, Literal::Float(x)) if x.fract() == 0.0 => {
@@ -391,27 +459,16 @@ fn check_default(argument: &Argument, default: &Literal, place: &Place, report: 
             };
             check_scalar(&scalar, "default", place, report);
             check_integer_spelling(&scalar, "default", place, report);
-            let (low, high) = if argument.ty == ParamType::U64 {
-                (0, i128::from(u64::MAX))
-            } else {
-                (i128::from(i64::MIN), i128::from(i64::MAX))
+            let Some((low, high, what)) = integer_type(argument.ty) else {
+                return;
             };
             match integer_value(&scalar) {
-                Some(n) if (low..=high).contains(&n) => Some(n as f64),
-                _ => {
-                    return wrong(
-                        report,
-                        if argument.ty == ParamType::U64 {
-                            "an unsigned 64-bit integer"
-                        } else {
-                            "a signed 64-bit integer"
-                        },
-                    );
-                }
+                Some(n) if (low..=high).contains(&n) => true,
+                _ => return wrong(report, what),
             }
         }
         (ParamType::I64 | ParamType::U64, _) => return wrong(report, "an integer"),
-        (ParamType::Str, Literal::Str(_)) => None,
+        (ParamType::Str, Literal::Str(_)) => false,
         (ParamType::Str, _) => return wrong(report, "a string"),
         (ParamType::Bytes, Literal::Str(hex)) => {
             let lowercase_hex = hex.len() % 2 == 0
@@ -427,7 +484,7 @@ fn check_default(argument: &Argument, default: &Literal, place: &Place, report: 
                     ),
                 );
             }
-            None
+            false
         }
         (ParamType::Bytes, _) => return wrong(report, "bytes (lowercase hexadecimal)"),
         (ParamType::Enum, Literal::Str(state)) => {
@@ -438,30 +495,31 @@ fn check_default(argument: &Argument, default: &Literal, place: &Place, report: 
                     format!("{state:?} isn't one of argument {}'s states", argument.name),
                 );
             }
-            None
+            false
         }
         (ParamType::Enum, _) => return wrong(report, "an enum (a state name)"),
         // Reported on the argument's type.
-        (ParamType::Vec3 | ParamType::Quat, _) => None,
+        (ParamType::Vec3 | ParamType::Quat, _) => false,
     };
     // A default isn't judged against a range that's wrong itself.
-    let usable = argument.range.filter(|range| {
-        let finite = range.min.is_none_or(f64::is_finite) && range.max.is_none_or(f64::is_finite);
-        let ordered = match (range.min, range.max) {
-            (Some(min), Some(max)) => min <= max,
-            _ => true,
-        };
-        finite && ordered
-    });
-    if let (Some(value), Some(range)) = (number, usable) {
-        let below = range.min.is_some_and(|min| value < min);
-        let above = range.max.is_some_and(|max| value > max);
+    if let (true, Some(range)) = (numeric, &argument.range)
+        && usable(argument)
+    {
+        let below = range
+            .min
+            .as_ref()
+            .is_some_and(|min| default.compare_end(min) == Some(Ordering::Less));
+        let above = range
+            .max
+            .as_ref()
+            .is_some_and(|max| default.compare_end(max) == Some(Ordering::Greater));
         if below || above {
             report.error(
                 Code::DefaultValue,
                 place,
                 format!(
-                    "default {value} is outside argument {}'s range",
+                    "default {} is outside argument {}'s range",
+                    show_end(default),
                     argument.name
                 ),
             );

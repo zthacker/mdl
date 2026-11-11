@@ -959,6 +959,23 @@ fn inspect_param_lists_every_entry_that_sends_it() {
     );
 }
 
+/// A range end past ±(2^53 - 1), which the IR writes as a decimal string,
+/// is shown as the integer it is.
+#[test]
+fn inspect_command_shows_a_wide_range_end_as_its_integer() {
+    let out = morphc_in(
+        &paired(),
+        &["inspect", "command", "sink.mark", "-"],
+        Some(FULL_BUNDLE),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("    stamp  u64, range 1..1152921504606846975\n"),
+        "{text}"
+    );
+}
+
 #[test]
 fn inspect_command_lists_every_packet_that_encodes_it() {
     let out = morphc_in(

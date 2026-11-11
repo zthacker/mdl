@@ -2458,6 +2458,64 @@ fn argument_ranges_and_defaults_fit_their_argument() {
     );
 }
 
+/// A range's ends are values of its argument's type, written as defaults
+/// are: an integer argument's past ±(2^53 - 1) are decimal strings, and
+/// every comparison with them is exact. sink.mark's stamp is a u64 from 1
+/// to 2^60 - 1, which only a string writes.
+#[test]
+fn an_integer_arguments_range_ends_are_exact() {
+    let stamp = "/catalog/commands/sink.mark/arguments/0";
+    let range = |v: &mut Value, end: &str, value: Value| {
+        command(v, "sink.mark")["arguments"][0]["range"][end] = value;
+    };
+    assert_eq!(problems(|_| {}), vec![]);
+    for (value, code) in [
+        // Past ±(2^53 - 1) as a number, which some readers would change.
+        (json!(9_007_199_254_740_993_i64), Code::UnsafeInteger),
+        // A whole double past i64, which only a string writes exactly.
+        (json!(1e19), Code::UnsafeInteger),
+        // Within ±(2^53 - 1), a number.
+        (json!("42"), Code::IntegerAsString),
+        (json!("042"), Code::ValueRange),
+        (json!(7.5), Code::ValueRange),
+        (json!(true), Code::ValueRange),
+    ] {
+        assert_one(code, &format!("{stamp}/range/max"), |v| {
+            range(v, "max", value.clone())
+        });
+    }
+    // An end is a value of the type, as a default is.
+    for (ty, end, value) in [
+        ("u64", "min", json!(-5)),
+        ("u64", "max", json!("99999999999999999999")),
+        ("i64", "max", json!("18446744073709551615")),
+        ("i64", "min", json!("-99999999999999999999")),
+    ] {
+        assert_one(Code::ValueRange, &format!("{stamp}/range/{end}"), |v| {
+            command(v, "sink.mark")["arguments"][0]["type"] = json!(ty);
+            range(v, end, value.clone());
+        });
+    }
+    // 2^60 and 2^60 - 1 are the same double, but not the same integer.
+    assert_one(Code::LimitsOrder, &format!("{stamp}/range"), |v| {
+        range(v, "min", json!("1152921504606846976"));
+    });
+    assert_one(Code::DefaultValue, &format!("{stamp}/default"), |v| {
+        command(v, "sink.mark")["arguments"][0]["default"] = json!("1152921504606846976");
+    });
+    assert_eq!(
+        problems(|v| {
+            command(v, "sink.mark")["arguments"][0]["default"] = json!("1152921504606846975");
+        }),
+        vec![]
+    );
+    // An f64 argument's ends are numbers.
+    let gain = "/catalog/commands/sink.configure/arguments/1/range/max";
+    assert_one(Code::ValueRange, gain, |v| {
+        command(v, "sink.configure")["arguments"][1]["range"]["max"] = json!("4");
+    });
+}
+
 #[test]
 fn a_whole_number_past_i64_is_an_f64_default_and_not_an_integer_one() {
     // gain is binary32, which holds 1e21.

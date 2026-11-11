@@ -1,3 +1,4 @@
+use mdl::ir::{Argument, RangeEnds};
 use mdl::source::{Location, Sources};
 use mdl::validate::validate;
 use proptest::prelude::*;
@@ -375,6 +376,33 @@ fn integers_beyond_what_json_reads_exactly_become_decimal_strings() {
             "signed": -42
         })
     );
+}
+
+/// A range end past ±(2^53 - 1) is written as a plain TOML integer, and
+/// read as the decimal string the IR writes; past i64, where TOML has no
+/// integer, as that string itself.
+#[test]
+fn a_wide_range_end_is_a_plain_toml_integer() {
+    let command = r#"mdl_version = "2.0"
+
+[catalog.commands."eps.stamp"]
+arguments = [
+    { name = "low", type = "u64", range = { min = 1, max = 1152921504606846975 } },
+    { name = "high", type = "u64", range = { min = 0, max = "18446744073709551615" } },
+]
+"#;
+    let sources = sources(&[("command.toml", command)]);
+    let parsed = read(sources.iter()).unwrap();
+    let arguments = &parsed.bundle.catalog.commands["eps.stamp"].arguments;
+    let ranges: Vec<_> = arguments.iter().map(Argument::range_ends).collect();
+    assert_eq!(
+        ranges,
+        [
+            Some(RangeEnds::Integers(Some(1), Some((1 << 60) - 1))),
+            Some(RangeEnds::Integers(Some(0), Some(i128::from(u64::MAX)))),
+        ]
+    );
+    assert!(validate(parsed.bundle).is_ok());
 }
 
 #[test]

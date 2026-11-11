@@ -286,9 +286,10 @@ impl From<&str> for Scalar {
     }
 }
 
-/// A typed constant: a command argument's default. Validation checks it
-/// against the argument's type. A number with no fraction reads as an
-/// integer (`1.0` is `1`), as canonical JSON writes it, unless it's past
+/// A typed constant: a command argument's default, or an end of its range.
+/// Validation checks it against the argument's type. A number with no
+/// fraction reads as an integer (`1.0` is `1`), as canonical JSON writes
+/// it, unless it's past
 /// the i64 range, where only a double holds it (an f64 default of 1e19 is
 /// written `10000000000000000000`). An integer argument's values beyond
 /// ±(2^53 − 1), and bytes (lowercase hex), are strings. Literals compare
@@ -321,6 +322,82 @@ impl PartialEq for Literal {
             (Literal::List(a), Literal::List(b)) => a == b,
             _ => false,
         }
+    }
+}
+
+impl Literal {
+    /// An integer as the IR writes it: a number within ±(2^53 − 1), a
+    /// decimal string beyond.
+    fn integer(n: i128) -> Literal {
+        match i64::try_from(n) {
+            Ok(small) if small.unsigned_abs() <= MAX_SAFE_INTEGER => Literal::Int(small),
+            _ => Literal::Str(n.to_string()),
+        }
+    }
+
+    /// The number it is, for an f64 value: an integer or a double. `None`
+    /// for anything else.
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            Literal::Int(n) => Some(*n as f64),
+            Literal::Float(x) => Some(*x),
+            _ => None,
+        }
+    }
+
+    /// The integer it is, for a u64 or i64 value: a number in the i64
+    /// range, or a decimal string in its one spelling, as integers past
+    /// ±(2^53 − 1) are written. `None` for anything else.
+    pub fn as_integer(&self) -> Option<i128> {
+        match self {
+            Literal::Int(n) => Some(i128::from(*n)),
+            Literal::Str(text) => integer_text(text),
+            _ => None,
+        }
+    }
+
+    /// How two range ends compare: exactly as integers when both are, as
+    /// numbers otherwise. `None` when either is neither.
+    pub(crate) fn compare_end(&self, other: &Literal) -> Option<std::cmp::Ordering> {
+        match (self.as_integer(), other.as_integer()) {
+            (Some(a), Some(b)) => Some(a.cmp(&b)),
+            _ => self.as_number()?.partial_cmp(&other.as_number()?),
+        }
+    }
+}
+
+/// Integers convert to the IR's spelling, as [`Scalar`]'s do:
+/// `Literal::from(1_u64 << 60)` is the string `"1152921504606846976"`.
+impl From<i32> for Literal {
+    fn from(n: i32) -> Self {
+        Literal::integer(i128::from(n))
+    }
+}
+
+impl From<u32> for Literal {
+    fn from(n: u32) -> Self {
+        Literal::integer(i128::from(n))
+    }
+}
+
+impl From<i64> for Literal {
+    fn from(n: i64) -> Self {
+        Literal::integer(i128::from(n))
+    }
+}
+
+impl From<u64> for Literal {
+    fn from(n: u64) -> Self {
+        Literal::integer(i128::from(n))
+    }
+}
+
+/// A double as its JSON reads back: a whole number in the i64 range is an
+/// integer.
+impl From<f64> for Literal {
+    fn from(x: f64) -> Literal {
+        let whole = i64_from_integral(x).filter(|_| x.fract() == 0.0);
+        whole.map_or(Literal::Float(x), Literal::Int)
     }
 }
 
@@ -376,8 +453,7 @@ impl<'de> Visitor<'de> for LiteralVisitor {
     }
 
     fn visit_f64<E>(self, x: f64) -> Result<Literal, E> {
-        let whole = i64_from_integral(x).filter(|_| x.fract() == 0.0);
-        Ok(whole.map_or(Literal::Float(x), Literal::Int))
+        Ok(Literal::from(x))
     }
 
     fn visit_str<E>(self, s: &str) -> Result<Literal, E> {
@@ -691,32 +767,72 @@ impl Argument {
             description: None,
         }
     }
+
+    /// Its range's ends as its type reads them: open where the range gives
+    /// none, and both open without a range. `None` for an argument that
+    /// isn't numeric, or an end that isn't a value of its type (a finite
+    /// number for an f64 argument; for a u64 or i64 one, an integer of the
+    /// type), which validation refuses.
+    pub fn range_ends(&self) -> Option<RangeEnds> {
+        let open = ArgumentRange::default();
+        let range = self.range.as_ref().unwrap_or(&open);
+        match self.ty {
+            ParamType::F64 => {
+                let read = |end: &Option<Literal>| match end {
+                    None => Some(None),
+                    Some(end) => end.as_number().filter(|x| x.is_finite()).map(Some),
+                };
+                Some(RangeEnds::Numbers(read(&range.min)?, read(&range.max)?))
+            }
+            ParamType::U64 | ParamType::I64 => {
+                let (low, high) = if self.ty == ParamType::U64 {
+                    (0, i128::from(u64::MAX))
+                } else {
+                    (i128::from(i64::MIN), i128::from(i64::MAX))
+                };
+                let read = |end: &Option<Literal>| match end {
+                    None => Some(None),
+                    Some(end) => end
+                        .as_integer()
+                        .filter(|n| (low..=high).contains(n))
+                        .map(Some),
+                };
+                Some(RangeEnds::Integers(read(&range.min)?, read(&range.max)?))
+            }
+            _ => None,
+        }
+    }
 }
 
 /// The values a numeric argument may take, inclusive; either end may be
-/// open.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+/// open. An end is a value of the argument's type, written as its default
+/// would be: a number, or for a u64 or i64 argument past ±(2^53 − 1), a
+/// decimal string. [`Literal::as_number`] and [`Literal::as_integer`] read
+/// it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct ArgumentRange {
-    #[serde(
-        default,
-        serialize_with = "finite::option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub min: Option<f64>,
-    #[serde(
-        default,
-        serialize_with = "finite::option",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub max: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<Literal>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<Literal>,
 }
 
 impl ArgumentRange {
-    pub fn new(min: Option<f64>, max: Option<f64>) -> Self {
+    pub fn new(min: Option<Literal>, max: Option<Literal>) -> Self {
         ArgumentRange { min, max }
     }
+}
+
+/// A numeric argument's range ends as its type reads them, each `None`
+/// where the range is open: numbers for an f64 argument, integers exactly
+/// for a u64 or i64 one ([`Argument::range_ends`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum RangeEnds {
+    Numbers(Option<f64>, Option<f64>),
+    Integers(Option<i128>, Option<i128>),
 }
 
 /// How many values a list argument takes, inclusive; either end may be

@@ -8,8 +8,8 @@ use serde_json::Value;
 
 use super::commands::{Argument, Command};
 use super::{Element, Entry, Packet, Param, StructType, TypeId};
-use crate::out::{List, Object};
-use crate::types::{Order, Scalar};
+use crate::out::{List, Object, integer_json};
+use crate::types::{ArgumentRange, Order, Scalar};
 
 /// Everything the bundle is made of, once worked out.
 pub(super) struct Bundle<'a, 'd> {
@@ -162,9 +162,21 @@ fn argument_object(argument: &Argument<'_>) -> Object {
     }
     if let Some(range) = &scalar.range {
         let mut object_range = Object::at(scalar.el.span());
-        for (key, end) in [("min", range.min), ("max", range.max)] {
-            if let Some((value, span)) = end {
-                object_range.put(key, value, Some(span));
+        match range {
+            ArgumentRange::Number(range) => {
+                for (key, end) in [("min", range.min), ("max", range.max)] {
+                    if let Some((value, span)) = end {
+                        object_range.put(key, value, Some(span));
+                    }
+                }
+            }
+            // A decimal string past ±(2^53 - 1), as the IR writes integers.
+            ArgumentRange::Integer(range) => {
+                for (key, end) in [("min", range.min), ("max", range.max)] {
+                    if let Some((value, span)) = end {
+                        object_range.put(key, integer_json(value), Some(span));
+                    }
+                }
             }
         }
         object.put_object("range", object_range);

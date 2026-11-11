@@ -3,7 +3,7 @@ use serde_json::{Value as Json, json};
 
 use super::*;
 use crate::artifact::{Artifacts, Written, build};
-use crate::ir::Artifact;
+use crate::ir::{Artifact, RangeEnds};
 use crate::read::{Loaded, read_artifact, read_bundle};
 use crate::validate::validate;
 
@@ -1096,6 +1096,37 @@ fn negative_zero_at_an_end_of_zero_is_kept() {
     }
 }
 
+/// sink.mark's stamp is a u64 from 1 to 2^60 - 1, its top end a decimal
+/// string. The top value encodes into the 60-bit field and decodes back;
+/// the next one up, the same double, is refused, the range named exactly.
+#[test]
+fn an_integer_argument_reaches_the_top_of_a_field_wider_than_53_bits() {
+    let sets = sets_of(&fixture(), "sink");
+    let mark =
+        |stamp: u64| CommandRequest::new("sink_v1", "sink.mark").with_argument("stamp", stamp);
+    let top = (1_u64 << 60) - 1;
+    let encoded = sets.encode(&mark(top)).unwrap();
+    let mut payload = vec![0x08];
+    payload.extend([0xFF; 7]);
+    payload.push(0xF0);
+    assert_eq!(encoded.payload, payload);
+    let metadata = encoded.metadata();
+    let message = Message::new(Payload::Binary(&encoded.payload), Timestamp::UNIX_EPOCH)
+        .with_metadata(&metadata);
+    let decoded = sets.decode_command("sink_v1", &message).unwrap();
+    assert_eq!(
+        arguments(&decoded),
+        vec![("stamp".to_string(), ArgumentValue::Uint(top))]
+    );
+    let refused = sets.encode(&mark(top + 1)).unwrap_err();
+    assert_eq!(refused.code(), "out_of_range");
+    assert!(
+        refused.to_string().contains("1 to 1152921504606846975"),
+        "{refused}"
+    );
+    assert_eq!(code(sets.encode(&mark(0))), "out_of_range");
+}
+
 #[test]
 fn a_json_command_ignores_keys_its_packet_doesnt_define() {
     let sets = sets_of(&fixture(), "vendor_j");
@@ -1643,11 +1674,14 @@ fn value_strategy(
     field: &Field,
     lengths: BoxedStrategy<usize>,
 ) -> BoxedStrategy<ArgumentValue> {
-    let range = argument.range.unwrap_or_default();
+    let ends = argument.range_ends();
     match argument.ty {
         ParamType::F64 => {
-            let low = range.min.unwrap_or(-1e6);
-            let high = range.max.unwrap_or(1e6);
+            let Some(RangeEnds::Numbers(min, max)) = ends else {
+                return Just(ArgumentValue::Float(0.0)).boxed();
+            };
+            let low = min.unwrap_or(-1e6);
+            let high = max.unwrap_or(1e6);
             // The ends, and just inside them, where rounding matters most.
             prop_oneof![
                 4 => (low..=high).boxed(),
@@ -1665,8 +1699,11 @@ fn value_strategy(
             } else {
                 (i128::from(i64::MIN), i128::from(i64::MAX))
             };
-            let low = range.min.map_or(type_low, |min| min.ceil() as i128);
-            let high = range.max.map_or(type_high, |max| max.floor() as i128);
+            let Some(RangeEnds::Integers(min, max)) = ends else {
+                return Just(ArgumentValue::Uint(0)).boxed();
+            };
+            let low = min.unwrap_or(type_low);
+            let high = max.unwrap_or(type_high);
             let unsigned = argument.ty == ParamType::U64;
             prop_oneof![4 => (low..=high).boxed(), 1 => Just(low).boxed(), 1 => Just(high).boxed()]
                 .prop_map(move |n| {

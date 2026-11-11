@@ -708,3 +708,58 @@ fn integers_convert_to_the_spelling_the_ir_writes() {
         assert_eq!(Scalar::from(text).as_integer(), None, "{text:?}");
     }
 }
+
+/// A range's ends are literals, read by the argument's type: numbers for
+/// an f64 argument, integers exactly for a u64 or i64 one, which the IR
+/// writes as decimal strings past ±(2^53 - 1).
+#[test]
+fn range_ends_are_read_by_their_arguments_type() {
+    // Integers convert to the IR's spelling.
+    assert_eq!(Literal::from(42), Literal::Int(42));
+    assert_eq!(
+        Literal::from((1_u64 << 60) - 1),
+        Literal::Str("1152921504606846975".into())
+    );
+    assert_eq!(
+        Literal::from(i64::MIN).as_integer(),
+        Some(i128::from(i64::MIN))
+    );
+    // A double reads back as its JSON does: whole within i64, an integer.
+    assert_eq!(Literal::from(3.0), Literal::Int(3));
+    assert!(matches!(Literal::from(2.5), Literal::Float(_)));
+    assert!(matches!(Literal::from(1e19), Literal::Float(_)));
+    // Only an integer's one spelling is an integer.
+    for text in ["042", "-0", "+5", "4.0", "x"] {
+        assert_eq!(Literal::Str(text.into()).as_integer(), None, "{text}");
+    }
+
+    let argument = |ty: &str, range: Value| -> Argument {
+        serde_json::from_value(json!({ "name": "x", "type": ty, "range": range })).unwrap()
+    };
+    let wide = json!({ "min": 1, "max": "1152921504606846975" });
+    assert_eq!(
+        argument("u64", wide.clone()).range_ends(),
+        Some(RangeEnds::Integers(Some(1), Some((1 << 60) - 1)))
+    );
+    assert_eq!(
+        serde_json::to_value(argument("u64", wide.clone()).range).unwrap(),
+        wide
+    );
+    // Read by the wrong type, an end isn't open: the reader says so.
+    assert_eq!(argument("f64", wide).range_ends(), None);
+    assert_eq!(
+        argument("f64", json!({ "max": 2.5 })).range_ends(),
+        Some(RangeEnds::Numbers(None, Some(2.5)))
+    );
+    assert_eq!(argument("u64", json!({ "max": 2.5 })).range_ends(), None);
+    // An integer outside the type isn't one of its values.
+    assert_eq!(argument("u64", json!({ "min": -5 })).range_ends(), None);
+    assert_eq!(
+        argument("i64", json!({ "max": "18446744073709551615" })).range_ends(),
+        None
+    );
+    let open: Argument = serde_json::from_value(json!({ "name": "x", "type": "u64" })).unwrap();
+    assert_eq!(open.range_ends(), Some(RangeEnds::Integers(None, None)));
+    let flag: Argument = serde_json::from_value(json!({ "name": "x", "type": "bool" })).unwrap();
+    assert_eq!(flag.range_ends(), None);
+}

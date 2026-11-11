@@ -16,8 +16,8 @@ use crate::encode::{
     raw_unchecked,
 };
 use crate::ir::{
-    Argument, ArgumentRange, ArrayEntry, CommandPacket, Conversion, Digest, Element, Entry, Field,
-    ParamType, Scalar, ScalarElement, Set, StructType,
+    Argument, ArrayEntry, CommandPacket, Conversion, Digest, Element, Entry, Field, ParamType,
+    RangeEnds, Scalar, ScalarElement, Set, StructType,
 };
 use crate::message::Message;
 use crate::route::FamilySets;
@@ -387,18 +387,24 @@ fn argument_value(
         ),
         other => other,
     };
-    let (ArgumentValue::Float(x), Some(range)) = (&value, argument.range) else {
+    let (ArgumentValue::Float(x), Some(_)) = (&value, &argument.range) else {
         // Without a range, any finite value is allowed.
+        allowed(argument, &value)?;
+        return Ok(value);
+    };
+    // An end that isn't a number (which validation refuses) refuses every
+    // value, as `allowed` checks it.
+    let Some(RangeEnds::Numbers(min, max)) = argument.range_ends() else {
         allowed(argument, &value)?;
         return Ok(value);
     };
     if number(raw).is_none_or(|n| !n.is_finite()) {
         return Err(ArgumentProblem::NonFinite { given: show(raw) });
     }
-    in_raw_range(field, range, argument.unit.as_deref(), raw, binary)?;
+    in_raw_range(field, (min, max), argument.unit.as_deref(), raw, binary)?;
     // Past an end is strictly beyond it by value, so -0.0 at an end of 0
     // stays -0.0 (`f64::max` and `f64::min` may return either zero).
-    let held = match (range.min, range.max) {
+    let held = match (min, max) {
         (Some(min), _) if *x < min => min,
         (_, Some(max)) if *x > max => max,
         _ => *x,
@@ -413,14 +419,14 @@ fn argument_value(
 /// either order. An integer compares with the ends exactly.
 fn in_raw_range(
     field: &Field,
-    range: ArgumentRange,
+    (min, max): (Option<f64>, Option<f64>),
     unit: Option<&str>,
     raw: &Value<'_>,
     binary: bool,
 ) -> Result<(), ArgumentProblem> {
     let end =
         |bound: Option<f64>, open: f64| raw_unchecked(field, bound.unwrap_or(open), unit, binary);
-    let (Some(a), Some(b)) = (end(range.min, f64::MIN), end(range.max, f64::MAX)) else {
+    let (Some(a), Some(b)) = (end(min, f64::MIN), end(max, f64::MAX)) else {
         return Err(ArgumentProblem::WrongType {
             given: show(raw),
             expected: "a raw value this field's conversion takes",

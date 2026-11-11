@@ -80,6 +80,17 @@ min = 1
 max = 131070
 min = 0
 
+[catalog.commands."sink.mark"]
+description = "Stamp the sink's log with a sequence number"
+
+[[catalog.commands."sink.mark".arguments]]
+name = "stamp"
+type = "u64"
+
+[catalog.commands."sink.mark".arguments.range]
+max = "1152921504606846975"
+min = 1
+
 [catalog.params."eps.bus_current"]
 description = "Bus current, sampled at 10 Hz"
 type = "f64"
@@ -855,6 +866,28 @@ reflect_in = true
 reflect_out = true
 width = 16
 xor_out = 65535
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.commands]]
+canonical = "sink.mark"
+name = "MARK"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "op"
+size_bits = 8
+type = "uint"
+value = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
 
 [sets.commands.metadata]
 msg = 9

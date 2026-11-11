@@ -24,7 +24,7 @@ use super::entries::{from_field, size_tag};
 use super::{Entry, Field, Import};
 use crate::Code;
 use crate::names::{catalog_part, identifier};
-use crate::types::{Dynamic, Length, Raw, Scalar, Shape};
+use crate::types::{ArgumentRange, Dynamic, Length, Raw, Scalar, Shape};
 
 /// One value an argument takes: the argument itself, or one of its
 /// members, by the names of the members down to it.
@@ -303,7 +303,11 @@ impl<'d> Import<'d, '_> {
             (true, Some(bits)) if (1..=64).contains(&bits) => {
                 let high = (1_i128 << bits) - 1;
                 let (low, high) = match &scalar.range {
-                    Some(range) => (
+                    Some(ArgumentRange::Integer(range)) => (
+                        range.min.map_or(0, |(min, _)| min.max(0)),
+                        range.max.map_or(high, |(max, _)| max.min(high)),
+                    ),
+                    Some(ArgumentRange::Number(range)) => (
                         range.min.map_or(0, |(min, _)| (min.ceil() as i128).max(0)),
                         range
                             .max

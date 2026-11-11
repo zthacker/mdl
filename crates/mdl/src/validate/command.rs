@@ -13,10 +13,11 @@ use super::set::{KeyId, KeyValue, by_value, exact, key_order, used_types};
 use crate::canonical::format_double;
 use crate::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::diagnostics::{Code, Place, Report};
-use crate::encode::{FieldProblem, raw_unchecked, show_literal, write_problem};
+use crate::encode::{FieldProblem, raw_unchecked, show_end, show_literal, write_problem};
 use crate::ir::{
-    Argument, ArrayEntry, ByteLength, Catalog, CommandPacket, Conversion, Count, Element, Encoding,
-    Entry, Family, Field, Literal, ParamType, Scalar, ScalarElement, ScalarType, Set, StructType,
+    Argument, ArgumentRange, ArrayEntry, ByteLength, Catalog, CommandPacket, Conversion, Count,
+    Element, Encoding, Entry, Family, Field, Literal, ParamType, RangeEnds, Scalar, ScalarElement,
+    ScalarType, Set, StructType,
 };
 use crate::text;
 use crate::units::convert_between;
@@ -1416,7 +1417,7 @@ fn check_argument_field(encoder: &Encoder<'_>, argument: &Argument, report: &mut
     }
     // Coverage is checked at the range's ends, which bound the raw values
     // only once the inverse is known to be monotonic over the range.
-    let monotonic = check_inverse(encoder, argument, report);
+    let monotonic = readable_range(argument) && check_inverse(encoder, argument, report);
     if let Some(Conversion::Linear { scale, .. }) = field.conversion
         && scale == 0.0
     {
@@ -1489,6 +1490,14 @@ fn check_argument_field(encoder: &Encoder<'_>, argument: &Argument, report: &mut
     }
 }
 
+/// Whether an argument's range ends are values of its type (numbers for an
+/// f64 argument, integers of the type for a u64 or i64 one). One that isn't
+/// is reported on the catalog, so the checks that need the range leave it
+/// out.
+fn readable_range(argument: &Argument) -> bool {
+    argument.range.is_none() || argument.range_ends().is_some()
+}
+
 /// Evenly spaced points at which a polynomial inverse is checked over its
 /// argument's range (and the ends), as `spec/encoding.md` §3.1 says.
 const INVERSE_SAMPLES: u32 = 4096;
@@ -1535,11 +1544,15 @@ fn check_inverse(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report
     {
         return false;
     }
-    let range = argument.range.unwrap_or_default();
-    let (Some(min), Some(max)) = (range.min, range.max) else {
+    let ends = match argument.range_ends() {
+        Some(RangeEnds::Numbers(min, max)) => (min, max),
+        _ => (None, None),
+    };
+    let (Some(min), Some(max)) = ends else {
         // A range with no ends is reported on the catalog.
         if argument
             .range
+            .as_ref()
             .is_some_and(|r| r.min.is_none() && r.max.is_none())
         {
             return false;
@@ -1738,9 +1751,18 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
         ParamType::F64 => (f64::NEG_INFINITY, f64::INFINITY),
         _ => return,
     };
-    let range = argument.range.unwrap_or_default();
-    let low = range.min.unwrap_or(type_low);
-    let high = range.max.unwrap_or(type_high);
+    let open = ArgumentRange::default();
+    let range = argument.range.as_ref().unwrap_or(&open);
+    // Readable, or the catalog reports it and coverage isn't checked.
+    let (numbers, integers) = match argument.range_ends() {
+        Some(RangeEnds::Numbers(min, max)) => ((min, max), (None, None)),
+        Some(RangeEnds::Integers(min, max)) => {
+            ((min.map(|n| n as f64), max.map(|n| n as f64)), (min, max))
+        }
+        None => return,
+    };
+    let low = numbers.0.unwrap_or(type_low);
+    let high = numbers.1.unwrap_or(type_high);
     let (raw_low, raw_high) = match &field.conversion {
         // An f64 argument is first converted into the field's unit (an
         // integer argument is in it already).
@@ -1778,9 +1800,10 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
         _ => None,
     };
     let (low_raw, high_raw) = match own_ends {
+        // Its ends are integers, compared exactly.
         Some((own_low, own_high)) => (
-            range.min.map_or(Some(own_low), exact),
-            range.max.map_or(Some(own_high), exact),
+            Some(integers.0.unwrap_or(own_low)),
+            Some(integers.1.unwrap_or(own_high)),
         ),
         None => (exact(raw_low), exact(raw_high)),
     };
@@ -1789,9 +1812,14 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
     if fits {
         return;
     }
-    let promise = match (range.min, range.max) {
+    let shown = |end: &Option<Literal>, own: String| end.as_ref().map_or(own, show_end);
+    let (own_low, own_high) = match own_ends {
+        Some((own_low, own_high)) => (own_low.to_string(), own_high.to_string()),
+        None => (low.to_string(), high.to_string()),
+    };
+    let promise = match (&range.min, &range.max) {
         (None, None) => format!("has no range, so it can be any {}", type_label(argument.ty)),
-        _ => format!("can be {low} to {high}"),
+        (min, max) => format!("can be {} to {}", shown(min, own_low), shown(max, own_high)),
     };
     report.error(
         Code::ValueRange,
@@ -1811,13 +1839,13 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
 /// most definitions mean.
 fn check_float_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) {
     let field = encoder.field;
-    let Some(range) = argument.range.filter(|_| argument.ty == ParamType::F64) else {
+    let Some(RangeEnds::Numbers(min, max)) = argument.range_ends() else {
         return;
     };
     // A field has a size only in a binary payload.
     let binary = field.size_bits.is_some();
     let single = binary && field.size_bits == Some(32);
-    for end in [range.min, range.max].into_iter().flatten() {
+    for end in [min, max].into_iter().flatten() {
         // A unit that doesn't convert is reported on its own.
         let Some(raw) = raw_unchecked(field, end, argument.unit.as_deref(), binary) else {
             continue;

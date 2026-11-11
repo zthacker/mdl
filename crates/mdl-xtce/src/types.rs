@@ -178,16 +178,25 @@ pub(crate) struct Scalar<'d> {
     /// A number type's alarm ranges, as the param's limits.
     pub(crate) limits: Option<Limits>,
     /// A number argument type's valid range, as the argument's range.
-    pub(crate) range: Option<ValidRange>,
+    pub(crate) range: Option<ArgumentRange>,
     /// An argument type's initial value, as XTCE writes it.
     pub(crate) initial: Option<(&'d str, Span)>,
 }
 
+/// A number argument type's range: a float type's, its ends doubles, or
+/// an integer type's, its ends integers exactly, which MDL writes as
+/// decimal strings past ±(2^53 - 1).
+#[derive(Debug, Clone)]
+pub(crate) enum ArgumentRange {
+    Number(ValidRange),
+    Integer(ValidRange<i128>),
+}
+
 /// A valid range as MDL's: inclusive ends, each with where it came from.
 #[derive(Debug, Clone)]
-pub(crate) struct ValidRange {
-    pub(crate) min: Option<(f64, Span)>,
-    pub(crate) max: Option<(f64, Span)>,
+pub(crate) struct ValidRange<T = f64> {
+    pub(crate) min: Option<(T, Span)>,
+    pub(crate) max: Option<(T, Span)>,
     /// Where `validRangeAppliesToCalibrated="false"` says the range is on
     /// raw values.
     pub(crate) raw: Option<Span>,
@@ -763,15 +772,18 @@ fn integer<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>
     };
     let (limits, range) = match role {
         Role::Parameter => (limits(el, report), None),
-        Role::Argument => match valid_range(el, true, report)? {
-            Some(range) => (None, Some(range)),
+        Role::Argument => match integer_valid_range(el, report)? {
+            Some(range) => (None, Some(ArgumentRange::Integer(range))),
             None => {
                 let held = Held {
                     signed,
                     bits: type_bits,
                     param,
                 };
-                (None, integer_holds(&encoding, held, report))
+                (
+                    None,
+                    integer_holds(&encoding, held).map(ArgumentRange::Integer),
+                )
             }
         },
     };
@@ -809,8 +821,8 @@ fn float<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> 
         Role::Parameter => scalar.limits = limits(el, report),
         Role::Argument => {
             float_argument_differences(el, &encoding, report)?;
-            let given = valid_range(el, false, report)?;
-            scalar.range = match &encoding.calibrator {
+            let given = valid_range(el, report)?;
+            let range = match &encoding.calibrator {
                 None if encoding.ty != "float" => Some(rounded_range(given, &encoding, report)),
                 None => given,
                 Some(calibrator) => {
@@ -821,6 +833,7 @@ fn float<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> 
                     Some(range)
                 }
             };
+            scalar.range = range.map(ArgumentRange::Number);
             scalar.initial = initial(el, role);
         }
     }
@@ -978,8 +991,8 @@ struct Held {
 /// What an integer argument with no valid range may be: what its encoding
 /// holds, and its type too (`signed`, and `sizeInBits`, 32 by default),
 /// which Yamcs checks a value against. An end the catalog type has anyway
-/// is left out; one past ±(2^53 - 1) is cut there.
-fn integer_holds(encoding: &Encoding<'_>, held: Held, report: &mut Report) -> Option<ValidRange> {
+/// is left out.
+fn integer_holds(encoding: &Encoding<'_>, held: Held) -> Option<ValidRange<i128>> {
     let (field_low, field_high) = encoding_integers(encoding);
     let (type_low, type_high) = signed_or_not(held.signed, u32::try_from(held.bits).unwrap_or(64));
     let (own_low, own_high) = if held.param == "i64" {
@@ -989,11 +1002,8 @@ fn integer_holds(encoding: &Encoding<'_>, held: Held, report: &mut Report) -> Op
     };
     let (low, high) = (field_low.max(type_low), field_high.min(type_high));
     let span = encoding.size_span;
-    if (low > own_low && low < -SAFE) || (high < own_high && high > SAFE) {
-        past_safe(span, report);
-    }
-    let min = (low > own_low).then(|| (low.max(-SAFE) as f64, span));
-    let max = (high < own_high).then(|| (high.min(SAFE) as f64, span));
+    let min = (low > own_low).then_some((low, span));
+    let max = (high < own_high).then_some((high, span));
     (min.is_some() || max.is_some()).then_some(ValidRange {
         min,
         max,
@@ -1001,16 +1011,15 @@ fn integer_holds(encoding: &Encoding<'_>, held: Held, report: &mut Report) -> Op
     })
 }
 
-/// Values a range would hold but can't say, since its ends lie within
-/// ±(2^53 - 1).
+/// Values an f64 argument's worked-out range leaves out: the importer
+/// works it out within ±(2^53 - 1).
 fn past_safe(span: Span, report: &mut Report) {
     report.warning(
         Code::Differs,
         span,
         format!(
             "MDL refuses this argument's values past ±{SAFE}, which the encoding holds and \
-             Yamcs sends: an MDL range's ends lie within ±(2^53 - 1), where every JSON reader \
-             agrees"
+             Yamcs sends: the importer works an f64 argument's range out within ±(2^53 - 1)"
         ),
     );
 }
@@ -1257,7 +1266,7 @@ fn relative_time<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scal
             };
             let span = data.size_span;
             let range = derived_range(&to_raw, holds(&data), None, span, report)?;
-            scalar.range = Some(worked_out(span, range));
+            scalar.range = Some(ArgumentRange::Number(worked_out(span, range)));
         }
         scalar.initial = initial(el, role);
     }
@@ -2309,11 +2318,17 @@ fn initial<'d>(el: El<'d>, role: Role) -> Option<(&'d str, Span)> {
     }
 }
 
-/// A number argument type's valid range: one ValidRange, alone (XTCE 1.0
+/// A number argument type's ValidRange element: one, alone (XTCE 1.0
 /// and 1.1) or in a ValidRangeSet (1.1 and 1.2). Yamcs checks it against
 /// the engineering value whatever `validRangeAppliesToCalibrated` says,
 /// and the two are the same value for an uncalibrated type.
-fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<ValidRange>> {
+/// It also gives where `validRangeAppliesToCalibrated` says the range is
+/// on raw values.
+fn valid_range_element<'d>(
+    el: El<'d>,
+    integer: bool,
+    report: &mut Report,
+) -> Option<Option<(El<'d>, Option<Span>)>> {
     // XTCE 1.2 says it on the set, XTCE 1.0 and 1.1 on the range or the
     // type.
     let mut applies = el.attr("validRangeAppliesToCalibrated");
@@ -2379,6 +2394,20 @@ fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<
         },
         report,
     );
+    let applies = range.attr("validRangeAppliesToCalibrated").or(applies);
+    let raw = match applies {
+        Some(attr) => (!xml::boolean(attr, report)?).then_some(attr.span),
+        None => None,
+    };
+    Some(Some((range, raw)))
+}
+
+/// A float argument type's valid range: inclusive ends as they are, an
+/// exclusive one as the nearest double inside it.
+fn valid_range(el: El<'_>, report: &mut Report) -> Option<Option<ValidRange>> {
+    let Some((range, raw)) = valid_range_element(el, false, report)? else {
+        return Some(None);
+    };
     let end =
         |inclusive: &str, exclusive: &str, report: &mut Report| -> Option<Option<(f64, Span)>> {
             if let Some(attr) = range.attr(inclusive) {
@@ -2392,12 +2421,7 @@ fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<
                     ),
                 );
                 }
-                let value = if integer {
-                    exact_double(attr, report)?
-                } else {
-                    finite(attr, report)?
-                };
-                return Some(Some((value, attr.span)));
+                return Some(Some((finite(attr, report)?, attr.span)));
             }
             let Some(attr) = range.attr(exclusive) else {
                 return Some(None);
@@ -2414,30 +2438,24 @@ fn valid_range(el: El<'_>, integer: bool, report: &mut Report) -> Option<Option<
         };
     let min = end("minInclusive", "minExclusive", report)?;
     let max = end("maxInclusive", "maxExclusive", report)?;
-    let applies = range.attr("validRangeAppliesToCalibrated").or(applies);
-    let raw = match applies {
-        Some(attr) => (!xml::boolean(attr, report)?).then_some(attr.span),
-        None => None,
-    };
     Some((min.is_some() || max.is_some()).then_some(ValidRange { min, max, raw }))
 }
 
-/// An integer end of a range, which MDL holds within ±(2^53 - 1), where
-/// every JSON reader agrees.
-fn exact_double(attr: Attr<'_>, report: &mut Report) -> Option<f64> {
-    let value = xml::long(attr, report)?;
-    if i128::from(value).abs() <= SAFE {
-        return Some(value as f64);
-    }
-    report.error(
-        Code::Unsupported,
-        attr.span,
-        format!(
-            "{value} isn't supported as a range's end: an MDL range's ends lie within ±(2^53 - \
-             1), where every JSON reader agrees"
-        ),
-    );
-    None
+/// An integer argument type's valid range: its inclusive ends, exactly
+/// (`xs:long`, as XTCE's IntegerRangeType has them).
+fn integer_valid_range(el: El<'_>, report: &mut Report) -> Option<Option<ValidRange<i128>>> {
+    let Some((range, raw)) = valid_range_element(el, true, report)? else {
+        return Some(None);
+    };
+    let end = |name: &str, report: &mut Report| -> Option<Option<(i128, Span)>> {
+        match range.attr(name) {
+            Some(attr) => Some(Some((i128::from(xml::long(attr, report)?), attr.span))),
+            None => Some(None),
+        }
+    };
+    let min = end("minInclusive", report)?;
+    let max = end("maxInclusive", report)?;
+    Some((min.is_some() || max.is_some()).then_some(ValidRange { min, max, raw }))
 }
 
 /// A finite double.
