@@ -74,8 +74,16 @@ request that leaves an argument out never fails on the argument's default.
 ### 2.3 Ranges
 
 A numeric argument with a `range` MUST lie within it, ends included
-[`out_of_range`]. An integer is compared with a bound exactly, not after
-converting it to a double.
+[`out_of_range`]. A range's ends are values of the argument's type,
+written as defaults are (§2.2): an `f64` argument's are numbers, and a
+`u64` or `i64` argument's are integers, written past ±(2^53 − 1) as
+decimal strings, so `{ "min": 1, "max": "1152921504606846975" }` is
+1 to 2^60 − 1. Validation reports an end as it reports a default: an end
+past ±(2^53 − 1) written as a number is `unsafe_integer`, one within it
+written as a string `integer_as_string`, and an end that isn't a value of
+the argument's type (a fraction, other text, an integer the type doesn't
+hold) `value_range`. An integer is compared with a bound exactly, not
+after converting it to a double.
 
 ### 2.4 Arguments a set leaves out
 

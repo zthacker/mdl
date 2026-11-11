@@ -1870,7 +1870,7 @@ fn meta_commands_are_catalog_commands_and_command_packets() {
                 "description": "Start",
                 "arguments": [
                     {"name": "mode", "type": "enum", "states": ["SAFE", "ON"], "description": "Where to go"},
-                    {"name": "delaytime", "type": "u64", "unit": "s", "range": {"min": 1.0, "max": 600.0}, "default": 10}
+                    {"name": "delaytime", "type": "u64", "unit": "s", "range": {"min": 1, "max": 600}, "default": 10}
                 ]
             }
         })
@@ -2236,7 +2236,7 @@ fn valid_ranges_are_inclusive_ranges() {
         range(&integer(
             r#"<ValidRangeSet><ValidRange minInclusive="-5" maxInclusive="9007199254740991"/></ValidRangeSet>"#
         )),
-        json!({"min": -5.0, "max": 9_007_199_254_740_991.0})
+        json!({"min": -5, "max": 9_007_199_254_740_991_i64})
     );
     assert_eq!(
         one_problem(&go_with(
@@ -2250,6 +2250,14 @@ fn valid_ranges_are_inclusive_ranges() {
             "minExclusive isn't imported: the range has minInclusive too, which Yamcs takes".into()
         )
     );
+    // Past ±(2^53 - 1), an integer end is exact, written as a decimal
+    // string.
+    assert_eq!(
+        range(&integer(
+            r#"<ValidRangeSet><ValidRange minInclusive="-9223372036854775807" maxInclusive="9007199254740993"/></ValidRangeSet>"#
+        )),
+        json!({"min": "-9223372036854775807", "max": "9007199254740993"})
+    );
     for (range, code) in [
         (
             r#"<ValidRangeSet><ValidRange minInclusive="0"/><ValidRange maxInclusive="9"/></ValidRangeSet>"#,
@@ -2258,10 +2266,6 @@ fn valid_ranges_are_inclusive_ranges() {
         (
             r#"<ValidRangeSet><ValidRange minInclusive="0"/></ValidRangeSet><ValidRange minInclusive="0"/>"#,
             "xtce.invalid",
-        ),
-        (
-            r#"<ValidRangeSet><ValidRange maxInclusive="9007199254740992"/></ValidRangeSet>"#,
-            "xtce.unsupported",
         ),
     ] {
         assert_eq!(one_error(&go_with(&integer(range), "A")).0, code, "{range}");
@@ -2298,7 +2302,7 @@ fn an_integer_argument_without_a_valid_range_takes_what_its_field_holds() {
             ),
             &[]
         ),
-        json!({"max": 65535.0})
+        json!({"max": 65535})
     );
     assert_eq!(
         validated_range(
@@ -2308,7 +2312,7 @@ fn an_integer_argument_without_a_valid_range_takes_what_its_field_holds() {
             ),
             &[]
         ),
-        json!({"min": -2048.0, "max": 2047.0})
+        json!({"min": -2048, "max": 2047})
     );
     // An unsigned type over a two's complement encoding is an i64 kept at 0
     // and above, since a command writes a u64 to a uint field only.
@@ -2318,7 +2322,7 @@ fn an_integer_argument_without_a_valid_range_takes_what_its_field_holds() {
     );
     assert_eq!(
         validated_range(&unsigned_int, &[]),
-        json!({"min": 0.0, "max": 127.0})
+        json!({"min": 0, "max": 127})
     );
     assert_eq!(
         bundle(&go_with(&unsigned_int, "A"))["catalog"]["commands"]["sat.go"]["arguments"][0]["type"],
@@ -2331,7 +2335,7 @@ fn an_integer_argument_without_a_valid_range_takes_what_its_field_holds() {
             &integer("", r#"<IntegerDataEncoding sizeInBits="64"/>"#),
             &[]
         ),
-        json!({"min": 0.0, "max": 2_147_483_647.0})
+        json!({"min": 0, "max": 2_147_483_647})
     );
     // Where those are the catalog type's own, no range is needed.
     assert_eq!(
@@ -2354,17 +2358,17 @@ fn an_integer_argument_without_a_valid_range_takes_what_its_field_holds() {
         ),
         Value::Null
     );
-    // An MDL range ends within ±(2^53 - 1), so a wider field's top values
-    // are refused.
+    // A field wider than 53 bits keeps its top values: the range's end is
+    // exact, a decimal string.
     assert_eq!(
         validated_range(
             &integer(
                 r#" signed="false" sizeInBits="64""#,
                 r#"<IntegerDataEncoding sizeInBits="60"/>"#
             ),
-            &["xtce.differs"]
+            &[]
         ),
-        json!({"max": 9_007_199_254_740_991.0})
+        json!({"max": "1152921504606846975"})
     );
 }
 
@@ -2405,7 +2409,7 @@ fn a_float_written_as_an_integer_takes_what_rounds_into_its_field() {
             &float(r#"<ValidRange minInclusive="0" maxExclusive="256"/>"#),
             &["xtce.differs", "xtce.differs"]
         ),
-        json!({"min": 0.0, "max": 255.5_f64.next_down()})
+        json!({"min": 0, "max": 255.5_f64.next_down()})
     );
     // A range the byte can't hold either way is the document's to fix.
     let text = go_with(&float(r#"<ValidRange maxInclusive="300"/>"#), "A");
@@ -2763,7 +2767,7 @@ fn an_argument_calibrator_is_the_inverse_and_its_inverse_the_conversion() {
         r#"<ValidRangeSet><ValidRange minInclusive="0" maxInclusive="5"/></ValidRangeSet>"#,
     ));
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(argument["range"], json!({"min": 0.0, "max": 5.0}));
+    assert_eq!(argument["range"], json!({"min": 0, "max": 5}));
     assert_eq!(
         field["conversion"],
         json!({"kind": "poly", "coefficients": [0.0, 0.01]})
@@ -2803,7 +2807,7 @@ fn a_spline_that_only_rises_or_falls_is_a_table_read_backwards() {
     let kept = falling.replace(r#" extrapolate="true""#, "");
     let (argument, _, warnings) = validated_argument(&calibrated(&kept, ""));
     assert_eq!(warnings, ["xtce.differs"]);
-    assert_eq!(argument["range"], json!({"min": 0.0, "max": 10.0}));
+    assert_eq!(argument["range"], json!({"min": 0, "max": 10}));
     for (spline, message) in [
         (
             r#"<SplineCalibrator order="0"><SplinePoint raw="0" calibrated="0"/><SplinePoint raw="1" calibrated="5"/></SplineCalibrator>"#,
@@ -3065,8 +3069,8 @@ fn an_aggregate_argument_is_an_argument_per_member() {
     assert_eq!(
         arguments,
         &json!([
-            {"name": "target_x", "type": "u64", "range": {"max": 255.0}, "default": 3},
-            {"name": "target_y", "type": "u64", "range": {"max": 255.0}, "default": 5}
+            {"name": "target_x", "type": "u64", "range": {"max": 255}, "default": 3},
+            {"name": "target_y", "type": "u64", "range": {"max": 255}, "default": 5}
         ])
     );
     let entries = &bundle["sets"][0]["commands"][0]["entries"];
@@ -3137,7 +3141,7 @@ fn an_array_argument_is_a_list_argument() {
     );
     assert_eq!(
         bundle["catalog"]["commands"]["sat.go"]["arguments"],
-        json!([{"name": "levels", "type": "u64", "range": {"max": 255.0},
+        json!([{"name": "levels", "type": "u64", "range": {"max": 255},
                 "list": {"min": 3, "max": 3}, "default": [1, 2, 3]}])
     );
     assert_eq!(
@@ -3167,7 +3171,7 @@ fn an_argument_giving_a_count_is_the_count_field() {
     assert_eq!(warnings, ["xtce.ignored"]);
     assert_eq!(
         bundle["catalog"]["commands"]["sat.go"]["arguments"],
-        json!([{"name": "values", "type": "u64", "range": {"max": 255.0}, "list": {"max": 255}}])
+        json!([{"name": "values", "type": "u64", "range": {"max": 255}, "list": {"max": 255}}])
     );
     let entries = &bundle["sets"][0]["commands"][0]["entries"];
     assert_eq!(

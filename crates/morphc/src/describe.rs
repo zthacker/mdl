@@ -297,6 +297,8 @@ pub fn bounds<T: Serialize>(value: &T) -> String {
     let value = serde_json::to_value(value).unwrap_or(Value::Null);
     let end = |key: &str| match value.get(key) {
         Some(Value::Number(n)) => n.as_f64().map_or_else(|| n.to_string(), |f| f.to_string()),
+        // An integer past ±(2^53 − 1), which the IR writes as a string.
+        Some(Value::String(text)) => text.clone(),
         Some(other) => other.to_string(),
         None => String::new(),
     };

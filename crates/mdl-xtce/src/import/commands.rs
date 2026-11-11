@@ -31,7 +31,8 @@ use crate::names::{catalog_part, identifier};
 use crate::out::integer_json;
 use crate::space::Kind;
 use crate::types::{
-    ArrayShape, Count, Length, Order, Raw, Scalar, Shape, Wanted, description, raw_value,
+    ArgumentRange, ArrayShape, Count, Length, Order, Raw, Scalar, Shape, Wanted, description,
+    raw_value,
 };
 use crate::xml::{self, El, Expect};
 
@@ -1654,14 +1655,27 @@ impl<'d> Import<'d, '_> {
             }
         };
         // Yamcs checks an assigned value against the valid range when the
-        // command is sent. Compared as a double, which is exact within
-        // ±2^53, where every end an integer type gives lies.
+        // command is sent: an integer type's exactly, a float type's as a
+        // double.
         if let (Raw::Integer, Some(range)) = (&scalar.raw, &scalar.range) {
-            let value = raw as f64;
-            let outside = match (range.min, range.max) {
-                (Some((min, _)), _) if value < min => Some(format!("below its minimum, {min}")),
-                (_, Some((max, _))) if value > max => Some(format!("above its maximum, {max}")),
-                _ => None,
+            let outside = match range {
+                ArgumentRange::Integer(range) => match (range.min, range.max) {
+                    (Some((min, _)), _) if raw < min => Some(format!("below its minimum, {min}")),
+                    (_, Some((max, _))) if raw > max => Some(format!("above its maximum, {max}")),
+                    _ => None,
+                },
+                ArgumentRange::Number(range) => {
+                    let value = raw as f64;
+                    match (range.min, range.max) {
+                        (Some((min, _)), _) if value < min => {
+                            Some(format!("below its minimum, {min}"))
+                        }
+                        (_, Some((max, _))) if value > max => {
+                            Some(format!("above its maximum, {max}"))
+                        }
+                        _ => None,
+                    }
+                }
             };
             if let Some(outside) = outside {
                 self.report.error(

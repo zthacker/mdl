@@ -163,6 +163,7 @@ pub const REQUIRED: &[&str] = &[
     "key:argument.unit",
     "key:argument.states",
     "key:argument.range",
+    "range:string_integer",
     "key:argument.list",
     "key:argument.description",
     "default:bool",
@@ -303,6 +304,15 @@ fn note(name: &str, value: &Value, owner: &str, found: &mut BTreeSet<String>) {
     }
     if matches!(name, "invalid" | "value" | "values" | "raw") {
         scalar(value, found);
+    }
+    // A range end past ±(2^53 − 1), which only an integer argument's is.
+    if owner == "range"
+        && matches!(name, "min" | "max")
+        && value
+            .as_str()
+            .is_some_and(|text| text.parse::<i128>().is_ok_and(|n| n.to_string() == text))
+    {
+        found.insert("range:string_integer".to_string());
     }
     let Some(text) = value.as_str() else {
         if name == "default" {

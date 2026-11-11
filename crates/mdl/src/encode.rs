@@ -661,6 +661,16 @@ pub(crate) fn show_literal(literal: &Literal) -> String {
     }
 }
 
+/// A range's end as a message shows it: the integer or number it is.
+pub(crate) fn show_end(end: &Literal) -> String {
+    match end {
+        Literal::Str(_) => end
+            .as_integer()
+            .map_or_else(|| show_literal(end), |n| n.to_string()),
+        _ => show_literal(end),
+    }
+}
+
 /// A value checked against its argument's type, states and range. Numbers
 /// compare by value: 3, 3.0 and a u64 3 are the same integer.
 fn check(argument: &Argument, value: &ArgumentValue) -> Result<Checked, ArgumentProblem> {
@@ -705,7 +715,9 @@ fn check(argument: &Argument, value: &ArgumentValue) -> Result<Checked, Argument
                 given: value.to_string(),
             });
         }
-        Checked::Number(x) => check_range(argument.range, value, |bound| x.partial_cmp(&bound))?,
+        Checked::Number(x) => check_range(argument.range.as_ref(), value, |bound| {
+            bound.as_number().and_then(|bound| x.partial_cmp(&bound))
+        })?,
         Checked::Integer(n) => {
             let (low, high) = if argument.ty == ParamType::U64 {
                 (0, i128::from(u64::MAX))
@@ -718,7 +730,10 @@ fn check(argument: &Argument, value: &ArgumentValue) -> Result<Checked, Argument
                     range: format!("{low} to {high} for its type"),
                 });
             }
-            check_range(argument.range, value, |bound| Some(compare(*n, bound)))?;
+            // Exactly: an integer argument's ends are integers.
+            check_range(argument.range.as_ref(), value, |bound| {
+                bound.as_integer().map(|bound| n.cmp(&bound))
+            })?;
         }
         _ => {}
     }
@@ -728,26 +743,28 @@ fn check(argument: &Argument, value: &ArgumentValue) -> Result<Checked, Argument
 /// The value inside `range`, by `order`, which compares the value with a
 /// bound.
 fn check_range(
-    range: Option<ArgumentRange>,
+    range: Option<&ArgumentRange>,
     value: &ArgumentValue,
-    order: impl Fn(f64) -> Option<Ordering>,
+    order: impl Fn(&Literal) -> Option<Ordering>,
 ) -> Result<(), ArgumentProblem> {
     let Some(range) = range else {
         return Ok(());
     };
     let above_min = range
         .min
+        .as_ref()
         .is_none_or(|min| matches!(order(min), Some(Ordering::Greater | Ordering::Equal)));
     let below_max = range
         .max
+        .as_ref()
         .is_none_or(|max| matches!(order(max), Some(Ordering::Less | Ordering::Equal)));
     if above_min && below_max {
         return Ok(());
     }
-    let range = match (range.min, range.max) {
-        (Some(min), Some(max)) => format!("{min} to {max}"),
-        (Some(min), None) => format!("at least {min}"),
-        (None, Some(max)) => format!("at most {max}"),
+    let range = match (&range.min, &range.max) {
+        (Some(min), Some(max)) => format!("{} to {}", show_end(min), show_end(max)),
+        (Some(min), None) => format!("at least {}", show_end(min)),
+        (None, Some(max)) => format!("at most {}", show_end(max)),
         (None, None) => "anything".to_string(),
     };
     Err(ArgumentProblem::OutOfRange {

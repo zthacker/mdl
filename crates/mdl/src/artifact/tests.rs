@@ -474,6 +474,21 @@ fn commands_evolve_like_params() {
         breaking(&|new| new["eps.go"]["arguments"][1]["range"]["min"] = json!(1)),
         vec![(Code::ChangedCommand, path("/arguments/1/range"))]
     );
+    // Ends compare exactly: 2^60 - 1 and 2^60 - 2 are one double, but
+    // lowering the end by one still refuses a value.
+    let wide = |max: &str| {
+        let mut catalog = old.clone();
+        catalog["eps.go"]["arguments"][1]["range"]["max"] = json!(max);
+        catalog
+    };
+    assert_eq!(
+        command_incompatibilities(wide("1152921504606846975"), wide("1152921504606846974")),
+        vec![(Code::ChangedCommand, path("/arguments/1/range"))]
+    );
+    assert_eq!(
+        command_incompatibilities(wide("1152921504606846974"), wide("1152921504606846975")),
+        vec![]
+    );
     assert_eq!(
         breaking(&|new| new["eps.go"]["arguments"][0]["states"] = json!(["B", "A"])),
         vec![(Code::ChangedCommand, path("/arguments/0/states"))]

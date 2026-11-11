@@ -484,8 +484,9 @@ same kind are (§4), with these differences:
   the same values in it (`minExclusive="0"` is a `min` of 5e-324). With
   both an inclusive and an exclusive end, the inclusive one is taken, as
   Yamcs takes it, and the other left out [`xtce.ignored`]. More than one
-  range, which Yamcs doesn't load either, is unsupported, and so is an
-  integer end past ±(2^53 − 1), where an MDL range's ends lie. Yamcs
+  range, which Yamcs doesn't load either, is unsupported. An integer
+  type's ends are taken exactly, as XTCE's `xs:long` ends are, and written
+  as decimal strings past ±(2^53 − 1). Yamcs
   checks the range against the engineering value whatever
   `validRangeAppliesToCalibrated` says. An uncalibrated type's raw and
   engineering values are one; on a calibrated type, `false` puts the range
@@ -494,20 +495,21 @@ same kind are (§4), with these differences:
 - **Without a range.** An integer argument with no valid range takes what
   both its encoding holds and its type does (`signed`, and `sizeInBits`,
   32 by default), which Yamcs checks a value against; an end its catalog
-  type has anyway (a `u64`'s 0) is left out, and one past ±(2^53 − 1) is
-  cut there [`xtce.differs`]. An uncalibrated float written as an integer
-  takes what MDL's rounding keeps in the encoding, from just above
-  `low − 0.5` to just below `high + 0.5`, for each end its valid range
-  doesn't give (§6.3). A calibrated argument, and a relative time written
-  as an integer, takes the engineering values whose raw values the
+  type has anyway (a `u64`'s 0) is left out; the others are exact, so a
+  60-bit field's argument reaches 2^60 − 1. An uncalibrated float written
+  as an integer takes what MDL's rounding keeps in the encoding, from just
+  above `low − 0.5` to just below `high + 0.5`, for each end its valid
+  range doesn't give (§6.3). A calibrated argument, and a relative time
+  written as an integer, takes the engineering values whose raw values the
   encoding holds, worked out through the calibrator or the scale and
   offset, cut at ±(2^53 − 1) [`xtce.differs`]; a float encoding holds so
   much that the cut is its range. If every such value lies past
   ±(2^53 − 1), the argument is unsupported, and if a given end lies past
   every such value, it's an error [`xtce.invalid`]. A spline that doesn't
-  extrapolate keeps a range to its points. An unsigned integer type over a two's complement
-  encoding is an `i64` argument, its range keeping it at 0 and above,
-  since an MDL command writes a `u64` argument only to a `uint` field.
+  extrapolate keeps a range to its points. An unsigned integer type over a
+  two's complement encoding is an `i64` argument, its range keeping it at
+  0 and above, since an MDL command writes a `u64` argument only to a
+  `uint` field.
 - **Defaults.** `initialValue`, the argument's or else its type's, is the
   argument's default, read as Yamcs reads it [`xtce.invalid`]: an integer
   in decimal, or after `0x`, `0o` or `0b` in that base, with `_` allowed
@@ -560,8 +562,9 @@ from Yamcs's in these cases. The first seven are warnings where they are
   validation reports it.
 - A float type of 32 bits, XTCE's default `sizeInBits`, written in 64:
   Yamcs narrows the value to 32 bits first, and MDL writes it whole.
-- An argument without a range whose encoding holds values past
-  ±(2^53 − 1): MDL refuses them, since its range ends there.
+- An f64 argument without a range whose encoding holds values past
+  ±(2^53 − 1): MDL refuses them, since the importer works its range out
+  within ±(2^53 − 1).
 - An argument's spline that doesn't extrapolate: Yamcs extrapolates it
   whatever it says, and MDL keeps to its points, as XTCE says, refusing a
   value outside them.
