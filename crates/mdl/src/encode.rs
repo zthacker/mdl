@@ -611,6 +611,11 @@ fn from_literal(argument: &Argument, literal: &Literal) -> Result<ArgumentValue,
         // An f64 default is a number whatever its spelling; integer
         // literals are within ±(2^53 - 1), so this is exact.
         (ParamType::F64, Literal::Int(value)) => ArgumentValue::Float(*value as f64),
+        // A value has its argument's type: a u64 default spelled as a
+        // small integer is a `Uint`.
+        (ParamType::U64, Literal::Int(value)) => {
+            ArgumentValue::Uint(u64::try_from(*value).map_err(|_| invalid())?)
+        }
         (_, Literal::Bool(value)) => ArgumentValue::Bool(*value),
         (_, Literal::Int(value)) => ArgumentValue::Int(*value),
         (_, Literal::Float(value)) => ArgumentValue::Float(*value),

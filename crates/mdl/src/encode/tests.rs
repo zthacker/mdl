@@ -1023,6 +1023,79 @@ fn a_decoded_command_names_its_target_and_its_defaulted_arguments() {
     assert_eq!(sets.encode(&decoded.request()).unwrap().payload, payload);
 }
 
+/// A decoded argument has its catalog type, whatever its field's
+/// signedness or its default's spelling: an i64 argument read from a uint
+/// field is an `Int`, a u64 default written `0` a `Uint`.
+#[test]
+fn a_decoded_argument_has_its_catalog_type() {
+    let bundle = json!({
+        "mdl_version": "2.0",
+        "catalog": { "commands": { "lab.set": { "arguments": [
+            { "name": "level", "type": "i64", "range": { "min": 0, "max": 200 } },
+            { "name": "slot", "type": "u64", "default": 0 }
+        ] } } },
+        "families": [{ "name": "lab", "encoding": "binary", "byte_order": "big",
+                       "alias": { "kind": "fixed", "value": "A1" } }],
+        "sets": [{ "name": "lab_v1", "family": "lab", "commands": [{
+            "name": "SET", "canonical": "lab.set",
+            "entries": [
+                { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 7 },
+                { "kind": "field", "name": "level", "type": "uint", "size_bits": 8,
+                  "argument": "level" }
+            ]
+        }] }]
+    });
+    let sets = sets_of(&bundle, "lab");
+    let decoded = sets.decode_command("lab_v1", &binary(&[7, 200])).unwrap();
+    assert_eq!(
+        arguments(&decoded),
+        vec![
+            ("level".to_string(), ArgumentValue::Int(200)),
+            ("slot".to_string(), ArgumentValue::Uint(0)),
+        ]
+    );
+    assert_eq!(decoded.defaulted, ["slot"]);
+}
+
+/// Held to its range, a value strictly past an end is that end, and -0.0
+/// at an end of 0 isn't past it: it decodes as -0.0 and encodes to the
+/// same payload.
+#[test]
+fn negative_zero_at_an_end_of_zero_is_kept() {
+    for range in [
+        json!({ "min": 0, "max": 10 }),
+        json!({ "min": -10, "max": 0 }),
+    ] {
+        let bundle = json!({
+            "mdl_version": "2.0",
+            "catalog": { "commands": { "lab.set": { "arguments": [
+                { "name": "x", "type": "f64", "range": range }
+            ] } } },
+            "families": [{ "name": "lab", "encoding": "binary", "byte_order": "big",
+                           "alias": { "kind": "fixed", "value": "A1" } }],
+            "sets": [{ "name": "lab_v1", "family": "lab", "commands": [{
+                "name": "SET", "canonical": "lab.set",
+                "entries": [
+                    { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 7 },
+                    { "kind": "field", "name": "x", "type": "float", "size_bits": 64,
+                      "argument": "x" }
+                ]
+            }] }]
+        });
+        let sets = sets_of(&bundle, "lab");
+        let mut payload = vec![7];
+        payload.extend_from_slice(&(-0.0_f64).to_be_bytes());
+        let decoded = sets.decode_command("lab_v1", &binary(&payload)).unwrap();
+        match arguments(&decoded).as_slice() {
+            [(_, ArgumentValue::Float(x))] => {
+                assert!(*x == 0.0 && x.is_sign_negative(), "{range}: {x}");
+            }
+            other => panic!("{range}: {other:?}"),
+        }
+        assert_eq!(sets.encode(&decoded.request()).unwrap().payload, payload);
+    }
+}
+
 #[test]
 fn a_json_command_ignores_keys_its_packet_doesnt_define() {
     let sets = sets_of(&fixture(), "vendor_j");

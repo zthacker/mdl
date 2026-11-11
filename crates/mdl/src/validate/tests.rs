@@ -2938,6 +2938,27 @@ fn coverage_compares_raw_values_exactly_at_the_top_of_64_bits() {
     );
 }
 
+/// An f64 argument goes into its field's unit before it's rounded, so
+/// coverage compares its range there, conversion or none: 0 to 3600 s is
+/// 0 to 60 min, which 8 bits hold, and 0 to 3600000 ms, which 16 don't.
+#[test]
+fn coverage_takes_an_unconverted_argument_into_its_fields_unit() {
+    let delay = |bits: u32, unit: &'static str| {
+        move |v: &mut Value| {
+            set_mode_packet(v)["entries"][2] = json!({
+                "kind": "field", "name": "delay", "type": "uint", "size_bits": bits,
+                "unit": unit, "argument": "delay_s"
+            });
+        }
+    };
+    assert_eq!(problems(delay(8, "min")), vec![]);
+    assert_one(
+        Code::ValueRange,
+        "/sets/0/commands/1/entries/2/argument",
+        delay(16, "ms"),
+    );
+}
+
 #[test]
 fn a_string_constant_fits_its_field() {
     let tag = |v: &mut Value, text: &str, length: Value| {

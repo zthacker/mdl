@@ -1742,7 +1742,16 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
     let low = range.min.unwrap_or(type_low);
     let high = range.max.unwrap_or(type_high);
     let (raw_low, raw_high) = match &field.conversion {
-        None => (low, high),
+        // An f64 argument is first converted into the field's unit (an
+        // integer argument is in it already).
+        None => {
+            let into_field =
+                |x: f64| convert_between(x, argument.unit.as_deref(), field.unit.as_deref());
+            let (Some(a), Some(b)) = (into_field(low), into_field(high)) else {
+                return;
+            };
+            (a.min(b), a.max(b))
+        }
         // Reported on its own: no inverse.
         Some(Conversion::Linear { scale, .. }) if *scale == 0.0 => return,
         Some(Conversion::States { .. }) => return,
