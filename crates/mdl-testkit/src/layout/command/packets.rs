@@ -23,7 +23,7 @@ enum Item {
 /// The last entry of a packet, whose length is the rest of the payload.
 #[derive(Debug, Clone)]
 enum Trailer {
-    Argument(Encoder),
+    Argument(Box<Encoder>),
     Target(Shape),
 }
 
@@ -78,7 +78,7 @@ pub(super) fn command_spec() -> BoxedStrategy<CommandSpec> {
                 );
                 let trailer = trailer.map(|trailer| match trailer {
                     Trailer::Argument(encoder) => {
-                        arguments.push((encoder, true));
+                        arguments.push((*encoder, true));
                         Item::Argument(arguments.len() - 1)
                     }
                     Trailer::Target(shape) => Item::Target(shape),
@@ -162,8 +162,8 @@ fn trailer() -> BoxedStrategy<Trailer> {
         Shape::Bytes(Len::Remaining),
     )));
     prop_oneof![
-        text.prop_map(Trailer::Argument),
-        bytes.prop_map(Trailer::Argument),
+        text.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
+        bytes.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
         select(TEXTS).prop_map(|text| Trailer::Target(Shape::Text(text, Len::Remaining))),
     ]
     .boxed()

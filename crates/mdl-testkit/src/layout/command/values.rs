@@ -53,11 +53,12 @@ fn integer_span(encoder: &Encoder) -> (i128, i128) {
     let types = encoder.ty.integers();
     let mut low = (*field.start()).max(*types.start());
     let mut high = (*field.end()).min(*types.end());
-    if let Some(min) = encoder.min {
-        low = low.max(min.ceil() as i128);
+    let (min, max) = encoder.integer_range;
+    if let Some(min) = min {
+        low = low.max(min);
     }
-    if let Some(max) = encoder.max {
-        high = high.min(max.floor() as i128);
+    if let Some(max) = max {
+        high = high.min(max);
     }
     (low, high)
 }
@@ -228,13 +229,13 @@ pub(super) fn spell(value: &Arg, how: u8) -> Given {
 }
 
 /// The least double at or above `n`.
-pub(super) fn double_at_least(n: i128) -> f64 {
+fn double_at_least(n: i128) -> f64 {
     let x = n as f64;
     if (x as i128) < n { x.next_up() } else { x }
 }
 
 /// The greatest double at or below `n`.
-pub(super) fn double_at_most(n: i128) -> f64 {
+fn double_at_most(n: i128) -> f64 {
     let x = n as f64;
     if (x as i128) > n { x.next_down() } else { x }
 }

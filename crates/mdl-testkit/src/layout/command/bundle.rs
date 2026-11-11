@@ -59,14 +59,19 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
     if let ArgType::Enum(states) = &encoder.ty {
         json.insert("states".into(), json!(states));
     }
-    if encoder.min.is_some() || encoder.max.is_some() {
-        let mut range = Map::new();
-        if let Some(min) = encoder.min {
-            range.insert("min".into(), json!(min));
-        }
-        if let Some(max) = encoder.max {
-            range.insert("max".into(), json!(max));
-        }
+    // An f64 argument's ends as numbers; an integer argument's exactly, as
+    // decimal strings past ±(2^53 − 1).
+    let ends = [
+        ("min", encoder.min.map(|x| json!(x))),
+        ("max", encoder.max.map(|x| json!(x))),
+        ("min", encoder.integer_range.0.map(integer_json)),
+        ("max", encoder.integer_range.1.map(integer_json)),
+    ];
+    let range: Map<String, Value> = ends
+        .into_iter()
+        .filter_map(|(key, end)| end.map(|end| (key.to_string(), end)))
+        .collect();
+    if !range.is_empty() {
         json.insert("range".into(), Value::Object(range));
     }
     if let Some(default) = &encoder.default {
