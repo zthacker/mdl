@@ -376,7 +376,7 @@ fn argument_value(
     };
     if argument.ty != ParamType::F64 {
         allowed(argument, &value)?;
-        return Ok(value);
+        return Ok(typed(argument.ty, value));
     }
     // From the field's unit into the argument's, which validation found
     // compatible.
@@ -396,8 +396,13 @@ fn argument_value(
         return Err(ArgumentProblem::NonFinite { given: show(raw) });
     }
     in_raw_range(field, range, argument.unit.as_deref(), raw, binary)?;
-    let held = range.min.map_or(*x, |min| x.max(min));
-    let held = range.max.map_or(held, |max| held.min(max));
+    // Past an end is strictly beyond it by value, so -0.0 at an end of 0
+    // stays -0.0 (`f64::max` and `f64::min` may return either zero).
+    let held = match (range.min, range.max) {
+        (Some(min), _) if *x < min => min,
+        (_, Some(max)) if *x > max => max,
+        _ => *x,
+    };
     let value = ArgumentValue::Float(held);
     allowed(argument, &value)?;
     Ok(value)
@@ -473,6 +478,21 @@ fn unconverted(ty: ParamType, raw: &Value<'_>) -> Result<ArgumentValue, Argument
         (_, Value::Bytes(bytes)) => ArgumentValue::Bytes(bytes.clone()),
         _ => return Err(wrong()),
     })
+}
+
+/// An allowed integer as its argument's type, whatever its field's
+/// signedness: an i64 argument written into a uint field decodes as an
+/// `Int`.
+fn typed(ty: ParamType, value: ArgumentValue) -> ArgumentValue {
+    match (ty, value) {
+        (ParamType::I64, ArgumentValue::Uint(n)) => {
+            i64::try_from(n).map_or(ArgumentValue::Uint(n), ArgumentValue::Int)
+        }
+        (ParamType::U64, ArgumentValue::Int(n)) => {
+            u64::try_from(n).map_or(ArgumentValue::Int(n), ArgumentValue::Uint)
+        }
+        (_, value) => value,
+    }
 }
 
 /// The target's native id, from the first target field.

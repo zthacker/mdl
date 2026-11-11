@@ -154,8 +154,8 @@ next, the inputs being, for a `table`, `min`, the raw value of every point
 strictly between `min` and `max`, and `max` (which checks it exactly), and
 for a `poly`, the 4097 points `min + (k × (max − min)) / 4096`, for k from
 0 to 4096. A `linear` inverse always qualifies. It also guarantees that the
-range's ends, through the inverse and rounded as below, fit an integer
-field (its size in a binary payload, 64 bits in a JSON one), so every
+range's ends, in the field's unit, through the inverse and rounded as
+below, fit an integer field (its size in a binary payload, 64 bits in a JSON one), so every
 value in range does. An absent end is the argument type's own, which for an
 unconverted `u64` or `i64` argument is compared as the integer it is: such
 an argument needs no range to fill a 64-bit field. A `bool` argument's
@@ -375,6 +375,10 @@ Each argument the packet encodes is its field's raw value:
   argument, 0 or 1 as false or true for a `bool` argument
   [`out_of_range`].
 
+A decoded value has its argument's type, whatever its field's type or its
+default's spelling: an `i64` argument read from a `uint` field is a
+signed integer, and a `u64` default written `0` is unsigned.
+
 The value MUST be one the catalog allows, by §2.2 and §2.3, with the same
 codes, but an `f64` argument with a range is tested on its raw value, in
 this order:
@@ -387,7 +391,8 @@ this order:
    ends exactly, as §2.3 compares integers with bounds, never after
    converting it to a double [`out_of_range`];
 3. the argument is the converted raw value, held to the range: a value
-   past an end, infinite included, is that end.
+   past an end, infinite included, is that end. Past is strictly beyond
+   by value, so -0.0 at an end of 0 stays -0.0.
 
 So 3600.06 s at 0.1 s per count encodes to raw 36001, which converts to
 3600.1 s and decodes as 3600.06 s when the range ends there. With an
