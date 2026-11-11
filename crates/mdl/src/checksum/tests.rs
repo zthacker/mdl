@@ -126,6 +126,24 @@ fn compiled_presets_give_their_check_values() {
     }
 }
 
+/// A reflected CRC's register starts at `init` as written. The presets'
+/// inits are zero or all ones, which read the same reflected; CRC-16/RIELLO's
+/// 0xB2AA and CRC-24/BLE's 0x555555 don't.
+#[test]
+fn a_reflected_crc_starts_at_its_init_as_written() {
+    for (checksum, check) in [
+        (Checksum::crc(16, 0x1021, 0xB2AA, true, true, 0), 0x63D0),
+        (
+            Checksum::crc(24, 0x065B, 0x55_5555, true, true, 0),
+            0xC2_5A56,
+        ),
+    ] {
+        let algorithm = Algorithm::resolve(&checksum).unwrap();
+        assert_eq!(algorithm.compute(CHECK_INPUT), check);
+        assert_eq!(Compiled::new(algorithm).compute(CHECK_INPUT), check);
+    }
+}
+
 /// The ISO checksum's encoding procedure, a byte at a time, as
 /// ECSS-E-70-41A Annex A.2 gives it.
 fn iso8473_by_the_book(bytes: &[u8]) -> u64 {
