@@ -1009,7 +1009,7 @@ fn param_json(meaning: &Meaning) -> Value {
 
 /// An integer as the IR writes it: a number within ±(2^53 - 1), else a
 /// decimal string.
-fn integer_json(n: i128) -> Value {
+pub(crate) fn integer_json(n: i128) -> Value {
     const SAFE: i128 = (1 << 53) - 1;
     match i64::try_from(n) {
         Ok(small) if n.abs() <= SAFE => json!(small),
@@ -2310,6 +2310,7 @@ fn assemble(
     }
 }
 
+pub mod command;
 mod fleet;
 #[cfg(test)]
 mod reference;
