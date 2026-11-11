@@ -39,8 +39,13 @@ checksums; this document uses those definitions and doesn't repeat them.
   [`unknown_argument`], given once [`duplicate_argument`].
 - An argument left out takes its default; one without a default is
   [`missing_argument`]. The result lists the defaulted arguments.
-- Arguments are checked in the order given, then in catalog order; the
-  first problem is the error.
+- Arguments are checked in two passes, and the first problem is the
+  error. First the given names, in the order given [`unknown_argument`,
+  `duplicate_argument`]; then every argument of the command, in catalog
+  order: a given value by §2.2 to §2.5, in that order, or a left-out one
+  by its default [`missing_argument`]. So a request built from a map,
+  whose keys come in no particular order, is refused the same way
+  however they come.
 
 ### 2.2 Types
 
@@ -370,7 +375,11 @@ part in identification and those in every record of an array
 
 ### 7.4 Arguments
 
-Each argument the packet encodes is its field's raw value:
+A float raw value MUST be finite [`non_finite`], which is checked before
+its conversion: NaN and ±infinity are `non_finite` through any
+conversion, as `decoding.md` §7.3 ranks `non_finite` above
+`out_of_calibration` for telemetry. Each argument the packet encodes is
+then its field's raw value:
 
 - through a `states` conversion, the name of the state listing the raw
   value [`unknown_state`];
@@ -388,17 +397,16 @@ default's spelling: an `i64` argument read from a `uint` field is a
 signed integer, and a `u64` default written `0` is unsigned.
 
 The value MUST be one the catalog allows, by §2.2 and §2.3, with the same
-codes, but an `f64` argument with a range is tested on its raw value, in
-this order:
+codes, but an `f64` argument with a range is tested on its raw value,
+finite by then, in this order:
 
-1. a float raw value MUST be finite [`non_finite`];
-2. the raw value MUST lie between what the range's two ends become by
+1. the raw value MUST lie between what the range's two ends become by
    §3.1 (the inverse conversion and its rounding, without the fit check),
    ends included, in either order; an open end counts as the largest
    finite double of its sign. An integer raw value is compared with the
    ends exactly, as §2.3 compares integers with bounds, never after
    converting it to a double [`out_of_range`];
-3. the argument is the converted raw value, held to the range: a value
+2. the argument is the converted raw value, held to the range: a value
    past an end, infinite included, is that end. Past is strictly beyond
    by value, so -0.0 at an end of 0 stays -0.0.
 

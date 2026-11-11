@@ -353,6 +353,13 @@ fn argument_value(
         given: show(raw),
         expected: "a raw value this field's conversion takes",
     };
+    // Before any conversion: NaN and ±infinity are no value, as telemetry
+    // ranks non_finite above out_of_calibration.
+    if let Value::Float(x) = raw
+        && !x.is_finite()
+    {
+        return Err(ArgumentProblem::NonFinite { given: show(raw) });
+    }
     let value = match (&field.conversion, raw) {
         (Some(Conversion::States { states }), Value::Uint(_) | Value::Int(_)) => {
             let n = integer(raw).ok_or_else(wrong)?;
