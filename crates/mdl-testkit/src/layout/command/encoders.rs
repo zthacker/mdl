@@ -15,7 +15,12 @@ use crate::layout::{Numeric, UNIT_GROUPS, scale, units};
 /// An argument of any type and a field that encodes it, with a default or
 /// none.
 pub(super) fn encoder() -> BoxedStrategy<Encoder> {
-    with_default(prop_oneof![
+    with_default(any_encoder())
+}
+
+/// An argument of any type and a field that encodes it, without a default.
+fn any_encoder() -> BoxedStrategy<Encoder> {
+    prop_oneof![
         1 => bool_encoder(),
         2 => integer_encoder(ArgType::U64),
         2 => integer_encoder(ArgType::I64),
@@ -23,7 +28,28 @@ pub(super) fn encoder() -> BoxedStrategy<Encoder> {
         2 => enum_encoder(),
         2 => text_encoder(false),
         1 => text_encoder(true),
-    ])
+    ]
+    .boxed()
+}
+
+/// A list argument's element, without bounds or a default: any field but
+/// one whose length another field holds (an element has no fields of its
+/// own), and, for `whole`, one of whole bytes or an integer (laid out
+/// whole), so that a varying count of them keeps what follows on its bits;
+/// for `bits`, only a big-endian integer or a bool, for records that
+/// aren't whole bytes.
+pub(super) fn element_encoder(whole: bool, bits: bool) -> BoxedStrategy<Encoder> {
+    any_encoder()
+        .prop_filter("an element's field", move |encoder| {
+            let own_length = !matches!(encoder.shape.len(), Some(Len::Field { .. }));
+            let shape = match &encoder.shape {
+                Shape::Bool => !whole,
+                Shape::Uint(_) | Shape::Int(_) => true,
+                _ => !bits,
+            };
+            own_length && shape
+        })
+        .boxed()
 }
 
 /// The encoder, maybe with a default: a value like any other.
@@ -44,9 +70,10 @@ pub(super) fn with_default(
 
 /// A value as the catalog reads it back (`spec/encoding.md` §2.2): a whole
 /// number in the i64 range is an integer, so -0.0 is 0.
-fn as_literal(value: Arg) -> Arg {
+pub(super) fn as_literal(value: Arg) -> Arg {
     match value {
         Arg::F64(x) if x == 0.0 && x.is_sign_negative() => Arg::F64(0.0),
+        Arg::List(values) => Arg::List(values.into_iter().map(as_literal).collect()),
         other => other,
     }
 }

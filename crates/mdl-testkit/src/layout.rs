@@ -60,6 +60,10 @@ pub enum Raw {
     Bool(bool),
     Str(String),
     Bytes(Vec<u8>),
+    /// An array's elements, in order.
+    Array(Vec<Raw>),
+    /// A record: each of its fields' raw values, by name, in order.
+    Record(Vec<(String, Raw)>),
 }
 
 /// A sample: its param, value and quality (`spec/decoding.md` §7.3).
@@ -97,6 +101,8 @@ impl PartialEq for Raw {
             (Raw::Bool(a), Raw::Bool(b)) => a == b,
             (Raw::Str(a), Raw::Str(b)) => a == b,
             (Raw::Bytes(a), Raw::Bytes(b)) => a == b,
+            (Raw::Array(a), Raw::Array(b)) => a == b,
+            (Raw::Record(a), Raw::Record(b)) => a == b,
             _ => false,
         }
     }
@@ -1441,7 +1447,8 @@ fn pack(
                 let start = (field.offset / 8) as usize;
                 payload[start..start + value.len()].copy_from_slice(value);
             }
-            (_, Raw::Str(_)) => {}
+            // Telemetry layouts make no arrays or records.
+            (_, Raw::Str(_) | Raw::Array(_) | Raw::Record(_)) => {}
         }
         samples.push(sample(field, &raw));
         record.push((field.name.clone(), raw));
@@ -1489,6 +1496,8 @@ fn as_raw(raw: &Raw) -> Expected {
         Raw::Bool(b) => Expected::Bool(*b),
         Raw::Str(text) => Expected::Str(text.clone()),
         Raw::Bytes(bytes) => Expected::Bytes(bytes.clone()),
+        // Telemetry layouts make no arrays or records.
+        Raw::Array(_) | Raw::Record(_) => Expected::Str(format!("{raw:?}")),
     }
 }
 

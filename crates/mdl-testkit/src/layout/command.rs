@@ -10,15 +10,20 @@
 //! into a raw value (unconverted, linear, states, a table read backwards,
 //! an explicit inverse), in units the field's may differ from; maybe the
 //! target's native id; strings and bytes of every length kind (a length
-//! field holding a computed length); and up to two checksums of any
+//! field holding a computed length); up to two arrays (§3.6), each of a
+//! list argument's values or of records whose fields take list arguments
+//! or constants, counted by a fixed count, a count field (which two arrays
+//! may share) or the rest of the payload; and up to two checksums of any
 //! algorithm and parameters, the later covering the earlier when it
 //! reaches back that far. Entries are laid out as the telemetry layouts
 //! are. A catalog command may have arguments its packet leaves out (§2.4).
 //!
 //! Requests spell numbers every way §2.2 allows, leave out arguments that
-//! have defaults, and lean toward the ends of ranges and toward raw values
-//! halfway between two that a field holds, where rounding decides (ties
-//! away from zero for integers, to even for binary32).
+//! have defaults, give lists of every length their bounds and counts allow
+//! (one length for the lists that must agree), and lean toward the ends of
+//! ranges and toward raw values halfway between two that a field holds,
+//! where rounding decides (ties away from zero for integers, to even for
+//! binary32).
 
 use std::ops::RangeInclusive;
 
@@ -157,10 +162,12 @@ pub enum Given {
     Float(f64),
     Text(String),
     Bytes(Vec<u8>),
+    /// A list argument's values.
+    List(Vec<Given>),
 }
 
-/// An argument's value, by its type: an enum's is its state's name. Floats
-/// compare by their bits, so -0.0 isn't 0.0.
+/// An argument's value, by its type: an enum's is its state's name, a list
+/// argument's its values. Floats compare by their bits, so -0.0 isn't 0.0.
 #[derive(Debug, Clone)]
 pub enum Arg {
     Bool(bool),
@@ -169,6 +176,7 @@ pub enum Arg {
     F64(f64),
     Text(String),
     Bytes(Vec<u8>),
+    List(Vec<Arg>),
 }
 
 impl PartialEq for Arg {
@@ -180,6 +188,7 @@ impl PartialEq for Arg {
             (Arg::F64(a), Arg::F64(b)) => a.to_bits() == b.to_bits(),
             (Arg::Text(a), Arg::Text(b)) => a == b,
             (Arg::Bytes(a), Arg::Bytes(b)) => a == b,
+            (Arg::List(a), Arg::List(b)) => a == b,
             _ => false,
         }
     }
@@ -197,7 +206,14 @@ pub enum Target {
 /// Any command layout validation accepts, of the kinds this module builds,
 /// with one to three requests for each packet.
 pub fn commands() -> BoxedStrategy<Commands> {
-    (any::<bool>(), any::<bool>(), vec(command_spec(), 1..=3))
+    (any::<bool>(), any::<bool>())
+        .prop_flat_map(|(little, metadata)| {
+            (
+                Just(little),
+                Just(metadata),
+                vec(command_spec(little), 1..=3),
+            )
+        })
         .prop_flat_map(|(little, metadata, specs)| {
             let count = specs.len();
             let apids = vec(0_i64..3, count).prop_map(move |apids| {
@@ -415,10 +431,20 @@ enum Through {
     },
 }
 
-/// A catalog argument, and a field that encodes it.
+/// How many values a list argument takes (`list`), either end open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Bounds {
+    min: Option<u32>,
+    max: Option<u32>,
+}
+
+/// A catalog argument, and a field that encodes it: for a list argument,
+/// an array's element, each value of the list written as that field.
 #[derive(Debug, Clone)]
 struct Encoder {
     ty: ArgType,
+    /// A list argument's bounds.
+    list: Option<Bounds>,
     /// The argument's unit and the field's: the same code but for an f64
     /// argument.
     units: Option<(&'static str, &'static str)>,
@@ -436,6 +462,7 @@ struct Encoder {
 fn encoder_of(ty: ArgType, shape: Shape) -> Encoder {
     Encoder {
         ty,
+        list: None,
         units: None,
         min: None,
         max: None,
@@ -465,6 +492,77 @@ enum Source {
     Target,
     /// The byte length of the field with this name, which comes later.
     Length(String),
+    /// The number of elements of the arrays that take their count from it.
+    Count,
+}
+
+/// How an array's count is given (`spec/encoding.md` §3.6).
+#[derive(Debug, Clone, PartialEq)]
+enum Counted {
+    Fixed(u32),
+    /// The field of this name holds `(n − add) / multiply`.
+    Field {
+        name: String,
+        multiply: u32,
+        add: i64,
+    },
+    Remaining,
+}
+
+/// An array's elements.
+#[derive(Debug, Clone)]
+enum Elements {
+    /// The values of the list argument at this index of the command's, each
+    /// written as a field of this shape.
+    Scalar {
+        argument: usize,
+        shape: Shape,
+        little: bool,
+        explicit: bool,
+    },
+    /// Records of the struct type of this name, its entries laid out from
+    /// the record's start: a field that takes a list argument holds its
+    /// value *i* in record *i*.
+    Records { name: String, entries: Vec<Placed> },
+}
+
+/// How an array's length follows from the count it's given: `count ×
+/// multiply + add` for a count field (§3.6), the count itself otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Scale {
+    multiply: u32,
+    add: i64,
+}
+
+impl Scale {
+    const ONE: Scale = Scale {
+        multiply: 1,
+        add: 0,
+    };
+
+    /// Whether the count gives a length of at least 0.
+    fn reaches(self, count: i64) -> bool {
+        count * i64::from(self.multiply) + self.add >= 0
+    }
+
+    /// The length a count gives; groups only hold counts that reach one.
+    fn length(self, count: i64) -> usize {
+        usize::try_from(count * i64::from(self.multiply) + self.add).unwrap_or(0)
+    }
+}
+
+/// List arguments whose lengths go together (§2.5, §3.6): those that fill
+/// one array's records have one length, and arrays that share a count field
+/// give it one value, each array's length following from it by its own
+/// `multiply` and `add`.
+#[derive(Debug, Clone)]
+struct Group {
+    /// Each member, and how its length follows from the group's count.
+    members: Vec<(usize, Scale)>,
+    /// The counts a request may give them.
+    counts: Vec<i64>,
+    /// The count their defaults give, when any of them has one.
+    default: Option<i64>,
 }
 
 /// An entry at its place.
@@ -485,6 +583,11 @@ enum Placed {
         algorithm: Algorithm,
         from_bits: u64,
     },
+    Array {
+        name: String,
+        count: Counted,
+        elements: Elements,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -498,6 +601,7 @@ struct Layout {
     /// Whether each entry starts where it does in every payload: a
     /// constant there is a key (`spec/encoding.md` §7.2).
     statics: Vec<bool>,
+    groups: Vec<Group>,
 }
 
 impl Layout {

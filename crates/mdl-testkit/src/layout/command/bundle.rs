@@ -4,7 +4,8 @@
 use serde_json::{Map, Value, json};
 
 use super::{
-    Arg, ArgType, Commands, Const, Encoder, Layout, Len, Placed, Request, Shape, Source, Through,
+    Arg, ArgType, Commands, Const, Counted, Elements, Encoder, Layout, Len, Placed, Request, Shape,
+    Source, Through,
 };
 use crate::layout::{Text, conversion_json, integer_json};
 
@@ -35,11 +36,16 @@ pub(super) fn assemble(
     if metadata {
         family["metadata"] = json!(["apid"]);
     }
+    let mut set = json!({ "name": "fam_v1", "family": "fam", "commands": packets });
+    let types = types_json(layouts);
+    if !types.is_empty() {
+        set["types"] = Value::Object(types);
+    }
     let bundle = json!({
         "mdl_version": "2.0",
         "catalog": { "commands": commands },
         "families": [family],
-        "sets": [{ "name": "fam_v1", "family": "fam", "commands": packets }]
+        "sets": [set]
     });
     Commands {
         bundle,
@@ -60,6 +66,13 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
     }
     if let ArgType::Enum(states) = &encoder.ty {
         json.insert("states".into(), json!(states));
+    }
+    if let Some(bounds) = encoder.list {
+        let ends: Map<String, Value> = [("min", bounds.min), ("max", bounds.max)]
+            .into_iter()
+            .filter_map(|(key, end)| end.map(|end| (key.to_string(), json!(end))))
+            .collect();
+        json.insert("list".into(), Value::Object(ends));
     }
     // An f64 argument's ends as numbers; an integer argument's exactly, as
     // decimal strings past ±(2^53 − 1).
@@ -83,7 +96,7 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
 }
 
 /// A value as the catalog writes it: bytes as lowercase hex, an integer
-/// past ±(2^53 − 1) as a decimal string.
+/// past ±(2^53 − 1) as a decimal string, a list as an array of its values.
 fn arg_json(value: &Arg) -> Value {
     match value {
         Arg::Bool(b) => json!(b),
@@ -97,7 +110,30 @@ fn arg_json(value: &Arg) -> Value {
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()
         ),
+        Arg::List(values) => Value::Array(values.iter().map(arg_json).collect()),
     }
+}
+
+/// The set's struct types: each array of records' own, its entries laid out
+/// from the record's start.
+fn types_json(layouts: &[Layout]) -> Map<String, Value> {
+    let mut types = Map::new();
+    for layout in layouts {
+        for entry in &layout.entries {
+            if let Placed::Array {
+                elements: Elements::Records { name, entries },
+                ..
+            } = entry
+            {
+                let entries: Vec<Value> = entries
+                    .iter()
+                    .map(|entry| entry_json(layout, entry))
+                    .collect();
+                types.insert(name.clone(), json!({ "entries": entries }));
+            }
+        }
+    }
+    types
 }
 
 fn packet_json(layout: &Layout) -> Value {
@@ -128,6 +164,11 @@ fn entry_json(layout: &Layout, entry: &Placed) -> Value {
             }
             return json;
         }
+        Placed::Array {
+            name,
+            count,
+            elements,
+        } => return array_json(layout, name, count, elements),
         Placed::Field {
             name,
             shape,
@@ -139,6 +180,80 @@ fn entry_json(layout: &Layout, entry: &Placed) -> Value {
     let mut json = Map::new();
     json.insert("kind".into(), json!("field"));
     json.insert("name".into(), json!(name));
+    shape_json(&mut json, name, shape, *little, *explicit);
+    match source {
+        Source::Constant(value) => {
+            let value = match value {
+                Const::Int(n) => integer_json(*n),
+                Const::Bool(b) => json!(u8::from(*b)),
+                Const::Text(text) => json!(text),
+            };
+            json.insert("value".into(), value);
+        }
+        Source::Argument(index) => {
+            json.insert("argument".into(), json!(format!("a{index}")));
+            through_json(&mut json, &layout.arguments[*index].0);
+        }
+        Source::Target => {
+            json.insert("target".into(), json!(true));
+        }
+        Source::Length(_) | Source::Count => {}
+    }
+    Value::Object(json)
+}
+
+/// An array: its count, and its elements, a scalar that encodes a list
+/// argument or a struct type whose fields do.
+fn array_json(layout: &Layout, name: &str, count: &Counted, elements: &Elements) -> Value {
+    let count = match count {
+        Counted::Fixed(count) => json!({ "kind": "fixed", "count": count }),
+        Counted::Field {
+            name,
+            multiply,
+            add,
+        } => {
+            let mut json = json!({ "kind": "field", "field": name });
+            if *multiply != 1 {
+                json["multiply"] = json!(multiply);
+            }
+            if *add != 0 {
+                json["add"] = json!(add);
+            }
+            json
+        }
+        Counted::Remaining => json!({ "kind": "remaining" }),
+    };
+    let mut json = json!({ "kind": "array", "name": name, "count": count });
+    match elements {
+        Elements::Scalar {
+            argument,
+            shape,
+            little,
+            explicit,
+        } => {
+            let mut element = Map::new();
+            element.insert("kind".into(), json!("scalar"));
+            shape_json(&mut element, name, shape, *little, *explicit);
+            through_json(&mut element, &layout.arguments[*argument].0);
+            json["element"] = Value::Object(element);
+            json["argument"] = json!(format!("a{argument}"));
+        }
+        Elements::Records { name, .. } => {
+            json["element"] = json!({ "kind": "struct", "name": name });
+        }
+    }
+    json
+}
+
+/// A field's or scalar element's type, size, length, text encoding and
+/// byte order, when spelled.
+fn shape_json(
+    json: &mut Map<String, Value>,
+    name: &str,
+    shape: &Shape,
+    little: bool,
+    explicit: bool,
+) {
     json.insert("type".into(), json!(shape.type_name()));
     if let Some(bits) = shape.bits()
         && !matches!(shape, Shape::Text(..) | Shape::Bytes(_))
@@ -157,63 +272,49 @@ fn entry_json(layout: &Layout, entry: &Placed) -> Value {
         }
         _ => {}
     }
-    if *explicit {
+    if explicit {
         json.insert(
             "byte_order".into(),
-            json!(if *little { "little" } else { "big" }),
+            json!(if little { "little" } else { "big" }),
         );
     }
-    match source {
-        Source::Constant(value) => {
-            let value = match value {
-                Const::Int(n) => integer_json(*n),
-                Const::Bool(b) => json!(u8::from(*b)),
-                Const::Text(text) => json!(text),
-            };
-            json.insert("value".into(), value);
+}
+
+/// How a field or scalar element turns its argument's value into a raw
+/// value (§3.1), and its unit.
+fn through_json(json: &mut Map<String, Value>, encoder: &Encoder) {
+    match &encoder.through {
+        Through::Plain => {}
+        Through::States(states) => {
+            let states: Vec<Value> = states
+                .iter()
+                .map(|(raw, name)| json!({ "raw": integer_json(*raw), "name": name }))
+                .collect();
+            json.insert(
+                "conversion".into(),
+                json!({ "kind": "states", "states": states }),
+            );
         }
-        Source::Argument(index) => {
-            let encoder = &layout.arguments[*index].0;
-            json.insert("argument".into(), json!(format!("a{index}")));
-            match &encoder.through {
-                Through::Plain => {}
-                Through::States(states) => {
-                    let states: Vec<Value> = states
-                        .iter()
-                        .map(|(raw, name)| json!({ "raw": integer_json(*raw), "name": name }))
-                        .collect();
-                    json.insert(
-                        "conversion".into(),
-                        json!({ "kind": "states", "states": states }),
-                    );
-                }
-                Through::Exact(conversion) => {
-                    if let Some(conversion) = conversion_json(conversion) {
-                        json.insert("conversion".into(), conversion);
-                    }
-                }
-                Through::Inverse {
-                    conversion,
-                    inverse,
-                } => {
-                    if let Some(conversion) = conversion_json(conversion) {
-                        json.insert("conversion".into(), conversion);
-                    }
-                    if let Some(inverse) = conversion_json(inverse) {
-                        json.insert("inverse".into(), inverse);
-                    }
-                }
-            }
-            if let Some((_, unit)) = encoder.units {
-                json.insert("unit".into(), json!(unit));
+        Through::Exact(conversion) => {
+            if let Some(conversion) = conversion_json(conversion) {
+                json.insert("conversion".into(), conversion);
             }
         }
-        Source::Target => {
-            json.insert("target".into(), json!(true));
+        Through::Inverse {
+            conversion,
+            inverse,
+        } => {
+            if let Some(conversion) = conversion_json(conversion) {
+                json.insert("conversion".into(), conversion);
+            }
+            if let Some(inverse) = conversion_json(inverse) {
+                json.insert("inverse".into(), inverse);
+            }
         }
-        Source::Length(_) => {}
     }
-    Value::Object(json)
+    if let Some((_, unit)) = encoder.units {
+        json.insert("unit".into(), json!(unit));
+    }
 }
 
 /// A length as IR JSON; a length field is named after the entry it serves.

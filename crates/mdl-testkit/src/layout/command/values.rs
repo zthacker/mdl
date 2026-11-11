@@ -225,7 +225,21 @@ pub(super) fn spell(value: &Arg, how: u8) -> Given {
         (Arg::Bool(b), _) => Given::Bool(*b),
         (Arg::Text(text), _) => Given::Text(text.clone()),
         (Arg::Bytes(bytes), _) => Given::Bytes(bytes.clone()),
+        // Each value spelled its own way.
+        (Arg::List(values), _) => Given::List(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| spell(value, how.wrapping_add(index as u8)))
+                .collect(),
+        ),
     }
+}
+
+/// A list argument's values, as many as `count`: each a value its element
+/// allows.
+pub(super) fn list_value(encoder: &Encoder, count: usize) -> BoxedStrategy<Arg> {
+    vec(value(encoder), count).prop_map(Arg::List).boxed()
 }
 
 /// The least double at or above `n`.
@@ -260,6 +274,9 @@ pub(super) fn value_of(given: &Given, ty: &ArgType) -> Arg {
         (Given::Bool(b), _) => Arg::Bool(*b),
         (Given::Text(text), _) => Arg::Text(text.clone()),
         (Given::Bytes(bytes), _) => Arg::Bytes(bytes.clone()),
+        (Given::List(values), _) => {
+            Arg::List(values.iter().map(|value| value_of(value, ty)).collect())
+        }
     }
 }
 

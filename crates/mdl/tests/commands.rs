@@ -98,15 +98,7 @@ fn sent(
 ) -> Result<CommandRequest, TestCaseError> {
     let mut sent = CommandRequest::new(set, command);
     for (name, value) in arguments {
-        let value = match value {
-            Given::Bool(b) => ArgumentValue::Bool(*b),
-            Given::Int(n) => ArgumentValue::Int(*n),
-            Given::Uint(n) => ArgumentValue::Uint(*n),
-            Given::Float(x) => ArgumentValue::Float(*x),
-            Given::Text(text) => ArgumentValue::Text(text.clone()),
-            Given::Bytes(bytes) => ArgumentValue::Bytes(bytes.clone()),
-        };
-        sent = sent.with_argument(name.as_str(), value);
+        sent = sent.with_argument(name.as_str(), given(value));
     }
     if let Some(target) = target {
         sent = sent.with_target(match target {
@@ -119,6 +111,19 @@ fn sent(
         });
     }
     Ok(sent)
+}
+
+/// A value as a caller gives it.
+fn given(value: &Given) -> ArgumentValue {
+    match value {
+        Given::Bool(b) => ArgumentValue::Bool(*b),
+        Given::Int(n) => ArgumentValue::Int(*n),
+        Given::Uint(n) => ArgumentValue::Uint(*n),
+        Given::Float(x) => ArgumentValue::Float(*x),
+        Given::Text(text) => ArgumentValue::Text(text.clone()),
+        Given::Bytes(bytes) => ArgumentValue::Bytes(bytes.clone()),
+        Given::List(values) => ArgumentValue::List(values.iter().map(given).collect()),
+    }
 }
 
 /// The argument, constant or entry a decoding error names.
@@ -165,6 +170,7 @@ fn arg(value: &ArgumentValue) -> Arg {
         ArgumentValue::Float(x) => Arg::F64(*x),
         ArgumentValue::Text(text) => Arg::Text(text.clone()),
         ArgumentValue::Bytes(bytes) => Arg::Bytes(bytes.clone()),
+        ArgumentValue::List(values) => Arg::List(values.iter().map(arg).collect()),
         other => Arg::Text(format!("not generated: {other:?}")),
     }
 }
