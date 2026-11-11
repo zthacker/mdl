@@ -170,7 +170,7 @@ several imports.
 | `crates/mdl-toml` | the TOML frontend: definitions written as the IR spelled in TOML |
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the command line: build, inspect, decode, encode |
-| `crates/mdl-testkit` | IR generators and the list of IR features, for the property tests (never published) |
+| `crates/mdl-testkit` | IR generators, the list of IR features, and oracles that work out from the spec what telemetry decodes to and what commands encode to, for the property tests (never published) |
 | `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
 
