@@ -1127,6 +1127,38 @@ fn an_integer_argument_reaches_the_top_of_a_field_wider_than_53_bits() {
     assert_eq!(code(sets.encode(&mark(0))), "out_of_range");
 }
 
+/// A float raw value that isn't finite is non_finite before its
+/// conversion, through a table that doesn't extrapolate too, where
+/// infinity lies outside the points (`spec/encoding.md` §7.4).
+#[test]
+fn an_infinite_raw_value_is_non_finite_before_its_conversion() {
+    let bundle = json!({
+        "mdl_version": "2.0",
+        "catalog": { "commands": { "lab.set": { "arguments": [
+            { "name": "x", "type": "f64", "range": { "min": 0, "max": 10 } }
+        ] } } },
+        "families": [{ "name": "lab", "encoding": "binary", "byte_order": "big",
+                       "alias": { "kind": "fixed", "value": "A1" } }],
+        "sets": [{ "name": "lab_v1", "family": "lab", "commands": [{
+            "name": "SET", "canonical": "lab.set",
+            "entries": [
+                { "kind": "field", "name": "op", "type": "uint", "size_bits": 8, "value": 7 },
+                { "kind": "field", "name": "x", "type": "float", "size_bits": 64,
+                  "conversion": { "kind": "table", "points": [
+                      { "raw": 0, "value": 0 }, { "raw": 100, "value": 10 } ] },
+                  "argument": "x" }
+            ]
+        }] }]
+    });
+    let sets = sets_of(&bundle, "lab");
+    for raw in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let mut payload = vec![7];
+        payload.extend_from_slice(&raw.to_be_bytes());
+        let refused = sets.decode_command("lab_v1", &binary(&payload));
+        assert_eq!(decode_code(refused), "non_finite", "{raw}");
+    }
+}
+
 #[test]
 fn a_json_command_ignores_keys_its_packet_doesnt_define() {
     let sets = sets_of(&fixture(), "vendor_j");
