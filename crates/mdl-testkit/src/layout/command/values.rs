@@ -225,21 +225,28 @@ pub(super) fn spell(value: &Arg, how: u8) -> Given {
         (Arg::Bool(b), _) => Given::Bool(*b),
         (Arg::Text(text), _) => Given::Text(text.clone()),
         (Arg::Bytes(bytes), _) => Given::Bytes(bytes.clone()),
-        // Each value spelled its own way.
-        (Arg::List(values), _) => Given::List(
-            values
-                .iter()
-                .enumerate()
-                .map(|(index, value)| spell(value, how.wrapping_add(index as u8)))
-                .collect(),
-        ),
+        (Arg::List(values), _) => Given::List(spell_list(values, how)),
     }
 }
 
-/// A list argument's values, as many as `count`: each a value its element
-/// allows.
+/// A list's values as a request spells them, each its own way.
+pub(super) fn spell_list(values: &[Arg], how: u8) -> Vec<Given> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(index, value)| spell(value, how.wrapping_add(index as u8)))
+        .collect()
+}
+
+/// A list argument's value, as many values as `count`: each a value its
+/// element allows.
 pub(super) fn list_value(encoder: &Encoder, count: usize) -> BoxedStrategy<Arg> {
-    vec(value(encoder), count).prop_map(Arg::List).boxed()
+    list_values(encoder, count).prop_map(Arg::List).boxed()
+}
+
+/// As many values as `count` that a list argument's element allows.
+pub(super) fn list_values(encoder: &Encoder, count: usize) -> BoxedStrategy<Vec<Arg>> {
+    vec(value(encoder), count).boxed()
 }
 
 /// The least double at or above `n`.

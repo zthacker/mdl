@@ -292,9 +292,21 @@ pub(super) struct Packed {
     /// Each encoded argument's raw value, by argument index.
     pub(super) arguments: Vec<Option<Raw>>,
     pub(super) target: Option<Raw>,
-    /// Each field's and checksum's place in the payload, by entry index:
-    /// its first bit and how many bits it takes.
+    /// Each field's, checksum's and array's place in the payload, by entry
+    /// index: its first bit and how many bits it takes.
     pub(super) places: Vec<Option<(u64, u64)>>,
+    /// Each array's elements' places, by entry index (none for other
+    /// entries).
+    pub(super) elements: Vec<Vec<ElementPlace>>,
+}
+
+/// An array element's place, and in a record each of its entries' places
+/// (padding's too), in record order.
+#[derive(Debug, Clone)]
+pub(super) struct ElementPlace {
+    pub(super) start: u64,
+    pub(super) size: u64,
+    pub(super) fields: Vec<(u64, u64)>,
 }
 
 /// Packs a packet (`spec/encoding.md` §3, §4): each field's raw value, an
@@ -431,6 +443,7 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
     let mut payload = Vec::new();
     let mut at = 0_u64;
     let mut places = vec![None; layout.entries.len()];
+    let mut elements_at = vec![Vec::new(); layout.entries.len()];
     for (k, entry) in layout.entries.iter().enumerate() {
         let start = at;
         match (entry, &raws[k]) {
@@ -446,6 +459,8 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
             }
             (Placed::Array { elements, .. }, Some(Raw::Array(items))) => {
                 for item in items {
+                    let first = at;
+                    let mut fields_at = Vec::new();
                     match (elements, item) {
                         (Elements::Scalar { shape, little, .. }, raw) => {
                             at += write(&mut payload, at, shape, *little, raw)
@@ -454,6 +469,7 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
                             // A record's entries in order, from its start,
                             // each field's raw value found by its name.
                             for entry in entries {
+                                let from = at;
                                 match entry {
                                     Placed::Padding(bits) => at += bits,
                                     Placed::Field {
@@ -469,10 +485,16 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
                                     }
                                     _ => {}
                                 }
+                                fields_at.push((from, at - from));
                             }
                         }
                         _ => {}
                     }
+                    elements_at[k].push(ElementPlace {
+                        start: first,
+                        size: at - first,
+                        fields: fields_at,
+                    });
                 }
             }
             (Placed::Array { .. }, _) => continue,
@@ -513,6 +535,7 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
         arguments,
         target: target_raw,
         places,
+        elements: elements_at,
     }
 }
 
