@@ -195,6 +195,18 @@ struct).
   holds (§5.4). An absent entry ends where it would have started: an
   absent entry with `offset_bits` still moves the next sequential entry to
   that offset.
+- **Overlap.** Entries that follow one another never overlap. A
+  container's entries form *runs*: one from its start, and a new one at
+  each entry with `offset_bits`, which the sequential entries after it
+  continue. An entry's *extent* runs from its earliest start to its
+  furthest end, unbounded when its size or start has no bound; an entry
+  that never takes a bit has none. Two entries of different runs whose
+  extents share a bit MUST NOT both be unconditional. A conditional entry
+  MAY share bits with an entry of another run only as an alternative
+  reading of them: when that entry is conditional too, or when that
+  entry, unconditional, covers in every placement (from its latest start
+  to its earliest start plus its smallest size) every bit the conditional
+  one can read. Every validator MUST refuse any other overlap.
 - **Static positions.** An entry's position is static when no message
   can move it: it has `offset_bits`, or it is its container's first
   entry, or the entry before it has a static position and an exact size.
@@ -284,7 +296,11 @@ unconditional and not optional.
 
 - `compare` and `in` compare a field with integers by value (a bool is 0
   or 1), or a string field with strings exactly. `mask_any` holds if
-  `field & value` isn't 0; `mask_all` if it equals `value`.
+  `field & value` isn't 0; `mask_all` if it equals `value`. A field takes
+  the comparisons its type allows: `eq`, `ne` and `in` an integer, bool
+  or string field; `lt`, `le`, `gt` and `ge` an integer one; `mask_any`
+  and `mask_all` an unsigned one. A string of fixed length 0 is always
+  empty, so no condition compares it.
 - A count or length from a field is `raw * multiply + add` (defaults 1
   and 0). A negative result is [`bad_length`], named by the entry whose
   count or length it is.
@@ -297,10 +313,15 @@ element of an array with a `fixed` or `field` count, the count is
 checked against the bits left: as `count * size` bits for elements with
 an exact size (§5.2), else as `count` bits, since every element takes at
 least one. A count past them is [`past_end`], named by the array. An
-element that takes no bits is [`empty_element`]. Strings and bytes are
-checked before they're copied. A decoder MUST NOT recurse deeper than
-the definition nests (validation caps it at 32), and MUST NOT panic or
-crash on any payload.
+element that takes no bits is [`empty_element`]. A validated definition
+never gives it: every element can take a bit (§5.2), and since a
+condition needs an always-present field of its container that isn't
+always empty (§5.4), and counts and lengths need fields too, every
+element takes at least one; the check guards definitions that weren't
+validated.
+Strings and bytes are checked before they're copied. A decoder MUST NOT
+recurse deeper than the definition nests (validation caps it at 32), and
+MUST NOT panic or crash on any payload.
 
 ### 5.6 Checksums
 
