@@ -1076,6 +1076,32 @@ fn an_empty_fixed_array_reads_no_bits() {
 }
 
 #[test]
+fn a_condition_needs_a_field_that_holds_something() {
+    // A string of fixed length 0 is always empty: a condition on it always
+    // gives one answer, and an element of it and entries conditional on it
+    // could take no bits.
+    let empty = json!({ "kind": "field", "name": "s", "type": "string",
+                        "length": { "kind": "fixed", "bytes": 0 } });
+    assert_eq!(
+        one(json!([
+            empty,
+            when(uint("v", 8), on("s", "eq", json!("x")))
+        ])),
+        vec![(Code::ReferenceType, entry(1, "/when/field"))]
+    );
+    // One byte holds something.
+    let letter = json!({ "kind": "field", "name": "s", "type": "string",
+                         "length": { "kind": "fixed", "bytes": 1 } });
+    assert_eq!(
+        one(json!([
+            letter,
+            when(uint("v", 8), on("s", "eq", json!("x")))
+        ])),
+        vec![]
+    );
+}
+
+#[test]
 fn sizes_suit_types() {
     let field = |ty: &str, extra: Value| {
         let mut f = json!({ "kind": "field", "name": "f", "type": ty });

@@ -1409,6 +1409,20 @@ fn check_condition_refs(
             );
             return None;
         }
+        // It always holds "", so a condition on it always gives one answer,
+        // and an element whose only other entries are conditional on it
+        // could take no bits (decoding.md §5.4, §5.5).
+        if let Some(ByteLength::Fixed { bytes: 0, .. }) = earlier.field.length {
+            report.error(
+                Code::ReferenceType,
+                &place.key("field"),
+                format!(
+                    "{name} has a fixed length of 0, so it's always empty and a condition on it \
+                     always gives the same answer"
+                ),
+            );
+            return None;
+        }
         Some(earlier.field)
     };
     match condition {
