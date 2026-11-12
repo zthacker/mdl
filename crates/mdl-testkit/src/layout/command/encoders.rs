@@ -558,6 +558,16 @@ pub(super) fn length_field() -> BoxedStrategy<Len> {
         .boxed()
 }
 
+/// A str or bytes argument in a field that a terminator ends.
+pub(super) fn terminated_encoder() -> BoxedStrategy<Encoder> {
+    let text = (select(TEXTS), any::<u8>()).prop_map(|(text, byte)| {
+        encoder_of(ArgType::Str, Shape::Text(text, Len::Terminator(byte)))
+    });
+    let bytes = any::<u8>()
+        .prop_map(|byte| encoder_of(ArgType::Bytes, Shape::Bytes(Len::Terminator(byte))));
+    prop_oneof![text, bytes].boxed()
+}
+
 /// A str argument, or with `bytes` a bytes one, in a field of any length
 /// kind but `remaining` (which only the last entry has).
 fn text_encoder(bytes: bool) -> BoxedStrategy<Encoder> {

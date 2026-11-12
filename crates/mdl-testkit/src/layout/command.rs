@@ -55,7 +55,8 @@ pub struct Commands {
 
 /// A request with one or two faults planted in it, and the error encoding
 /// gives: the first problem `spec/encoding.md` reaches (the set and
-/// command; §2.1's two passes; §3's entries in order, length fields last).
+/// command; §2.1's two passes; §3's entries in order, then length fields,
+/// then counts).
 #[derive(Debug, Clone)]
 pub struct Refused {
     pub set: String,
@@ -64,7 +65,9 @@ pub struct Refused {
     pub arguments: Vec<(String, Given)>,
     pub target: Option<Target>,
     pub code: &'static str,
-    /// The argument or field the error names, if it names one.
+    /// What the error names, if it names anything: an argument or field, a
+    /// list's value (`a3[2]`), or an element and its record field
+    /// (`f2[1].r0`).
     pub at: Option<String>,
     /// Every fault in it, planted or found by §2.1's first pass: the error
     /// is the one caught first.
@@ -72,26 +75,36 @@ pub struct Refused {
 }
 
 /// A fault in a request: the code it gives on its own, where encoding
-/// catches it, and the catalog argument it's about, if it's about one.
+/// catches it, the catalog argument it's about if it's about one, and what
+/// the error names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fault {
     pub code: &'static str,
     pub stage: Stage,
     pub argument: Option<usize>,
+    pub at: Option<String>,
 }
 
 /// Where encoding catches a fault, in the order it checks things: the
 /// request (§1); a given name, by its place in the request; an argument,
 /// by catalog index; an entry, by index; then a length field, by the index
-/// of the entry it measures (§3.5). Don't reorder the variants: the
-/// derived order is the check order.
+/// of the entry it measures (§3.5); then an array's count, by the array's
+/// index (§3.6). Don't reorder the variants: the derived order is the
+/// check order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     Request,
     Name(usize),
     Argument(usize),
-    Field(usize),
+    /// An entry. In an array, the lengths of its records' lists are
+    /// compared first (`element: None`), then each element in order, and
+    /// in a record each field in order: `Some((element, position))`.
+    Field {
+        entry: usize,
+        element: Option<(usize, usize)>,
+    },
     Length(usize),
+    Count(usize),
 }
 
 /// A payload with a fault planted in it, and the code decoding it gives
@@ -107,6 +120,11 @@ pub struct Garbled {
     pub code: &'static str,
     /// The argument or entry the error names, if it names one.
     pub at: Option<String>,
+    /// The kind of fault, as faults are picked: `set`, `encoding`,
+    /// `no_packet`, `checksum`, `constant`, `raw` and `cut`, or in an
+    /// array `element`, `record constant`, `count`, `cut inside an array`,
+    /// `more bytes` and `list_length`.
+    pub kind: &'static str,
     /// What was planted, for a failing case's report.
     pub planted: String,
 }

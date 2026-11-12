@@ -5,7 +5,9 @@ use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::{Index, select};
 
-use super::encoders::{as_literal, element_encoder, encoder, length_field, with_default};
+use super::encoders::{
+    as_literal, element_encoder, encoder, length_field, terminated_encoder, with_default,
+};
 use super::values::{list_value, text_for};
 use super::{
     Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Group, Layout, Len, Placed, Scale,
@@ -466,6 +468,11 @@ fn draft(
     };
     let scalar = element_encoder(variable, false)
         .prop_map(|encoder| DraftElement::Scalar(Box::new(encoder)));
+    // A fixed count of bools, one bit each: flags packed into bits.
+    let flags = Just(DraftElement::Scalar(Box::new(encoder_of(
+        ArgType::Bool,
+        Shape::Bool,
+    ))));
     let records = |bits: bool| {
         vec(record_field(bits), 1..=3)
             .prop_filter("a record takes a list", |fields| {
@@ -475,10 +482,16 @@ fn draft(
             })
             .prop_map(move |fields| DraftElement::Records { fields, bits })
     };
-    let element = if little || variable {
-        prop_oneof![2 => scalar, 1 => records(false)].boxed()
-    } else {
-        prop_oneof![2 => scalar, 1 => records(false), 1 => records(true)].boxed()
+    let element = match (little, variable) {
+        (_, true) => prop_oneof![2 => scalar, 1 => records(false)].boxed(),
+        (true, false) => prop_oneof![4 => scalar, 1 => flags, 2 => records(false)].boxed(),
+        (false, false) => prop_oneof![
+            4 => scalar,
+            1 => flags,
+            2 => records(false),
+            2 => records(true),
+        ]
+        .boxed(),
     };
     element.prop_map(make).boxed()
 }
@@ -514,7 +527,8 @@ fn record_field(bits: bool) -> BoxedStrategy<RecordField<Encoder>> {
     .boxed()
 }
 
-/// The last entry's array: `remaining` elements, whole bytes.
+/// The last entry's array: `remaining` elements, whole bytes, a third of
+/// the time strings or bytes a terminator ends, whose size varies.
 fn remaining_draft(little: bool) -> BoxedStrategy<ArrayDraft> {
     (0_u32..=2, proptest::option::of(0_u32..=3))
         .prop_flat_map(move |(min, extra)| {
@@ -524,7 +538,16 @@ fn remaining_draft(little: bool) -> BoxedStrategy<ArrayDraft> {
                 max,
             };
             let counts: Vec<i64> = (min..=max.unwrap_or(min + 3)).map(i64::from).collect();
-            draft(CountKind::Remaining, bounds, counts, little, true)
+            let terminated = counts.clone();
+            prop_oneof![
+                2 => draft(CountKind::Remaining, bounds, counts, little, true),
+                1 => terminated_encoder().prop_map(move |encoder| ArrayDraft {
+                    count: CountKind::Remaining,
+                    bounds,
+                    counts: terminated.clone(),
+                    element: DraftElement::Scalar(Box::new(encoder)),
+                }),
+            ]
         })
         .boxed()
 }
@@ -610,10 +633,10 @@ fn trailer(little: bool) -> BoxedStrategy<Trailer> {
         Shape::Bytes(Len::Remaining),
     )));
     prop_oneof![
-        text.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
-        bytes.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
-        select(TEXTS).prop_map(|text| Trailer::Target(Shape::Text(text, Len::Remaining))),
-        remaining_draft(little).prop_map(|draft| Trailer::Array(Box::new(draft))),
+        1 => text.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
+        1 => bytes.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
+        1 => select(TEXTS).prop_map(|text| Trailer::Target(Shape::Text(text, Len::Remaining))),
+        2 => remaining_draft(little).prop_map(|draft| Trailer::Array(Box::new(draft))),
     ]
     .boxed()
 }

@@ -437,7 +437,7 @@ fn commands_reach_every_feature() {
     let mut runner = TestRunner::deterministic();
     let strategy = commands();
     let mut found = BTreeSet::new();
-    for _ in 0..300 {
+    for _ in 0..1000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         found.extend(features(&case.bundle));
         found.extend(labels(&case));
@@ -594,34 +594,42 @@ fn commands_reach_every_feature() {
     assert!(missing.is_empty(), "never generated: {missing:?}");
 }
 
-/// Planted faults reach every refusal code §8 lists for single values and
-/// fields, and every decoding refusal this module plants, each by every
-/// route it has.
+/// Planted faults reach every refusal code §8 lists for single values,
+/// lists, fields and arrays, and every decoding refusal this module plants,
+/// each by every route it has, at least 5 times. Routes are many and some
+/// need rare layouts, so it looks at more cases than the feature test
+/// does.
 #[test]
 fn faults_reach_every_code() {
     let mut runner = TestRunner::deterministic();
     let strategy = commands();
-    let mut found = BTreeSet::new();
-    for _ in 0..300 {
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut note = |label: String| *found.entry(label).or_default() += 1;
+    for _ in 0..1000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         for refused in &case.refused {
-            found.insert(format!("refused:{}", refused.code));
+            note(format!("refused:{}", refused.code));
             if refused.faults.len() >= 2 {
-                found.insert("refused:two faults".to_string());
+                note("refused:two faults".to_string());
             }
             let Some(first) = refused.faults.iter().min_by_key(|fault| fault.stage) else {
                 continue;
             };
             if let (Stage::Length(_), "bad_length") = (first.stage, first.code) {
-                found.insert("refused:bad_length/length field".to_string());
+                note("refused:bad_length/length field".to_string());
             }
             if first.code == "raw_range" {
-                let route = if first.argument.is_some() {
-                    "f64"
-                } else {
-                    "target"
+                let route = match (first.stage, first.argument) {
+                    (
+                        Stage::Field {
+                            element: Some(_), ..
+                        },
+                        _,
+                    ) => "element",
+                    (_, Some(_)) => "f64",
+                    (_, None) => "target",
                 };
-                found.insert(format!("refused:raw_range/{route}"));
+                note(format!("refused:raw_range/{route}"));
             }
             // §3.5: a length field's fault is caught after a later entry's.
             let length_after_later =
@@ -629,18 +637,88 @@ fn faults_reach_every_code() {
                     .faults
                     .iter()
                     .any(|fault| match (fault.stage, first.stage) {
-                        (Stage::Length(measured), Stage::Field(later)) => later > measured,
+                        (Stage::Length(measured), Stage::Field { entry: later, .. }) => {
+                            later > measured
+                        }
                         _ => false,
                     });
             if length_after_later {
-                found.insert("refused:length field after a later entry".to_string());
+                note("refused:length field after a later entry".to_string());
+            }
+            // §3.6: a count's fault is caught after a later entry's, and
+            // after a later length field's; records' lengths are compared
+            // before their fields are worked out.
+            for fault in &refused.faults {
+                match (fault.stage, first.stage) {
+                    (
+                        Stage::Field {
+                            entry: array,
+                            element: Some(_),
+                        },
+                        Stage::Field {
+                            entry: records,
+                            element: None,
+                        },
+                    ) if array == records && first.code == "bad_count" => {
+                        note("refused:records compared before an element".to_string());
+                    }
+                    (Stage::Count(array), Stage::Field { entry: later, .. }) if later > array => {
+                        note("refused:count after a later entry".to_string());
+                    }
+                    (Stage::Count(array), Stage::Length(later)) if later > array => {
+                        note("refused:count after a length field".to_string());
+                    }
+                    _ => {}
+                }
+            }
+            // Lists: a list's value, an element, records, a count.
+            let at = first.at.clone().unwrap_or_default();
+            match first.stage {
+                Stage::Argument(_) if at.contains('[') => {
+                    note(format!("refused:{}/list value", first.code));
+                }
+                Stage::Field {
+                    element: Some(_), ..
+                } => {
+                    note(format!("refused:{}/element", first.code));
+                }
+                Stage::Field { element: None, .. } if first.code == "bad_count" => {
+                    note("refused:bad_count/records".to_string());
+                }
+                Stage::Count(_) => {
+                    note("refused:bad_count/count".to_string());
+                }
+                _ => {}
+            }
+            let takes_list = case.bundle["catalog"]["commands"][&refused.command]["arguments"]
+                .as_array()
+                .and_then(|arguments| arguments.iter().find(|argument| argument["name"] == at))
+                .is_some_and(|argument| argument.get("list").is_some());
+            let given_list = refused
+                .arguments
+                .iter()
+                .rev()
+                .find(|(name, _)| *name == at)
+                .is_some_and(|(_, given)| matches!(given, Given::List(_)));
+            match (first.code, takes_list, given_list) {
+                ("wrong_type", true, false) => {
+                    note("refused:wrong_type/one value for a list".to_string());
+                }
+                ("wrong_type", false, true) => {
+                    note("refused:wrong_type/a list for one value".to_string());
+                }
+                ("not_default", true, _) => {
+                    note("refused:not_default/list".to_string());
+                }
+                _ => {}
             }
         }
         for garbled in &case.garbled {
-            found.insert(format!("garbled:{}", garbled.code));
+            note(format!("garbled:{}", garbled.code));
             if garbled.code == "no_packet" {
-                found.insert(format!("garbled:no_packet/{}", garbled.planted));
+                note(format!("garbled:no_packet/{}", garbled.planted));
             }
+            note(format!("garbled:{}/{}", garbled.code, garbled.kind));
         }
     }
     let required = [
@@ -665,6 +743,23 @@ fn faults_reach_every_code() {
         "refused:bad_length/length field",
         "refused:two faults",
         "refused:length field after a later entry",
+        "refused:list_length",
+        "refused:wrong_type/one value for a list",
+        "refused:wrong_type/a list for one value",
+        "refused:wrong_type/list value",
+        "refused:non_finite/list value",
+        "refused:unknown_state/list value",
+        "refused:out_of_range/list value",
+        "refused:not_default/list",
+        "refused:raw_range/element",
+        "refused:invalid_text/element",
+        "refused:contains_terminator/element",
+        "refused:bad_length/element",
+        "refused:bad_count/records",
+        "refused:bad_count/count",
+        "refused:count after a later entry",
+        "refused:records compared before an element",
+        "refused:count after a length field",
         "garbled:unknown_set",
         "garbled:wrong_encoding",
         "garbled:no_packet",
@@ -677,10 +772,24 @@ fn faults_reach_every_code() {
         "garbled:out_of_range",
         "garbled:non_finite",
         "garbled:past_end",
+        "garbled:unknown_state/element",
+        "garbled:out_of_range/element",
+        "garbled:non_finite/element",
+        "garbled:bad_length/count",
+        "garbled:past_end/count",
+        "garbled:wrong_constant/record constant",
+        "garbled:past_end/cut inside an array",
+        "garbled:no_terminator/cut inside an array",
+        "garbled:past_end/more bytes",
+        "garbled:no_terminator/more bytes",
+        "garbled:list_length",
     ];
-    let missing: Vec<&str> = required
+    // Each at least 5 times, so that a change to the generators that makes
+    // a route rare shows here before it's gone.
+    let rare: Vec<(&str, usize)> = required
         .into_iter()
-        .filter(|feature| !found.contains(*feature))
+        .map(|label| (label, found.get(label).copied().unwrap_or(0)))
+        .filter(|(_, times)| *times < 5)
         .collect();
-    assert!(missing.is_empty(), "never planted: {missing:?}");
+    assert!(rare.is_empty(), "planted fewer than 5 times: {rare:?}");
 }

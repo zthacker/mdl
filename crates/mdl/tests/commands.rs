@@ -14,7 +14,7 @@ mod artifacts;
 
 use mdl::bindings::NativeId;
 use mdl::decode::{CommandDecodeError, DecodeError};
-use mdl::encode::{ArgumentValue, CommandRequest, EncodeError};
+use mdl::encode::{ArgumentProblem, ArgumentValue, CommandRequest, EncodeError, FieldProblem};
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::time::Timestamp;
 use mdl_testkit::layout::command::{Arg, Encoding, Given, Target, commands};
@@ -126,22 +126,44 @@ fn given(value: &Given) -> ArgumentValue {
     }
 }
 
-/// The argument, constant or entry a decoding error names.
+/// The argument (and list value), constant or entry a decoding error
+/// names, as a path: `a3[2]`, `f2[1].r0`.
 fn decode_named(error: &CommandDecodeError) -> Option<String> {
     match error {
         CommandDecodeError::Constant { field, .. } => Some(field.clone()),
-        CommandDecodeError::Argument { argument, .. } => Some(argument.clone()),
+        CommandDecodeError::Argument {
+            argument, problem, ..
+        } => Some(argument_path(argument, problem)),
         CommandDecodeError::Decode(DecodeError::Entry { path, .. }) => Some(path.clone()),
         _ => None,
     }
 }
 
-/// The argument or field an encoding error names.
+/// The argument (and list value) or field (and element, and record field)
+/// an encoding error names, as a path: `a3[2]`, `f2[1].r0`.
 fn named(error: &EncodeError) -> Option<String> {
     match error {
-        EncodeError::Argument { argument, .. } => Some(argument.clone()),
-        EncodeError::Field { field, .. } => Some(field.clone()),
+        EncodeError::Argument {
+            argument, problem, ..
+        } => Some(argument_path(argument, problem)),
+        EncodeError::Field { field, problem, .. } => Some(match problem {
+            FieldProblem::Element {
+                index,
+                field: Some(inner),
+                ..
+            } => format!("{field}[{index}].{inner}"),
+            FieldProblem::Element { index, .. } => format!("{field}[{index}]"),
+            _ => field.clone(),
+        }),
         _ => None,
+    }
+}
+
+/// An argument, or one value of a list argument.
+fn argument_path(argument: &str, problem: &ArgumentProblem) -> String {
+    match problem {
+        ArgumentProblem::Item { index, .. } => format!("{argument}[{index}]"),
+        _ => argument.to_string(),
     }
 }
 
