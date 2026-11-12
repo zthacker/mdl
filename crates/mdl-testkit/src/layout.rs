@@ -17,11 +17,19 @@
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
+use body::{Body, BodySpec, body_spec};
 pub use fleet::{Fleet, Meta, Sent, fleet};
+use meaning::{UNIT_GROUPS, convert, convert_unit, table};
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::select;
 use serde_json::{Map, Value, json};
+pub use time::EventTime;
+use time::{
+    Count, SECOND, TimeFields, TimeSource, count_value, epoch, event_time, near_leap, received,
+    time_fields, time_json, time_scale, time_source, to_utc, unit, week_value,
+};
+pub(crate) use time::{instant_text, label};
 
 /// A family, its one set, and messages for it.
 #[derive(Debug, Clone)]
@@ -66,11 +74,20 @@ pub enum Raw {
     Record(Vec<(String, Raw)>),
 }
 
-/// A sample: its param, value and quality (`spec/decoding.md` §7.3).
+/// A sample (`spec/decoding.md` §7.3).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sample {
     pub param: String,
     pub value: Expected,
+    /// The record path of its value, every index included (`f2[1].f0`);
+    /// for a composite, its members' paths joined by `,`.
+    pub path: String,
+    /// The value's position in its innermost array, for a value inside
+    /// one.
+    pub index: Option<u64>,
+    /// For an element of an array with `sample_interval_ms`: how long after
+    /// the packet's event time it was taken, in nanoseconds.
+    pub time_offset_ns: Option<i64>,
     /// The quality's name, as `spec/decoding.md` §7.3 spells it.
     pub quality: &'static str,
 }
@@ -85,6 +102,12 @@ pub enum Expected {
     Str(String),
     Bytes(Vec<u8>),
     Enum(String),
+    /// A composite's members in order (x, y, z, or w, x, y, z), in its
+    /// source's frame, spelled as the IR spells frames (§7.4).
+    Vector {
+        frame: String,
+        members: Vec<f64>,
+    },
 }
 
 /// Two floats are the same value: the same bits, or both NaN.
@@ -118,6 +141,20 @@ impl PartialEq for Expected {
             (Expected::Str(a), Expected::Str(b)) => a == b,
             (Expected::Bytes(a), Expected::Bytes(b)) => a == b,
             (Expected::Enum(a), Expected::Enum(b)) => a == b,
+            (
+                Expected::Vector { frame, members },
+                Expected::Vector {
+                    frame: other_frame,
+                    members: other_members,
+                },
+            ) => {
+                frame == other_frame
+                    && members.len() == other_members.len()
+                    && members
+                        .iter()
+                        .zip(other_members)
+                        .all(|(a, b)| same_float(*a, *b))
+            }
             _ => false,
         }
     }
@@ -128,22 +165,15 @@ impl PartialEq for Expected {
 pub fn telemetry() -> BoxedStrategy<Telemetry> {
     (any::<bool>(), time_source())
         .prop_flat_map(|(little, time)| {
-            let packet = (vec(field_spec(), 1..=8), time_fields(&time));
+            let packet = (body_spec(), time_fields(&time));
             (Just(little), Just(time), vec(packet, 1..=3))
         })
         .prop_flat_map(|(little, time, packets)| {
             let packets: Vec<PacketLayout> = packets
                 .into_iter()
                 .enumerate()
-                .map(|(index, (fields, count))| {
-                    lay_out(
-                        PacketShape::single(index),
-                        little,
-                        &time,
-                        count,
-                        None,
-                        fields,
-                    )
+                .map(|(index, (body, count))| {
+                    lay_out(PacketShape::single(index), little, &time, count, None, body)
                 })
                 .collect();
             let messages: Vec<BoxedStrategy<Vec<Message>>> = packets
@@ -278,6 +308,7 @@ enum Sentinel {
     Text(String),
 }
 
+/// A field or scalar array element, before it's laid out.
 #[derive(Debug, Clone)]
 struct FieldSpec {
     kind: Kind,
@@ -285,30 +316,53 @@ struct FieldSpec {
     invalid: Vec<Sentinel>,
     /// Whether it asks for the other byte order than its family's.
     flip: bool,
+    /// Whether it maps to a param: a field to its own, an element to its
+    /// array's.
+    mapped: bool,
 }
 
 fn field_spec() -> BoxedStrategy<FieldSpec> {
-    let kind = prop_oneof![
-        3 => (1_u32..=64).prop_map(Kind::Uint),
-        3 => (1_u32..=64).prop_map(Kind::Int),
-        2 => select(&[32_u32, 64][..]).prop_map(Kind::Float),
-        1 => Just(Kind::Bool),
-        2 => (
-            1_u32..=12,
-            select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]),
-            proptest::option::of(any::<u8>()),
-        )
-            .prop_map(|(bytes, text, terminator)| Kind::Text { bytes, text, terminator }),
-        1 => (1_u32..=8).prop_map(Kind::Bytes),
+    spec_of(kind(true))
+}
+
+/// Any kind of field; bools only if `bools` (they're one bit, so they
+/// can't be widened to whole bytes).
+fn kind(bools: bool) -> BoxedStrategy<Kind> {
+    let text = (
+        1_u32..=12,
+        select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]),
+        proptest::option::of(any::<u8>()),
+    )
+        .prop_map(|(bytes, text, terminator)| Kind::Text {
+            bytes,
+            text,
+            terminator,
+        });
+    let mut kinds = vec![
+        (3, (1_u32..=64).prop_map(Kind::Uint).boxed()),
+        (3, (1_u32..=64).prop_map(Kind::Int).boxed()),
+        (2, select(&[32_u32, 64][..]).prop_map(Kind::Float).boxed()),
+        (2, text.boxed()),
+        (1, (1_u32..=8).prop_map(Kind::Bytes).boxed()),
     ];
-    (kind, any::<bool>())
-        .prop_flat_map(|(kind, flip)| {
-            (meaning(&kind), sentinels(&kind), Just(kind), Just(flip)).prop_map(
-                |(meaning, invalid, kind, flip)| FieldSpec {
+    if bools {
+        kinds.push((1, Just(Kind::Bool).boxed()));
+    }
+    proptest::strategy::Union::new_weighted(kinds).boxed()
+}
+
+/// A field of one of `kinds`, with any meaning and sentinels it can have,
+/// mapped most of the time.
+fn spec_of(kinds: BoxedStrategy<Kind>) -> BoxedStrategy<FieldSpec> {
+    (kinds, any::<bool>(), proptest::bool::weighted(0.85))
+        .prop_flat_map(|(kind, flip, mapped)| {
+            (meaning(&kind), sentinels(&kind), Just(kind)).prop_map(
+                move |(meaning, invalid, kind)| FieldSpec {
                     kind,
                     meaning,
                     invalid,
                     flip,
+                    mapped,
                 },
             )
         })
@@ -370,6 +424,15 @@ fn letters(kind: &Kind) -> BoxedStrategy<String> {
 
 /// An f64 meaning: through any numeric conversion, in any units.
 fn number(kind: &Kind) -> BoxedStrategy<Meaning> {
+    number_in(kind, proptest::option::of(units()).boxed())
+}
+
+/// An f64 meaning: through any numeric conversion, in `units` (the
+/// field's and its param's).
+fn number_in(
+    kind: &Kind,
+    units: BoxedStrategy<Option<(&'static str, &'static str)>>,
+) -> BoxedStrategy<Meaning> {
     let linear = (scale(), -1e3..1e3_f64)
         .prop_map(|(scale, offset)| Numeric::Linear { scale, offset })
         .boxed();
@@ -394,8 +457,15 @@ fn number(kind: &Kind) -> BoxedStrategy<Meaning> {
         2 => table,
         1 => spline,
     ];
-    (conversion, proptest::option::of(units()))
+    (conversion, units)
         .prop_map(|(conversion, units)| Meaning::Number { conversion, units })
+        .boxed()
+}
+
+/// A field's unit and its param's, of one dimension (maybe the same code).
+fn units() -> BoxedStrategy<(&'static str, &'static str)> {
+    select(UNIT_GROUPS)
+        .prop_flat_map(|group| (select(group), select(group)))
         .boxed()
 }
 
@@ -468,186 +538,23 @@ fn sentinels(kind: &Kind) -> BoxedStrategy<Vec<Sentinel>> {
     }
 }
 
-// ---- Units ------------------------------------------------------------------
-
-/// Codes of one dimension each, which convert into each other.
-const UNIT_GROUPS: &[&[&str]] = &[
-    &["mV", "V", "kV"],
-    &["mA", "A"],
-    &["K", "Cel", "[degF]"],
-    &["ms", "s", "min", "h"],
-    &["m", "km", "[ft_i]"],
-    &["rad", "mrad", "deg"],
-];
-
-/// A field's unit and its param's, of one dimension (maybe the same code).
-fn units() -> BoxedStrategy<(&'static str, &'static str)> {
-    select(UNIT_GROUPS)
-        .prop_flat_map(|group| (select(group), select(group)))
-        .boxed()
-}
-
-/// A unit's factor (`units.md` §2): its prefix's factor times its atom's,
-/// in binary64, for the codes of [`UNIT_GROUPS`].
-fn factor(code: &str) -> f64 {
-    match code {
-        "mV" => 1e-3 * 1000.0,
-        "V" => 1000.0,
-        "kV" => 1e3 * 1000.0,
-        "mA" | "ms" | "mrad" => 1e-3 * 1.0,
-        "km" => 1e3 * 1.0,
-        "min" => 60.0,
-        "h" => 3600.0,
-        "[ft_i]" => 0.3048,
-        "deg" => 0.017453292519943295,
-        _ => 1.0,
-    }
-}
-
-/// `v` from unit `from` into `to` (`units.md` §4).
-fn convert_unit(v: f64, from: &str, to: &str) -> f64 {
-    if from == to {
-        return v;
-    }
-    let temperature = |code: &str| matches!(code, "Cel" | "[degF]");
-    if !temperature(from) && !temperature(to) {
-        return (v * factor(from)) / factor(to);
-    }
-    let kelvin = match from {
-        "Cel" => v + 273.15,
-        "[degF]" => ((v + 459.67) * 5.0) / 9.0,
-        other => v * factor(other),
-    };
-    match to {
-        "Cel" => kelvin - 273.15,
-        "[degF]" => ((kelvin * 9.0) / 5.0) - 459.67,
-        other => kelvin / factor(other),
-    }
-}
-
-// ---- Conversions --------------------------------------------------------
-
-/// `x` through a numeric conversion (§7.1); `None` outside a table's or
-/// spline's points when it doesn't extrapolate.
-fn convert(conversion: &Numeric, x: f64) -> Option<f64> {
-    match conversion {
-        Numeric::Plain => Some(x),
-        Numeric::Linear { scale, offset } => Some(x * scale + offset),
-        Numeric::Poly(coefficients) => {
-            let mut highest_first = coefficients.iter().rev();
-            let mut y = highest_first.next().copied().unwrap_or(0.0);
-            for c in highest_first {
-                y = y * x + c;
-            }
-            Some(y)
-        }
-        Numeric::Table {
-            points,
-            step,
-            extrapolate,
-        } => table(points, *step, *extrapolate, x),
-        Numeric::Spline {
-            points,
-            extrapolate,
-        } => spline(points, *extrapolate, x),
-    }
-}
-
-/// The segment `x` falls in: `Ok(i)` between points `i` and `i + 1`,
-/// `Err(true)` below the first point, `Err(false)` above the last.
-fn segment(points: &[(f64, f64)], x: f64) -> Result<usize, bool> {
-    let last = points.len() - 1;
-    if x < points[0].0 {
-        return Err(true);
-    }
-    if x > points[last].0 {
-        return Err(false);
-    }
-    Ok((0..last)
-        .find(|&i| points[i].0 < x && x < points[i + 1].0)
-        .unwrap_or(0))
-}
-
-fn table(points: &[(f64, f64)], step: bool, extrapolate: bool, x: f64) -> Option<f64> {
-    if let Some(&(_, value)) = points.iter().find(|(raw, _)| *raw == x) {
-        return Some(value);
-    }
-    let last = points.len() - 1;
-    let i = match segment(points, x) {
-        Ok(i) => i,
-        Err(_) if !extrapolate => return None,
-        // Extrapolated, a step table gives the nearest end point's value.
-        Err(below) if step => return Some(if below { points[0].1 } else { points[last].1 }),
-        Err(below) => {
-            if below {
-                0
-            } else {
-                last - 1
-            }
-        }
-    };
-    let ((ri, vi), (rj, vj)) = (points[i], points[i + 1]);
-    if step {
-        return Some(vi);
-    }
-    Some(vi + ((x - ri) * (vj - vi)) / (rj - ri))
-}
-
-/// The natural cubic spline through the points, by §7.1's sweep.
-fn spline(points: &[(f64, f64)], extrapolate: bool, x: f64) -> Option<f64> {
-    if let Some(&(_, value)) = points.iter().find(|(raw, _)| *raw == x) {
-        return Some(value);
-    }
-    let n = points.len() - 1;
-    let r: Vec<f64> = points.iter().map(|point| point.0).collect();
-    let v: Vec<f64> = points.iter().map(|point| point.1).collect();
-    let h: Vec<f64> = (0..n).map(|i| r[i + 1] - r[i]).collect();
-    let s: Vec<f64> = (0..n).map(|i| (v[i + 1] - v[i]) / h[i]).collect();
-    let mut c = vec![0.0; n];
-    let mut d = vec![0.0; n];
-    for i in 1..n {
-        let p = 2.0 * (h[i - 1] + h[i]) - h[i - 1] * c[i - 1];
-        c[i] = h[i] / p;
-        d[i] = (6.0 * (s[i] - s[i - 1]) - h[i - 1] * d[i - 1]) / p;
-    }
-    let mut m = vec![0.0; n + 1];
-    if n >= 2 {
-        m[n - 1] = d[n - 1];
-        for i in (1..n - 1).rev() {
-            m[i] = d[i] - c[i] * m[i + 1];
-        }
-    }
-    let i = match segment(points, x) {
-        Ok(i) => i,
-        Err(_) if !extrapolate => return None,
-        Err(true) => return Some(v[0] + (x - r[0]) * (s[0] - h[0] * m[1] / 6.0)),
-        Err(false) => {
-            return Some(v[n] + (x - r[n]) * (s[n - 1] + h[n - 1] * m[n - 1] / 6.0));
-        }
-    };
-    let left = r[i + 1] - x;
-    let right = x - r[i];
-    Some(
-        (m[i] * left * left * left + m[i + 1] * right * right * right) / (6.0 * h[i])
-            + ((v[i] - m[i] * h[i] * h[i] / 6.0) * left) / h[i]
-            + ((v[i + 1] - m[i + 1] * h[i] * h[i] / 6.0) * right) / h[i],
-    )
-}
-
 // ---- Laying a packet out ------------------------------------------------
 
-/// A field at its place.
+/// A field or scalar array element, laid out: how it's read, and what it
+/// means.
 #[derive(Debug, Clone)]
 struct Placed {
     name: String,
-    param: String,
+    /// The param it maps to; an element maps to its array's.
+    param: Option<String>,
     kind: Kind,
     meaning: Meaning,
     invalid: Vec<Sentinel>,
-    /// Its bit position in the packet.
-    offset: u64,
     /// Whether it's read little-endian.
     little: bool,
+    /// Whether it spells its byte order: it isn't the family's, and it
+    /// matters where the value sits.
+    explicit: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -672,10 +579,26 @@ struct PacketLayout {
     /// For a boot set's correlation packet: its clock and boot fields,
     /// right after the header.
     correlation: Option<Correlation>,
-    fields: Vec<Placed>,
+    /// Its entries after the header and time fields.
+    body: Body,
     /// Its entries, padding included, as IR JSON.
     entries: Vec<Value>,
-    bits: u64,
+}
+
+impl PacketLayout {
+    /// The packet as IR JSON.
+    fn json(&self) -> Value {
+        let mut json = json!({ "name": self.name, "identify": self.identify,
+                               "entries": self.entries });
+        if self.count.is_some() {
+            json["time_field"] = json!("t");
+        }
+        let composites = self.body.composites_json();
+        if !composites.is_empty() {
+            json["composites"] = json!(composites);
+        }
+        json
+    }
 }
 
 /// What a packet is called and how it's told apart.
@@ -731,7 +654,7 @@ fn lay_out(
     time: &TimeSource,
     timed: TimeFields,
     correlation: Option<Correlation>,
-    specs: Vec<FieldSpec>,
+    spec: BodySpec,
 ) -> PacketLayout {
     let TimeFields {
         count,
@@ -750,7 +673,6 @@ fn lay_out(
     for (name, bits) in &shape.header {
         entries.push(json!({ "kind": "field", "name": name, "type": "uint", "size_bits": bits }));
     }
-    let mut fields = Vec::new();
     let mut offset = time_start(&shape.header);
     if let Some(correlation) = &correlation {
         let mut clock = json!({ "kind": "field", "name": "clock", "type": "uint",
@@ -811,49 +733,8 @@ fn lay_out(
         entries.push(t);
         offset += u64::from(count.bits());
     }
-    for (position, spec) in specs.into_iter().enumerate() {
-        let mut kind = spec.kind;
-        let mut meaning = spec.meaning;
-        let mut little = family_little;
-        let mut explicit = false;
-        if spec.flip && kind.ordered() {
-            little = !family_little;
-            explicit = true;
-        }
-        let ordered_little = little && kind.ordered();
-        if kind.on_a_byte() || (ordered_little && !inside_one_byte(offset, kind.bits())) {
-            let skip = (8 - offset % 8) % 8;
-            if skip > 0 {
-                entries.push(json!({ "kind": "padding", "size_bits": skip }));
-                offset += skip;
-            }
-        }
-        // Widening keeps every value, state, point and sentinel it held.
-        if ordered_little && !inside_one_byte(offset, kind.bits()) && kind.bits() % 8 != 0 {
-            kind = kind.widened(kind.bits().div_ceil(8) * 8);
-            // An i64 param takes a uint of at most 63 bits.
-            if kind == Kind::Uint(64) && meaning == Meaning::I64 {
-                meaning = Meaning::U64;
-            }
-        }
-        // Inside one byte the order doesn't apply, so it isn't spelled.
-        if explicit && inside_one_byte(offset, kind.bits()) {
-            explicit = false;
-            little = family_little;
-        }
-        let field = Placed {
-            name: format!("f{position}"),
-            param: format!("{}.f{position}", shape.params),
-            kind,
-            meaning,
-            invalid: spec.invalid,
-            offset,
-            little,
-        };
-        entries.push(field_json(&field, explicit));
-        offset += u64::from(field.kind.bits());
-        fields.push(field);
-    }
+    let body = body::lay_out(spec, family_little, offset, &shape.name, &shape.params);
+    entries.extend(body.entries());
     PacketLayout {
         name: shape.name,
         id: shape.id,
@@ -864,16 +745,25 @@ fn lay_out(
         count_invalid,
         week_invalid,
         correlation,
-        fields,
+        body,
         entries,
-        bits: offset,
     }
 }
 
-fn field_json(field: &Placed, explicit: bool) -> Value {
-    let mut json = Map::new();
+fn field_json(field: &Placed) -> Value {
+    let mut json = scalar_json(field);
     json.insert("kind".into(), json!("field"));
     json.insert("name".into(), json!(field.name));
+    if let Some(param) = &field.param {
+        json.insert("canonical".into(), json!(param));
+    }
+    Value::Object(json)
+}
+
+/// What a field and a scalar array element both spell: type, size or
+/// length, byte order, text, conversion, unit and sentinels.
+fn scalar_json(field: &Placed) -> Map<String, Value> {
+    let mut json = Map::new();
     let ty = match field.kind {
         Kind::Uint(_) => "uint",
         Kind::Int(_) => "int",
@@ -914,7 +804,7 @@ fn field_json(field: &Placed, explicit: bool) -> Value {
             json.insert("length".into(), json!({ "kind": "fixed", "bytes": bytes }));
         }
     }
-    if explicit {
+    if field.explicit {
         json.insert(
             "byte_order".into(),
             json!(if field.little { "little" } else { "big" }),
@@ -952,8 +842,7 @@ fn field_json(field: &Placed, explicit: bool) -> Value {
             .collect();
         json.insert("invalid".into(), json!(invalid));
     }
-    json.insert("canonical".into(), json!(field.param));
-    Value::Object(json)
+    json
 }
 
 /// A numeric conversion as IR JSON; `None` for none. Defaults (linear
@@ -1041,8 +930,8 @@ fn message_at(
     ground: i128,
     header: Vec<u64>,
 ) -> BoxedStrategy<Message> {
-    let values: Vec<BoxedStrategy<Raw>> = packet.fields.iter().map(raw_value).collect();
-    let length = usize::try_from(packet.bits.div_ceil(8)).unwrap_or(0);
+    let values = body::values(&packet.body.nodes);
+    let length = usize::try_from(packet.body.most_bits.div_ceil(8)).unwrap_or(0);
     // Now and then a sentinel, which means ground time.
     let count = match packet.count {
         Some(count) if !packet.count_invalid.is_empty() => {
@@ -1105,22 +994,24 @@ fn message_at(
     let timing = (count, week, cuc, correlation);
     let start = time_start(&packet.header) as usize / 8;
     (values, vec(any::<u8>(), length), timing)
-        .prop_map(move |(raws, mut noise, (count, week, cuc, correlation))| {
-            if let (Some(seconds), TimeSource::Cuc { coarse, .. }) = (cuc, &time) {
-                for k in 0..*coarse as usize {
-                    let shift = 8 * (*coarse as usize - 1 - k);
-                    noise[start + k] = (seconds >> shift) as u8;
+        .prop_map(
+            move |(values, mut noise, (count, week, cuc, correlation))| {
+                if let (Some(seconds), TimeSource::Cuc { coarse, .. }) = (cuc, &time) {
+                    for k in 0..*coarse as usize {
+                        let shift = 8 * (*coarse as usize - 1 - k);
+                        noise[start + k] = (seconds >> shift) as u8;
+                    }
                 }
-            }
-            let timing = Timing {
-                count,
-                week,
-                received: ground,
-                header: header.clone(),
-                correlation,
-            };
-            pack(&packet, &time, raws, noise, timing)
-        })
+                let timing = Timing {
+                    count,
+                    week,
+                    received: ground,
+                    header: header.clone(),
+                    correlation,
+                };
+                pack(&packet, &time, values, noise, timing)
+            },
+        )
         .boxed()
 }
 
@@ -1350,7 +1241,7 @@ fn put_bits(payload: &mut [u8], offset: u64, size: u32, value: u64, little: bool
 fn pack(
     packet: &PacketLayout,
     time: &TimeSource,
-    raws: Vec<Raw>,
+    values: Vec<(String, Raw)>,
     mut payload: Vec<u8>,
     timing: Timing,
 ) -> Message {
@@ -1371,7 +1262,6 @@ fn pack(
         at += u64::from(*bits);
     }
     let start = time_start(&packet.header);
-    let mut samples = Vec::new();
     if let (Some(fields), Some((clock, boot))) = (&packet.correlation, correlation) {
         put_bits(&mut payload, start, fields.clock_bits, clock, packet.little);
         put_bits(
@@ -1404,55 +1294,10 @@ fn pack(
         put_bits(&mut payload, at, bits, value, packet.little);
         record.push(("t".to_string(), raw.clone()));
     }
-    for (field, raw) in packet.fields.iter().zip(raws) {
-        let bits = field.kind.bits();
-        match (&field.kind, &raw) {
-            (_, Raw::Uint(n)) => put_bits(&mut payload, field.offset, bits, *n, field.little),
-            (_, Raw::Int(n)) => put_bits(
-                &mut payload,
-                field.offset,
-                bits,
-                fit(*n as u64, bits),
-                field.little,
-            ),
-            (Kind::Float(32), Raw::Float(x)) => put_bits(
-                &mut payload,
-                field.offset,
-                32,
-                u64::from((*x as f32).to_bits()),
-                field.little,
-            ),
-            (_, Raw::Float(x)) => {
-                put_bits(&mut payload, field.offset, 64, x.to_bits(), field.little)
-            }
-            (_, Raw::Bool(b)) => put_bits(&mut payload, field.offset, 1, u64::from(*b), false),
-            (
-                Kind::Text {
-                    bytes,
-                    text,
-                    terminator,
-                },
-                Raw::Str(value),
-            ) => {
-                let encoded = encode(value, *text);
-                let start = (field.offset / 8) as usize;
-                payload[start..start + encoded.len()].copy_from_slice(&encoded);
-                if let Some(byte) = terminator
-                    && encoded.len() < *bytes as usize
-                {
-                    payload[start + encoded.len()] = *byte;
-                }
-            }
-            (_, Raw::Bytes(value)) => {
-                let start = (field.offset / 8) as usize;
-                payload[start..start + value.len()].copy_from_slice(value);
-            }
-            // Telemetry layouts make no arrays or records.
-            (_, Raw::Str(_) | Raw::Array(_) | Raw::Record(_)) => {}
-        }
-        samples.push(sample(field, &raw));
-        record.push((field.name.clone(), raw));
-    }
+    let end = body::write(&packet.body.nodes, &values, &mut payload, packet.body.start);
+    payload.truncate(usize::try_from(end.div_ceil(8)).unwrap_or(payload.len()));
+    let samples = packet.body.samples(&values);
+    record.extend(values);
     // A count or a week holding a sentinel has no reading: ground time.
     let sentinel = count.as_ref().is_some_and(|raw| {
         packet.count_invalid.iter().any(|n| match raw {
@@ -1485,793 +1330,6 @@ fn pack(
     }
 }
 
-// ---- What a value means -----------------------------------------------
-
-/// The raw value as a sample states it when its quality isn't `good`.
-fn as_raw(raw: &Raw) -> Expected {
-    match raw {
-        Raw::Uint(n) => Expected::U64(*n),
-        Raw::Int(n) => Expected::I64(*n),
-        Raw::Float(x) => Expected::F64(*x),
-        Raw::Bool(b) => Expected::Bool(*b),
-        Raw::Str(text) => Expected::Str(text.clone()),
-        Raw::Bytes(bytes) => Expected::Bytes(bytes.clone()),
-        // Telemetry layouts make no arrays or records.
-        Raw::Array(_) | Raw::Record(_) => Expected::Str(format!("{raw:?}")),
-    }
-}
-
-/// Whether the raw value is one of the field's sentinels (§7.2): text
-/// exactly, an integer or a float numerically.
-fn is_sentinel(field: &Placed, raw: &Raw) -> bool {
-    field.invalid.iter().any(|sentinel| match (sentinel, raw) {
-        (Sentinel::Int(n), Raw::Uint(m)) => i128::from(*m) == *n,
-        (Sentinel::Int(n), Raw::Int(m)) => i128::from(*m) == *n,
-        // Sentinels for floats are small, so the double holds them.
-        (Sentinel::Int(n), Raw::Float(x)) => *x == *n as f64,
-        (Sentinel::Text(text), Raw::Str(value)) => text == value,
-        _ => false,
-    })
-}
-
-/// What a field's raw value gives its param (§7.1 to §7.3).
-fn sample(field: &Placed, raw: &Raw) -> Sample {
-    let (value, quality) = meaning_of(field, raw);
-    Sample {
-        param: field.param.clone(),
-        value,
-        quality,
-    }
-}
-
-fn meaning_of(field: &Placed, raw: &Raw) -> (Expected, &'static str) {
-    if is_sentinel(field, raw) {
-        return (as_raw(raw), "invalid");
-    }
-    let integer = match raw {
-        Raw::Uint(n) => Some(i128::from(*n)),
-        Raw::Int(n) => Some(i128::from(*n)),
-        _ => None,
-    };
-    let good = |value| (value, "good");
-    match (&field.meaning, raw) {
-        (Meaning::U64, Raw::Uint(n)) => good(Expected::U64(*n)),
-        (Meaning::I64, _) => good(Expected::I64(
-            integer.and_then(|n| i64::try_from(n).ok()).unwrap_or(0),
-        )),
-        (Meaning::Bool, Raw::Bool(b)) => good(Expected::Bool(*b)),
-        (Meaning::Bool, _) => good(Expected::Bool(integer.unwrap_or(0) != 0)),
-        (Meaning::Str, Raw::Str(text)) => good(Expected::Str(text.clone())),
-        (Meaning::Bytes, Raw::Bytes(bytes)) => good(Expected::Bytes(bytes.clone())),
-        (Meaning::TextState(names), Raw::Str(text)) if names.contains(text) => {
-            good(Expected::Enum(text.clone()))
-        }
-        (Meaning::States(states), _) => {
-            match states.iter().find(|(state, _)| Some(*state) == integer) {
-                Some((_, name)) => good(Expected::Enum(name.clone())),
-                None => (as_raw(raw), "unknown_state"),
-            }
-        }
-        (Meaning::Number { conversion, units }, _) => {
-            let x = match raw {
-                Raw::Uint(n) => *n as f64,
-                Raw::Int(n) => *n as f64,
-                Raw::Float(x) => *x,
-                _ => f64::NAN,
-            };
-            // NaN or an infinity read is the raw value, whatever converts
-            // it; NaN is never outside a table.
-            if !x.is_finite() {
-                return (as_raw(raw), "non_finite");
-            }
-            let Some(converted) = convert(conversion, x) else {
-                return (as_raw(raw), "out_of_calibration");
-            };
-            let value = match units {
-                Some((from, to)) => convert_unit(converted, from, to),
-                None => converted,
-            };
-            if value.is_finite() {
-                good(Expected::F64(value))
-            } else {
-                (as_raw(raw), "non_finite")
-            }
-        }
-        // A text state the param doesn't list.
-        (_, _) => (as_raw(raw), "unknown_state"),
-    }
-}
-
-// ---- Time ----------------------------------------------------------------
-
-/// What a message's event time is (§8): ground time only, or a UTC
-/// instant in nanoseconds since 1970-01-01T00:00:00Z (Unix time, which has
-/// no leap seconds).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EventTime {
-    Ground,
-    At(i128),
-    /// It can't be read: a count that isn't a number, or an instant
-    /// outside years 0001 to 9999 (`invalid_time`).
-    Invalid,
-    /// Time since the asset booted, in the source's unit.
-    SinceBoot {
-        value: u64,
-        unit: &'static str,
-    },
-}
-
-const SECOND: i128 = 1_000_000_000;
-const WEEK: i128 = 604_800 * SECOND;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scale {
-    Utc,
-    Tai,
-    Gps,
-    Tt,
-}
-
-impl Scale {
-    fn name(self) -> &'static str {
-        match self {
-            Scale::Utc => "utc",
-            Scale::Tai => "tai",
-            Scale::Gps => "gps",
-            Scale::Tt => "tt",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Unit {
-    S,
-    Ms,
-    Us,
-    Ns,
-}
-
-impl Unit {
-    fn name(self) -> &'static str {
-        match self {
-            Unit::S => "s",
-            Unit::Ms => "ms",
-            Unit::Us => "us",
-            Unit::Ns => "ns",
-        }
-    }
-
-    fn nanos(self) -> i128 {
-        match self {
-            Unit::S => SECOND,
-            Unit::Ms => 1_000_000,
-            Unit::Us => 1_000,
-            Unit::Ns => 1,
-        }
-    }
-
-    /// The widest unsigned count, in whole bytes, that keeps an event time
-    /// within years 0001 to 9999 from any epoch generated here.
-    fn count_bits(self) -> u32 {
-        match self {
-            Unit::S => 32,
-            Unit::Ms => 40,
-            Unit::Us => 48,
-            Unit::Ns => 64,
-        }
-    }
-}
-
-/// An epoch: its text in MDL's one spelling, and its label (nanoseconds
-/// since 1970-01-01T00:00:00 on its scale, every day 86,400 s).
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Epoch {
-    text: String,
-    label: i128,
-}
-
-/// A set's time source.
-#[derive(Debug, Clone, PartialEq)]
-enum TimeSource {
-    None,
-    Cuc {
-        coarse: u32,
-        fine: u32,
-        epoch: Epoch,
-        scale: Scale,
-    },
-    Elapsed {
-        unit: Unit,
-        epoch: Epoch,
-        scale: Scale,
-    },
-    Gps {
-        unit: Unit,
-        week_bits: Option<u32>,
-    },
-    /// Time since boot in each timed packet's `t`, which a correlation
-    /// packet's absolute clock (in `clock_unit` from `epoch` on `scale`)
-    /// and boot clock tie to an instant (§8.2).
-    Boot {
-        unit: Unit,
-        clock_unit: Unit,
-        epoch: Epoch,
-        scale: Scale,
-    },
-}
-
-/// A packet's count field: an elapsed count, or a GPS time of week.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Count {
-    Uint(u32),
-    Int(u32),
-    Float(u32),
-}
-
-impl Count {
-    fn bits(self) -> u32 {
-        match self {
-            Count::Uint(bits) | Count::Int(bits) | Count::Float(bits) => bits,
-        }
-    }
-}
-
-/// The days from 1970-01-01 to a date in the proleptic Gregorian
-/// calendar (Howard Hinnant's `days_from_civil`).
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-/// A date and time as a label: nanoseconds since 1970-01-01T00:00:00.
-pub(crate) fn label(date: (i64, i64, i64), time: (i64, i64, i64), nanos: i128) -> i128 {
-    let (year, month, day) = date;
-    let (hour, minute, second) = time;
-    let seconds = days_from_civil(year, month, day) * 86_400 + hour * 3600 + minute * 60 + second;
-    i128::from(seconds) * SECOND + nanos
-}
-
-/// TAI − UTC from each date on (UTC), as `spec/decoding.md` §8.1 lists it
-/// after IERS Bulletin C.
-const LEAPS: &[((i64, i64, i64), i128)] = &[
-    ((1972, 1, 1), 10),
-    ((1972, 7, 1), 11),
-    ((1973, 1, 1), 12),
-    ((1974, 1, 1), 13),
-    ((1975, 1, 1), 14),
-    ((1976, 1, 1), 15),
-    ((1977, 1, 1), 16),
-    ((1978, 1, 1), 17),
-    ((1979, 1, 1), 18),
-    ((1980, 1, 1), 19),
-    ((1981, 7, 1), 20),
-    ((1982, 7, 1), 21),
-    ((1983, 7, 1), 22),
-    ((1985, 7, 1), 23),
-    ((1988, 1, 1), 24),
-    ((1990, 1, 1), 25),
-    ((1991, 1, 1), 26),
-    ((1992, 7, 1), 27),
-    ((1993, 7, 1), 28),
-    ((1994, 7, 1), 29),
-    ((1996, 1, 1), 30),
-    ((1997, 7, 1), 31),
-    ((1999, 1, 1), 32),
-    ((2006, 1, 1), 33),
-    ((2009, 1, 1), 34),
-    ((2012, 7, 1), 35),
-    ((2015, 7, 1), 36),
-    ((2017, 1, 1), 37),
-];
-
-/// Each entry's start, as a UTC instant, and its offset, in nanoseconds.
-fn leaps() -> impl Iterator<Item = (i128, i128)> {
-    LEAPS
-        .iter()
-        .map(|&(date, offset)| (label(date, (0, 0, 0), 0), offset * SECOND))
-}
-
-/// The UTC instant of a TAI label (§8.1), a label inside a leap second
-/// being the last nanosecond before it.
-fn tai_to_utc(tai: i128) -> i128 {
-    let mut instant = tai - 10 * SECOND;
-    let mut previous: Option<i128> = None;
-    for (start, offset) in leaps() {
-        let before = previous.unwrap_or(offset);
-        if tai >= start + before && tai < start + offset {
-            return start - 1;
-        }
-        if start + offset <= tai {
-            instant = tai - offset;
-        }
-        previous = Some(offset);
-    }
-    instant
-}
-
-/// The UTC instant of a label on `scale`.
-fn to_utc(label: i128, scale: Scale) -> i128 {
-    match scale {
-        Scale::Utc => label,
-        Scale::Tai => tai_to_utc(label),
-        Scale::Gps => tai_to_utc(label + 19 * SECOND),
-        Scale::Tt => tai_to_utc(label - 32_184_000_000),
-    }
-}
-
-/// TAI − UTC in effect at a UTC instant.
-fn tai_minus_utc(instant: i128) -> i128 {
-    leaps()
-        .filter(|(start, _)| *start <= instant)
-        .last()
-        .map_or(10 * SECOND, |(_, offset)| offset)
-}
-
-/// The GPS epoch, 1980-01-06T00:00:00, as a label on the gps scale.
-fn gps_epoch() -> i128 {
-    label((1980, 1, 6), (0, 0, 0), 0)
-}
-
-/// The full GPS week (§8): the field's value, or with `week_bits` the week
-/// congruent to it nearest the ground time's.
-fn gps_week(value: u64, week_bits: Option<u32>, ground: i128) -> i128 {
-    let Some(bits) = week_bits else {
-        return i128::from(value);
-    };
-    let modulus = 1_i128 << bits;
-    let w = i128::from(value) % modulus;
-    let ground_label = ground + tai_minus_utc(ground) - 19 * SECOND;
-    let g = (ground_label - gps_epoch()).div_euclid(WEEK);
-    let c = (g - w + modulus / 2).div_euclid(modulus).max(0);
-    w + c * modulus
-}
-
-/// A count of `unit`s in nanoseconds: an integer exactly, a float times the
-/// unit in binary64, rounded down. `None` for a float that isn't a number,
-/// or is so large no instant in range is that far from any epoch.
-fn count_nanos(raw: &Raw, unit: Unit) -> Option<i128> {
-    match raw {
-        Raw::Uint(n) => Some(i128::from(*n) * unit.nanos()),
-        Raw::Int(n) => Some(i128::from(*n) * unit.nanos()),
-        Raw::Float(x) => {
-            let nanos = (x * unit.nanos() as f64).floor();
-            (nanos.is_finite() && nanos.abs() < 1e30).then_some(nanos as i128)
-        }
-        _ => None,
-    }
-}
-
-/// The UTC instant of a label, if it can be read and lies within years
-/// 0001 to 9999.
-fn instant(on_scale: Option<i128>, scale: Scale) -> EventTime {
-    let first = label((1, 1, 1), (0, 0, 0), 0);
-    let last = label((9999, 12, 31), (23, 59, 59), SECOND - 1);
-    match on_scale.map(|on_scale| to_utc(on_scale, scale)) {
-        Some(at) if (first..=last).contains(&at) => EventTime::At(at),
-        _ => EventTime::Invalid,
-    }
-}
-
-fn time_scale() -> BoxedStrategy<Scale> {
-    select(&[Scale::Utc, Scale::Tai, Scale::Gps, Scale::Tt][..]).boxed()
-}
-
-fn unit() -> BoxedStrategy<Unit> {
-    select(&[Unit::S, Unit::Ms, Unit::Us, Unit::Ns][..]).boxed()
-}
-
-/// An epoch: one of the well-known ones, or any instant from 1960 to 2030
-/// to the millisecond, spelled as MDL spells instants.
-fn epoch() -> BoxedStrategy<Epoch> {
-    let known = select(
-        &[
-            ("1958-01-01T00:00:00Z", (1958, 1, 1), (0, 0, 0), 0),
-            ("1970-01-01T00:00:00Z", (1970, 1, 1), (0, 0, 0), 0),
-            ("1980-01-06T00:00:00Z", (1980, 1, 6), (0, 0, 0), 0),
-            ("2000-01-01T11:58:55.816Z", (2000, 1, 1), (11, 58, 55), 816),
-            ("2000-01-01T12:00:00Z", (2000, 1, 1), (12, 0, 0), 0),
-        ][..],
-    )
-    .prop_map(|(text, date, time, millis)| Epoch {
-        text: text.to_string(),
-        label: label(date, time, i128::from(millis) * 1_000_000),
-    });
-    // Any day of the month, leap days included (2000 is a leap year).
-    let date = (1960_i64..=2030, 1_i64..=12).prop_flat_map(|(year, month)| {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let days = match month {
-            2 if leap => 29,
-            2 => 28,
-            4 | 6 | 9 | 11 => 30,
-            _ => 31,
-        };
-        (Just(year), Just(month), 1_i64..=days)
-    });
-    let any = (date, (0_i64..24, 0_i64..60, 0_i64..60), 0_i128..1000).prop_map(
-        |((year, month, day), (hour, minute, second), millis)| {
-            let fraction = if millis == 0 {
-                String::new()
-            } else {
-                format!(".{millis:03}").trim_end_matches('0').to_string()
-            };
-            Epoch {
-                text: format!(
-                    "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}{fraction}Z"
-                ),
-                label: label(
-                    (year, month, day),
-                    (hour, minute, second),
-                    millis * 1_000_000,
-                ),
-            }
-        },
-    );
-    prop_oneof![known, any].boxed()
-}
-
-fn time_source() -> BoxedStrategy<TimeSource> {
-    prop_oneof![
-        1 => Just(TimeSource::None),
-        2 => (1_u32..=4, 0_u32..=3, epoch(), time_scale()).prop_map(|(coarse, fine, epoch, scale)| {
-            TimeSource::Cuc { coarse, fine, epoch, scale }
-        }),
-        2 => (unit(), epoch(), time_scale())
-            .prop_map(|(unit, epoch, scale)| TimeSource::Elapsed { unit, epoch, scale }),
-        2 => (unit(), proptest::option::of(select(&[10_u32, 13, 16][..])))
-            .prop_map(|(unit, week_bits)| TimeSource::Gps { unit, week_bits }),
-    ]
-    .boxed()
-}
-
-/// A packet's time fields for the source: its count field, if it has one,
-/// and up to one sentinel each for the count and a GPS week.
-#[derive(Debug, Clone, Default, PartialEq)]
-struct TimeFields {
-    count: Option<Count>,
-    count_invalid: Vec<i128>,
-    week_invalid: Vec<u64>,
-    /// Whether the count and week restate the unit their source counts
-    /// them in, which validation allows (§8).
-    units: bool,
-}
-
-fn time_fields(time: &TimeSource) -> BoxedStrategy<TimeFields> {
-    let gps = matches!(time, TimeSource::Gps { .. });
-    count(time)
-        .prop_flat_map(move |count| {
-            let range = match count {
-                Some(Count::Uint(bits)) => 0..=(1_i128 << bits) - 1,
-                Some(Count::Int(bits)) => -(1_i128 << (bits - 1))..=(1_i128 << (bits - 1)) - 1,
-                _ => -1000..=1000,
-            };
-            let count_invalid = match count {
-                Some(_) => btree_set(range, 0..=1).boxed(),
-                None => Just(BTreeSet::new()).boxed(),
-            };
-            let week_invalid = if gps && count.is_some() {
-                btree_set(0_u64..=u64::from(u16::MAX), 0..=1).boxed()
-            } else {
-                Just(BTreeSet::new()).boxed()
-            };
-            (Just(count), count_invalid, week_invalid, any::<bool>())
-        })
-        .prop_map(|(count, count_invalid, week_invalid, units)| TimeFields {
-            count,
-            count_invalid: count_invalid.into_iter().collect(),
-            week_invalid: week_invalid.into_iter().collect(),
-            units,
-        })
-        .boxed()
-}
-
-/// A packet's count field for the source, if it has one: whole bytes, wide
-/// enough for the source's counts and no wider than keeps them in range.
-fn count(time: &TimeSource) -> BoxedStrategy<Option<Count>> {
-    let widths = |least: u32, most: u32| -> Vec<u32> { (least..=most).step_by(8).collect() };
-    match time {
-        TimeSource::None | TimeSource::Cuc { .. } => Just(None).boxed(),
-        TimeSource::Boot { .. } => {
-            proptest::option::of(select(widths(8, 32)).prop_map(Count::Uint)).boxed()
-        }
-        // Now and then 64 bits, whose counts can run past year 9999.
-        TimeSource::Elapsed { unit, .. } => {
-            let bits = widths(8, unit.count_bits());
-            proptest::option::of(prop_oneof![
-                3 => select(bits.clone()).prop_map(Count::Uint),
-                3 => select(bits).prop_map(Count::Int),
-                1 => select(&[Count::Uint(64), Count::Int(64)][..]),
-                2 => select(&[32_u32, 64][..]).prop_map(Count::Float),
-            ])
-            .boxed()
-        }
-        // A time of week up to 604,800 s in the unit.
-        TimeSource::Gps { unit, .. } => {
-            let least = match unit {
-                Unit::S => 24,
-                Unit::Ms => 32,
-                Unit::Us => 40,
-                Unit::Ns => 56,
-            };
-            proptest::option::of(prop_oneof![
-                select(widths(least, 64)).prop_map(Count::Uint),
-                select(&[32_u32, 64][..]).prop_map(Count::Float),
-            ])
-            .boxed()
-        }
-    }
-}
-
-/// A count field's value: mostly one that keeps the event time in range
-/// (up to 2^31 s from the epoch, or a time of week up to two weeks, which
-/// the spec adds as it is), and now and then a float that isn't a number
-/// or is far too large.
-fn count_value(time: &TimeSource, count: Count) -> BoxedStrategy<Raw> {
-    let (unit, gps) = match time {
-        TimeSource::Elapsed { unit, .. } => (*unit, false),
-        TimeSource::Gps { unit, .. } => (*unit, true),
-        _ => (Unit::S, false),
-    };
-    let span = if gps {
-        (2 * WEEK / unit.nanos()) as f64
-    } else {
-        2_147_483_648.0 * (SECOND / unit.nanos()) as f64
-    };
-    let unreadable = select(&[f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e300, -1e300][..])
-        .prop_map(Raw::Float)
-        .boxed();
-    let low = if gps { 0.0 } else { -span };
-    // An elapsed integer count lands near a leap second often: the count
-    // from the epoch to it, where the field holds that, else any count.
-    let near = |signed: bool, bits: u32| -> BoxedStrategy<Raw> {
-        let TimeSource::Elapsed { epoch, scale, .. } = time else {
-            return Just(Raw::Uint(0)).boxed();
-        };
-        let start = epoch.label;
-        (near_leap(*scale), any::<u64>())
-            .prop_map(move |(label, fallback)| {
-                let n = (label - start).div_euclid(unit.nanos());
-                let (low, high) = if signed {
-                    (-(1_i128 << (bits - 1)), (1_i128 << (bits - 1)) - 1)
-                } else {
-                    (0, (1_i128 << bits) - 1)
-                };
-                match (signed, (low..=high).contains(&n)) {
-                    (true, true) => Raw::Int(i64::try_from(n).unwrap_or(0)),
-                    (false, true) => Raw::Uint(u64::try_from(n).unwrap_or(0)),
-                    (true, false) => Raw::Int(sign_extend(fit(fallback, bits), bits)),
-                    (false, false) => Raw::Uint(fit(fallback, bits)),
-                }
-            })
-            .boxed()
-    };
-    match count {
-        Count::Uint(bits) if gps => (0..(2 * WEEK / unit.nanos()) as u64)
-            .prop_map(move |n| Raw::Uint(fit(n, bits)))
-            .boxed(),
-        Count::Uint(bits) => prop_oneof![
-            2 => any::<u64>().prop_map(move |n| Raw::Uint(fit(n, bits))),
-            1 => near(false, bits),
-        ]
-        .boxed(),
-        Count::Int(bits) => prop_oneof![
-            2 => any::<u64>().prop_map(move |n| Raw::Int(sign_extend(fit(n, bits), bits))),
-            1 => near(true, bits),
-        ]
-        .boxed(),
-        // A binary32 count is the double it widens to, whatever decimal
-        // it looks like.
-        Count::Float(32) => prop_oneof![
-            8 => (low..span)
-                .prop_map(|x| Raw::Float(f64::from(x as f32)))
-                .prop_filter("within the span", move |raw| match raw {
-                    Raw::Float(x) => *x >= low && *x < span,
-                    _ => true,
-                }),
-            // ±1e300 is an infinity in binary32.
-            1 => unreadable.prop_map(|raw| match raw {
-                Raw::Float(x) => Raw::Float(f64::from(x as f32)),
-                other => other,
-            }),
-        ]
-        .boxed(),
-        Count::Float(_) => prop_oneof![
-            8 => (low..span).prop_map(Raw::Float),
-            1 => unreadable,
-        ]
-        .boxed(),
-    }
-}
-
-/// A message's ground time: from 1990 to 2035, near the GPS week rollovers
-/// of 1999-08-22 and 2019-04-07, and within two seconds of a leap step
-/// (where the ground's TAI − UTC changes), more often.
-fn received() -> BoxedStrategy<i128> {
-    let rollover = |date| {
-        let at = label(date, (0, 0, 0), 0);
-        (at - 30 * 86_400 * SECOND..at + 30 * 86_400 * SECOND).boxed()
-    };
-    let steps: Vec<i128> = leaps()
-        .map(|(start, _)| start)
-        .filter(|start| *start >= label((1990, 1, 1), (0, 0, 0), 0))
-        .collect();
-    prop_oneof![
-        3 => label((1990, 1, 1), (0, 0, 0), 0)..label((2035, 1, 1), (0, 0, 0), 0),
-        1 => rollover((1999, 8, 22)),
-        1 => rollover((2019, 4, 7)),
-        1 => (select(steps), -2 * SECOND..2 * SECOND).prop_map(|(start, delta)| start + delta),
-    ]
-    .boxed()
-}
-
-/// A GPS week field's value for a message received at `ground`: any, or
-/// with `week_bits` one exactly half a cycle from the ground's week either
-/// way, where "nearest" ties.
-fn week_value(time: &TimeSource, ground: i128) -> BoxedStrategy<u16> {
-    let TimeSource::Gps {
-        week_bits: Some(bits),
-        ..
-    } = time
-    else {
-        return any::<u16>().boxed();
-    };
-    let modulus = 1_i128 << bits;
-    let g = (ground + tai_minus_utc(ground) - 19 * SECOND - gps_epoch()).div_euclid(WEEK);
-    let ties: Vec<u16> = [g + modulus / 2, g - modulus / 2]
-        .iter()
-        .map(|w| u16::try_from(w.rem_euclid(modulus)).unwrap_or(0))
-        .collect();
-    prop_oneof![2 => any::<u16>(), 1 => select(ties)].boxed()
-}
-
-/// A label on `scale` within two seconds of a leap second: of the moment
-/// TAI − UTC steps, on `tai`, `gps` and `tt`, or of an entry's start, on
-/// `utc`.
-fn near_leap(scale: Scale) -> BoxedStrategy<i128> {
-    let mut entries = Vec::new();
-    let mut previous: Option<i128> = None;
-    for (start, offset) in leaps() {
-        entries.push((start, previous.unwrap_or(offset)));
-        previous = Some(offset);
-    }
-    (select(entries), -2 * SECOND..2 * SECOND)
-        .prop_map(move |((start, before), delta)| {
-            let tai = start + before + delta;
-            match scale {
-                Scale::Utc => start + delta,
-                Scale::Tai => tai,
-                Scale::Gps => tai - 19 * SECOND,
-                Scale::Tt => tai + 32_184_000_000,
-            }
-        })
-        .boxed()
-}
-
-/// The set's time source as IR JSON, a CUC code at `cuc_offset`.
-fn time_json(time: &TimeSource, cuc_offset: u64) -> Option<Value> {
-    Some(match time {
-        TimeSource::None => return None,
-        TimeSource::Cuc {
-            coarse,
-            fine,
-            epoch,
-            scale,
-        } => json!({
-            "kind": "cuc", "offset_bits": cuc_offset, "coarse_bytes": coarse, "fine_bytes": fine,
-            "epoch": epoch.text, "scale": scale.name()
-        }),
-        TimeSource::Elapsed { unit, epoch, scale } => json!({
-            "kind": "elapsed", "unit": unit.name(), "epoch": epoch.text, "scale": scale.name()
-        }),
-        TimeSource::Gps { unit, week_bits } => {
-            let mut gps = json!({ "kind": "gps", "unit": unit.name(), "week_field": "week" });
-            if let Some(bits) = week_bits {
-                gps["week_bits"] = json!(bits);
-            }
-            gps
-        }
-        TimeSource::Boot {
-            unit,
-            clock_unit,
-            epoch,
-            scale,
-        } => json!({
-            "kind": "boot", "unit": unit.name(),
-            "correlate": {
-                "packet": "CORR", "clock_field": "clock", "clock_unit": clock_unit.name(),
-                "epoch": epoch.text, "scale": scale.name(), "boot_field": "boot"
-            }
-        }),
-    })
-}
-
-/// A packet's event time (§8, §8.1); `payload` starts where its time
-/// fields do.
-fn event_time(
-    time: &TimeSource,
-    payload: &[u8],
-    count: Option<&Raw>,
-    week: u64,
-    ground: i128,
-) -> EventTime {
-    match time {
-        TimeSource::None => EventTime::Ground,
-        TimeSource::Cuc {
-            coarse,
-            fine,
-            epoch,
-            scale,
-        } => {
-            let big = |bytes: &[u8]| bytes.iter().fold(0_i128, |n, b| (n << 8) | i128::from(*b));
-            let coarse_end = *coarse as usize;
-            let seconds = big(&payload[..coarse_end]);
-            let fraction = big(&payload[coarse_end..coarse_end + *fine as usize]);
-            let nanos = fraction * SECOND / (1_i128 << (8 * fine));
-            instant(Some(epoch.label + seconds * SECOND + nanos), *scale)
-        }
-        TimeSource::Elapsed { unit, epoch, scale } => match count {
-            Some(raw) => instant(
-                count_nanos(raw, *unit).map(|nanos| epoch.label + nanos),
-                *scale,
-            ),
-            None => EventTime::Ground,
-        },
-        TimeSource::Gps { unit, week_bits } => match count {
-            Some(raw) => {
-                let week = gps_week(week, *week_bits, ground);
-                let label = count_nanos(raw, *unit).map(|nanos| gps_epoch() + week * WEEK + nanos);
-                instant(label, Scale::Gps)
-            }
-            None => EventTime::Ground,
-        },
-        TimeSource::Boot { unit, .. } => match count {
-            Some(Raw::Uint(value)) => EventTime::SinceBoot {
-                value: *value,
-                unit: unit.name(),
-            },
-            _ => EventTime::Ground,
-        },
-    }
-}
-
-/// A Unix instant in MDL's spelling, its fraction without trailing zeros.
-pub(crate) fn instant_text(unix: i128) -> String {
-    let seconds = unix.div_euclid(SECOND);
-    let nanos = unix.rem_euclid(SECOND);
-    let days = seconds.div_euclid(86_400);
-    let of_day = seconds.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(i64::try_from(days).unwrap_or(0));
-    let fraction = if nanos == 0 {
-        String::new()
-    } else {
-        format!(".{nanos:09}").trim_end_matches('0').to_string()
-    };
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}{fraction}Z",
-        of_day / 3600,
-        of_day % 3600 / 60,
-        of_day % 60
-    )
-}
-
-/// The date `days` after 1970-01-01 (Howard Hinnant's `civil_from_days`).
-pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let mp = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
 // ---- The bundle -----------------------------------------------------------
 
 fn assemble(
@@ -2281,23 +1339,18 @@ fn assemble(
     messages: Vec<Vec<Message>>,
 ) -> Telemetry {
     let mut params = Map::new();
-    for field in packets.iter().flat_map(|packet| &packet.fields) {
-        params.insert(field.param.clone(), param_json(&field.meaning));
+    let mut types = Map::new();
+    for packet in packets {
+        params.extend(packet.body.params());
+        types.extend(packet.body.types_json());
     }
-    let packet_json: Vec<Value> = packets
-        .iter()
-        .map(|packet| {
-            let mut json = json!({ "name": packet.name, "identify": packet.identify,
-                                   "entries": packet.entries });
-            if packet.count.is_some() {
-                json["time_field"] = json!("t");
-            }
-            json
-        })
-        .collect();
+    let packet_json: Vec<Value> = packets.iter().map(PacketLayout::json).collect();
     let mut set = json!({ "name": "fam_v1", "family": "fam", "packets": packet_json });
     if let Some(time) = time_json(time, 8) {
         set["time"] = time;
+    }
+    if !types.is_empty() {
+        set["types"] = Value::Object(types);
     }
     let bundle = json!({
         "mdl_version": "2.0",
@@ -2319,9 +1372,12 @@ fn assemble(
     }
 }
 
+mod body;
 pub mod command;
 mod fleet;
+mod meaning;
 #[cfg(test)]
 mod reference;
 #[cfg(test)]
 mod tests;
+mod time;
