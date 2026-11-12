@@ -112,9 +112,31 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
         // bytes, so this is exact.
         let mut at = 0_u64;
         let mut counted: Vec<(&str, &Value, &Value)> = Vec::new();
-        for entry in entries {
+        for (position, entry) in entries.iter().enumerate() {
             let kind = entry["kind"].as_str().unwrap_or("");
             let element = &entry["element"];
+            if kind == "padding" {
+                // Only spare bits are a byte or more: alignment is less.
+                if entry["size_bits"].as_u64().is_some_and(|bits| bits >= 8) {
+                    found.insert("padding:wide".to_string());
+                }
+                if position + 1 == entries.len() {
+                    found.insert(
+                        if *in_type {
+                            "padding:struct_end"
+                        } else {
+                            "padding:packet_end"
+                        }
+                        .to_string(),
+                    );
+                }
+            }
+            if *in_type && entry["length"]["kind"] == "field" {
+                found.insert("length:field/in_struct".to_string());
+            }
+            if element["length"]["kind"] == "terminator" {
+                found.insert("element:terminated".to_string());
+            }
             let size = |entry: &Value| -> u64 {
                 entry["size_bits"]
                     .as_u64()
@@ -349,6 +371,17 @@ fn layouts_reach_every_meaning() {
         "text:ascii",
         "text:latin1",
         "length:fixed/terminator",
+        "length:terminator",
+        "length:field",
+        "length:remaining",
+        "key:length.multiply",
+        "key:length.add",
+        "length:field/in_struct",
+        "element:terminated",
+        "entry:padding",
+        "padding:wide",
+        "padding:struct_end",
+        "padding:packet_end",
         "byte_order:little",
         "byte_order:big",
         "time:cuc",

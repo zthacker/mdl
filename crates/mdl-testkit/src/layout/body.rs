@@ -22,8 +22,9 @@ use serde_json::{Map, Value, json};
 
 use super::meaning::sample;
 use super::{
-    FieldSpec, Kind, Meaning, Placed, Raw, Sample, encode, field_json, field_spec, fit,
-    inside_one_byte, kind, param_json, put_bits, raw_value, scalar_json, spec_of,
+    FieldSpec, Kind, Length, Meaning, Place, Placed, Raw, Sample, encode, field_json, field_spec,
+    fit, inside_one_byte, kind, length_field, param_json, put_bits, raw_value, remaining_kind,
+    scalar_json, spec_of,
 };
 use composite::{CompositeNode, CompositeSource, CompositeSpec, composite_source, resolve};
 
@@ -36,8 +37,8 @@ const MOST_ELEMENTS: u32 = 5;
 #[derive(Debug, Clone)]
 pub(super) struct BodySpec {
     items: Vec<ItemSpec>,
-    /// An array with a `remaining` count, last (§5.2).
-    trailer: Option<ArraySpec>,
+    /// What runs to the packet's end, last (§5.2).
+    trailer: Option<Trailer>,
     composites: Vec<CompositeSpec>,
     /// The order the packet lists its composites in, which needn't be
     /// their names' (samples follow the names').
@@ -63,6 +64,17 @@ enum ItemSpec {
     Array(ArraySpec),
     /// A struct entry, of a struct type of its own.
     Struct(TypeSpec),
+    /// Spare bits: padding of this many.
+    Spare(u32),
+}
+
+/// What runs to the end of the packet.
+#[derive(Debug, Clone)]
+enum Trailer {
+    /// An array of a `remaining` count.
+    Array(ArraySpec),
+    /// A string or bytes of a `remaining` length.
+    Field(FieldSpec),
 }
 
 #[derive(Debug, Clone)]
@@ -102,9 +114,9 @@ struct TypeSpec {
     items: Vec<ItemSpec>,
 }
 
-/// Any body: fields, arrays and structs in any order, sometimes an array
-/// that runs to the end, and up to two composites, whose members' items
-/// mix with the rest.
+/// Any body: fields, arrays, structs and spare bits in any order,
+/// sometimes an array, string or bytes that runs to the end, and up to two
+/// composites, whose members' items mix with the rest.
 pub(super) fn body_spec() -> BoxedStrategy<BodySpec> {
     (
         vec(item_spec(2), 1..=6),
@@ -128,7 +140,7 @@ pub(super) fn body_spec() -> BoxedStrategy<BodySpec> {
 /// went.
 fn mix(
     items: Vec<ItemSpec>,
-    trailer: Option<ArraySpec>,
+    trailer: Option<Trailer>,
     sources: Vec<CompositeSource>,
     order: &[usize],
     listed: Vec<usize>,
@@ -163,6 +175,7 @@ fn item_spec(depth: u32) -> BoxedStrategy<ItemSpec> {
     let mut items = vec![
         (6, field_spec().prop_map(ItemSpec::Field).boxed()),
         (3, array_spec(depth).prop_map(ItemSpec::Array).boxed()),
+        (1, (1_u32..=16).prop_map(ItemSpec::Spare).boxed()),
     ];
     if depth > 0 {
         items.push((2, type_spec(depth - 1).prop_map(ItemSpec::Struct).boxed()));
@@ -190,16 +203,22 @@ fn array_spec(depth: u32) -> BoxedStrategy<ArraySpec> {
         .boxed()
 }
 
-/// An array that runs to the end of the packet.
-fn trailer_spec() -> BoxedStrategy<ArraySpec> {
-    element_spec(1, true)
+/// An array, string or bytes that runs to the end of the packet.
+fn trailer_spec() -> BoxedStrategy<Trailer> {
+    let array = element_spec(1, true)
         .prop_flat_map(|element| (interval_for(&element), Just(element)))
-        .prop_map(|(interval, element)| ArraySpec {
-            count: CountSpec::Remaining,
-            element,
-            interval,
-        })
-        .boxed()
+        .prop_map(|(interval, element)| {
+            Trailer::Array(ArraySpec {
+                count: CountSpec::Remaining,
+                element,
+                interval,
+            })
+        });
+    prop_oneof![
+        3 => array,
+        1 => spec_of(remaining_kind()).prop_map(Trailer::Field),
+    ]
+    .boxed()
 }
 
 /// A count field: 2 to 16 bits, scaled now and then.
@@ -228,7 +247,7 @@ fn element_spec(depth: u32, varying: bool) -> BoxedStrategy<ElementSpec> {
     // Integers narrower than a byte, often: bit-packed elements, and
     // little-endian ones that must each sit inside a byte.
     let kinds = prop_oneof![
-        3 => kind(!varying),
+        3 => kind(Place::Element { varying }),
         1 => (1_u32..=7).prop_map(Kind::Uint),
         1 => (1_u32..=7).prop_map(Kind::Int),
     ];
@@ -364,8 +383,10 @@ pub(super) fn lay_out(
     for (position, item) in spec.items.into_iter().enumerate() {
         placer.item(format!("f{position}"), item, &mut names);
     }
-    if let Some(trailer) = spec.trailer {
-        placer.array("rest".into(), trailer, &mut names);
+    match spec.trailer {
+        Some(Trailer::Array(trailer)) => placer.array("rest".into(), trailer, &mut names),
+        Some(Trailer::Field(trailer)) => placer.field("rest".into(), trailer),
+        None => {}
     }
     let nodes = placer.nodes;
     let composites = spec
@@ -386,8 +407,9 @@ pub(super) fn lay_out(
 }
 
 /// Places entries one after another (§5.2). `at` is where the next entry
-/// starts when every count that varies is 0; what varies is whole bytes,
-/// so `at` modulo 8 is exact either way.
+/// starts when everything whose size varies takes its fewest bits (every
+/// count that varies at 0, every length at its least); what varies is
+/// whole bytes, so `at` modulo 8 is exact either way.
 struct Placer {
     little: bool,
     at: u64,
@@ -436,14 +458,29 @@ impl Placer {
                 self.at += least_bits(&ty.entries);
                 self.nodes.push(Node::Struct(StructNode { name, ty }));
             }
+            ItemSpec::Spare(bits) => {
+                self.nodes.push(Node::Padding(u64::from(bits)));
+                self.at += u64::from(bits);
+            }
         }
     }
 
-    /// A field: strings and bytes start on a byte; little-endian numbers
-    /// that span bytes are whole bytes on byte boundaries (widened if need
-    /// be); a byte order is spelled only where it differs from the
-    /// family's and matters (§2.1, §2.2).
+    /// A field: strings and bytes start on a byte, after the field that
+    /// holds their length if one does; little-endian numbers that span
+    /// bytes are whole bytes on byte boundaries (widened if need be); a
+    /// byte order is spelled only where it differs from the family's and
+    /// matters (§2.1, §2.2, §5.4).
     fn field(&mut self, name: String, spec: FieldSpec) {
+        if let Some(Length::Field { bits, .. }) = spec.kind.length() {
+            let length = FieldSpec {
+                kind: Kind::Uint(bits),
+                meaning: Meaning::U64,
+                invalid: Vec::new(),
+                flip: false,
+                mapped: false,
+            };
+            self.field(length_field(&name), length);
+        }
         let param = spec.mapped.then(|| format!("{}.{name}", self.params));
         let FieldSpec {
             mut kind,
@@ -519,7 +556,7 @@ impl Placer {
             }
         };
         if let Some(count) = fixed {
-            self.at += u64::from(count) * element_bits(&element, least_bits);
+            self.at += u64::from(count) * element_bits(&element, Bound::Least);
         }
         self.nodes.push(Node::Array(ArrayNode {
             name,
@@ -700,49 +737,58 @@ fn needs_byte(nodes: &[Node]) -> bool {
     })
 }
 
-/// The fewest bits entries take: every count that varies at 0.
+/// Which end of a size that varies.
+#[derive(Debug, Clone, Copy)]
+enum Bound {
+    /// Every count that varies at 0, every length at its least.
+    Least,
+    /// Every count that varies at [`MOST_ELEMENTS`], every length at the
+    /// most a message gives it.
+    Most,
+}
+
+/// The fewest bits entries take.
 fn least_bits(nodes: &[Node]) -> u64 {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Padding(bits) => *bits,
-            Node::Field(field) => u64::from(field.kind.bits()),
-            Node::Array(array) => match array.count {
-                Counted::Fixed(count) => {
-                    u64::from(count) * element_bits(&array.element, least_bits)
-                }
-                Counted::Field { .. } | Counted::Remaining => 0,
-            },
-            Node::Struct(node) => least_bits(&node.ty.entries),
-        })
-        .sum()
+    bits_of(nodes, Bound::Least)
 }
 
-/// The most bits entries take: every count that varies at its most.
+/// The most bits entries take in a message.
 fn most_bits(nodes: &[Node]) -> u64 {
+    bits_of(nodes, Bound::Most)
+}
+
+fn bits_of(nodes: &[Node], bound: Bound) -> u64 {
     nodes
         .iter()
         .map(|node| match node {
             Node::Padding(bits) => *bits,
-            Node::Field(field) => u64::from(field.kind.bits()),
+            Node::Field(field) => scalar_bits(field, bound),
             Node::Array(array) => {
-                let count = match array.count {
-                    Counted::Fixed(count) => count,
-                    Counted::Field { .. } | Counted::Remaining => MOST_ELEMENTS,
+                let count = match (&array.count, bound) {
+                    (Counted::Fixed(count), _) => *count,
+                    (Counted::Field { .. } | Counted::Remaining, Bound::Least) => 0,
+                    (Counted::Field { .. } | Counted::Remaining, Bound::Most) => MOST_ELEMENTS,
                 };
-                u64::from(count) * element_bits(&array.element, most_bits)
+                u64::from(count) * element_bits(&array.element, bound)
             }
-            Node::Struct(node) => most_bits(&node.ty.entries),
+            Node::Struct(node) => bits_of(&node.ty.entries, bound),
         })
         .sum()
 }
 
-/// An element's size: a scalar's, or `size` of a struct's entries.
-fn element_bits(element: &ElementNode, size: fn(&[Node]) -> u64) -> u64 {
+/// An element's size, at `bound` where it varies.
+fn element_bits(element: &ElementNode, bound: Bound) -> u64 {
     match element {
-        ElementNode::Scalar(element) => u64::from(element.kind.bits()),
-        ElementNode::Struct(ty) => size(&ty.entries),
+        ElementNode::Scalar(element) => scalar_bits(element, bound),
+        ElementNode::Struct(ty) => bits_of(&ty.entries, bound),
     }
+}
+
+fn scalar_bits(field: &Placed, bound: Bound) -> u64 {
+    u64::from(match bound {
+        Bound::Least => field.kind.bits(),
+        Bound::Most => field.kind.most_bits(),
+    })
 }
 
 /// The raw values a count field of `bits` can hold that give each array
@@ -882,7 +928,8 @@ fn params_of(nodes: &[Node], params: &mut Vec<(String, Value)>) {
 // ---- Values ---------------------------------------------------------------
 
 /// Values for a container's entries: each one's raw value, by name, in
-/// order, its count fields holding counts its arrays can have.
+/// order, its count fields holding counts its arrays can have, and its
+/// length fields the lengths of their values.
 pub(super) fn values(nodes: &[Node]) -> BoxedStrategy<Vec<(String, Raw)>> {
     let counts = count_ranges(nodes);
     let raws: Vec<BoxedStrategy<u64>> = counts
@@ -898,9 +945,47 @@ pub(super) fn values(nodes: &[Node]) -> BoxedStrategy<Vec<(String, Raw)>> {
             .collect();
         let entries: Vec<BoxedStrategy<Option<(String, Raw)>>> =
             nodes.iter().map(|node| entry_value(node, &held)).collect();
-        entries.prop_map(|entries| entries.into_iter().flatten().collect())
+        let nodes = nodes.clone();
+        entries.prop_map(move |entries| {
+            let mut record: Vec<(String, Raw)> = entries.into_iter().flatten().collect();
+            measure(&nodes, &mut record);
+            record
+        })
     })
     .boxed()
+}
+
+/// Gives each length field of a container the raw value its entry's value
+/// takes: `(bytes - add) / multiply` (§5.4).
+fn measure(nodes: &[Node], record: &mut [(String, Raw)]) {
+    for node in nodes {
+        let Node::Field(field) = node else {
+            continue;
+        };
+        let Some(length @ Length::Field { .. }) = field.kind.length() else {
+            continue;
+        };
+        let bytes = record
+            .iter()
+            .find(|(name, _)| *name == field.name)
+            .and_then(|(_, raw)| value_bytes(&field.kind, raw));
+        let Some(raw) = bytes.and_then(|bytes| length.field_raw(bytes)) else {
+            continue;
+        };
+        let name = length_field(&field.name);
+        if let Some(entry) = record.iter_mut().find(|(entry, _)| *entry == name) {
+            entry.1 = Raw::Uint(raw);
+        }
+    }
+}
+
+/// How many bytes a string's or bytes' value is, in its encoding.
+fn value_bytes(kind: &Kind, raw: &Raw) -> Option<usize> {
+    match (kind, raw) {
+        (Kind::Text { text, .. }, Raw::Str(value)) => Some(encode(value, *text).len()),
+        (Kind::Bytes(_), Raw::Bytes(value)) => Some(value.len()),
+        _ => None,
+    }
 }
 
 /// Each count field of a container, and the raw values it can hold.
@@ -1029,30 +1114,37 @@ fn put(field: &Placed, raw: &Raw, payload: &mut [u8], at: u64) -> u64 {
         ),
         (_, Raw::Float(x)) => put_bits(payload, at, 64, x.to_bits(), field.little),
         (_, Raw::Bool(b)) => put_bits(payload, at, 1, u64::from(*b), false),
-        (
-            Kind::Text {
-                bytes,
-                text,
-                terminator,
-            },
-            Raw::Str(value),
-        ) => {
-            let encoded = encode(value, *text);
-            let start = (at / 8) as usize;
-            payload[start..start + encoded.len()].copy_from_slice(&encoded);
-            if let Some(byte) = terminator
-                && encoded.len() < *bytes as usize
-            {
-                payload[start + encoded.len()] = *byte;
-            }
+        (Kind::Text { length, text }, Raw::Str(value)) => {
+            return put_run(payload, at, &encode(value, *text), *length);
         }
-        (_, Raw::Bytes(value)) => {
-            let start = (at / 8) as usize;
-            payload[start..start + value.len()].copy_from_slice(value);
-        }
-        (_, Raw::Str(_) | Raw::Array(_) | Raw::Record(_)) => {}
+        (Kind::Bytes(length), Raw::Bytes(value)) => return put_run(payload, at, value, *length),
+        (_, Raw::Str(_) | Raw::Bytes(_) | Raw::Array(_) | Raw::Record(_)) => {}
     }
     at + u64::from(bits)
+}
+
+/// Writes a string's or bytes' value at `at`, a byte (§2.2), and the
+/// terminator its length ends it with, if any; returns where the entry
+/// ends: a fixed length takes every byte, a terminator takes one more.
+fn put_run(payload: &mut [u8], at: u64, value: &[u8], length: Length) -> u64 {
+    let start = (at / 8) as usize;
+    payload[start..start + value.len()].copy_from_slice(value);
+    let taken = match length {
+        Length::Fixed { bytes, terminator } => {
+            if let Some(byte) = terminator
+                && value.len() < bytes as usize
+            {
+                payload[start + value.len()] = byte;
+            }
+            bytes as usize
+        }
+        Length::Terminated(byte) => {
+            payload[start + value.len()] = byte;
+            value.len() + 1
+        }
+        Length::Field { .. } | Length::Remaining => value.len(),
+    };
+    at + 8 * taken as u64
 }
 
 // ---- Samples --------------------------------------------------------------
