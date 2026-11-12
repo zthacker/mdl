@@ -195,26 +195,121 @@ enum Text {
     Latin1,
 }
 
+/// The most bytes a string or bytes value of a length that varies has in a
+/// message.
+const MOST_BYTES: u32 = 8;
+
+/// How many bytes a string or bytes value takes (§5.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Length {
+    /// `bytes` bytes. With a terminator the value ends at the first one
+    /// among them, and the rest is padding (a C `char[16]`).
+    Fixed { bytes: u32, terminator: Option<u8> },
+    /// Up to a terminator byte, which ends the value but isn't part of it.
+    Terminated(u8),
+    /// `raw * multiply + add` bytes, `raw` read from a field of `bits` right
+    /// before it (§5.4).
+    Field { bits: u32, multiply: u32, add: i64 },
+    /// The rest of the packet.
+    Remaining,
+}
+
+impl Length {
+    /// The byte that ends its value, if one does.
+    fn terminator(self) -> Option<u8> {
+        match self {
+            Length::Fixed { terminator, .. } => terminator,
+            Length::Terminated(byte) => Some(byte),
+            Length::Field { .. } | Length::Remaining => None,
+        }
+    }
+
+    /// How many bytes its value can have in a message: exactly a fixed
+    /// length's without a terminator, up to it with one, those a length
+    /// field can say (up to [`MOST_BYTES`]), or up to [`MOST_BYTES`]. Some
+    /// count is always above 0: a length field of 2 bits or more holds 2
+    /// and 3, which say `2m + a` and `3m + a` bytes, and for the scales
+    /// [`varying_length`] makes one of those is from 1 to 8.
+    fn value_bytes(self) -> Vec<usize> {
+        match self {
+            Length::Fixed {
+                bytes,
+                terminator: None,
+            } => vec![bytes as usize],
+            Length::Fixed { bytes, .. } => (0..=bytes as usize).collect(),
+            Length::Field { .. } => (0..=MOST_BYTES as usize)
+                .filter(|&bytes| self.field_raw(bytes).is_some())
+                .collect(),
+            Length::Terminated(_) | Length::Remaining => (0..=MOST_BYTES as usize).collect(),
+        }
+    }
+
+    /// The raw value a length field holds for a value of `bytes` bytes:
+    /// `(bytes - add) / multiply`, if that's a whole number its field holds.
+    fn field_raw(self, bytes: usize) -> Option<u64> {
+        let Length::Field {
+            bits,
+            multiply,
+            add,
+        } = self
+        else {
+            return None;
+        };
+        let rest = i128::try_from(bytes).ok()? - i128::from(add);
+        let multiply = i128::from(multiply);
+        if rest < 0 || rest % multiply != 0 {
+            return None;
+        }
+        let raw = u64::try_from(rest / multiply).ok()?;
+        raw.checked_shr(bits)
+            .is_none_or(|high| high == 0)
+            .then_some(raw)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum Kind {
     Uint(u32),
     Int(u32),
     Float(u32),
     Bool,
-    Text {
-        bytes: u32,
-        text: Text,
-        terminator: Option<u8>,
-    },
-    Bytes(u32),
+    Text { length: Length, text: Text },
+    Bytes(Length),
 }
 
 impl Kind {
+    /// Its size in bits; for a string or bytes whose length varies, the
+    /// fewest it takes (its terminator alone, or nothing), since what
+    /// varies is whole bytes.
     fn bits(&self) -> u32 {
         match self {
             Kind::Uint(bits) | Kind::Int(bits) | Kind::Float(bits) => *bits,
             Kind::Bool => 1,
-            Kind::Text { bytes, .. } | Kind::Bytes(bytes) => bytes * 8,
+            Kind::Text { length, .. } | Kind::Bytes(length) => match length {
+                Length::Fixed { bytes, .. } => bytes * 8,
+                Length::Terminated(_) => 8,
+                Length::Field { .. } | Length::Remaining => 0,
+            },
+        }
+    }
+
+    /// The most bits a value of it takes in a message.
+    fn most_bits(&self) -> u32 {
+        match self {
+            Kind::Text { length, .. } | Kind::Bytes(length) => match length {
+                Length::Fixed { bytes, .. } => bytes * 8,
+                Length::Terminated(_) => (MOST_BYTES + 1) * 8,
+                Length::Field { .. } | Length::Remaining => MOST_BYTES * 8,
+            },
+            _ => self.bits(),
+        }
+    }
+
+    /// A string's or bytes' length.
+    fn length(&self) -> Option<Length> {
+        match self {
+            Kind::Text { length, .. } | Kind::Bytes(length) => Some(*length),
+            _ => None,
         }
     }
 
@@ -225,7 +320,7 @@ impl Kind {
 
     /// Whether it starts on a byte whatever its order (§2.2).
     fn on_a_byte(&self) -> bool {
-        matches!(self, Kind::Text { .. } | Kind::Bytes(_))
+        self.length().is_some()
     }
 
     /// The same kind of integer, `bits` wide.
@@ -255,10 +350,21 @@ impl Kind {
     fn takes_letters(&self) -> bool {
         matches!(
             self,
-            Kind::Text { text, terminator, .. }
-                if *text != Text::Utf8 && matches!(terminator, None | Some(0))
+            Kind::Text { text, length }
+                if *text != Text::Utf8 && matches!(length.terminator(), None | Some(0))
         )
     }
+}
+
+/// Where a field or element sits, which decides the kinds it can have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// An entry of a packet or struct type: any kind, its length fixed, up
+    /// to a terminator or from a field.
+    Entry,
+    /// An array's element. It has no fields of its own to take a length
+    /// from, and where the count varies it's whole bytes, so not a bool.
+    Element { varying: bool },
 }
 
 /// The param a field maps to, and through what.
@@ -322,33 +428,72 @@ struct FieldSpec {
 }
 
 fn field_spec() -> BoxedStrategy<FieldSpec> {
-    spec_of(kind(true))
+    spec_of(kind(Place::Entry))
 }
 
-/// Any kind of field; bools only if `bools` (they're one bit, so they
-/// can't be widened to whole bytes).
-fn kind(bools: bool) -> BoxedStrategy<Kind> {
-    let text = (
-        1_u32..=12,
-        select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]),
-        proptest::option::of(any::<u8>()),
-    )
-        .prop_map(|(bytes, text, terminator)| Kind::Text {
-            bytes,
-            text,
-            terminator,
-        });
+/// Any kind a field or element can have where it sits.
+fn kind(place: Place) -> BoxedStrategy<Kind> {
+    let texts = select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]);
+    let text = (texts, text_length(place))
+        .prop_map(|(text, length)| Kind::Text { length, text })
+        .boxed();
+    let bytes = prop_oneof![
+        3 => (1_u32..=8).prop_map(|bytes| Length::Fixed { bytes, terminator: None }),
+        1 => varying_length(place),
+    ]
+    .prop_map(Kind::Bytes)
+    .boxed();
     let mut kinds = vec![
         (3, (1_u32..=64).prop_map(Kind::Uint).boxed()),
         (3, (1_u32..=64).prop_map(Kind::Int).boxed()),
         (2, select(&[32_u32, 64][..]).prop_map(Kind::Float).boxed()),
-        (2, text.boxed()),
-        (1, (1_u32..=8).prop_map(Kind::Bytes).boxed()),
+        (2, text),
+        (1, bytes),
     ];
-    if bools {
+    if place != (Place::Element { varying: true }) {
         kinds.push((1, Just(Kind::Bool).boxed()));
     }
     proptest::strategy::Union::new_weighted(kinds).boxed()
+}
+
+/// A string's length: fixed (1 to 12 bytes, maybe ending at a terminator)
+/// most of the time, else one that varies.
+fn text_length(place: Place) -> BoxedStrategy<Length> {
+    let fixed = (1_u32..=12, proptest::option::of(any::<u8>()))
+        .prop_map(|(bytes, terminator)| Length::Fixed { bytes, terminator });
+    prop_oneof![3 => fixed, 1 => varying_length(place)].boxed()
+}
+
+/// A length that varies: up to a terminator, or, for an entry, from a
+/// field of 2 to 16 bits, scaled now and then (§5.4).
+fn varying_length(place: Place) -> BoxedStrategy<Length> {
+    let terminated = any::<u8>().prop_map(Length::Terminated);
+    if place != Place::Entry {
+        return terminated.boxed();
+    }
+    let field = (
+        2_u32..=16,
+        prop_oneof![3 => Just(1_u32), 1 => 2_u32..=3],
+        prop_oneof![3 => Just(0_i64), 1 => -2_i64..=2],
+    )
+        .prop_map(|(bits, multiply, add)| Length::Field {
+            bits,
+            multiply,
+            add,
+        });
+    prop_oneof![terminated, field].boxed()
+}
+
+/// A string or bytes that runs to the packet's end.
+fn remaining_kind() -> BoxedStrategy<Kind> {
+    prop_oneof![
+        select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]).prop_map(|text| Kind::Text {
+            length: Length::Remaining,
+            text,
+        }),
+        Just(Kind::Bytes(Length::Remaining)),
+    ]
+    .boxed()
 }
 
 /// A field of one of `kinds`, with any meaning and sentinels it can have,
@@ -405,19 +550,13 @@ fn meaning(kind: &Kind) -> BoxedStrategy<Meaning> {
     }
 }
 
-/// ASCII letters that fit a field that [`Kind::takes_letters`]: exactly its
-/// length without a terminator, up to it with one.
+/// ASCII letters that fit a field that [`Kind::takes_letters`]: at least
+/// one, and as many as its value can have.
 fn letters(kind: &Kind) -> BoxedStrategy<String> {
-    let (bytes, least) = match kind {
-        Kind::Text {
-            bytes, terminator, ..
-        } => {
-            let bytes = *bytes as usize;
-            (bytes, if terminator.is_some() { 1 } else { bytes })
-        }
-        _ => (1, 1),
-    };
-    vec(select(&b"abcdefghij"[..]), least..=bytes)
+    let mut counts = kind.length().map(Length::value_bytes).unwrap_or_default();
+    counts.retain(|&count| count > 0);
+    select(counts)
+        .prop_flat_map(|count| vec(select(&b"abcdefghij"[..]), count))
         .prop_map(|letters| letters.into_iter().map(char::from).collect())
         .boxed()
 }
@@ -780,16 +919,8 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
         Kind::Bool => {
             json.insert("size_bits".into(), json!(1));
         }
-        Kind::Text {
-            bytes,
-            text,
-            terminator,
-        } => {
-            let mut length = json!({ "kind": "fixed", "bytes": bytes });
-            if let Some(byte) = terminator {
-                length["terminator"] = json!(byte);
-            }
-            json.insert("length".into(), length);
+        Kind::Text { length, text } => {
+            json.insert("length".into(), length_json(*length, &field.name));
             match text {
                 Text::Utf8 => {}
                 Text::Ascii => {
@@ -800,8 +931,8 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
                 }
             }
         }
-        Kind::Bytes(bytes) => {
-            json.insert("length".into(), json!({ "kind": "fixed", "bytes": bytes }));
+        Kind::Bytes(length) => {
+            json.insert("length".into(), length_json(*length, &field.name));
         }
     }
     if field.explicit {
@@ -843,6 +974,37 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
         json.insert("invalid".into(), json!(invalid));
     }
     json
+}
+
+/// A length as IR JSON. A length field is named after the entry it serves
+/// ([`length_field`]).
+fn length_json(length: Length, name: &str) -> Value {
+    match length {
+        Length::Fixed { bytes, terminator } => {
+            let mut json = json!({ "kind": "fixed", "bytes": bytes });
+            if let Some(byte) = terminator {
+                json["terminator"] = json!(byte);
+            }
+            json
+        }
+        Length::Terminated(byte) => json!({ "kind": "terminator", "byte": byte }),
+        Length::Field { multiply, add, .. } => {
+            let mut json = json!({ "kind": "field", "field": length_field(name) });
+            if multiply != 1 {
+                json["multiply"] = json!(multiply);
+            }
+            if add != 0 {
+                json["add"] = json!(add);
+            }
+            json
+        }
+        Length::Remaining => json!({ "kind": "remaining" }),
+    }
+}
+
+/// The name of the field that holds an entry's length.
+fn length_field(name: &str) -> String {
+    format!("{name}_len")
 }
 
 /// A numeric conversion as IR JSON; `None` for none. Defaults (linear
@@ -1112,15 +1274,23 @@ fn any_raw(kind: &Kind) -> BoxedStrategy<Raw> {
         .prop_map(|bits| Raw::Float(f64::from_bits(bits)))
         .boxed(),
         Kind::Bool => any::<bool>().prop_map(Raw::Bool).boxed(),
-        Kind::Text {
-            bytes,
-            text,
-            terminator,
-        } => text_value(*bytes as usize, *text, *terminator),
-        Kind::Bytes(bytes) => vec(any::<u8>(), *bytes as usize)
-            .prop_map(Raw::Bytes)
-            .boxed(),
+        Kind::Text { length, text } => text_value(*length, *text),
+        Kind::Bytes(length) => bytes_value(*length),
     }
+}
+
+/// Bytes that fit `length`: as many as its value can have, without its
+/// terminator byte.
+fn bytes_value(length: Length) -> BoxedStrategy<Raw> {
+    let terminator = length.terminator();
+    let byte = any::<u8>().prop_map(move |byte| match terminator {
+        Some(t) if byte == t => t.wrapping_add(1),
+        _ => byte,
+    });
+    select(length.value_bytes())
+        .prop_flat_map(move |count| vec(byte.clone(), count))
+        .prop_map(Raw::Bytes)
+        .boxed()
 }
 
 /// One of `values`, as an integer field's raw value.
@@ -1173,20 +1343,38 @@ fn sign_extend(n: u64, bits: u32) -> i64 {
     ((n << shift) as i64) >> shift
 }
 
-/// Text in `text` that fits a field of `bytes` bytes: exactly that many
-/// without a terminator, at most that many, without the terminator byte,
-/// with one.
-fn text_value(bytes: usize, text: Text, terminator: Option<u8>) -> BoxedStrategy<Raw> {
+/// Text in `text` that fits `length`, in as many bytes as its value can
+/// have: one count of them, picked first, filled exactly with letters
+/// where the length allows no other (a fixed one without a terminator, or
+/// one from a field); else any count up to the most, without the
+/// terminator byte.
+fn text_value(length: Length, text: Text) -> BoxedStrategy<Raw> {
     let chars = match text {
         Text::Ascii => proptest::char::range('\u{0}', '\u{7f}').boxed(),
         Text::Latin1 => proptest::char::range('\u{0}', '\u{ff}').boxed(),
         Text::Utf8 => any::<char>().boxed(),
     };
+    let terminator = length.terminator();
+    let exact = matches!(
+        length,
+        Length::Fixed {
+            terminator: None,
+            ..
+        } | Length::Field { .. }
+    );
+    let counts = length.value_bytes();
+    let most = counts.iter().copied().max().unwrap_or(0);
+    let limit = if exact {
+        select(counts).boxed()
+    } else {
+        Just(most).boxed()
+    };
     (
-        vec(chars, 0..=bytes),
-        vec(select(&b"abcdefghij"[..]), bytes),
+        limit,
+        vec(chars, 0..=most),
+        vec(select(&b"abcdefghij"[..]), most),
     )
-        .prop_map(move |(chars, filler)| {
+        .prop_map(move |(bytes, chars, filler)| {
             let mut value = String::new();
             let mut used = 0;
             for c in chars {
@@ -1198,8 +1386,7 @@ fn text_value(bytes: usize, text: Text, terminator: Option<u8>) -> BoxedStrategy
                 used += encoded.len();
                 value.push(c);
             }
-            // Without a terminator the text fills the field exactly.
-            if terminator.is_none() {
+            if exact {
                 for letter in filler.into_iter().take(bytes - used) {
                     value.push(char::from(letter));
                 }
