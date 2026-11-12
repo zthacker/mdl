@@ -1350,6 +1350,27 @@ fn a_struct_holding_narrow_values_says_why_it_starts_on_a_byte() {
 }
 
 #[test]
+fn a_struct_of_bools_starts_anywhere() {
+    // legacy_v1 is little-endian, but a bool has no byte order
+    // (decoding.md §2.1), so it isn't a little-endian value a struct has
+    // to start on a byte for.
+    let flag =
+        |name: &str| json!({ "kind": "field", "name": name, "type": "bool", "size_bits": 1 });
+    assert_eq!(
+        legacy_with_types(
+            json!({ "t": { "entries": [flag("a"), flag("b")] } }),
+            json!([
+                uint("n", 3),
+                { "kind": "struct", "name": "s", "struct": "t" },
+                { "kind": "array", "name": "r", "count": { "kind": "fixed", "count": 3 },
+                  "element": { "kind": "struct", "name": "t" } }
+            ])
+        ),
+        vec![]
+    );
+}
+
+#[test]
 fn a_terminated_buffer_has_room_for_its_values() {
     let padded = |bytes: u32| {
         json!({ "kind": "field", "name": "s", "type": "string",
