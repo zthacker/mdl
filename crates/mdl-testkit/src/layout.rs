@@ -551,7 +551,8 @@ fn text_length(slot: Slot) -> BoxedStrategy<Length> {
 }
 
 /// A length that varies: up to a terminator, or, for an entry, from a
-/// field of 2 to 16 bits, scaled now and then (§5.4).
+/// field of 2 to 16 bits, scaled now and then (§5.4), with a negative
+/// `add` a quarter of the time, so a raw 0 says a length below 0.
 fn varying_length(slot: Slot) -> BoxedStrategy<Length> {
     let terminated = any::<u8>().prop_map(Length::Terminated);
     if slot != Slot::Entry {
@@ -560,7 +561,7 @@ fn varying_length(slot: Slot) -> BoxedStrategy<Length> {
     let field = (
         2_u32..=16,
         prop_oneof![3 => Just(1_u32), 1 => 2_u32..=3],
-        prop_oneof![3 => Just(0_i64), 1 => -2_i64..=2],
+        prop_oneof![2 => Just(0_i64), 1 => -2_i64..=-1, 1 => 1_i64..=2],
     )
         .prop_map(|(bits, multiply, add)| Length::Field {
             bits,
@@ -959,7 +960,7 @@ fn lay_out(
         offset += u64::from(count.bits());
     }
     let body = body::lay_out(spec, family_little, offset, &shape.name, &shape.params);
-    entries.extend(body.entries());
+    entries.extend(body.entries_json());
     PacketLayout {
         name: shape.name,
         id: shape.id,
@@ -1197,7 +1198,7 @@ fn draft(
     header: Vec<u64>,
 ) -> BoxedStrategy<Draft> {
     let time = time.clone();
-    let values = body::values(&packet.body.nodes);
+    let values = body::values(&packet.body.entries);
     let length = usize::try_from(packet.body.most_bits.div_ceil(8)).unwrap_or(0);
     // Now and then a sentinel, which means ground time.
     let count = match packet.count {
@@ -1659,7 +1660,8 @@ fn write_message(
         steps.push(header_step("t", at + u64::from(bits)));
     }
     let mut writer = Writer::new(payload, garbled, steps);
-    let end = writer.container(&packet.body.nodes, values, packet.body.start, "");
+    // The body's entries are the packet's: their offsets count from bit 0.
+    let end = writer.container(&packet.body.entries, values, 0, packet.body.start, "");
     (record, writer.steps(), end)
 }
 

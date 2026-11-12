@@ -112,9 +112,54 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
         // bytes, so this is exact.
         let mut at = 0_u64;
         let mut counted: Vec<(&str, &Value, &Value)> = Vec::new();
+        let mut offsets = std::collections::BTreeSet::new();
         for (position, entry) in entries.iter().enumerate() {
             let kind = entry["kind"].as_str().unwrap_or("");
             let element = &entry["element"];
+            if let Some(offset) = entry["offset_bits"].as_u64() {
+                at = offset;
+                found.insert(
+                    if *in_type {
+                        "offset:in_record"
+                    } else {
+                        "offset:top"
+                    }
+                    .to_string(),
+                );
+                if !offsets.insert(offset) {
+                    found.insert("offset:alternatives".to_string());
+                }
+                let next = entries.get(position + 1);
+                if entry.get("when").is_some()
+                    && next.is_some_and(|next| next.get("offset_bits").is_none())
+                {
+                    found.insert("offset:conditional_then_sequential".to_string());
+                }
+            }
+            if let Some(when) = entry.get("when") {
+                found.insert(format!("when:{kind}"));
+                if *in_type {
+                    found.insert("when:in_struct".to_string());
+                }
+                let mut tested = when;
+                while tested.get("field").is_none() {
+                    tested = match (tested.get("condition"), tested["conditions"].get(0)) {
+                        (Some(inner), _) | (None, Some(inner)) => inner,
+                        (None, None) => break,
+                    };
+                }
+                let selector = entries.iter().find(|e| e["name"] == tested["field"]);
+                if let Some(ty) = selector.and_then(|s| s["type"].as_str()) {
+                    found.insert(format!("selector:{ty}"));
+                }
+                // A condition compares the raw value, whatever it means.
+                if selector.is_some_and(|s| s.get("conversion").is_some()) {
+                    found.insert("selector:converted".to_string());
+                }
+                if selector.is_some_and(|s| s.get("invalid").is_some()) {
+                    found.insert("selector:sentinel".to_string());
+                }
+            }
             if kind == "padding" {
                 // Only spare bits are a byte or more: alignment is less.
                 if entry["size_bits"].as_u64().is_some_and(|bits| bits >= 8) {
@@ -214,6 +259,10 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
                         if counter.is_some_and(|c| c.get("canonical").is_some()) {
                             found.insert("count:mapped".to_string());
                         }
+                        // A count is the raw value, whatever it converts to.
+                        if counter.is_some_and(|c| c.get("conversion").is_some()) {
+                            found.insert("count:converted".to_string());
+                        }
                     }
                     if count["count"] == 0 {
                         found.insert("count:zero".to_string());
@@ -262,6 +311,42 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
         }
     }
     for message in &case.messages {
+        let packet = set["packets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|packet| packet["name"] == message.packet);
+        let entries = packet
+            .and_then(|packet| packet["entries"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        for entry in entries.iter().filter(|entry| entry.get("when").is_some()) {
+            let present = message
+                .record
+                .iter()
+                .any(|(name, _)| *name == entry["name"]);
+            found.insert(
+                if present {
+                    "when:present"
+                } else {
+                    "when:absent"
+                }
+                .to_string(),
+            );
+        }
+        let composites = packet
+            .and_then(|packet| packet["composites"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        for composite in &composites {
+            let sampled = message
+                .samples
+                .iter()
+                .any(|sample| sample.param == composite["canonical"]);
+            if !sampled {
+                found.insert("composite:absent".to_string());
+            }
+        }
         for (name, raw) in &message.record {
             if matches!(raw, super::Raw::Array(items) if items.is_empty()) {
                 found.insert(
@@ -382,6 +467,41 @@ fn layouts_reach_every_meaning() {
         "padding:wide",
         "padding:struct_end",
         "padding:packet_end",
+        // Offsets and conditions.
+        "key:entry.offset_bits",
+        "key:entry.when",
+        "condition:compare",
+        "condition:in",
+        "condition:all",
+        "condition:any",
+        "condition:not",
+        "op:eq",
+        "op:ne",
+        "op:lt",
+        "op:le",
+        "op:gt",
+        "op:ge",
+        "op:mask_any",
+        "op:mask_all",
+        "offset:top",
+        "offset:in_record",
+        "offset:alternatives",
+        "offset:conditional_then_sequential",
+        "when:field",
+        "when:array",
+        "when:struct",
+        "when:padding",
+        "when:in_struct",
+        "selector:uint",
+        "selector:int",
+        "selector:bool",
+        "selector:string",
+        "selector:converted",
+        "selector:sentinel",
+        "count:converted",
+        "when:present",
+        "when:absent",
+        "composite:absent",
         "byte_order:little",
         "byte_order:big",
         "time:cuc",

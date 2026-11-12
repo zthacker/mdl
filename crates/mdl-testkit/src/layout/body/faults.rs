@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use proptest::prelude::*;
 use proptest::sample::Index;
 
-use super::{Bound, Counted, ElementNode, Node, element_bits};
+use super::{Bound, Counted, ElementNode, Entry, Node, element_bits, present};
 use crate::layout::time::received;
 use crate::layout::{
     Damage, Draft, Failure, Kind, Length, Message, PacketLayout, Problem, Raw, Text, TimeSource,
@@ -447,7 +447,7 @@ fn apply(
         match change {
             Change::Cut(cut) => bytes = bytes.min(*cut),
             Change::More(cut) => {
-                let Some(room) = one_more(&packet.body.nodes, &mut values) else {
+                let Some(room) = one_more(&packet.body.entries, &mut values) else {
                     return (noise, Outcome::Unknown);
                 };
                 noise.resize(noise.len() + room, 0);
@@ -468,8 +468,8 @@ fn apply(
 /// Writes the last element of the array the body ends with once more, if
 /// it runs to the end and has one; returns the most bytes the element
 /// takes.
-fn one_more(nodes: &[Node], values: &mut [(String, Raw)]) -> Option<usize> {
-    let Some(Node::Array(array)) = nodes.last() else {
+fn one_more(entries: &[Entry], values: &mut [(String, Raw)]) -> Option<usize> {
+    let Some(Node::Array(array)) = entries.last().map(|entry| &entry.node) else {
         return None;
     };
     if !matches!(array.count, Counted::Remaining) {
@@ -526,7 +526,7 @@ fn plants(
     }
     // Part of one more element after an array that runs to the end.
     let mut values = draft.values.clone();
-    if let Some(room) = one_more(&packet.body.nodes, &mut values) {
+    if let Some(room) = one_more(&packet.body.entries, &mut values) {
         let mut noise = draft.noise.clone();
         noise.resize(noise.len() + room, 0);
         let (_, steps, end) = write_message(packet, time, &values, &mut noise, &draft.timing, None);
@@ -542,7 +542,7 @@ fn plants(
         }
     }
     let mut found = Targets::default();
-    targets(&packet.body.nodes, &draft.values, &[], "", &mut found);
+    targets(&packet.body.entries, &draft.values, &[], "", &mut found);
     let mut held = Vec::new();
     for count in &found.counts {
         // A raw value that gives the first array it counts a count below
@@ -704,7 +704,7 @@ struct TextTarget {
 
 /// The targets among a container's values, at `spot` and `path`.
 fn targets(
-    nodes: &[Node],
+    entries: &[Entry],
     record: &[(String, Raw)],
     spot: &[Seg],
     path: &str,
@@ -721,8 +721,8 @@ fn targets(
         (place, path)
     };
     let mut scales: BTreeMap<&str, Vec<(u32, i64)>> = BTreeMap::new();
-    for node in nodes {
-        if let Node::Array(array) = node
+    for entry in entries {
+        if let Node::Array(array) = &entry.node
             && let Counted::Field {
                 field,
                 multiply,
@@ -733,17 +733,14 @@ fn targets(
         }
     }
     let bits_of = |name: &str| {
-        nodes.iter().find_map(|node| match node {
+        entries.iter().find_map(|entry| match &entry.node {
             Node::Field(field) if field.name == name => Some(field.kind.bits()),
             _ => None,
         })
     };
-    let entries = nodes
-        .iter()
-        .filter(|node| !matches!(node, Node::Padding(_)));
-    for (node, (name, raw)) in entries.zip(record) {
+    for (entry, (name, raw)) in present(entries, record) {
         let (here, at) = place(name);
-        match (node, raw) {
+        match (&entry.node, raw) {
             (Node::Field(field), raw) => {
                 if let Some(scales) = scales.get(name.as_str()) {
                     found.counts.push(CountTarget {
