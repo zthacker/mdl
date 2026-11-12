@@ -82,14 +82,3 @@ fn list_place(layout: &Layout, argument: usize) -> Option<ListPlace> {
             }
         })
 }
-
-/// How likely a kind of fault is to be picked, against the others: those
-/// any request or payload can be given (an unknown set or command, a
-/// name, a missing argument; an unknown set, the wrong encoding, no
-/// packet) a quarter as likely as those that need what the layout has.
-fn kind_weight(kind: &str) -> usize {
-    match kind {
-        "request" | "name" | "missing" | "set" | "encoding" | "no_packet" => 1,
-        _ => 4,
-    }
-}

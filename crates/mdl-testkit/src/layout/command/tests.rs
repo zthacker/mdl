@@ -11,7 +11,8 @@ use super::encoders::f64_encoder;
 use super::requests::{buffer, decoded_value, native, raw_of};
 use super::values::{unrounded, value};
 use super::{
-    Arg, ArgType, Commands, Given, Len, Shape, Stage, Target, Through, commands, encoder_of,
+    Arg, ArgType, Commands, GarbledKind, Given, Len, RefusedKind, Shape, Stage, Target, Through,
+    commands, encoder_of,
 };
 use crate::coverage::features;
 use crate::layout::{Numeric, Raw};
@@ -594,6 +595,100 @@ fn commands_reach_every_feature() {
     assert!(missing.is_empty(), "never generated: {missing:?}");
 }
 
+/// What the faults reach test counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Reached {
+    /// A request refused with this code.
+    Refused(&'static str),
+    /// A fault of this kind planted in a request.
+    RefusedKind(RefusedKind),
+    /// A route a refusal takes.
+    Route(RefusedRoute),
+    /// A payload refused with this code.
+    Garbled(&'static str),
+    /// A payload fault of this kind.
+    GarbledKind(GarbledKind),
+    /// A payload fault of this kind, refused with this code.
+    KindCode(GarbledKind, &'static str),
+    /// Why no packet matched a payload.
+    Unmatched(Unmatched),
+}
+
+/// A route a refusal takes: where its code is caught, or an order §3.5
+/// and §3.6 set between two faults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RefusedRoute {
+    TwoFaults,
+    /// `bad_length` at a length field.
+    LengthField,
+    /// `raw_range` for an argument's field, or the target's.
+    RawRangeArgument,
+    RawRangeTarget,
+    /// A code for a list's value, or for an element.
+    ListValue(&'static str),
+    Element(&'static str),
+    /// `bad_count` for an array's records, or for a count field.
+    BadCountRecords,
+    BadCountCount,
+    /// `wrong_type` for one value given a list argument, or a list given an
+    /// argument that takes one; `not_default` for a list.
+    OneValueForList,
+    ListForOneValue,
+    NotDefaultList,
+    /// A length field's fault caught after a later entry's (§3.5).
+    LengthFieldAfterLaterEntry,
+    /// A count's fault caught after a later entry's, or a later length
+    /// field's (§3.6).
+    CountAfterLaterEntry,
+    CountAfterLengthField,
+    /// An array's records compared before their fields are worked out.
+    RecordsBeforeElement,
+}
+
+impl RefusedRoute {
+    const ALL: [RefusedRoute; 21] = [
+        RefusedRoute::TwoFaults,
+        RefusedRoute::LengthField,
+        RefusedRoute::RawRangeArgument,
+        RefusedRoute::RawRangeTarget,
+        RefusedRoute::ListValue("wrong_type"),
+        RefusedRoute::ListValue("non_finite"),
+        RefusedRoute::ListValue("unknown_state"),
+        RefusedRoute::ListValue("out_of_range"),
+        RefusedRoute::Element("raw_range"),
+        RefusedRoute::Element("invalid_text"),
+        RefusedRoute::Element("contains_terminator"),
+        RefusedRoute::Element("bad_length"),
+        RefusedRoute::BadCountRecords,
+        RefusedRoute::BadCountCount,
+        RefusedRoute::OneValueForList,
+        RefusedRoute::ListForOneValue,
+        RefusedRoute::NotDefaultList,
+        RefusedRoute::LengthFieldAfterLaterEntry,
+        RefusedRoute::CountAfterLaterEntry,
+        RefusedRoute::CountAfterLengthField,
+        RefusedRoute::RecordsBeforeElement,
+    ];
+}
+
+/// Why no packet matched a payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Unmatched {
+    EmptyPayload,
+    /// The family reads metadata, and the link gave none.
+    NoMetadata,
+    /// A key value no packet has.
+    UnknownKey,
+}
+
+impl Unmatched {
+    const ALL: [Unmatched; 3] = [
+        Unmatched::EmptyPayload,
+        Unmatched::NoMetadata,
+        Unmatched::UnknownKey,
+    ];
+}
+
 /// Planted faults reach every refusal code §8 lists for single values,
 /// lists, fields and arrays, and every decoding refusal this module plants,
 /// each by every route it has, at least 5 times. Routes are many and some
@@ -603,33 +698,38 @@ fn commands_reach_every_feature() {
 fn faults_reach_every_code() {
     let mut runner = TestRunner::deterministic();
     let strategy = commands();
-    let mut found: BTreeMap<String, usize> = BTreeMap::new();
-    let mut note = |label: String| *found.entry(label).or_default() += 1;
+    let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
+    let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
+    let route = Reached::Route;
     for _ in 0..1000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
+        let framed = case.bundle["families"][0].get("metadata").is_some();
         for refused in &case.refused {
-            note(format!("refused:{}", refused.code));
+            note(Reached::Refused(refused.code));
+            for fault in &refused.faults {
+                note(Reached::RefusedKind(fault.kind));
+            }
             if refused.faults.len() >= 2 {
-                note("refused:two faults".to_string());
+                note(route(RefusedRoute::TwoFaults));
             }
             let Some(first) = refused.faults.iter().min_by_key(|fault| fault.stage) else {
                 continue;
             };
             if let (Stage::Length(_), "bad_length") = (first.stage, first.code) {
-                note("refused:bad_length/length field".to_string());
+                note(route(RefusedRoute::LengthField));
             }
+            // An element's `raw_range` counts with the elements, below.
             if first.code == "raw_range" {
-                let route = match (first.stage, first.argument) {
+                match (first.stage, first.argument) {
                     (
                         Stage::Field {
                             element: Some(_), ..
                         },
                         _,
-                    ) => "element",
-                    (_, Some(_)) => "f64",
-                    (_, None) => "target",
-                };
-                note(format!("refused:raw_range/{route}"));
+                    ) => {}
+                    (_, Some(_)) => note(route(RefusedRoute::RawRangeArgument)),
+                    (_, None) => note(route(RefusedRoute::RawRangeTarget)),
+                }
             }
             // §3.5: a length field's fault is caught after a later entry's.
             let length_after_later =
@@ -643,7 +743,7 @@ fn faults_reach_every_code() {
                         _ => false,
                     });
             if length_after_later {
-                note("refused:length field after a later entry".to_string());
+                note(route(RefusedRoute::LengthFieldAfterLaterEntry));
             }
             // §3.6: a count's fault is caught after a later entry's, and
             // after a later length field's; records' lengths are compared
@@ -660,13 +760,13 @@ fn faults_reach_every_code() {
                             element: None,
                         },
                     ) if array == records && first.code == "bad_count" => {
-                        note("refused:records compared before an element".to_string());
+                        note(route(RefusedRoute::RecordsBeforeElement));
                     }
                     (Stage::Count(array), Stage::Field { entry: later, .. }) if later > array => {
-                        note("refused:count after a later entry".to_string());
+                        note(route(RefusedRoute::CountAfterLaterEntry));
                     }
                     (Stage::Count(array), Stage::Length(later)) if later > array => {
-                        note("refused:count after a length field".to_string());
+                        note(route(RefusedRoute::CountAfterLengthField));
                     }
                     _ => {}
                 }
@@ -675,18 +775,18 @@ fn faults_reach_every_code() {
             let at = first.at.clone().unwrap_or_default();
             match first.stage {
                 Stage::Argument(_) if at.contains('[') => {
-                    note(format!("refused:{}/list value", first.code));
+                    note(route(RefusedRoute::ListValue(first.code)));
                 }
                 Stage::Field {
                     element: Some(_), ..
                 } => {
-                    note(format!("refused:{}/element", first.code));
+                    note(route(RefusedRoute::Element(first.code)));
                 }
                 Stage::Field { element: None, .. } if first.code == "bad_count" => {
-                    note("refused:bad_count/records".to_string());
+                    note(route(RefusedRoute::BadCountRecords));
                 }
                 Stage::Count(_) => {
-                    note("refused:bad_count/count".to_string());
+                    note(route(RefusedRoute::BadCountCount));
                 }
                 _ => {}
             }
@@ -701,94 +801,91 @@ fn faults_reach_every_code() {
                 .find(|(name, _)| *name == at)
                 .is_some_and(|(_, given)| matches!(given, Given::List(_)));
             match (first.code, takes_list, given_list) {
-                ("wrong_type", true, false) => {
-                    note("refused:wrong_type/one value for a list".to_string());
-                }
-                ("wrong_type", false, true) => {
-                    note("refused:wrong_type/a list for one value".to_string());
-                }
-                ("not_default", true, _) => {
-                    note("refused:not_default/list".to_string());
-                }
+                ("wrong_type", true, false) => note(route(RefusedRoute::OneValueForList)),
+                ("wrong_type", false, true) => note(route(RefusedRoute::ListForOneValue)),
+                ("not_default", true, _) => note(route(RefusedRoute::NotDefaultList)),
                 _ => {}
             }
         }
         for garbled in &case.garbled {
-            note(format!("garbled:{}", garbled.code));
+            note(Reached::Garbled(garbled.code));
+            note(Reached::GarbledKind(garbled.kind));
+            note(Reached::KindCode(garbled.kind, garbled.code));
             if garbled.code == "no_packet" {
-                note(format!("garbled:no_packet/{}", garbled.planted));
+                let unmatched = if garbled.payload.is_empty() {
+                    Unmatched::EmptyPayload
+                } else if framed && garbled.metadata.is_empty() {
+                    Unmatched::NoMetadata
+                } else {
+                    Unmatched::UnknownKey
+                };
+                note(Reached::Unmatched(unmatched));
             }
-            note(format!("garbled:{}/{}", garbled.code, garbled.kind));
         }
     }
-    let required = [
-        "refused:unknown_set",
-        "refused:unknown_command",
-        "refused:unknown_argument",
-        "refused:duplicate_argument",
-        "refused:missing_argument",
-        "refused:wrong_type",
-        "refused:non_finite",
-        "refused:unknown_state",
-        "refused:out_of_range",
-        "refused:not_default",
-        "refused:raw_range",
-        "refused:raw_range/f64",
-        "refused:raw_range/target",
-        "refused:missing_target",
-        "refused:target_type",
-        "refused:invalid_text",
-        "refused:contains_terminator",
-        "refused:bad_length",
-        "refused:bad_length/length field",
-        "refused:two faults",
-        "refused:length field after a later entry",
-        "refused:list_length",
-        "refused:wrong_type/one value for a list",
-        "refused:wrong_type/a list for one value",
-        "refused:wrong_type/list value",
-        "refused:non_finite/list value",
-        "refused:unknown_state/list value",
-        "refused:out_of_range/list value",
-        "refused:not_default/list",
-        "refused:raw_range/element",
-        "refused:invalid_text/element",
-        "refused:contains_terminator/element",
-        "refused:bad_length/element",
-        "refused:bad_count/records",
-        "refused:bad_count/count",
-        "refused:count after a later entry",
-        "refused:records compared before an element",
-        "refused:count after a length field",
-        "garbled:unknown_set",
-        "garbled:wrong_encoding",
-        "garbled:no_packet",
-        "garbled:no_packet/an empty payload",
-        "garbled:no_packet/no metadata",
-        "garbled:no_packet/a key no packet has",
-        "garbled:bad_checksum",
-        "garbled:wrong_constant",
-        "garbled:unknown_state",
-        "garbled:out_of_range",
-        "garbled:non_finite",
-        "garbled:past_end",
-        "garbled:unknown_state/element",
-        "garbled:out_of_range/element",
-        "garbled:non_finite/element",
-        "garbled:bad_length/count",
-        "garbled:past_end/count",
-        "garbled:wrong_constant/record constant",
-        "garbled:past_end/cut inside an array",
-        "garbled:no_terminator/cut inside an array",
-        "garbled:past_end/more bytes",
-        "garbled:no_terminator/more bytes",
-        "garbled:list_length",
-    ];
+    let mut required: Vec<Reached> = [
+        "unknown_set",
+        "unknown_command",
+        "unknown_argument",
+        "duplicate_argument",
+        "missing_argument",
+        "wrong_type",
+        "non_finite",
+        "unknown_state",
+        "out_of_range",
+        "not_default",
+        "raw_range",
+        "missing_target",
+        "target_type",
+        "invalid_text",
+        "contains_terminator",
+        "bad_length",
+        "list_length",
+        "bad_count",
+    ]
+    .map(Reached::Refused)
+    .to_vec();
+    required.extend(RefusedKind::ALL.map(Reached::RefusedKind));
+    required.extend(RefusedRoute::ALL.map(Reached::Route));
+    required.extend(
+        [
+            "unknown_set",
+            "wrong_encoding",
+            "no_packet",
+            "bad_checksum",
+            "wrong_constant",
+            "unknown_state",
+            "out_of_range",
+            "non_finite",
+            "past_end",
+            "no_terminator",
+            "bad_length",
+            "list_length",
+        ]
+        .map(Reached::Garbled),
+    );
+    required.extend(GarbledKind::ALL.map(Reached::GarbledKind));
+    required.extend(
+        [
+            (GarbledKind::Element, "unknown_state"),
+            (GarbledKind::Element, "out_of_range"),
+            (GarbledKind::Element, "non_finite"),
+            (GarbledKind::Count, "bad_length"),
+            (GarbledKind::Count, "past_end"),
+            (GarbledKind::RecordConstant, "wrong_constant"),
+            (GarbledKind::CutInsideArray, "past_end"),
+            (GarbledKind::CutInsideArray, "no_terminator"),
+            (GarbledKind::MoreBytes, "past_end"),
+            (GarbledKind::MoreBytes, "no_terminator"),
+        ]
+        .map(|(kind, code)| Reached::KindCode(kind, code)),
+    );
+    required.extend(Unmatched::ALL.map(Reached::Unmatched));
     // Each at least 5 times, so that a change to the generators that makes
     // a route rare shows here before it's gone.
-    let rare: Vec<(&str, usize)> = required
+    let rare: Vec<(Reached, usize)> = required
         .into_iter()
-        .map(|label| (label, found.get(label).copied().unwrap_or(0)))
+        .map(|reached| (reached, found.get(&reached).copied().unwrap_or(0)))
         .filter(|(_, times)| *times < 5)
         .collect();
     assert!(rare.is_empty(), "planted fewer than 5 times: {rare:?}");
