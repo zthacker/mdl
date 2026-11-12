@@ -387,6 +387,9 @@ fn packet_checksums(entries: &[Entry], type_sizes: &BTreeMap<&str, u64>) -> Pack
             compiled.fixed.push((index, *at));
         }
     }
+    // Verified in order of position (decoding.md §5.6), which offsets can
+    // make other than the order they're listed in.
+    compiled.fixed.sort_by_key(|&(_, at)| at);
     compiled
 }
 

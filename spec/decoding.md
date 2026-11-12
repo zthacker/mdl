@@ -337,10 +337,11 @@ isn't one the algorithm accepts for it (the computed value, for all but
 A checksum at a static position (§5.2) is verified before any other entry
 of the packet is extracted, so damage anywhere it covers is
 `bad_checksum`, not whatever error the damaged entry would cause; those
-checksums are verified in order of position. One that reaches past the
-payload's end isn't a problem yet: the entries are then read in order,
-and the first that reaches past the end is the error [`past_end`]. Any
-other checksum is verified when the decoder reaches it.
+checksums are verified in order of position, whatever order they're
+listed in. One that reaches past the packet's end (§5.1) isn't a problem
+yet: the entries are then read in order, and the first that reaches past
+the end is the error [`past_end`]. Any other checksum is verified when
+the decoder reaches it.
 
 - `crc`, with `width` (8 to 64 bits, whole bytes), `poly`, `init`,
   `reflect_in`, `reflect_out` and `xor_out`, the parameters of the CRC

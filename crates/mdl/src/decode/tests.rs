@@ -1213,6 +1213,44 @@ fn damage_a_static_checksum_covers_is_reported_as_a_bad_checksum() {
 }
 
 #[test]
+fn static_checksums_are_verified_in_order_of_position() {
+    // Listed first, `late` sits after `early`. Both cover `data`, so damage
+    // there fails both, and the error names the one at the lower position
+    // (decoding.md §5.6), whatever order they're listed in.
+    let mut bundle = bundle();
+    let ident = bundle["sets"].as_array_mut().unwrap().last_mut().unwrap();
+    ident["packets"].as_array_mut().unwrap().push(json!({
+        "name": "TWICE",
+        "identify": { "kind": 30 },
+        "entries": [
+            { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+            { "kind": "field", "name": "data", "type": "uint", "size_bits": 8 },
+            { "kind": "checksum", "name": "late", "offset_bits": 24, "from_bits": 8,
+              "algorithm": { "kind": "xor" } },
+            { "kind": "checksum", "name": "early", "offset_bits": 16, "from_bits": 8,
+              "algorithm": { "kind": "sum", "width": 8 } }
+        ]
+    }));
+    // early = 0x41, the sum of data; late = 0x41 ^ 0x41.
+    assert_eq!(
+        identified_in(&bundle, &[30, 0x41, 0x41, 0x00]).unwrap().0,
+        "TWICE"
+    );
+    let err = identified_in(&bundle, &[30, 0x42, 0x41, 0x00]).unwrap_err();
+    assert_eq!(
+        err,
+        DecodeError::Entry {
+            packet: "TWICE".to_string(),
+            path: "early".to_string(),
+            problem: Problem::BadChecksum {
+                stored: 0x41,
+                computed: 0x42
+            },
+        }
+    );
+}
+
+#[test]
 fn tables_and_splines_give_engineering_values_and_flag_raw_values_outside_them() {
     let artifacts = artifacts();
     let sets = family_sets(&artifacts, "vendor_j");
