@@ -1059,6 +1059,23 @@ fn positions_overlaps_and_bounds() {
 }
 
 #[test]
+fn an_empty_fixed_array_reads_no_bits() {
+    // A fixed count of 0 reads nothing, though an element could take any
+    // number of bits, so what's placed at an offset right after it is clear
+    // of it.
+    assert_eq!(
+        one(json!([
+            uint("a", 8),
+            { "kind": "array", "name": "none", "count": { "kind": "fixed", "count": 0 },
+              "element": { "kind": "scalar", "type": "string",
+                           "length": { "kind": "terminator", "byte": 0 } } },
+            at(uint("b", 8), 8)
+        ])),
+        vec![]
+    );
+}
+
+#[test]
 fn sizes_suit_types() {
     let field = |ty: &str, extra: Value| {
         let mut f = json!({ "kind": "field", "name": "f", "type": ty });
