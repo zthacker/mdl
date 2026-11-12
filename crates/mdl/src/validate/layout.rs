@@ -5,13 +5,13 @@
 //! at, the latest unbounded when it can't be known) and size bounds, plus
 //! the set of bit positions modulo 8 it can start at. From these:
 //!
-//! - **Overlap.** Entries placed one after another never overlap, so each
-//!   explicit `offset_bits` starts a new *run*, and the possible extents of
-//!   entries in different runs are compared, whatever order they're listed
-//!   in. Two unconditional entries that can read the same bits are an
-//!   error. A conditional entry may overlap another only as an alternative
-//!   reading: when both are conditional, or when one region contains the
-//!   other.
+//! - **Overlap** (decoding.md §5.2). Entries placed one after another
+//!   never overlap, so each explicit `offset_bits` starts a new *run*, and
+//!   the possible extents of entries in different runs are compared,
+//!   whatever order they're listed in. Two unconditional entries that can
+//!   read the same bits are an error. A conditional entry may overlap
+//!   another only as an alternative reading: when both are conditional, or
+//!   when one region contains the other.
 //! - **Exact length.** In a packet of exact length, every entry's furthest
 //!   possible end fits. Layouts whose size varies beyond that use
 //!   `at_least`.
@@ -606,10 +606,15 @@ impl<'a> Layout<'a> {
             }
             Some(Count::Fixed { count }) => {
                 let n = u64::from(*count);
+                // No elements read no bits, however many an element can take.
+                let max = match n {
+                    0 => Some(0),
+                    _ => element.size.max.and_then(|m| m.checked_mul(n)),
+                };
                 (
                     Size {
                         min: element.size.min.saturating_mul(n),
-                        max: element.size.max.and_then(|m| m.checked_mul(n)),
+                        max,
                     },
                     Some(n),
                 )
