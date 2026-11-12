@@ -482,11 +482,12 @@ fn check_composite(
     }
 }
 
-/// Frames consumers convert between: a vector converts to itself, and
-/// along any chain of these steps: ECEF and ECI_J2000 into each other (with
-/// time), NED and ENU into each other (axis order), and NED, ENU or
-/// GEODETIC into ECEF (with the asset's position). So GEODETIC reaches
-/// ECI_J2000 through ECEF. Attitude quaternions only keep their frame.
+/// Frames consumers convert between (decoding.md §7.4): a vector converts
+/// to itself, and along any chain of these steps: ECEF and ECI_J2000 into
+/// each other (with time), NED and ENU into each other (axis order), and
+/// NED, ENU or GEODETIC into ECEF (with the asset's position). So GEODETIC
+/// reaches ECI_J2000 through ECEF. Attitude quaternions only keep their
+/// frame.
 fn frame_converts(from: Frame, to: Frame, quaternion: bool) -> bool {
     use Frame::*;
     if from == to {
