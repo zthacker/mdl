@@ -84,11 +84,26 @@ fn message_of(message: &layout::Message) -> Message<'_> {
 }
 
 /// A decoding error as the testkit writes one: the entry it names and what
-/// it reports. `None` for an error that isn't about an entry, or one of a
-/// kind the testkit doesn't plant.
+/// it reports. `None` for an error of a kind the testkit doesn't plant.
 fn failure(error: &DecodeError) -> Option<layout::Failure> {
-    let DecodeError::Entry { path, problem, .. } = error else {
-        return None;
+    let (path, problem) = match error {
+        // The packet's, so it names no entry.
+        DecodeError::TooShort {
+            needed,
+            given,
+            exact,
+            ..
+        } => {
+            let problem = layout::Problem::TooShort {
+                needed_bytes: *needed,
+                given_bytes: *given,
+                exact: *exact,
+            };
+            let path = String::new();
+            return Some(layout::Failure { path, problem });
+        }
+        DecodeError::Entry { path, problem, .. } => (path, problem),
+        _ => return None,
     };
     let problem = match problem {
         Problem::PastEnd {
@@ -118,6 +133,10 @@ fn failure(error: &DecodeError) -> Option<layout::Failure> {
             },
         },
         Problem::BadLength { value } => layout::Problem::BadLength { value: *value },
+        Problem::BadChecksum { stored, computed } => layout::Problem::BadChecksum {
+            stored: *stored,
+            computed: *computed,
+        },
         _ => return None,
     };
     Some(layout::Failure {

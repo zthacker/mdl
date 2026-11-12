@@ -13,7 +13,7 @@ use super::{
     Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Group, Layout, Len, Placed, Scale,
     Shape, Source, TEXTS, encoder_of,
 };
-use crate::checksum::Algorithm;
+use crate::checksum::{Algorithm, algorithm};
 use crate::layout::{Text, inside_one_byte};
 
 /// One entry of a packet after its key, before it's laid out.
@@ -137,7 +137,7 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
             proptest::option::weighted(0.4, target_shape()),
             proptest::option::weighted(0.25, trailer(little)),
         ),
-        vec((any::<Index>(), checksum(), any::<Index>()), 0..=2),
+        vec((any::<Index>(), algorithm(), any::<Index>()), 0..=2),
         vec(any::<bool>(), 10),
         vec(any::<bool>(), 10),
         vec(array_draft(little), 0..=2),
@@ -637,41 +637,6 @@ fn trailer(little: bool) -> BoxedStrategy<Trailer> {
         1 => bytes.prop_map(|encoder| Trailer::Argument(Box::new(encoder))),
         1 => select(TEXTS).prop_map(|text| Trailer::Target(Shape::Text(text, Len::Remaining))),
         2 => remaining_draft(little).prop_map(|draft| Trailer::Array(Box::new(draft))),
-    ]
-    .boxed()
-}
-
-/// Any checksum: a CRC of any width and parameters, a sum, an xor or the
-/// ISO checksum.
-fn checksum() -> BoxedStrategy<Algorithm> {
-    let width = select(&[8_u32, 16, 24, 32, 40, 48, 56, 64][..]);
-    let crc = (
-        width.clone(),
-        any::<(u64, u64, u64)>(),
-        any::<(bool, bool)>(),
-    )
-        .prop_map(
-            |(width, (poly, init, xor_out), (reflect_in, reflect_out))| {
-                let mask = if width == 64 {
-                    u64::MAX
-                } else {
-                    (1 << width) - 1
-                };
-                Algorithm::Crc {
-                    width,
-                    poly: poly & mask,
-                    init: init & mask,
-                    reflect_in,
-                    reflect_out,
-                    xor_out: xor_out & mask,
-                }
-            },
-        );
-    prop_oneof![
-        3 => crc,
-        1 => width.prop_map(|width| Algorithm::Sum { width }),
-        1 => Just(Algorithm::Xor),
-        1 => Just(Algorithm::Iso8473),
     ]
     .boxed()
 }

@@ -1,8 +1,10 @@
 //! Checksums as `spec/decoding.md` §5.6 defines them, computed the slow way
 //! its text describes (a CRC register shifted bit by bit, a Fletcher sum
-//! byte by byte), for the command oracle. Pinned to the CRC catalogue's
-//! check values and the ECSS test vectors, not to `mdl`.
+//! byte by byte), for the command and telemetry oracles. Pinned to the CRC
+//! catalogue's check values and the ECSS test vectors, not to `mdl`.
 
+use proptest::prelude::*;
+use proptest::sample::select;
 use serde_json::{Value, json};
 
 use crate::layout::integer_json;
@@ -102,6 +104,25 @@ impl Algorithm {
         }
     }
 
+    /// Whether a decoder accepts `stored` for bytes whose value is
+    /// `computed` (§5.6): the computed value, and for the ISO checksum also
+    /// 0x0000 when the computed value is 0xFFFF.
+    pub(crate) fn accepts(&self, stored: u64, computed: u64) -> bool {
+        stored == computed || (*self == Algorithm::Iso8473 && computed == 0xffff && stored == 0)
+    }
+
+    /// The value stored in `bytes`, read as [`stored`](Self::stored)
+    /// writes it.
+    pub(crate) fn read(&self, bytes: &[u8], little: bool) -> u64 {
+        let little = little && matches!(self, Algorithm::Crc { .. } | Algorithm::Sum { .. });
+        let fold = |value: u64, byte: &u8| (value << 8) | u64::from(*byte);
+        if little {
+            bytes.iter().rev().fold(0, fold)
+        } else {
+            bytes.iter().fold(0, fold)
+        }
+    }
+
     /// As IR JSON.
     pub(crate) fn json(&self) -> Value {
         match self {
@@ -126,6 +147,41 @@ impl Algorithm {
             Algorithm::Iso8473 => json!({ "kind": "iso8473" }),
         }
     }
+}
+
+/// Any checksum: a CRC of any width and parameters, a sum, an xor or the
+/// ISO checksum.
+pub(crate) fn algorithm() -> BoxedStrategy<Algorithm> {
+    let width = select(&[8_u32, 16, 24, 32, 40, 48, 56, 64][..]);
+    let crc = (
+        width.clone(),
+        any::<(u64, u64, u64)>(),
+        any::<(bool, bool)>(),
+    )
+        .prop_map(
+            |(width, (poly, init, xor_out), (reflect_in, reflect_out))| {
+                let mask = if width == 64 {
+                    u64::MAX
+                } else {
+                    (1 << width) - 1
+                };
+                Algorithm::Crc {
+                    width,
+                    poly: poly & mask,
+                    init: init & mask,
+                    reflect_in,
+                    reflect_out,
+                    xor_out: xor_out & mask,
+                }
+            },
+        );
+    prop_oneof![
+        3 => crc,
+        1 => width.prop_map(|width| Algorithm::Sum { width }),
+        1 => Just(Algorithm::Xor),
+        1 => Just(Algorithm::Iso8473),
+    ]
+    .boxed()
 }
 
 #[cfg(test)]

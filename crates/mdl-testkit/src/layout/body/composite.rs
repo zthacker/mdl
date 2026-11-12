@@ -413,6 +413,7 @@ fn node_name(node: &Node) -> Option<&str> {
         Node::Field(field) => Some(&field.name),
         Node::Array(array) => Some(&array.name),
         Node::Struct(node) => Some(&node.name),
+        Node::Checksum(node) => Some(&node.name),
     }
 }
 
