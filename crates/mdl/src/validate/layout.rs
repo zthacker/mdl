@@ -824,7 +824,10 @@ impl<'a> Layout<'a> {
                 return None;
             }
         };
-        let little = byte_order.or(self.byte_order) == Some(ByteOrder::Little);
+        // Only numbers have a byte order (decoding.md §2.1): a bool reads
+        // the same wherever it sits.
+        let little =
+            ty != ScalarType::Bool && byte_order.or(self.byte_order) == Some(ByteOrder::Little);
         let whole_bytes = bits % 8 == 0;
         if little && bits > 8 && !whole_bytes {
             report.error(
@@ -919,7 +922,8 @@ impl<'a> Layout<'a> {
         }
         if let Some(element) = facts.element {
             // Element k starts at the array's start plus k element sizes,
-            // for k below the count (eight steps reach every residue).
+            // for k below the count, and element 0 even for a count of 0
+            // (decoding.md §5.2; eight steps reach every residue).
             let steps = element.max_count.map_or(7, |n| n.saturating_sub(1).min(7));
             let mut element_starts = start;
             for _ in 0..steps {
