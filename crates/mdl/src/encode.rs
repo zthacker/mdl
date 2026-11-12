@@ -22,7 +22,7 @@ use crate::decode::{Record, Value};
 use crate::ir::{
     Argument, ArgumentRange, ArrayEntry, ByteLength, Command, CommandPacket, Conversion, Count,
     Digest, Element, Entry, Field, FromField, Literal, ParamType, Scalar, ScalarType, Set,
-    StructType,
+    StructType, TextEncoding,
 };
 use crate::message::MetaValue;
 use crate::route::FamilySets;
@@ -323,8 +323,9 @@ pub enum FieldProblem {
         field: Option<String>,
         problem: Box<FieldProblem>,
     },
-    #[error("the text can't be written as {encoding}")]
-    InvalidText { encoding: &'static str },
+    /// Text the field's encoding can't hold: the one it names, or UTF-8.
+    #[error("the text can't be written as {}", text::name(*.encoding))]
+    InvalidText { encoding: TextEncoding },
     #[error("the value contains its terminator byte {byte:#04x}")]
     ContainsTerminator { byte: u8 },
     #[error("the field holds the target's native id, and the request names no target")]
@@ -1399,7 +1400,7 @@ pub(crate) fn target_value(
 pub(crate) fn run_bytes(field: &Field, value: &Value<'_>) -> Result<Vec<u8>, FieldProblem> {
     let bytes = match value {
         Value::Str(text) => text::encode(text, field.text).ok_or(FieldProblem::InvalidText {
-            encoding: text::name(field.text),
+            encoding: text::encoding_of(field.text),
         })?,
         Value::Bytes(bytes) => bytes.clone(),
         _ => return Ok(Vec::new()),

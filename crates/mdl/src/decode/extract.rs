@@ -795,7 +795,7 @@ fn in_padding(problem: Problem) -> Problem {
 
 fn text(bytes: &[u8], encoding: Option<TextEncoding>) -> Result<String, Problem> {
     text::decode(bytes, encoding).ok_or(Problem::InvalidText {
-        encoding: text::name(encoding),
+        encoding: text::encoding_of(encoding),
     })
 }
 

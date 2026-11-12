@@ -4,9 +4,14 @@
 
 use crate::ir::TextEncoding;
 
+/// A field's encoding: the one it names, or UTF-8, the default.
+pub(crate) fn encoding_of(encoding: Option<TextEncoding>) -> TextEncoding {
+    encoding.unwrap_or(TextEncoding::Utf8)
+}
+
 /// The encoding's name, for messages.
-pub(crate) fn name(encoding: Option<TextEncoding>) -> &'static str {
-    match encoding.unwrap_or(TextEncoding::Utf8) {
+pub(crate) fn name(encoding: TextEncoding) -> &'static str {
+    match encoding {
         TextEncoding::Utf8 => "UTF-8",
         TextEncoding::Ascii => "ASCII",
         TextEncoding::Latin1 => "Latin-1",
@@ -17,7 +22,7 @@ pub(crate) fn name(encoding: Option<TextEncoding>) -> &'static str {
 /// Latin-1 maps each byte to the code point of the same value. `None` if
 /// the bytes aren't text in the encoding.
 pub(crate) fn decode(bytes: &[u8], encoding: Option<TextEncoding>) -> Option<String> {
-    match encoding.unwrap_or(TextEncoding::Utf8) {
+    match encoding_of(encoding) {
         TextEncoding::Utf8 => std::str::from_utf8(bytes).ok().map(str::to_string),
         TextEncoding::Ascii => bytes
             .is_ascii()
@@ -29,7 +34,7 @@ pub(crate) fn decode(bytes: &[u8], encoding: Option<TextEncoding>) -> Option<Str
 /// Text as bytes: UTF-8 as it is, ASCII only below 0x80, Latin-1 only up to
 /// U+00FF. `None` if the text can't be written in the encoding.
 pub(crate) fn encode(text: &str, encoding: Option<TextEncoding>) -> Option<Vec<u8>> {
-    match encoding.unwrap_or(TextEncoding::Utf8) {
+    match encoding_of(encoding) {
         TextEncoding::Utf8 => Some(text.as_bytes().to_vec()),
         TextEncoding::Ascii => text.is_ascii().then(|| text.as_bytes().to_vec()),
         TextEncoding::Latin1 => text

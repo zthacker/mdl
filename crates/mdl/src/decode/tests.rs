@@ -401,6 +401,18 @@ fn a_binary_packet_that_cant_be_decoded_is_rejected_with_the_entry() {
     let err = decode_hk(&not_ascii).unwrap_err();
     assert_eq!(err.code(), "invalid_text");
     assert!(err.to_string().starts_with("packet HK, label: "), "{err}");
+    // The error carries the encoding, and its message names it.
+    let ascii = Problem::InvalidText {
+        encoding: TextEncoding::Ascii,
+    };
+    assert!(
+        matches!(&err, DecodeError::Entry { problem, .. } if *problem == ascii),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string().ends_with("its bytes aren't valid ASCII"),
+        "{err}"
+    );
 
     // No packet of the set has apid 101.
     let artifacts = artifacts();
