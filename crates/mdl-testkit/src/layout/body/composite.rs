@@ -8,7 +8,10 @@ use proptest::prelude::*;
 use proptest::sample::{Index, select};
 use serde_json::{Value, json};
 
-use super::{ArraySpec, CountSpec, ElementNode, ElementSpec, ItemSpec, Node, TypeSpec, interval};
+use super::{
+    ArraySpec, CountSpec, ElementNode, ElementSpec, Entry, ItemSpec, Node, TypeSpec, WhenSpec,
+    interval, when_spec,
+};
 use crate::layout::meaning::{member_value, rank};
 use crate::layout::{
     Expected, FieldSpec, Kind, Placed, Raw, Sample, UNIT_GROUPS, number_in, sentinels,
@@ -183,15 +186,17 @@ pub(super) fn composite_source() -> BoxedStrategy<CompositeSource> {
                 Just(fields).prop_shuffle(),
                 Just(elements).prop_shuffle(),
                 vec(any::<Index>(), n),
+                proptest::option::weighted(0.25, when_spec()),
             )
                 .prop_map(
-                    |(element, extra, interval, fields, elements, records)| Draws {
+                    |(element, extra, interval, fields, elements, records, when)| Draws {
                         element,
                         extra,
                         interval,
                         fields,
                         elements,
                         records,
+                        when,
                     },
                 );
             (Just(head), members, select(holders), draws)
@@ -204,7 +209,9 @@ pub(super) fn composite_source() -> BoxedStrategy<CompositeSource> {
 /// how many elements past the members it has, and its interval; field
 /// `fields[k]` of a struct holds member `k`; an array's members are its
 /// first elements in `elements` that it has; an array of structs holds
-/// member `k` in element `records[k]`.
+/// member `k` in element `records[k]`. With `when`, its first item is
+/// there only when that holds, so the composite may have no sample
+/// (§7.4).
 #[derive(Debug, Clone)]
 struct Draws {
     element: FieldSpec,
@@ -213,6 +220,7 @@ struct Draws {
     fields: Vec<usize>,
     elements: Vec<u32>,
     records: Vec<Index>,
+    when: Option<WhenSpec>,
 }
 
 fn holding(head: Head, members: Vec<FieldSpec>, holder: Holder, draws: Draws) -> CompositeSource {
@@ -269,6 +277,17 @@ fn holding(head: Head, members: Vec<FieldSpec>, holder: Holder, draws: Draws) ->
             (vec![ItemSpec::Array(array)], members)
         }
     };
+    let items = match draws.when {
+        Some(when) => {
+            let mut items = items.into_iter();
+            let first = items.next().map(|item| ItemSpec::Conditional {
+                when,
+                item: Box::new(item),
+            });
+            first.into_iter().chain(items).collect()
+        }
+        None => items,
+    };
     CompositeSource {
         head,
         items,
@@ -316,16 +335,21 @@ enum Step {
 
 /// A composite's members, found among the laid-out entries by the names
 /// their items took.
-pub(super) fn resolve(spec: CompositeSpec, param: &str, nodes: &[Node]) -> Option<CompositeNode> {
+pub(super) fn resolve(
+    spec: CompositeSpec,
+    param: &str,
+    entries: &[Entry],
+) -> Option<CompositeNode> {
     let members = spec
         .members
         .iter()
         .enumerate()
         .map(|(k, &(item, inside))| {
             let name = format!("f{item}");
-            let node = nodes
+            let node = &entries
                 .iter()
-                .find(|node| node_name(node) == Some(name.as_str()))?;
+                .find(|entry| node_name(&entry.node) == Some(name.as_str()))?
+                .node;
             let first = Step::Name(name);
             let (steps, field) = match (node, inside) {
                 (Node::Field(field), Inside::Whole) => (vec![first], field),
@@ -392,8 +416,8 @@ fn node_name(node: &Node) -> Option<&str> {
     }
 }
 
-fn field_named<'n>(nodes: &'n [Node], name: &str) -> Option<&'n Placed> {
-    nodes.iter().find_map(|node| match node {
+fn field_named<'e>(entries: &'e [Entry], name: &str) -> Option<&'e Placed> {
+    entries.iter().find_map(|entry| match &entry.node {
         Node::Field(field) if field.name == name => Some(field),
         _ => None,
     })

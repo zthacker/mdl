@@ -13,8 +13,9 @@
 
 use std::collections::BTreeMap;
 use std::iter::once;
+use std::ops::RangeInclusive;
 
-use proptest::collection::vec;
+use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::select;
 use proptest::strategy::Union;
@@ -22,9 +23,9 @@ use serde_json::{Map, Value, json};
 
 use super::meaning::sample;
 use super::{
-    Failure, FieldSpec, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Slot, encode,
-    field_json, field_spec, fit, inside_one_byte, kind, length_field, param_json, put_bits,
-    raw_value, remaining_kind, scalar_json, spec_of,
+    Failure, FieldSpec, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Sentinel, Slot, Text,
+    encode, field_json, field_spec, fit, inside_one_byte, integer_json, kind, length_field,
+    meaning, param_json, put_bits, raw_value, remaining_kind, scalar_json, sentinels, spec_of,
 };
 use composite::{CompositeNode, CompositeSource, CompositeSpec, composite_source, resolve};
 use faults::{Place, Short, Step};
@@ -67,6 +68,70 @@ enum ItemSpec {
     Struct(TypeSpec),
     /// Spare bits: padding of this many.
     Spare(u32),
+    /// An item `gap` bits past where it would start, at an explicit
+    /// offset, where the position before it is known (§5.2).
+    Offset {
+        gap: u32,
+        item: Box<ItemSpec>,
+    },
+    /// An item present only when a condition on a selector holds (§5.4).
+    Conditional {
+        when: WhenSpec,
+        item: Box<ItemSpec>,
+    },
+    /// Two readings of the same bits ([`Alternatives`]).
+    Alternatives(Box<Alternatives>),
+}
+
+/// Two fields reading the same bits at one offset, at most one of them
+/// present: a union a selector picks a reading of. The first is there
+/// when `when` holds, the second when `other` does, never both.
+#[derive(Debug, Clone)]
+struct Alternatives {
+    when: WhenSpec,
+    other: Test,
+    first: FieldSpec,
+    second: FieldSpec,
+}
+
+/// A condition on a selector field, before it's laid out.
+#[derive(Debug, Clone)]
+struct WhenSpec {
+    selector: Selector,
+    /// A new selector field: any meaning a field of its kind can have, so
+    /// a condition compares its raw value, not what it converts to (§5.4).
+    field: FieldSpec,
+    /// Whether it tests the container's last selector, when that's of its
+    /// kind.
+    share: bool,
+    test: Test,
+}
+
+/// A selector field's kind: what conditions can compare (§5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Selector {
+    Uint(u32),
+    Int(u32),
+    Bool,
+    /// One ASCII letter.
+    Text,
+}
+
+impl Selector {
+    fn kind(self) -> Kind {
+        match self {
+            Selector::Uint(bits) => Kind::Uint(bits),
+            Selector::Int(bits) => Kind::Int(bits),
+            Selector::Bool => Kind::Bool,
+            Selector::Text => Kind::Text {
+                length: Length::Fixed {
+                    bytes: 1,
+                    terminator: None,
+                },
+                text: Text::Ascii,
+            },
+        }
+    }
 }
 
 /// What runs to the end of the packet.
@@ -87,17 +152,21 @@ struct ArraySpec {
     interval: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum CountSpec {
     Fixed(u32),
     /// From a count field of `bits`, as `raw * multiply + add` (§5.4): the
     /// container's last count field if `share` and the arrays can agree on
-    /// its values, else a new one right before the array.
+    /// its values, else a new one right before the array. The field may
+    /// mean anything a uint can (a count is its raw value), and have
+    /// sentinels.
     Field {
         bits: u32,
         multiply: u32,
         add: i64,
         share: bool,
+        meaning: Meaning,
+        invalid: Vec<Sentinel>,
         mapped: bool,
     },
     Remaining,
@@ -120,7 +189,7 @@ struct TypeSpec {
 /// composites, whose members' items mix with the rest.
 pub(super) fn body_spec() -> BoxedStrategy<BodySpec> {
     (
-        vec(item_spec(2), 1..=6),
+        vec(item_spec(2, true), 1..=6),
         proptest::option::weighted(0.3, trailer_spec()),
         vec(composite_source(), 0..=2),
     )
@@ -171,17 +240,194 @@ fn mix(
 }
 
 /// An entry of a body or struct type: struct entries and arrays of
-/// structs only while `depth` allows another level.
-fn item_spec(depth: u32) -> BoxedStrategy<ItemSpec> {
+/// structs only while `depth` allows another level; now and then under a
+/// condition. At a packet's `top` level, also at an offset (a conditional
+/// one too), or a pair of alternative readings. In a struct type an entry
+/// with an offset makes the struct end, for what follows, wherever any of
+/// its entries can (§5.2), so offsets there come only in fixed records
+/// ([`record_spec`]), whose size is exact.
+fn item_spec(depth: u32, top: bool) -> BoxedStrategy<ItemSpec> {
     let mut items = vec![
         (6, field_spec().prop_map(ItemSpec::Field).boxed()),
-        (3, array_spec(depth).prop_map(ItemSpec::Array).boxed()),
+        (4, array_spec(depth).prop_map(ItemSpec::Array).boxed()),
         (2, (1_u32..=16).prop_map(ItemSpec::Spare).boxed()),
     ];
     if depth > 0 {
         items.push((2, type_spec(depth - 1).prop_map(ItemSpec::Struct).boxed()));
     }
-    Union::new_weighted(items).boxed()
+    let plain = Union::new_weighted(items).boxed();
+    let offset = (0_u32..=24, plain.clone()).prop_map(|(gap, item)| ItemSpec::Offset {
+        gap,
+        item: Box::new(item),
+    });
+    let gap = if top {
+        proptest::option::weighted(0.4, 0_u32..=16).boxed()
+    } else {
+        Just(None).boxed()
+    };
+    let conditional = (when_spec(), plain.clone(), gap).prop_map(|(when, item, gap)| {
+        let item = match gap {
+            Some(gap) => ItemSpec::Offset {
+                gap,
+                item: Box::new(item),
+            },
+            None => item,
+        };
+        ItemSpec::Conditional {
+            when,
+            item: Box::new(item),
+        }
+    });
+    if !top {
+        return prop_oneof![10 => plain, 3 => conditional].boxed();
+    }
+    prop_oneof![
+        10 => plain,
+        2 => offset,
+        3 => conditional,
+        1 => alternatives_spec(),
+    ]
+    .boxed()
+}
+
+/// A condition on a selector of any kind, new or the container's last.
+fn when_spec() -> BoxedStrategy<WhenSpec> {
+    let selector = prop_oneof![
+        3 => (2_u32..=6).prop_map(Selector::Uint),
+        2 => (2_u32..=6).prop_map(Selector::Int),
+        1 => Just(Selector::Bool),
+        1 => Just(Selector::Text),
+    ];
+    (selector, proptest::bool::weighted(0.4))
+        .prop_flat_map(|(selector, share)| {
+            (spec_of(Just(selector.kind()).boxed()), test_for(selector)).prop_map(
+                move |(field, test)| WhenSpec {
+                    selector,
+                    field,
+                    share,
+                    test,
+                },
+            )
+        })
+        .boxed()
+}
+
+/// A test a selector of this kind can be put to: a comparison, mostly,
+/// else `not` one, or `all` or `any` of two.
+fn test_for(selector: Selector) -> BoxedStrategy<Test> {
+    let leaf = leaf_for(selector);
+    prop_oneof![
+        4 => leaf.clone(),
+        1 => leaf.clone().prop_map(|test| Test::Not(Box::new(test))),
+        1 => vec(leaf.clone(), 2).prop_map(Test::All),
+        1 => vec(leaf, 2).prop_map(Test::Any),
+    ]
+    .boxed()
+}
+
+/// A comparison a selector of this kind takes (validation's rules): any
+/// on an unsigned integer, no mask on a signed one, equality on a bool or
+/// text; or `in` with values it holds.
+fn leaf_for(selector: Selector) -> BoxedStrategy<Test> {
+    let numbers = |values: RangeInclusive<i128>, ops: &'static [Op]| {
+        prop_oneof![
+            3 => (select(ops), values.clone())
+                .prop_map(|(op, n)| Test::Compare(op, Operand::Int(n))),
+            1 => btree_set(values, 1..=3)
+                .prop_map(|set| Test::In(set.into_iter().map(Operand::Int).collect())),
+        ]
+        .boxed()
+    };
+    let all = &[
+        Op::Eq,
+        Op::Ne,
+        Op::Lt,
+        Op::Le,
+        Op::Gt,
+        Op::Ge,
+        Op::MaskAny,
+        Op::MaskAll,
+    ];
+    match selector {
+        Selector::Uint(bits) => numbers(0..=(1 << bits) - 1, all),
+        Selector::Int(bits) => numbers(-(1 << (bits - 1))..=(1 << (bits - 1)) - 1, &all[..6]),
+        Selector::Bool => numbers(0..=1, &all[..2]),
+        Selector::Text => {
+            let letter = select(&["a", "b", "c", "d"][..]).prop_map(|t| Operand::Text(t.into()));
+            prop_oneof![
+                3 => (select(&all[..2]), letter.clone())
+                    .prop_map(|(op, text)| Test::Compare(op, text)),
+                1 => vec(letter, 1..=2).prop_map(Test::In),
+            ]
+            .boxed()
+        }
+    }
+}
+
+/// Kinds of a fixed size: numbers, and text and bytes of a fixed length.
+fn fixed_kind() -> BoxedStrategy<Kind> {
+    prop_oneof![
+        3 => (1_u32..=64).prop_map(Kind::Uint),
+        3 => (1_u32..=64).prop_map(Kind::Int),
+        2 => select(&[32_u32, 64][..]).prop_map(Kind::Float),
+        1 => (1_u32..=8).prop_map(|bytes| Kind::Text {
+            length: Length::Fixed { bytes, terminator: None },
+            text: Text::Ascii,
+        }),
+        1 => (1_u32..=8).prop_map(|bytes| Kind::Bytes(Length::Fixed { bytes, terminator: None })),
+    ]
+    .boxed()
+}
+
+/// A fixed record: one to four fields of a fixed size (bools too), each
+/// after the first at an offset 0 to 16 bits past where it would start.
+/// Its size is exact, so a struct of it ends at one place within a byte.
+fn record_spec() -> BoxedStrategy<TypeSpec> {
+    let kinds = prop_oneof![4 => fixed_kind(), 1 => Just(Kind::Bool)].boxed();
+    (
+        spec_of(kinds.clone()),
+        vec((0_u32..=16, spec_of(kinds)), 0..=3),
+    )
+        .prop_map(|(first, rest)| TypeSpec {
+            items: once(ItemSpec::Field(first))
+                .chain(rest.into_iter().map(|(gap, spec)| ItemSpec::Offset {
+                    gap,
+                    item: Box::new(ItemSpec::Field(spec)),
+                }))
+                .collect(),
+        })
+        .boxed()
+}
+
+/// Two fixed-size fields, no bools, reading the same bits: under a test
+/// and its `not`, or, on an unsigned selector, equal to two values.
+fn alternatives_spec() -> BoxedStrategy<ItemSpec> {
+    let kinds = fixed_kind();
+    (
+        when_spec(),
+        spec_of(kinds.clone()),
+        spec_of(kinds),
+        any::<bool>(),
+        any::<u64>(),
+    )
+        .prop_map(|(mut when, first, second, values, picked)| {
+            let other = match when.selector {
+                Selector::Uint(bits) if values => {
+                    let a = i128::from(picked % (1 << bits));
+                    let b = (a + 1) % (1 << bits);
+                    when.test = Test::Compare(Op::Eq, Operand::Int(a));
+                    Test::Compare(Op::Eq, Operand::Int(b))
+                }
+                _ => Test::Not(Box::new(when.test.clone())),
+            };
+            ItemSpec::Alternatives(Box::new(Alternatives {
+                when,
+                other,
+                first,
+                second,
+            }))
+        })
+        .boxed()
 }
 
 /// An array of a fixed count (now and then none) or one from a field.
@@ -215,8 +461,23 @@ fn trailer_spec() -> BoxedStrategy<Trailer> {
                 interval,
             })
         });
+    // Terminated strings and bytes, often: one more element of them, cut
+    // short, finds no terminator.
+    let kinds = prop_oneof![
+        3 => (select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]), any::<u8>())
+            .prop_map(|(text, byte)| Kind::Text { length: Length::Terminated(byte), text }),
+        1 => any::<u8>().prop_map(|byte| Kind::Bytes(Length::Terminated(byte))),
+    ];
+    let terminated = spec_of(kinds.boxed()).prop_map(|spec| {
+        Trailer::Array(ArraySpec {
+            count: CountSpec::Remaining,
+            element: ElementSpec::Scalar(spec),
+            interval: None,
+        })
+    });
     prop_oneof![
         3 => array,
+        1 => terminated,
         1 => spec_of(remaining_kind()).prop_map(Trailer::Field),
     ]
     .boxed()
@@ -238,12 +499,17 @@ fn count_field() -> BoxedStrategy<CountSpec> {
             } else {
                 prop_oneof![3 => Just(0_i64), 1 => -2_i64..=2].boxed()
             };
-            add.prop_map(move |add| CountSpec::Field {
-                bits,
-                multiply,
-                add,
-                share,
-                mapped,
+            let kind = Kind::Uint(bits);
+            (add, meaning(&kind), sentinels(&kind)).prop_map(move |(add, meaning, invalid)| {
+                CountSpec::Field {
+                    bits,
+                    multiply,
+                    add,
+                    share,
+                    meaning,
+                    invalid,
+                    mapped,
+                }
             })
         })
         .boxed()
@@ -271,13 +537,14 @@ fn element_spec(depth: u32, varying: bool) -> BoxedStrategy<ElementSpec> {
     .boxed()
 }
 
-/// A struct type: a field, then up to three entries more.
+/// A struct type: a field, then up to three entries more; or a fixed
+/// record.
 fn type_spec(depth: u32) -> BoxedStrategy<TypeSpec> {
-    (field_spec(), vec(item_spec(depth), 0..=3))
-        .prop_map(|(first, rest)| TypeSpec {
+    let general =
+        (field_spec(), vec(item_spec(depth, false), 0..=3)).prop_map(|(first, rest)| TypeSpec {
             items: once(ItemSpec::Field(first)).chain(rest).collect(),
-        })
-        .boxed()
+        });
+    prop_oneof![4 => general, 1 => record_spec()].boxed()
 }
 
 /// An interval between samples, sometimes, for mapped scalar elements.
@@ -303,13 +570,170 @@ fn interval() -> BoxedStrategy<f64> {
 
 // ---- Laid out -------------------------------------------------------------
 
-/// A body's or struct type's entry, laid out.
+/// A body's or struct type's entry, laid out: where it is when it says,
+/// when it's present, and what it reads.
+#[derive(Debug, Clone)]
+pub(super) struct Entry {
+    /// Its `offset_bits`, from its container's start: a packet's, for a
+    /// body's entries.
+    offset: Option<u64>,
+    /// Present only when this holds (§5.4).
+    when: Option<Condition>,
+    node: Node,
+}
+
+impl Entry {
+    /// Whether its size, or whether it's there, varies between messages.
+    fn varies(&self) -> bool {
+        self.when.is_some()
+            || node_bits(&self.node, Bound::Least) != node_bits(&self.node, Bound::Most)
+    }
+}
+
+/// What an entry reads.
 #[derive(Debug, Clone)]
 pub(super) enum Node {
     Padding(u64),
     Field(Placed),
     Array(ArrayNode),
     Struct(StructNode),
+}
+
+/// A condition (§5.4) on a selector field of the entry's container: every
+/// comparison in it is on that field's raw value.
+#[derive(Debug, Clone)]
+pub(super) struct Condition {
+    field: String,
+    test: Test,
+}
+
+impl Condition {
+    /// Whether it holds for its container's values.
+    fn holds(&self, record: &[(String, Raw)]) -> bool {
+        record
+            .iter()
+            .find(|(name, _)| *name == self.field)
+            .is_some_and(|(_, raw)| self.test.holds(raw))
+    }
+}
+
+/// What a condition asks of its field's raw value.
+#[derive(Debug, Clone)]
+enum Test {
+    Compare(Op, Operand),
+    In(Vec<Operand>),
+    Not(Box<Test>),
+    All(Vec<Test>),
+    Any(Vec<Test>),
+}
+
+impl Test {
+    fn holds(&self, raw: &Raw) -> bool {
+        match self {
+            Test::Compare(op, operand) => compare(raw, *op, operand),
+            Test::In(operands) => operands.iter().any(|operand| compare(raw, Op::Eq, operand)),
+            Test::Not(test) => !test.holds(raw),
+            Test::All(tests) => tests.iter().all(|test| test.holds(raw)),
+            Test::Any(tests) => tests.iter().any(|test| test.holds(raw)),
+        }
+    }
+
+    /// Every operand it compares with, for a selector's values.
+    fn operands(&self, out: &mut Vec<(Op, Operand)>) {
+        match self {
+            Test::Compare(op, operand) => out.push((*op, operand.clone())),
+            Test::In(operands) => out.extend(operands.iter().map(|o| (Op::Eq, o.clone()))),
+            Test::Not(test) => test.operands(out),
+            Test::All(tests) | Test::Any(tests) => {
+                for test in tests {
+                    test.operands(out);
+                }
+            }
+        }
+    }
+}
+
+/// A comparison (§5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    /// `field & value != 0`
+    MaskAny,
+    /// `field & value == value`
+    MaskAll,
+}
+
+impl Op {
+    /// Its name, as the IR spells it.
+    fn name(self) -> &'static str {
+        match self {
+            Op::Eq => "eq",
+            Op::Ne => "ne",
+            Op::Lt => "lt",
+            Op::Le => "le",
+            Op::Gt => "gt",
+            Op::Ge => "ge",
+            Op::MaskAny => "mask_any",
+            Op::MaskAll => "mask_all",
+        }
+    }
+}
+
+/// What a condition compares a field with: an integer (a bool is 0 or 1),
+/// or text, exactly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Operand {
+    Int(i128),
+    Text(String),
+}
+
+/// A comparison of a raw value with an operand (§5.4): by value, a bool as
+/// 0 or 1; text only for equality.
+fn compare(raw: &Raw, op: Op, operand: &Operand) -> bool {
+    let value = match (raw, operand) {
+        (Raw::Str(text), Operand::Text(expected)) => {
+            return match op {
+                Op::Eq => text == expected,
+                Op::Ne => text != expected,
+                _ => false,
+            };
+        }
+        (Raw::Uint(n), Operand::Int(_)) => i128::from(*n),
+        (Raw::Int(n), Operand::Int(_)) => i128::from(*n),
+        (Raw::Bool(b), Operand::Int(_)) => i128::from(*b),
+        _ => return false,
+    };
+    let Operand::Int(expected) = *operand else {
+        return false;
+    };
+    match op {
+        Op::Eq => value == expected,
+        Op::Ne => value != expected,
+        Op::Lt => value < expected,
+        Op::Le => value <= expected,
+        Op::Gt => value > expected,
+        Op::Ge => value >= expected,
+        Op::MaskAny => value & expected != 0,
+        Op::MaskAll => value & expected == expected,
+    }
+}
+
+/// The entries of a container that its values say are present, each with
+/// its value: padding and absent entries left out.
+fn present<'e>(
+    entries: &'e [Entry],
+    record: &'e [(String, Raw)],
+) -> impl Iterator<Item = (&'e Entry, &'e (String, Raw))> {
+    entries
+        .iter()
+        .filter(|entry| !matches!(entry.node, Node::Padding(_)))
+        .filter(move |entry| entry.when.as_ref().is_none_or(|when| when.holds(record)))
+        .zip(record)
 }
 
 #[derive(Debug, Clone)]
@@ -341,7 +765,7 @@ enum ElementNode {
 #[derive(Debug, Clone)]
 pub(super) struct TypeNode {
     name: String,
-    entries: Vec<Node>,
+    entries: Vec<Entry>,
 }
 
 #[derive(Debug, Clone)]
@@ -355,7 +779,7 @@ pub(super) struct StructNode {
 pub(super) struct Body {
     /// Where it starts, in every message.
     pub(super) start: u64,
-    pub(super) nodes: Vec<Node>,
+    pub(super) entries: Vec<Entry>,
     /// Its struct types, for the set.
     types: Vec<TypeNode>,
     composites: Vec<CompositeNode>,
@@ -393,21 +817,23 @@ pub(super) fn lay_out(
         placer.item(format!("f{position}"), item, &mut names);
     }
     match spec.trailer {
-        Some(Trailer::Array(trailer)) => placer.array("rest".into(), trailer, &mut names),
-        Some(Trailer::Field(trailer)) => placer.field("rest".into(), trailer),
+        Some(Trailer::Array(trailer)) => placer.array("rest".into(), trailer, None, &mut names),
+        Some(Trailer::Field(trailer)) => placer.field("rest".into(), trailer, None),
         None => {}
     }
-    let nodes = placer.nodes;
+    let entries = placer.entries;
     let composites = spec
         .composites
         .into_iter()
         .enumerate()
-        .filter_map(|(index, composite)| resolve(composite, &format!("{params}.c{index}"), &nodes))
+        .filter_map(|(index, composite)| {
+            resolve(composite, &format!("{params}.c{index}"), &entries)
+        })
         .collect();
-    let most_bits = start + most_bits(&nodes);
+    let most_bits = extent(&entries, 0, start, Bound::Most);
     Body {
         start,
-        nodes,
+        entries,
         types: names.types,
         composites,
         listed: spec.listed,
@@ -415,17 +841,23 @@ pub(super) fn lay_out(
     }
 }
 
-/// Places entries one after another (§5.2). `at` is where the next entry
-/// starts when everything whose size varies takes its fewest bits (every
-/// count that varies at 0, every length at its least); what varies is
-/// whole bytes, so `at` modulo 8 is exact either way.
+/// Places entries one after another (§5.2), or at offsets. `at` is where
+/// the next entry starts, exactly while `exact` holds: until something
+/// whose size varies, or that may be absent. After that only `at` modulo 8
+/// is known, which is exact anyway, since what varies is whole bytes.
 struct Placer {
     little: bool,
     at: u64,
+    /// Whether `at` is where the next entry starts in every message.
+    exact: bool,
+    /// Whether the next entry is placed at an explicit offset: `at`.
+    pending_offset: bool,
     /// What this container's params' names start with.
     params: String,
-    nodes: Vec<Node>,
+    entries: Vec<Entry>,
     counts: Vec<CountField>,
+    /// The container's selector fields, and their kinds.
+    selectors: Vec<(String, Selector)>,
 }
 
 /// A container's count field, and the scales, `(multiply, add)`, of the
@@ -441,37 +873,151 @@ impl Placer {
         Placer {
             little,
             at,
+            exact: true,
+            pending_offset: false,
             params,
-            nodes: Vec::new(),
+            entries: Vec::new(),
             counts: Vec::new(),
+            selectors: Vec::new(),
         }
+    }
+
+    /// Adds an entry at `at`, which it doesn't move: at an explicit offset
+    /// if one is pending, and under `when`. A pending offset goes on the
+    /// first entry an item adds, which may be its selector, count or
+    /// length field or padding: the item's entries move together. A
+    /// conditional entry is whole bytes, so what follows starts at one
+    /// place within a byte whether it's there or not; one that can't be is
+    /// always there.
+    fn push(&mut self, node: Node, when: Option<Condition>) {
+        let whole = node_bits(&node, Bound::Least).is_multiple_of(8)
+            && node_bits(&node, Bound::Most).is_multiple_of(8);
+        let entry = Entry {
+            offset: std::mem::take(&mut self.pending_offset).then_some(self.at),
+            when: when.filter(|_| whole),
+            node,
+        };
+        if entry.varies() {
+            self.exact = false;
+        }
+        self.entries.push(entry);
     }
 
     fn pad_to_byte(&mut self) {
         let skip = (8 - self.at % 8) % 8;
         if skip > 0 {
-            self.nodes.push(Node::Padding(skip));
+            self.push(Node::Padding(skip), None);
             self.at += skip;
         }
     }
 
     fn item(&mut self, name: String, item: ItemSpec, names: &mut Names) {
+        self.place(name, item, None, names);
+    }
+
+    /// Places an item, under `when` if given.
+    fn place(&mut self, name: String, item: ItemSpec, when: Option<Condition>, names: &mut Names) {
         match item {
-            ItemSpec::Field(spec) => self.field(name, spec),
-            ItemSpec::Array(spec) => self.array(name, spec, names),
+            ItemSpec::Field(spec) => self.field(name, spec, when),
+            ItemSpec::Array(spec) => self.array(name, spec, when, names),
             ItemSpec::Struct(spec) => {
-                let ty = struct_type(self.little, spec, false, false, names);
+                let whole = when.is_some();
+                let ty = struct_type(self.little, spec, false, false, whole, names);
                 if needs_byte(&ty.entries) {
                     self.pad_to_byte();
                 }
-                self.at += least_bits(&ty.entries);
-                self.nodes.push(Node::Struct(StructNode { name, ty }));
+                let bits = least_bits(&ty.entries);
+                self.push(Node::Struct(StructNode { name, ty }), when);
+                self.at += bits;
             }
             ItemSpec::Spare(bits) => {
-                self.nodes.push(Node::Padding(u64::from(bits)));
+                let bits = if when.is_some() {
+                    bits.div_ceil(8) * 8
+                } else {
+                    bits
+                };
+                self.push(Node::Padding(u64::from(bits)), when);
                 self.at += u64::from(bits);
             }
+            // Only where the position before it is known: an offset past
+            // what may vary would have to clear its largest size.
+            ItemSpec::Offset { gap, item } => {
+                if self.exact {
+                    self.at += u64::from(gap);
+                    self.pending_offset = true;
+                }
+                self.place(name, *item, when, names);
+                self.pending_offset = false;
+            }
+            ItemSpec::Conditional { when: spec, item } => {
+                let field = self.selector(&name, spec.selector, spec.field, spec.share);
+                let condition = Condition {
+                    field,
+                    test: spec.test,
+                };
+                self.place(name, *item, Some(condition), names);
+            }
+            ItemSpec::Alternatives(pair) => {
+                let Alternatives {
+                    when,
+                    other,
+                    first,
+                    second,
+                } = *pair;
+                self.alternatives(&name, when, other, first, second);
+            }
         }
+    }
+
+    /// The selector a condition tests: the container's last, if `share`
+    /// and it's of this kind; else a new field, named after the item,
+    /// right before it.
+    fn selector(&mut self, item: &str, selector: Selector, spec: FieldSpec, share: bool) -> String {
+        if share
+            && let Some((name, kind)) = self.selectors.last()
+            && *kind == selector
+        {
+            return name.clone();
+        }
+        let name = format!("{item}_sel");
+        self.field(name.clone(), spec, None);
+        self.selectors.push((name.clone(), selector));
+        name
+    }
+
+    /// Two fields at one offset on a byte, the first present under the
+    /// test, the second under `other`, and what follows at an offset past
+    /// both: the second, absent, would end where it started. Where the
+    /// position isn't known, the first alone, under its test.
+    fn alternatives(
+        &mut self,
+        name: &str,
+        spec: WhenSpec,
+        other: Test,
+        first: FieldSpec,
+        second: FieldSpec,
+    ) {
+        let field = self.selector(name, spec.selector, spec.field, spec.share);
+        let first_when = Condition {
+            field: field.clone(),
+            test: spec.test,
+        };
+        if !self.exact {
+            self.field(format!("{name}_a"), first, Some(first_when));
+            return;
+        }
+        self.pad_to_byte();
+        let start = self.at;
+        self.pending_offset = true;
+        self.field(format!("{name}_a"), first, Some(first_when));
+        let first_end = self.at;
+        self.at = start;
+        self.pending_offset = true;
+        let second_when = Condition { field, test: other };
+        self.field(format!("{name}_b"), second, Some(second_when));
+        self.at = self.at.max(first_end);
+        self.pending_offset = true;
+        self.exact = true;
     }
 
     /// A field: strings and bytes start on a byte, after the field that
@@ -479,7 +1025,7 @@ impl Placer {
     /// bytes are whole bytes on byte boundaries (widened if need be); a
     /// byte order is spelled only where it differs from the family's and
     /// matters (§2.1, §2.2, §5.4).
-    fn field(&mut self, name: String, spec: FieldSpec) {
+    fn field(&mut self, name: String, spec: FieldSpec, when: Option<Condition>) {
         if let Some(Length::Field { bits, .. }) = spec.kind.length() {
             let length = FieldSpec {
                 kind: Kind::Uint(bits),
@@ -488,7 +1034,7 @@ impl Placer {
                 flip: false,
                 mapped: false,
             };
-            self.field(length_field(&name), length);
+            self.field(length_field(&name), length, None);
         }
         let param = spec.mapped.then(|| format!("{}.{name}", self.params));
         let FieldSpec {
@@ -498,6 +1044,10 @@ impl Placer {
             flip,
             ..
         } = spec;
+        // A conditional number is whole bytes (see `push`).
+        if when.is_some() && kind.ordered() && kind.bits() % 8 != 0 {
+            (kind, meaning) = widened(&kind, meaning);
+        }
         let mut little = self.little;
         let mut explicit = false;
         if flip && kind.ordered() {
@@ -517,21 +1067,25 @@ impl Placer {
             little = self.little;
         }
         let bits = kind.bits();
-        self.nodes.push(Node::Field(Placed {
-            name,
-            param,
-            kind,
-            meaning,
-            invalid,
-            little,
-            explicit,
-        }));
+        self.push(
+            Node::Field(Placed {
+                name,
+                param,
+                kind,
+                meaning,
+                invalid,
+                little,
+                explicit,
+            }),
+            when,
+        );
         self.at += u64::from(bits);
     }
 
     /// An array (§5.2), after its count field. A remaining count starts it
-    /// on a byte, since it reads to the packet's end.
-    fn array(&mut self, name: String, spec: ArraySpec, names: &mut Names) {
+    /// on a byte, since it reads to the packet's end. A conditional one has
+    /// whole-byte elements, as one whose count varies does.
+    fn array(&mut self, name: String, spec: ArraySpec, when: Option<Condition>, names: &mut Names) {
         let count = match spec.count {
             CountSpec::Fixed(count) => Counted::Fixed(count),
             CountSpec::Remaining => {
@@ -543,9 +1097,22 @@ impl Placer {
                 multiply,
                 add,
                 share,
+                meaning,
+                invalid,
                 mapped,
             } => Counted::Field {
-                field: self.count_field(&name, bits, (multiply, add), share, mapped),
+                field: self.count_field(
+                    &name,
+                    (multiply, add),
+                    share,
+                    FieldSpec {
+                        kind: Kind::Uint(bits),
+                        meaning,
+                        invalid,
+                        flip: false,
+                        mapped,
+                    },
+                ),
                 multiply,
                 add,
             },
@@ -554,25 +1121,30 @@ impl Placer {
             Counted::Fixed(count) => Some(count),
             Counted::Field { .. } | Counted::Remaining => None,
         };
+        let shaped = fixed.filter(|_| when.is_none());
         let element = match spec.element {
-            ElementSpec::Scalar(spec) => ElementNode::Scalar(self.element(&name, spec, fixed)),
+            ElementSpec::Scalar(spec) => ElementNode::Scalar(self.element(&name, spec, shaped)),
             ElementSpec::Struct(spec) => {
-                let ty = struct_type(self.little, spec, true, fixed.is_none(), names);
+                let ty = struct_type(self.little, spec, true, shaped.is_none(), false, names);
                 if needs_byte(&ty.entries) {
                     self.pad_to_byte();
                 }
                 ElementNode::Struct(ty)
             }
         };
-        if let Some(count) = fixed {
-            self.at += u64::from(count) * element_bits(&element, Bound::Least);
-        }
-        self.nodes.push(Node::Array(ArrayNode {
-            name,
-            count,
-            element,
-            interval: spec.interval,
-        }));
+        let bits = fixed.map_or(0, |count| {
+            u64::from(count) * element_bits(&element, Bound::Least)
+        });
+        self.push(
+            Node::Array(ArrayNode {
+                name,
+                count,
+                element,
+                interval: spec.interval,
+            }),
+            when,
+        );
+        self.at += bits;
     }
 
     /// A scalar element, its array starting at the next position. Its byte
@@ -633,10 +1205,9 @@ impl Placer {
     fn count_field(
         &mut self,
         array: &str,
-        bits: u32,
         scale: (u32, i64),
         share: bool,
-        mapped: bool,
+        spec: FieldSpec,
     ) -> String {
         if share && let Some(last) = self.counts.last_mut() {
             let mut scales = last.scales.clone();
@@ -647,16 +1218,10 @@ impl Placer {
             }
         }
         let name = format!("{array}_n");
-        let spec = FieldSpec {
-            kind: Kind::Uint(bits),
-            meaning: Meaning::U64,
-            invalid: Vec::new(),
-            flip: false,
-            mapped,
-        };
-        self.field(name.clone(), spec);
+        let bits = spec.kind.bits();
+        self.field(name.clone(), spec, None);
         // Placed in a little-endian family, it may have been widened.
-        let bits = match self.nodes.last() {
+        let bits = match self.entries.last().map(|entry| &entry.node) {
             Some(Node::Field(field)) => field.kind.bits(),
             _ => bits,
         };
@@ -694,12 +1259,14 @@ fn narrow_fits(start: u64, bits: u32, count: u32) -> bool {
 /// element it's padded to whole bytes when it needs a byte start (each
 /// element does then), when the count varies, or when its own size does:
 /// §5.2 counts every residue after elements whose size varies, unless
-/// they're whole bytes.
+/// they're whole bytes. A conditional struct is padded to whole bytes too
+/// (`whole`).
 fn struct_type(
     little: bool,
     spec: TypeSpec,
     element: bool,
     varying: bool,
+    whole: bool,
     names: &mut Names,
 ) -> TypeNode {
     let index = names.types.len();
@@ -713,13 +1280,13 @@ fn struct_type(
     for (position, item) in spec.items.into_iter().enumerate() {
         inner.item(format!("f{position}"), item, names);
     }
-    let sized = least_bits(&inner.nodes) == most_bits(&inner.nodes);
-    if element && (varying || !sized || needs_byte(&inner.nodes)) {
+    let sized = least_bits(&inner.entries) == most_bits(&inner.entries);
+    if whole || (element && (varying || !sized || needs_byte(&inner.entries))) {
         inner.pad_to_byte();
     }
     let ty = TypeNode {
         name,
-        entries: inner.nodes,
+        entries: inner.entries,
     };
     names.types[index] = ty.clone();
     ty
@@ -729,13 +1296,13 @@ fn struct_type(
 /// directly, in an array or in a nested struct, a string, bytes, a
 /// little-endian value, or a value of at most 8 bits that names its own
 /// byte order. A bool has no byte order (§2.1), so it doesn't count.
-fn needs_byte(nodes: &[Node]) -> bool {
+fn needs_byte(entries: &[Entry]) -> bool {
     let scalar = |field: &Placed| {
         field.kind.on_a_byte()
             || (field.kind.ordered()
                 && (field.little || (field.explicit && field.kind.bits() <= 8)))
     };
-    nodes.iter().any(|node| match node {
+    entries.iter().any(|entry| match &entry.node {
         Node::Padding(_) => false,
         Node::Field(field) => scalar(field),
         Node::Array(array) => match &array.element {
@@ -749,47 +1316,65 @@ fn needs_byte(nodes: &[Node]) -> bool {
 /// Which end of a size that varies.
 #[derive(Debug, Clone, Copy)]
 enum Bound {
-    /// Every count that varies at 0, every length at its least.
+    /// Every count that varies at 0, every length at its least, every
+    /// conditional entry absent.
     Least,
     /// Every count that varies at [`MOST_ELEMENTS`], every length at the
-    /// most a message gives it.
+    /// most a message gives it, every conditional entry present.
     Most,
 }
 
-/// The fewest bits entries take.
-fn least_bits(nodes: &[Node]) -> u64 {
-    bits_of(nodes, Bound::Least)
+/// The fewest bits a struct type's entries take.
+fn least_bits(entries: &[Entry]) -> u64 {
+    extent(entries, 0, 0, Bound::Least)
 }
 
-/// The most bits entries take in a message.
-fn most_bits(nodes: &[Node]) -> u64 {
-    bits_of(nodes, Bound::Most)
+/// The most bits a struct type's entries take in a message.
+fn most_bits(entries: &[Entry]) -> u64 {
+    extent(entries, 0, 0, Bound::Most)
 }
 
-fn bits_of(nodes: &[Node], bound: Bound) -> u64 {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Padding(bits) => *bits,
-            Node::Field(field) => scalar_bits(field, bound),
-            Node::Array(array) => {
-                let count = match (&array.count, bound) {
-                    (Counted::Fixed(count), _) => *count,
-                    (Counted::Field { .. } | Counted::Remaining, Bound::Least) => 0,
-                    (Counted::Field { .. } | Counted::Remaining, Bound::Most) => MOST_ELEMENTS,
-                };
-                u64::from(count) * element_bits(&array.element, bound)
-            }
-            Node::Struct(node) => bits_of(&node.ty.entries, bound),
-        })
-        .sum()
+/// The furthest end of a container's entries at `bound`, those without an
+/// offset placed one after another from `start`, those with one at it
+/// past `origin`, the container's start (§5.2). An absent entry ends
+/// where it would have started.
+fn extent(entries: &[Entry], origin: u64, start: u64, bound: Bound) -> u64 {
+    let mut at = start;
+    let mut furthest = start;
+    for entry in entries {
+        if let Some(offset) = entry.offset {
+            at = origin + offset;
+        }
+        if entry.when.is_none() || matches!(bound, Bound::Most) {
+            at += node_bits(&entry.node, bound);
+        }
+        furthest = furthest.max(at);
+    }
+    furthest
+}
+
+/// What a node reads, at `bound` where it varies.
+fn node_bits(node: &Node, bound: Bound) -> u64 {
+    match node {
+        Node::Padding(bits) => *bits,
+        Node::Field(field) => scalar_bits(field, bound),
+        Node::Array(array) => {
+            let count = match (&array.count, bound) {
+                (Counted::Fixed(count), _) => *count,
+                (Counted::Field { .. } | Counted::Remaining, Bound::Least) => 0,
+                (Counted::Field { .. } | Counted::Remaining, Bound::Most) => MOST_ELEMENTS,
+            };
+            u64::from(count) * element_bits(&array.element, bound)
+        }
+        Node::Struct(node) => extent(&node.ty.entries, 0, 0, bound),
+    }
 }
 
 /// An element's size, at `bound` where it varies.
 fn element_bits(element: &ElementNode, bound: Bound) -> u64 {
     match element {
         ElementNode::Scalar(element) => scalar_bits(element, bound),
-        ElementNode::Struct(ty) => bits_of(&ty.entries, bound),
+        ElementNode::Struct(ty) => extent(&ty.entries, 0, 0, bound),
     }
 }
 
@@ -805,21 +1390,30 @@ fn exact_bits(element: &ElementNode) -> Option<u64> {
     }
 }
 
-fn exact_entries(nodes: &[Node]) -> Option<u64> {
-    nodes
-        .iter()
-        .map(|node| match node {
-            Node::Padding(bits) => Some(*bits),
-            Node::Field(field) => exact_scalar(field),
+/// A struct type's exact size: the furthest end of its entries, when every
+/// one has an exact size, none of them conditional.
+fn exact_entries(entries: &[Entry]) -> Option<u64> {
+    let mut at = 0;
+    let mut furthest = 0;
+    for entry in entries {
+        if entry.when.is_some() {
+            return None;
+        }
+        if let Some(offset) = entry.offset {
+            at = offset;
+        }
+        at += match &entry.node {
+            Node::Padding(bits) => *bits,
+            Node::Field(field) => exact_scalar(field)?,
             Node::Array(array) => match array.count {
-                Counted::Fixed(count) => {
-                    exact_bits(&array.element).map(|bits| bits * u64::from(count))
-                }
-                Counted::Field { .. } | Counted::Remaining => None,
+                Counted::Fixed(count) => exact_bits(&array.element)? * u64::from(count),
+                Counted::Field { .. } | Counted::Remaining => return None,
             },
-            Node::Struct(node) => exact_entries(&node.ty.entries),
-        })
-        .sum()
+            Node::Struct(node) => exact_entries(&node.ty.entries)?,
+        };
+        furthest = furthest.max(at);
+    }
+    Some(furthest)
 }
 
 fn exact_scalar(field: &Placed) -> Option<u64> {
@@ -862,14 +1456,14 @@ fn raw_range(bits: u32, scales: &[(u32, i64)]) -> Option<(u64, u64)> {
 
 impl Body {
     /// Its entries, padding included.
-    pub(super) fn entries(&self) -> Vec<Value> {
-        self.nodes.iter().map(node_json).collect()
+    pub(super) fn entries_json(&self) -> Vec<Value> {
+        self.entries.iter().map(entry_json).collect()
     }
 
     /// Every param it maps, as the catalog defines them.
     pub(super) fn params(&self) -> Vec<(String, Value)> {
         let mut params = Vec::new();
-        params_of(&self.nodes, &mut params);
+        params_of(&self.entries, &mut params);
         params.extend(self.composites.iter().map(CompositeNode::param_json));
         params
     }
@@ -879,7 +1473,7 @@ impl Body {
         self.types
             .iter()
             .map(|ty| {
-                let entries: Vec<Value> = ty.entries.iter().map(node_json).collect();
+                let entries: Vec<Value> = ty.entries.iter().map(entry_json).collect();
                 (ty.name.clone(), json!({ "entries": entries }))
             })
             .collect()
@@ -892,6 +1486,44 @@ impl Body {
             .filter_map(|&index| self.composites.get(index))
             .map(CompositeNode::json)
             .collect()
+    }
+}
+
+fn entry_json(entry: &Entry) -> Value {
+    let mut json = node_json(&entry.node);
+    if let Some(offset) = entry.offset {
+        json["offset_bits"] = json!(offset);
+    }
+    if let Some(when) = &entry.when {
+        json["when"] = condition_json(&when.field, &when.test);
+    }
+    json
+}
+
+/// A condition as IR JSON, every comparison in it on `field`.
+fn condition_json(field: &str, test: &Test) -> Value {
+    let operand = |operand: &Operand| match operand {
+        Operand::Int(n) => integer_json(*n),
+        Operand::Text(text) => json!(text),
+    };
+    match test {
+        Test::Compare(op, value) => {
+            json!({ "kind": "compare", "field": field, "op": op.name(), "value": operand(value) })
+        }
+        Test::In(values) => {
+            let values: Vec<Value> = values.iter().map(operand).collect();
+            json!({ "kind": "in", "field": field, "values": values })
+        }
+        Test::Not(test) => json!({ "kind": "not", "condition": condition_json(field, test) }),
+        Test::All(tests) | Test::Any(tests) => {
+            let kind = if matches!(test, Test::All(_)) {
+                "all"
+            } else {
+                "any"
+            };
+            let conditions: Vec<Value> = tests.iter().map(|t| condition_json(field, t)).collect();
+            json!({ "kind": kind, "conditions": conditions })
+        }
     }
 }
 
@@ -947,15 +1579,15 @@ fn node_json(node: &Node) -> Value {
     }
 }
 
-fn params_of(nodes: &[Node], params: &mut Vec<(String, Value)>) {
+fn params_of(entries: &[Entry], params: &mut Vec<(String, Value)>) {
     let mut add = |field: &Placed| {
         if let Some(param) = &field.param {
             params.push((param.clone(), param_json(&field.meaning)));
         }
     };
     let mut inner = Vec::new();
-    for node in nodes {
-        match node {
+    for entry in entries {
+        match &entry.node {
             Node::Padding(_) => {}
             Node::Field(field) => add(field),
             Node::Array(array) => match &array.element {
@@ -972,28 +1604,40 @@ fn params_of(nodes: &[Node], params: &mut Vec<(String, Value)>) {
 
 // ---- Values ---------------------------------------------------------------
 
-/// Values for a container's entries: each one's raw value, by name, in
-/// order, its count fields holding counts its arrays can have, and its
-/// length fields the lengths of their values.
-pub(super) fn values(nodes: &[Node]) -> BoxedStrategy<Vec<(String, Raw)>> {
-    let counts = count_ranges(nodes);
+/// Values for a container's present entries: each one's raw value, by
+/// name, in order, its count fields holding counts its arrays can have,
+/// and its length fields the lengths of their values. An entry whose
+/// condition its selector's value fails is absent.
+pub(super) fn values(entries: &[Entry]) -> BoxedStrategy<Vec<(String, Raw)>> {
+    let counts = count_ranges(entries);
+    let selected = selector_values(entries);
     let raws: Vec<BoxedStrategy<u64>> = counts
         .iter()
         .map(|(_, (low, high))| (*low..=*high).boxed())
         .collect();
-    let nodes = nodes.to_vec();
+    let entries = entries.to_vec();
     raws.prop_flat_map(move |raws| {
         let held: BTreeMap<String, u64> = counts
             .iter()
             .map(|(name, _)| name.clone())
             .zip(raws)
             .collect();
-        let entries: Vec<BoxedStrategy<Option<(String, Raw)>>> =
-            nodes.iter().map(|node| entry_value(node, &held)).collect();
-        let nodes = nodes.clone();
-        entries.prop_map(move |entries| {
-            let mut record: Vec<(String, Raw)> = entries.into_iter().flatten().collect();
-            measure(&nodes, &mut record);
+        let drawn: Vec<BoxedStrategy<Option<(String, Raw)>>> = entries
+            .iter()
+            .map(|entry| entry_value(&entry.node, &held, &selected))
+            .collect();
+        let entries = entries.clone();
+        drawn.prop_map(move |drawn| {
+            let mut record: Vec<(String, Raw)> = Vec::new();
+            for (entry, value) in entries.iter().zip(drawn) {
+                let Some(value) = value else {
+                    continue;
+                };
+                if entry.when.as_ref().is_none_or(|when| when.holds(&record)) {
+                    record.push(value);
+                }
+            }
+            measure(&entries, &mut record);
             record
         })
     })
@@ -1002,9 +1646,9 @@ pub(super) fn values(nodes: &[Node]) -> BoxedStrategy<Vec<(String, Raw)>> {
 
 /// Gives each length field of a container the raw value its entry's value
 /// takes: `(bytes - add) / multiply` (§5.4).
-fn measure(nodes: &[Node], record: &mut [(String, Raw)]) {
-    for node in nodes {
-        let Node::Field(field) = node else {
+fn measure(entries: &[Entry], record: &mut [(String, Raw)]) {
+    for entry in entries {
+        let Node::Field(field) = &entry.node else {
             continue;
         };
         let Some(length @ Length::Field { .. }) = field.kind.length() else {
@@ -1033,10 +1677,73 @@ fn value_bytes(kind: &Kind, raw: &Raw) -> Option<usize> {
     }
 }
 
+/// The values each selector field of a container leans on: what its
+/// conditions compare with and the values beside it (for a mask, the mask,
+/// none of it, all but its lowest bit, and every other bit), so each
+/// condition holds about half the time.
+fn selector_values(entries: &[Entry]) -> BTreeMap<String, Vec<Raw>> {
+    let mut operands: BTreeMap<&str, Vec<(Op, Operand)>> = BTreeMap::new();
+    for entry in entries {
+        if let Some(when) = &entry.when {
+            when.test
+                .operands(operands.entry(when.field.as_str()).or_default());
+        }
+    }
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let Node::Field(field) = &entry.node else {
+                return None;
+            };
+            let compared = operands.get(field.name.as_str())?;
+            let mut raws = Vec::new();
+            for (op, operand) in compared {
+                match operand {
+                    Operand::Text(text) => {
+                        raws.push(Raw::Str(text.clone()));
+                        raws.push(Raw::Str("z".to_string()));
+                    }
+                    Operand::Int(n) => {
+                        let largest = field.kind.integers().map_or(0, |range| *range.end());
+                        let near = match op {
+                            Op::MaskAny | Op::MaskAll => [*n, 0, n & (n - 1), largest & !n],
+                            _ => [n - 1, *n, n + 1, *n],
+                        };
+                        raws.extend(
+                            near.into_iter()
+                                .filter_map(|value| int_raw(&field.kind, value)),
+                        );
+                    }
+                }
+            }
+            (!raws.is_empty()).then(|| (field.name.clone(), raws))
+        })
+        .collect()
+}
+
+/// An integer as a raw value of a field of this kind, if it holds it: a
+/// bool holds 0 and 1.
+fn int_raw(kind: &Kind, value: i128) -> Option<Raw> {
+    match kind {
+        Kind::Bool => match value {
+            0 => Some(Raw::Bool(false)),
+            1 => Some(Raw::Bool(true)),
+            _ => None,
+        },
+        Kind::Uint(_) if kind.integers()?.contains(&value) => {
+            u64::try_from(value).ok().map(Raw::Uint)
+        }
+        Kind::Int(_) if kind.integers()?.contains(&value) => {
+            i64::try_from(value).ok().map(Raw::Int)
+        }
+        _ => None,
+    }
+}
+
 /// Each count field of a container, and the raw values it can hold.
-fn count_ranges(nodes: &[Node]) -> Vec<(String, (u64, u64))> {
+fn count_ranges(entries: &[Entry]) -> Vec<(String, (u64, u64))> {
     let mut scales: BTreeMap<&str, Vec<(u32, i64)>> = BTreeMap::new();
-    for node in nodes {
+    for entry in entries {
         if let Node::Array(ArrayNode {
             count:
                 Counted::Field {
@@ -1045,14 +1752,14 @@ fn count_ranges(nodes: &[Node]) -> Vec<(String, (u64, u64))> {
                     add,
                 },
             ..
-        }) = node
+        }) = &entry.node
         {
             scales.entry(field).or_default().push((*multiply, *add));
         }
     }
-    nodes
+    entries
         .iter()
-        .filter_map(|node| match node {
+        .filter_map(|entry| match &entry.node {
             Node::Field(field) => {
                 let scales = scales.get(field.name.as_str())?;
                 Some((field.name.clone(), raw_range(field.kind.bits(), scales)?))
@@ -1062,7 +1769,11 @@ fn count_ranges(nodes: &[Node]) -> Vec<(String, (u64, u64))> {
         .collect()
 }
 
-fn entry_value(node: &Node, held: &BTreeMap<String, u64>) -> BoxedStrategy<Option<(String, Raw)>> {
+fn entry_value(
+    node: &Node,
+    held: &BTreeMap<String, u64>,
+    selected: &BTreeMap<String, Vec<Raw>>,
+) -> BoxedStrategy<Option<(String, Raw)>> {
     let named = |name: &str, values: BoxedStrategy<Raw>| {
         let name = name.to_string();
         values
@@ -1071,9 +1782,13 @@ fn entry_value(node: &Node, held: &BTreeMap<String, u64>) -> BoxedStrategy<Optio
     };
     match node {
         Node::Padding(_) => Just(None).boxed(),
-        Node::Field(field) => match held.get(&field.name) {
-            Some(raw) => named(&field.name, Just(Raw::Uint(*raw)).boxed()),
-            None => named(&field.name, raw_value(field)),
+        Node::Field(field) => match (held.get(&field.name), selected.get(&field.name)) {
+            (Some(raw), _) => named(&field.name, Just(Raw::Uint(*raw)).boxed()),
+            (None, Some(leaned)) => {
+                let values = prop_oneof![3 => select(leaned.clone()), 1 => raw_value(field)];
+                named(&field.name, values.boxed())
+            }
+            (None, None) => named(&field.name, raw_value(field)),
         },
         Node::Array(array) => {
             let element = match &array.element {
@@ -1134,17 +1849,22 @@ impl<'p> Writer<'p> {
         self.steps
     }
 
-    /// Writes a container's values from bit `at`, leaving padding as it
-    /// was, its entries named under `path`. Returns where it ends, or
-    /// `None` where decoding stops inside it.
+    /// Writes a container's present values, leaving padding as it was, its
+    /// entries named under `path`: entries without an offset one after
+    /// another from `at`, those with one at it past `origin`, the
+    /// container's start; an absent entry ends where it would have started
+    /// (§5.2). Returns where it ends, or `None` where decoding stops
+    /// inside it.
     pub(super) fn container(
         &mut self,
-        nodes: &[Node],
+        entries: &[Entry],
         record: &[(String, Raw)],
+        origin: u64,
         at: u64,
         path: &str,
     ) -> Option<u64> {
         let mut at = at;
+        let mut furthest = at;
         let mut values = record.iter();
         let padding = if path.is_empty() {
             Place::Padding
@@ -1153,9 +1873,16 @@ impl<'p> Writer<'p> {
         } else {
             Place::PaddingInStruct
         };
-        for node in nodes {
-            if let Node::Padding(bits) = node {
+        for entry in entries {
+            if let Some(offset) = entry.offset {
+                at = origin + offset;
+            }
+            if entry.when.as_ref().is_some_and(|when| !when.holds(record)) {
+                continue;
+            }
+            if let Node::Padding(bits) = &entry.node {
                 at += bits;
+                furthest = furthest.max(at);
                 self.reach(path, at, Short::Padding, padding);
                 continue;
             }
@@ -1167,7 +1894,7 @@ impl<'p> Writer<'p> {
             } else {
                 format!("{path}.{name}")
             };
-            at = match (node, raw) {
+            at = match (&entry.node, raw) {
                 (Node::Field(field), raw) => {
                     self.scalar(field, raw, at, &here, record, Place::Field)?
                 }
@@ -1175,12 +1902,13 @@ impl<'p> Writer<'p> {
                     self.array(array, items, at, &here, record)?
                 }
                 (Node::Struct(node), Raw::Record(fields)) => {
-                    self.container(&node.ty.entries, fields, at, &here)?
+                    self.container(&node.ty.entries, fields, at, at, &here)?
                 }
                 _ => return self.unknown(),
             };
+            furthest = furthest.max(at);
         }
-        Some(at)
+        Some(furthest)
     }
 
     /// A field or scalar element at `at`. `scope` is its container's
@@ -1209,6 +1937,11 @@ impl<'p> Writer<'p> {
             _ => None,
         };
         let bytes = garbled.clone().unwrap_or(value);
+        // Its start is checked first: one past the packet's end, at an
+        // offset, is past the end there, with its start as the bits it
+        // needs. That figure is MDL's report; the spec gives the code and
+        // the path.
+        self.reach(path, at, Short::PastEnd, place);
         let end = match length {
             Length::Fixed { .. } => {
                 let end = put_run(self.payload, at, &bytes, length);
@@ -1320,7 +2053,7 @@ impl<'p> Writer<'p> {
                 self.scalar(element, raw, at, path, &[], Place::Element)
             }
             (ElementNode::Struct(ty), Raw::Record(fields)) => {
-                self.container(&ty.entries, fields, at, path)
+                self.container(&ty.entries, fields, at, at, path)
             }
             _ => self.unknown(),
         }
@@ -1414,7 +2147,7 @@ impl Body {
     /// scalar element in record order, then the composites by name (§7.4).
     pub(super) fn samples(&self, record: &[(String, Raw)]) -> Vec<Sample> {
         let mut samples = Vec::new();
-        samples_of(&self.nodes, record, "", None, &mut samples);
+        samples_of(&self.entries, record, "", None, &mut samples);
         let mut composites: Vec<&CompositeNode> = self.composites.iter().collect();
         composites.sort_by(|a, b| a.param().cmp(b.param()));
         samples.extend(composites.into_iter().filter_map(|c| c.sample(record)));
@@ -1425,22 +2158,19 @@ impl Body {
 /// Samples of a container's values, at paths under `prefix`, inside an
 /// array element at `index` (the innermost array's).
 fn samples_of(
-    nodes: &[Node],
+    entries: &[Entry],
     record: &[(String, Raw)],
     prefix: &str,
     index: Option<u64>,
     samples: &mut Vec<Sample>,
 ) {
-    let entries = nodes
-        .iter()
-        .filter(|node| !matches!(node, Node::Padding(_)));
-    for (node, (name, raw)) in entries.zip(record) {
+    for (entry, (name, raw)) in present(entries, record) {
         let path = if prefix.is_empty() {
             name.clone()
         } else {
             format!("{prefix}.{name}")
         };
-        match (node, raw) {
+        match (&entry.node, raw) {
             (Node::Field(field), raw) => samples.extend(sample(field, raw, path, index, None)),
             (Node::Array(array), Raw::Array(items)) => {
                 for (position, item) in (0_u64..).zip(items) {
