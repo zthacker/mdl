@@ -74,15 +74,100 @@ pub struct Refused {
     pub faults: Vec<Fault>,
 }
 
-/// A fault in a request: the code it gives on its own, where encoding
-/// catches it, the catalog argument it's about if it's about one, and what
-/// the error names.
+/// A fault in a request: the kind it was planted as, the code it gives on
+/// its own, where encoding catches it, the catalog argument it's about if
+/// it's about one, and what the error names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fault {
+    pub kind: RefusedKind,
     pub code: &'static str,
     pub stage: Stage,
     pub argument: Option<usize>,
     pub at: Option<String>,
+}
+
+/// A kind of fault in a request. Faults are picked by kind first, each by
+/// its weight, however many of it the command has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RefusedKind {
+    /// A set the family doesn't have, or a command the set doesn't encode.
+    Request,
+    /// An argument the command doesn't have, or one given again.
+    Name,
+    /// An argument without a default, left out.
+    Missing,
+    /// A list argument's fault.
+    ListValue,
+    /// A value the catalog refuses for an argument that takes one.
+    Value,
+    /// A value whose length its length field can't hold.
+    Length,
+    /// A value its field can't hold.
+    Field,
+    /// A value an element's field can't hold.
+    Element,
+    /// An array's records given lists of two lengths.
+    Records,
+    /// A count field given a length its `multiply` doesn't divide.
+    Multiply,
+    /// Two arrays sharing a count field given two counts.
+    Shared,
+    /// The target replaced, or left out.
+    Target,
+}
+
+impl RefusedKind {
+    pub const ALL: [RefusedKind; 12] = [
+        RefusedKind::Request,
+        RefusedKind::Name,
+        RefusedKind::Missing,
+        RefusedKind::ListValue,
+        RefusedKind::Value,
+        RefusedKind::Length,
+        RefusedKind::Field,
+        RefusedKind::Element,
+        RefusedKind::Records,
+        RefusedKind::Multiply,
+        RefusedKind::Shared,
+        RefusedKind::Target,
+    ];
+
+    /// How likely the kind is to be picked, against the others: those
+    /// any request can be given (an unknown set or command, a name, a
+    /// missing argument) a quarter as likely as those that need what the
+    /// layout has.
+    fn weight(self) -> u32 {
+        match self {
+            RefusedKind::Request | RefusedKind::Name | RefusedKind::Missing => 1,
+            RefusedKind::ListValue
+            | RefusedKind::Value
+            | RefusedKind::Length
+            | RefusedKind::Field
+            | RefusedKind::Element
+            | RefusedKind::Records
+            | RefusedKind::Multiply
+            | RefusedKind::Shared
+            | RefusedKind::Target => 4,
+        }
+    }
+
+    /// Whether faults of the kind are caught before every argument and
+    /// entry, so that planted with another, they'd hide it.
+    fn hides_others(self) -> bool {
+        match self {
+            RefusedKind::Request | RefusedKind::Name => true,
+            RefusedKind::Missing
+            | RefusedKind::ListValue
+            | RefusedKind::Value
+            | RefusedKind::Length
+            | RefusedKind::Field
+            | RefusedKind::Element
+            | RefusedKind::Records
+            | RefusedKind::Multiply
+            | RefusedKind::Shared
+            | RefusedKind::Target => false,
+        }
+    }
 }
 
 /// Where encoding catches a fault, in the order it checks things: the
@@ -120,13 +205,82 @@ pub struct Garbled {
     pub code: &'static str,
     /// The argument or entry the error names, if it names one.
     pub at: Option<String>,
-    /// The kind of fault, as faults are picked: `set`, `encoding`,
-    /// `no_packet`, `checksum`, `constant`, `raw` and `cut`, or in an
-    /// array `element`, `record constant`, `count`, `cut inside an array`,
-    /// `more bytes` and `list_length`.
-    pub kind: &'static str,
+    /// The kind of fault, as faults are picked.
+    pub kind: GarbledKind,
     /// What was planted, for a failing case's report.
     pub planted: String,
+}
+
+/// A kind of fault planted in a payload. Faults are picked by kind first,
+/// each by its weight; the variants are in the order picking sorts them
+/// in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum GarbledKind {
+    /// A stored checksum with a bit flipped.
+    Checksum,
+    /// A constant that isn't a key, holding another value.
+    Constant,
+    /// The count field of an array holding a count below 0, or its
+    /// largest.
+    Count,
+    /// The payload cut short inside an entry after the keys.
+    Cut,
+    /// The payload cut inside an array with a known count.
+    CutInsideArray,
+    /// An element holding a raw value decoding refuses.
+    Element,
+    /// A JSON payload for a binary family.
+    Encoding,
+    /// Lists past their bounds, through a payload packed with them.
+    ListLength,
+    /// Part of one more element after an array that runs to the end.
+    MoreBytes,
+    /// A payload no packet matches.
+    NoPacket,
+    /// An argument's field holding a raw value decoding refuses.
+    Raw,
+    /// A record's constant holding another value.
+    RecordConstant,
+    /// A set the family doesn't have.
+    Set,
+}
+
+impl GarbledKind {
+    pub const ALL: [GarbledKind; 13] = [
+        GarbledKind::Checksum,
+        GarbledKind::Constant,
+        GarbledKind::Count,
+        GarbledKind::Cut,
+        GarbledKind::CutInsideArray,
+        GarbledKind::Element,
+        GarbledKind::Encoding,
+        GarbledKind::ListLength,
+        GarbledKind::MoreBytes,
+        GarbledKind::NoPacket,
+        GarbledKind::Raw,
+        GarbledKind::RecordConstant,
+        GarbledKind::Set,
+    ];
+
+    /// How likely the kind is to be picked, against the others: those
+    /// any payload can be given (an unknown set, the wrong encoding, no
+    /// packet) a quarter as likely as those that need what the layout
+    /// has.
+    fn weight(self) -> usize {
+        match self {
+            GarbledKind::Encoding | GarbledKind::NoPacket | GarbledKind::Set => 1,
+            GarbledKind::Checksum
+            | GarbledKind::Constant
+            | GarbledKind::Count
+            | GarbledKind::Cut
+            | GarbledKind::CutInsideArray
+            | GarbledKind::Element
+            | GarbledKind::ListLength
+            | GarbledKind::MoreBytes
+            | GarbledKind::Raw
+            | GarbledKind::RecordConstant => 4,
+        }
+    }
 }
 
 /// How a payload is given to the decoder: as bytes, or as JSON text.

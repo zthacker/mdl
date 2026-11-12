@@ -7,12 +7,12 @@ use proptest::prelude::*;
 use proptest::sample::{Index, select};
 use proptest::strategy::Union;
 
-use super::{argument_name, entry_name, kind_weight, list_place};
+use super::{argument_name, entry_name, list_place};
 use crate::layout::command::requests::{Parts, parts};
 use crate::layout::command::values::{list_value, list_values, spell, spell_list, value};
 use crate::layout::command::{
     Arg, ArgType, Bounds, Counted, Elements, Encoder, Fault, Given, Layout, Len, Placed, Refused,
-    Scale, Shape, Source, Stage, Target, Through,
+    RefusedKind, Scale, Shape, Source, Stage, Target, Through,
 };
 use crate::layout::{Numeric, Text};
 
@@ -63,6 +63,41 @@ enum Plant {
     },
 }
 
+/// A pair of faults whose later entry is caught first: a length field's
+/// fault after a later entry's (§3.5), a count's after a later entry's,
+/// or a count's after a later length field's (§3.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PairKind {
+    LengthAfterLaterEntry,
+    CountAfterLaterEntry,
+    CountAfterLaterLength,
+}
+
+impl PairKind {
+    const ALL: [PairKind; 3] = [
+        PairKind::LengthAfterLaterEntry,
+        PairKind::CountAfterLaterEntry,
+        PairKind::CountAfterLaterLength,
+    ];
+
+    /// The kind of pair two faults make when the one at `late` is caught
+    /// after the one at `early` though its entry comes first.
+    fn of(late: Stage, early: Stage) -> Option<PairKind> {
+        match (late, early) {
+            (Stage::Length(measured), Stage::Field { entry: later, .. }) if later > measured => {
+                Some(PairKind::LengthAfterLaterEntry)
+            }
+            (Stage::Count(array), Stage::Field { entry: later, .. }) if later > array => {
+                Some(PairKind::CountAfterLaterEntry)
+            }
+            (Stage::Count(array), Stage::Length(later)) if later > array => {
+                Some(PairKind::CountAfterLaterLength)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// What a plant touches. Two plants that touch one argument, or the
 /// target, aren't both planted; a set or command plant goes alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,39 +132,50 @@ impl Plant {
 
 /// A valid request for the layout's command with one or two faults
 /// planted in it, and the error encoding gives. Each fault is of a kind
-/// picked first, by its weight (`kind_weight`), however many of it the
-/// command has. Half the time, a fault caught late
+/// picked first, by its weight ([`RefusedKind::weight`]), however many of
+/// it the command has. Half the time, a fault caught late
 /// (a length field's or a count's) is paired with one caught before it
 /// though its entry comes later, each kind of pair as likely as the
 /// others.
 pub(in super::super) fn refusal(layout: Layout) -> BoxedStrategy<Refused> {
     let mut staged: Vec<Staged> = Vec::new();
-    let mut kinds: Vec<(&'static str, Vec<usize>)> = Vec::new();
+    let mut kind_of: Vec<RefusedKind> = Vec::new();
+    let mut kinds: Vec<(RefusedKind, Vec<usize>)> = Vec::new();
     for (kind, plant) in plants(&layout) {
         let index = staged.len();
         staged.push(plant);
+        kind_of.push(kind);
         match kinds.iter_mut().find(|(seen, _)| *seen == kind) {
             Some((_, indices)) => indices.push(index),
             None => kinds.push((kind, vec![index])),
         }
     }
     let count = staged.len();
-    let mut pairs: Vec<Vec<(usize, usize)>> = vec![Vec::new(); 3];
+    let mut pairs: Vec<(PairKind, Vec<(usize, usize)>)> = PairKind::ALL
+        .iter()
+        .map(|kind| (*kind, Vec::new()))
+        .collect();
     for first in 0..count {
         for second in 0..count {
-            if let Some(kind) = pair_kind(staged[first].0, staged[second].0) {
-                pairs[kind].push((first, second));
+            if let Some(kind) = PairKind::of(staged[first].0, staged[second].0)
+                && let Some((_, of_kind)) = pairs.iter_mut().find(|(seen, _)| *seen == kind)
+            {
+                of_kind.push((first, second));
             }
         }
     }
-    pairs.retain(|of_kind| !of_kind.is_empty());
+    let pairs: Vec<Vec<(usize, usize)>> = pairs
+        .into_iter()
+        .map(|(_, of_kind)| of_kind)
+        .filter(|of_kind| !of_kind.is_empty())
+        .collect();
     // A kind by its weight, then one of it. Two faults planted together,
     // but for the pairs below, are of kinds that don't hide the other.
-    let pick = |kinds: &[(&'static str, Vec<usize>)], hidden: bool| {
+    let pick = |kinds: &[(RefusedKind, Vec<usize>)], hidden: bool| {
         let arms: Vec<(u32, BoxedStrategy<usize>)> = kinds
             .iter()
-            .filter(|(kind, _)| hidden || !hides_others(kind))
-            .map(|(kind, indices)| (kind_weight(kind) as u32, select(indices.clone()).boxed()))
+            .filter(|(kind, _)| hidden || !kind.hides_others())
+            .map(|(kind, indices)| (kind.weight(), select(indices.clone()).boxed()))
             .collect();
         (!arms.is_empty()).then(|| Union::new_weighted(arms).boxed())
     };
@@ -153,34 +199,30 @@ pub(in super::super) fn refusal(layout: Layout) -> BoxedStrategy<Refused> {
     let plants: Vec<BoxedStrategy<Plant>> = staged.into_iter().map(|(_, plant)| plant).collect();
     (Just(layout.clone()), parts(&layout), picks)
         .prop_flat_map(move |(layout, parts, picks)| {
-            let chosen: Vec<BoxedStrategy<Plant>> =
-                picks.iter().map(|pick| plants[*pick].clone()).collect();
+            let chosen: Vec<BoxedStrategy<(RefusedKind, Plant)>> = picks
+                .iter()
+                .map(|pick| {
+                    let kind = kind_of[*pick];
+                    plants[*pick]
+                        .clone()
+                        .prop_map(move |plant| (kind, plant))
+                        .boxed()
+                })
+                .collect();
             (Just(layout), Just(parts), chosen)
         })
         .prop_map(|(layout, parts, chosen)| refused(&layout, parts, chosen))
         .boxed()
 }
 
-/// The kind of pair two faults make when the one at `late` is caught
-/// after the one at `early` though its entry comes first: a length field's
-/// after a later entry's (§3.5), a count's after a later entry's, or a
-/// count's after a later length field's (§3.6).
-fn pair_kind(late: Stage, early: Stage) -> Option<usize> {
-    match (late, early) {
-        (Stage::Length(measured), Stage::Field { entry: later, .. }) if later > measured => Some(0),
-        (Stage::Count(array), Stage::Field { entry: later, .. }) if later > array => Some(1),
-        (Stage::Count(array), Stage::Length(later)) if later > array => Some(2),
-        _ => None,
-    }
-}
-
 /// The request with the plants that don't clash planted, and the first
-/// error it reaches.
-fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
-    let mut plants: Vec<Plant> = Vec::new();
-    for plant in chosen {
-        if !plants.iter().any(|kept| kept.clashes(&plant)) {
-            plants.push(plant);
+/// error it reaches. A fault's kind is its plant's; the first pass finds
+/// the names, and the second the arguments left out.
+fn refused(layout: &Layout, parts: Parts, chosen: Vec<(RefusedKind, Plant)>) -> Refused {
+    let mut plants: Vec<(RefusedKind, Plant)> = Vec::new();
+    for (kind, plant) in chosen {
+        if !plants.iter().any(|(_, kept)| kept.clashes(&plant)) {
+            plants.push((kind, plant));
         }
     }
     let mut set = "fam_v1".to_string();
@@ -188,24 +230,28 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
     let mut named = parts.named;
     let mut target = parts.target;
     let mut faults: Vec<Fault> = Vec::new();
-    let mut fault =
-        |code: &'static str, stage: Stage, argument: Option<usize>, at: Option<String>| {
-            faults.push(Fault {
-                code,
-                stage,
-                argument,
-                at,
-            });
-        };
-    for plant in plants {
+    let mut fault = |kind: RefusedKind,
+                     code: &'static str,
+                     stage: Stage,
+                     argument: Option<usize>,
+                     at: Option<String>| {
+        faults.push(Fault {
+            kind,
+            code,
+            stage,
+            argument,
+            at,
+        });
+    };
+    for (kind, plant) in plants {
         match plant {
             Plant::Set => {
                 set = "fam_v9".into();
-                fault("unknown_set", Stage::Request, None, None);
+                fault(kind, "unknown_set", Stage::Request, None, None);
             }
             Plant::Command => {
                 command = "cmd.nope".into();
-                fault("unknown_command", Stage::Request, None, None);
+                fault(kind, "unknown_command", Stage::Request, None, None);
             }
             Plant::Unknown { value, place } => {
                 named.insert(place.index(named.len() + 1), ("zz".into(), value));
@@ -232,7 +278,7 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
                 at,
             } => {
                 give(&mut named, argument, value);
-                fault(code, stage, Some(argument), Some(at));
+                fault(kind, code, stage, Some(argument), Some(at));
             }
             Plant::Lists {
                 lists,
@@ -245,9 +291,15 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
                 for (argument, value) in lists {
                     give(&mut named, argument, value);
                 }
-                fault(code, stage, argument, Some(at));
+                fault(kind, code, stage, argument, Some(at));
                 for caught in later {
-                    fault(caught.code, caught.stage, caught.argument, caught.at);
+                    fault(
+                        caught.kind,
+                        caught.code,
+                        caught.stage,
+                        caught.argument,
+                        caught.at,
+                    );
                 }
             }
             Plant::Target {
@@ -257,6 +309,7 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
             } => {
                 target = replaced;
                 fault(
+                    kind,
                     code,
                     Stage::Field {
                         entry,
@@ -275,6 +328,7 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
     for (place, (name, _)) in named.iter().enumerate() {
         if !known.contains(name) {
             fault(
+                RefusedKind::Name,
                 "unknown_argument",
                 Stage::Name(place),
                 None,
@@ -283,6 +337,7 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
         } else if !seen.insert(name.clone()) {
             let argument = index_of(name);
             fault(
+                RefusedKind::Name,
                 "duplicate_argument",
                 Stage::Name(place),
                 argument,
@@ -295,6 +350,7 @@ fn refused(layout: &Layout, parts: Parts, chosen: Vec<Plant>) -> Refused {
         let name = argument_name(index);
         if encoder.default.is_none() && !named.iter().any(|(given, _)| *given == name) {
             fault(
+                RefusedKind::Missing,
                 "missing_argument",
                 Stage::Argument(index),
                 Some(index),
@@ -359,12 +415,18 @@ type Staged = (Stage, BoxedStrategy<Plant>);
 /// Every fault the layout's command can be given, each with its kind and
 /// where it's caught (a name's place is only known once it's planted, and
 /// an element's index once its list is drawn).
-fn plants(layout: &Layout) -> Vec<(&'static str, Staged)> {
-    let mut plants: Vec<(&'static str, Staged)> = vec![
-        ("request", (Stage::Request, Just(Plant::Set).boxed())),
-        ("request", (Stage::Request, Just(Plant::Command).boxed())),
+fn plants(layout: &Layout) -> Vec<(RefusedKind, Staged)> {
+    let mut plants: Vec<(RefusedKind, Staged)> = vec![
         (
-            "name",
+            RefusedKind::Request,
+            (Stage::Request, Just(Plant::Set).boxed()),
+        ),
+        (
+            RefusedKind::Request,
+            (Stage::Request, Just(Plant::Command).boxed()),
+        ),
+        (
+            RefusedKind::Name,
             (
                 Stage::Name(0),
                 (any::<bool>(), any::<Index>())
@@ -390,14 +452,18 @@ fn plants(layout: &Layout) -> Vec<(&'static str, Staged)> {
                 place,
             })
             .boxed();
-        plants.push(("name", (Stage::Name(0), duplicate)));
+        plants.push((RefusedKind::Name, (Stage::Name(0), duplicate)));
         if encoder.default.is_none() {
             let missing = Just(Plant::Missing { argument }).boxed();
-            plants.push(("missing", (Stage::Argument(argument), missing)));
+            plants.push((RefusedKind::Missing, (Stage::Argument(argument), missing)));
         }
         if encoder.list.is_some() {
             let faults = list_faults(layout, argument);
-            plants.extend(faults.into_iter().map(|plant| ("list value", plant)));
+            plants.extend(
+                faults
+                    .into_iter()
+                    .map(|plant| (RefusedKind::ListValue, plant)),
+            );
             continue;
         }
         let at = Stage::Argument(argument);
@@ -406,16 +472,17 @@ fn plants(layout: &Layout) -> Vec<(&'static str, Staged)> {
             .prop_map(|(value, how)| Given::List(vec![spell(&value, how)]))
             .boxed();
         plants.push((
-            "value",
+            RefusedKind::Value,
             valued(argument, list, at, "wrong_type", name.clone()),
         ));
         for (values, code) in argument_faults(encoder) {
-            plants.push(("value", valued(argument, values, at, code, name.clone())));
+            let plant = valued(argument, values, at, code, name.clone());
+            plants.push((RefusedKind::Value, plant));
         }
         if !encoded {
             if let Some(values) = not_default(encoder) {
                 let plant = valued(argument, values, at, "not_default", name.clone());
-                plants.push(("value", plant));
+                plants.push((RefusedKind::Value, plant));
             }
             continue;
         }
@@ -427,9 +494,9 @@ fn plants(layout: &Layout) -> Vec<(&'static str, Staged)> {
         };
         for (values, stage, code) in field_faults(layout, encoder, entry) {
             let (kind, named) = match stage {
-                Stage::Length(entry) => ("length", entry_name(layout, entry)),
-                Stage::Field { entry, .. } => ("field", entry_name(layout, entry)),
-                _ => ("field", None),
+                Stage::Length(entry) => (RefusedKind::Length, entry_name(layout, entry)),
+                Stage::Field { entry, .. } => (RefusedKind::Field, entry_name(layout, entry)),
+                _ => (RefusedKind::Field, None),
             };
             let plant = valued(argument, values, stage, code, named.unwrap_or_default());
             plants.push((kind, plant));
@@ -438,7 +505,7 @@ fn plants(layout: &Layout) -> Vec<(&'static str, Staged)> {
     plants.extend(
         element_faults(layout)
             .into_iter()
-            .map(|plant| ("element", plant)),
+            .map(|plant| (RefusedKind::Element, plant)),
     );
     plants.extend(count_faults(layout));
     if let Some(entry) = entry_of(layout, |source| matches!(source, Source::Target))
@@ -452,7 +519,7 @@ fn plants(layout: &Layout) -> Vec<(&'static str, Staged)> {
             })
             .boxed();
             plants.push((
-                "target",
+                RefusedKind::Target,
                 (
                     Stage::Field {
                         entry,
@@ -737,7 +804,7 @@ struct Spoiled {
 /// doesn't divide; two arrays that share a count field giving it two
 /// values, caught on the later array. Counts are worked out after every
 /// length field.
-fn count_faults(layout: &Layout) -> Vec<(&'static str, Staged)> {
+fn count_faults(layout: &Layout) -> Vec<(RefusedKind, Staged)> {
     let mut faults = Vec::new();
     let encoders = |members: &[usize]| -> Vec<(usize, Encoder)> {
         members
@@ -825,6 +892,7 @@ fn count_faults(layout: &Layout) -> Vec<(&'static str, Staged)> {
                             {
                                 values[0] = spoiled.bad.clone();
                                 later.push(Fault {
+                                    kind: RefusedKind::Records,
                                     code: spoiled.code,
                                     stage: spoiled.stage,
                                     argument: Some(member),
@@ -845,7 +913,7 @@ fn count_faults(layout: &Layout) -> Vec<(&'static str, Staged)> {
                     }
                 })
                 .boxed();
-            faults.push(("records", (stage, plant)));
+            faults.push((RefusedKind::Records, (stage, plant)));
         }
         if let Counted::Field { multiply, add, .. } = count
             && *multiply >= 2
@@ -872,7 +940,7 @@ fn count_faults(layout: &Layout) -> Vec<(&'static str, Staged)> {
                         later: Vec::new(),
                     })
                     .boxed();
-                faults.push(("multiply", (stage, plant)));
+                faults.push((RefusedKind::Multiply, (stage, plant)));
             }
         }
     }
@@ -932,7 +1000,7 @@ fn count_faults(layout: &Layout) -> Vec<(&'static str, Staged)> {
                 later: Vec::new(),
             })
             .boxed();
-        faults.push(("shared", (stage, plant)));
+        faults.push((RefusedKind::Shared, (stage, plant)));
     }
     faults
 }
@@ -1201,10 +1269,4 @@ fn target_faults(shape: &Shape) -> Vec<(Option<Target>, &'static str)> {
         _ => {}
     }
     faults
-}
-
-/// Whether faults of a kind are caught before every argument and entry, so
-/// that planted with another, they'd hide it.
-fn hides_others(kind: &str) -> bool {
-    matches!(kind, "request" | "name")
 }

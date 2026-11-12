@@ -4,14 +4,14 @@
 use proptest::prelude::*;
 use proptest::sample::Index;
 
-use super::{argument_name, entry_name, kind_weight, list_place};
+use super::{argument_name, entry_name, list_place};
 use crate::layout::command::requests::{
     ElementPlace, Packed, buffer, pack, parts, values, write_checksums,
 };
 use crate::layout::command::values::{list_value, unrounded};
 use crate::layout::command::{
-    Arg, ArgType, Const, Counted, Elements, Encoder, Encoding, Garbled, Group, Layout, Len, Placed,
-    Shape, Source, Target, Through,
+    Arg, ArgType, Const, Counted, Elements, Encoder, Encoding, Garbled, GarbledKind, Group, Layout,
+    Len, Placed, Shape, Source, Target, Through,
 };
 use crate::layout::{fit, put_bits};
 
@@ -33,12 +33,12 @@ pub(in super::super) fn garbling(layout: Layout, keys: Vec<Const>) -> BoxedStrat
             let mut faults = garbled(&layout, &keys, &packed, &detail);
             faults.extend(beyond_payloads(&layout, &values, target, &beyond));
             // A kind of fault first, by its weight, then one of that kind.
-            let mut kinds: Vec<&str> = faults.iter().map(|fault| fault.kind).collect();
+            let mut kinds: Vec<GarbledKind> = faults.iter().map(|fault| fault.kind).collect();
             kinds.sort_unstable();
             kinds.dedup();
-            let weighted: Vec<&str> = kinds
+            let weighted: Vec<GarbledKind> = kinds
                 .iter()
-                .flat_map(|kind| std::iter::repeat_n(*kind, kind_weight(kind)))
+                .flat_map(|kind| std::iter::repeat_n(*kind, kind.weight()))
                 .collect();
             let kind = weighted.get(kind.index(weighted.len().max(1))).copied();
             let faults: Vec<Garbled> = faults
@@ -53,7 +53,7 @@ pub(in super::super) fn garbling(layout: Layout, keys: Vec<Const>) -> BoxedStrat
                 metadata: Vec::new(),
                 code: "unknown_set",
                 at: None,
-                kind: "set",
+                kind: GarbledKind::Set,
                 planted: "an unknown set".into(),
             })
         })
@@ -64,18 +64,20 @@ pub(in super::super) fn garbling(layout: Layout, keys: Vec<Const>) -> BoxedStrat
 /// gives and the argument or entry that error names.
 fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> Vec<Garbled> {
     let metadata = metadata(layout);
-    // Each fault's kind is the one it's listed with, set at the end.
-    let fault =
-        |payload: Vec<u8>, code: &'static str, at: Option<String>, planted: String| Garbled {
-            set: "fam_v1".into(),
-            payload,
-            encoding: Encoding::Binary,
-            metadata: metadata.clone(),
-            code,
-            at,
-            kind: "",
-            planted,
-        };
+    let fault = |kind: GarbledKind,
+                 payload: Vec<u8>,
+                 code: &'static str,
+                 at: Option<String>,
+                 planted: String| Garbled {
+        set: "fam_v1".into(),
+        payload,
+        encoding: Encoding::Binary,
+        metadata: metadata.clone(),
+        code,
+        at,
+        kind,
+        planted,
+    };
     // The payload with raw bits written at an entry, its checksums worked
     // out again.
     let rewritten = |entry: usize, bits_value: u64| -> Option<Vec<u8>> {
@@ -89,50 +91,54 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
         Some(payload)
     };
     let mut faults = vec![
-        (
-            "set",
-            Garbled {
-                set: "fam_v9".into(),
-                ..fault(
-                    packed.payload.clone(),
-                    "unknown_set",
-                    None,
-                    "an unknown set".into(),
-                )
-            },
-        ),
-        (
-            "encoding",
-            Garbled {
-                encoding: Encoding::Json,
-                ..fault(
-                    b"{}".to_vec(),
-                    "wrong_encoding",
-                    None,
-                    "a JSON payload".into(),
-                )
-            },
-        ),
-        (
+        Garbled {
+            set: "fam_v9".into(),
+            ..fault(
+                GarbledKind::Set,
+                packed.payload.clone(),
+                "unknown_set",
+                None,
+                "an unknown set".into(),
+            )
+        },
+        Garbled {
+            encoding: Encoding::Json,
+            ..fault(
+                GarbledKind::Encoding,
+                b"{}".to_vec(),
+                "wrong_encoding",
+                None,
+                "a JSON payload".into(),
+            )
+        },
+        fault(
+            GarbledKind::NoPacket,
+            Vec::new(),
             "no_packet",
-            fault(Vec::new(), "no_packet", None, "an empty payload".into()),
+            None,
+            "an empty payload".into(),
         ),
     ];
     if !metadata.is_empty() {
-        let unframed = Garbled {
+        faults.push(Garbled {
             metadata: Vec::new(),
             ..fault(
+                GarbledKind::NoPacket,
                 packed.payload.clone(),
                 "no_packet",
                 None,
                 "no metadata".into(),
             )
-        };
-        faults.push(("no_packet", unframed));
+        });
     }
     if let Some(payload) = unknown_key(layout, keys, packed) {
-        let unknown = fault(payload, "no_packet", None, "a key no packet has".into());
-        faults.push(("no_packet", unknown));
+        faults.push(fault(
+            GarbledKind::NoPacket,
+            payload,
+            "no_packet",
+            None,
+            "a key no packet has".into(),
+        ));
     }
     // A stored checksum changed (§5.6): no algorithm accepts its value
     // with one bit flipped. It's the checksum that fails first: one before
@@ -151,8 +157,14 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
             let mut payload = packed.payload.clone();
             payload[stored_at + width - 1] ^= 1;
             let named = entry_name(layout, entry);
-            let flipped = fault(payload, "bad_checksum", named, format!("checksum {entry}"));
-            faults.push(("checksum", flipped));
+            let planted = format!("checksum {entry}");
+            faults.push(fault(
+                GarbledKind::Checksum,
+                payload,
+                "bad_checksum",
+                named,
+                planted,
+            ));
         }
     }
     // A constant that isn't a key, holding something else (§7.3).
@@ -172,13 +184,14 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
         let entry = loose[detail.index(loose.len())];
         if let Some(payload) = other_constant(layout, packed, entry) {
             let named = entry_name(layout, entry);
-            let other = fault(
+            let planted = format!("constant {entry}");
+            faults.push(fault(
+                GarbledKind::Constant,
                 payload,
                 "wrong_constant",
                 named,
-                format!("constant {entry}"),
-            );
-            faults.push(("constant", other));
+                planted,
+            ));
         }
     }
     // Arguments' raw values decoding refuses (§7.4).
@@ -196,7 +209,7 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
             if let Some(payload) = rewritten(entry, raw) {
                 let named = Some(argument_name(*index));
                 let planted = format!("raw {raw:#x} at {entry}");
-                faults.push(("raw", fault(payload, code, named, planted)));
+                faults.push(fault(GarbledKind::Raw, payload, code, named, planted));
             }
         }
     }
@@ -236,21 +249,18 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
         let (low, high) = cuts[detail.index(cuts.len())];
         let length = (low + (high - low) / 2) as usize;
         let named = cut_entry(layout, packed, 8 * length as u64);
-        let cut = fault(
+        faults.push(fault(
+            GarbledKind::Cut,
             packed.payload[..length].to_vec(),
             "past_end",
             named,
             format!("cut to {length} bytes"),
-        );
-        faults.push(("cut", cut));
+        ));
     }
     for (kind, payload, code, at, planted) in list_faults_in(layout, packed, detail, key_bytes) {
-        faults.push((kind, fault(payload, code, Some(at), planted)));
+        faults.push(fault(kind, payload, code, Some(at), planted));
     }
     faults
-        .into_iter()
-        .map(|(kind, fault)| Garbled { kind, ..fault })
-        .collect()
 }
 
 /// The metadata the link frames the layout's payloads with.
@@ -419,7 +429,7 @@ fn element_faults_in(
     for (argument, shape, little, place) in fields {
         for (raw, code) in refused_raws(&layout.arguments[argument].0, shape) {
             faults.push((
-                "element",
+                GarbledKind::Element,
                 written(layout, packed, place, raw, little),
                 code,
                 format!("{}[{index}]", argument_name(argument)),
@@ -441,7 +451,7 @@ fn element_faults_in(
             };
             if let Some(payload) = another_constant(layout, packed, *place, shape, *little, value) {
                 faults.push((
-                    "record constant",
+                    GarbledKind::RecordConstant,
                     payload,
                     "wrong_constant",
                     format!("{name}[{index}].{field}"),
@@ -494,7 +504,7 @@ fn count_faults_in(layout: &Layout, packed: &Packed, array: &ArrayAt<'_>) -> Vec
     let step = i64::from(*multiply);
     if let Some(raw) = (0..=1_i64).find(|raw| raw * step + add < 0) {
         faults.push((
-            "count",
+            GarbledKind::Count,
             written(layout, packed, place, raw as u64, *little),
             "bad_length",
             name.to_string(),
@@ -508,7 +518,7 @@ fn count_faults_in(layout: &Layout, packed: &Packed, array: &ArrayAt<'_>) -> Vec
         && counted as u64 * each > left
     {
         faults.push((
-            "count",
+            GarbledKind::Count,
             written(layout, packed, place, most, *little),
             "past_end",
             name.to_string(),
@@ -541,7 +551,7 @@ fn cut_inside(packed: &Packed, array: &ArrayAt<'_>, key_bytes: u64) -> Option<Li
         None => first_past(name, array.elements, array.places, 0, end)?,
     };
     Some((
-        "cut inside an array",
+        GarbledKind::CutInsideArray,
         packed.payload[..length as usize].to_vec(),
         code,
         at,
@@ -585,7 +595,7 @@ fn one_more_element(packed: &Packed, array: &ArrayAt<'_>, detail: &Index) -> Opt
     let mut payload = packed.payload.clone();
     payload.extend(&bytes);
     Some((
-        "more bytes",
+        GarbledKind::MoreBytes,
         payload,
         code,
         at,
@@ -595,7 +605,7 @@ fn one_more_element(packed: &Packed, array: &ArrayAt<'_>, detail: &Index) -> Opt
 
 /// A fault in a payload's arrays: its kind, the payload, the code, what
 /// the error names, and what was planted.
-type ListFault = (&'static str, Vec<u8>, &'static str, String, String);
+type ListFault = (GarbledKind, Vec<u8>, &'static str, String, String);
 
 /// Each entry's place in a record of exact size, from its start.
 fn record_places(elements: &Elements) -> Vec<(u64, u64)> {
@@ -717,7 +727,7 @@ fn beyond_payloads(
                 metadata: metadata(layout),
                 code: "list_length",
                 at: Some(argument_name(refused)),
-                kind: "list_length",
+                kind: GarbledKind::ListLength,
                 planted: format!("lists past their bounds, from {}", argument_name(refused)),
             })
         })

@@ -19,6 +19,7 @@
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
+pub use body::faults::{FaultKind, Garbling, Held, Place, Route};
 use body::faults::{Short, Step};
 use body::{Body, BodySpec, Writer, body_spec};
 pub use fleet::{Fleet, Meta, Sent, fleet};
@@ -67,9 +68,8 @@ pub struct Message {
 /// Faults planted in a message, and the error they give.
 #[derive(Debug, Clone)]
 pub struct Damage {
-    /// Each fault's route, as the reach test counts them (`cut:array`,
-    /// `text:surrogate`).
-    pub routes: Vec<String>,
+    /// Each fault's route, one or two of them.
+    pub routes: Vec<Route>,
     /// What was planted, for a failing case's report.
     pub planted: String,
     pub failure: Failure,
@@ -444,7 +444,7 @@ impl Kind {
 
 /// Where a field or element sits, which decides the kinds it can have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Place {
+enum Slot {
     /// An entry of a packet or struct type: any kind, its length fixed, up
     /// to a terminator or from a field.
     Entry,
@@ -514,18 +514,18 @@ struct FieldSpec {
 }
 
 fn field_spec() -> BoxedStrategy<FieldSpec> {
-    spec_of(kind(Place::Entry))
+    spec_of(kind(Slot::Entry))
 }
 
 /// Any kind a field or element can have where it sits.
-fn kind(place: Place) -> BoxedStrategy<Kind> {
+fn kind(slot: Slot) -> BoxedStrategy<Kind> {
     let texts = select(&[Text::Utf8, Text::Ascii, Text::Latin1][..]);
-    let text = (texts, text_length(place))
+    let text = (texts, text_length(slot))
         .prop_map(|(text, length)| Kind::Text { length, text })
         .boxed();
     let bytes = prop_oneof![
         3 => (1_u32..=8).prop_map(|bytes| Length::Fixed { bytes, terminator: None }),
-        1 => varying_length(place),
+        1 => varying_length(slot),
     ]
     .prop_map(Kind::Bytes)
     .boxed();
@@ -536,7 +536,7 @@ fn kind(place: Place) -> BoxedStrategy<Kind> {
         (2, text),
         (1, bytes),
     ];
-    if place != (Place::Element { varying: true }) {
+    if slot != (Slot::Element { varying: true }) {
         kinds.push((1, Just(Kind::Bool).boxed()));
     }
     proptest::strategy::Union::new_weighted(kinds).boxed()
@@ -544,17 +544,17 @@ fn kind(place: Place) -> BoxedStrategy<Kind> {
 
 /// A string's length: fixed (1 to 12 bytes, maybe ending at a terminator)
 /// most of the time, else one that varies.
-fn text_length(place: Place) -> BoxedStrategy<Length> {
+fn text_length(slot: Slot) -> BoxedStrategy<Length> {
     let fixed = (1_u32..=12, proptest::option::of(any::<u8>()))
         .prop_map(|(bytes, terminator)| Length::Fixed { bytes, terminator });
-    prop_oneof![3 => fixed, 1 => varying_length(place)].boxed()
+    prop_oneof![3 => fixed, 1 => varying_length(slot)].boxed()
 }
 
 /// A length that varies: up to a terminator, or, for an entry, from a
 /// field of 2 to 16 bits, scaled now and then (§5.4).
-fn varying_length(place: Place) -> BoxedStrategy<Length> {
+fn varying_length(slot: Slot) -> BoxedStrategy<Length> {
     let terminated = any::<u8>().prop_map(Length::Terminated);
-    if place != Place::Entry {
+    if slot != Slot::Entry {
         return terminated.boxed();
     }
     let field = (
@@ -1605,7 +1605,7 @@ fn write_message(
         path: name.to_string(),
         needs,
         short: Short::PastEnd,
-        label: "header",
+        place: Place::Header,
     };
     put_bits(payload, 0, 8, u64::from(packet.id), false);
     let mut record = vec![("id".to_string(), Raw::Uint(u64::from(packet.id)))];
@@ -1634,7 +1634,7 @@ fn write_message(
             path: String::new(),
             needs: start + u64::from(8 * (coarse + fine)),
             short: Short::Padding,
-            label: "time code",
+            place: Place::TimeCode,
         });
     }
     // The count field comes after the GPS week, in the family's byte order.

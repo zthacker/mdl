@@ -17,21 +17,206 @@ use proptest::sample::Index;
 use super::{Bound, Counted, ElementNode, Node, element_bits};
 use crate::layout::time::received;
 use crate::layout::{
-    Damage, Draft, EventTime, Failure, Kind, Length, Message, PacketLayout, Problem, Raw, Text,
-    TimeSource, draft, encode, length_field, pack, write_message,
+    Damage, Draft, Failure, Kind, Length, Message, PacketLayout, Problem, Raw, Text, TimeSource,
+    draft, encode, length_field, pack, write_message,
 };
+
+/// A kind of fault, as faults are picked: a kind first, each as likely as
+/// the others. The variants are in the order picking sorts them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FaultKind {
+    /// A count field holding a count below 0, or its largest.
+    Count,
+    /// The payload cut short.
+    Cut,
+    /// A length field holding a length below 0, or its largest.
+    Length,
+    /// Part of one more element after an array that runs to the end.
+    More,
+    /// A count field shared by arrays, holding a count the first can have
+    /// and a later one can't.
+    SharedCount,
+    /// A string's bytes that aren't text in its encoding.
+    Text,
+}
+
+impl FaultKind {
+    pub const ALL: [FaultKind; 6] = [
+        FaultKind::Count,
+        FaultKind::Cut,
+        FaultKind::Length,
+        FaultKind::More,
+        FaultKind::SharedCount,
+        FaultKind::Text,
+    ];
+
+    /// Whether faults of the kind give the payload its length. Of two
+    /// faults planted together, at most one does.
+    fn cuts(self) -> bool {
+        match self {
+            FaultKind::Cut | FaultKind::More => true,
+            FaultKind::Count | FaultKind::Length | FaultKind::SharedCount | FaultKind::Text => {
+                false
+            }
+        }
+    }
+}
+
+/// What a step reads, and so where a payload that ends too soon fails. The
+/// variants are in the order picking sorts them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Place {
+    /// An array's count, checked as `count × size` (§5.5).
+    Array,
+    /// An array's count, checked a bit per element.
+    ArrayBitEach,
+    /// A scalar element.
+    Element,
+    /// A field, at the top level or in a struct.
+    Field,
+    /// A header or time field.
+    Header,
+    /// Padding at a packet's top level.
+    Padding,
+    /// Padding in a struct entry.
+    PaddingInStruct,
+    /// Padding in an array's element.
+    PaddingInElement,
+    /// A value up to a terminator.
+    Terminator,
+    /// A CUC time code, padding to decoding.
+    TimeCode,
+}
+
+impl Place {
+    pub const ALL: [Place; 10] = [
+        Place::Array,
+        Place::ArrayBitEach,
+        Place::Element,
+        Place::Field,
+        Place::Header,
+        Place::Padding,
+        Place::PaddingInStruct,
+        Place::PaddingInElement,
+        Place::Terminator,
+        Place::TimeCode,
+    ];
+}
+
+/// Bytes that aren't text in an encoding. The variants are in the order
+/// picking sorts them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Garbling {
+    /// A UTF-8 sequence cut off by the value's end.
+    CutOff,
+    /// An ASCII byte of 0x80 or more.
+    High,
+    /// A byte UTF-8 never has.
+    Never,
+    /// An overlong UTF-8 form.
+    Overlong,
+    /// A UTF-8 code point past U+10FFFF.
+    PastMax,
+    /// A stray UTF-8 continuation byte.
+    Stray,
+    /// A UTF-8 surrogate.
+    Surrogate,
+}
+
+impl Garbling {
+    pub const ALL: [Garbling; 7] = [
+        Garbling::CutOff,
+        Garbling::High,
+        Garbling::Never,
+        Garbling::Overlong,
+        Garbling::PastMax,
+        Garbling::Stray,
+        Garbling::Surrogate,
+    ];
+
+    /// Its name, for a failing case's report.
+    fn name(self) -> &'static str {
+        match self {
+            Garbling::CutOff => "cut_off",
+            Garbling::High => "high",
+            Garbling::Never => "never",
+            Garbling::Overlong => "overlong",
+            Garbling::PastMax => "past_max",
+            Garbling::Stray => "stray",
+            Garbling::Surrogate => "surrogate",
+        }
+    }
+
+    fn sequence(self) -> &'static [u8] {
+        match self {
+            Garbling::CutOff => &[0xe2, 0x82],
+            Garbling::High => &[0xe9],
+            Garbling::Never => &[0xff],
+            Garbling::Overlong => &[0xc0, 0xaf],
+            Garbling::PastMax => &[0xf4, 0x90, 0x80, 0x80],
+            Garbling::Stray => &[0x80],
+            Garbling::Surrogate => &[0xed, 0xa0, 0x80],
+        }
+    }
+}
+
+/// What a count or length field is made to hold: its largest raw value,
+/// or 0 where that gives a count or length below 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Held {
+    Largest,
+    Negative,
+}
+
+impl Held {
+    pub const ALL: [Held; 2] = [Held::Largest, Held::Negative];
+
+    /// The raw value it puts in a field of `bits`.
+    fn raw(self, bits: u32) -> u64 {
+        match self {
+            Held::Largest if bits >= 64 => u64::MAX,
+            Held::Largest => (1 << bits) - 1,
+            Held::Negative => 0,
+        }
+    }
+}
+
+/// A fault's route: its kind, and what it reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Route {
+    Count(Held),
+    /// A cut, by what decoding then reads short.
+    Cut(Place),
+    Length(Held),
+    /// One more element, by what in it decoding reads short.
+    More(Place),
+    SharedCount,
+    Text(Garbling),
+}
+
+impl Route {
+    pub fn kind(self) -> FaultKind {
+        match self {
+            Route::Count(_) => FaultKind::Count,
+            Route::Cut(_) => FaultKind::Cut,
+            Route::Length(_) => FaultKind::Length,
+            Route::More(_) => FaultKind::More,
+            Route::SharedCount => FaultKind::SharedCount,
+            Route::Text(_) => FaultKind::Text,
+        }
+    }
+}
 
 /// A step decoding takes, as the writer notes it.
 #[derive(Debug, Clone)]
 pub(in crate::layout) enum Step {
-    /// Reading needs the packet's bits up to `needs`: a packet that ends
-    /// before fails with `short`, named by `path`. `label` says what's
-    /// read, for the reach test.
+    /// Reading `place` needs the packet's bits up to `needs`: a packet
+    /// that ends before fails with `short`, named by `path`.
     Reach {
         path: String,
         needs: u64,
         short: Short,
-        label: &'static str,
+        place: Place,
     },
     /// Fails whatever the packet's length.
     Fail(Failure),
@@ -60,8 +245,8 @@ pub(in crate::layout) enum Short {
 #[derive(Debug, Clone)]
 enum Outcome {
     Decodes,
-    /// Fails, at a step of this label.
-    Fails(Failure, &'static str),
+    /// Fails, reading `place` short if that's how.
+    Fails(Failure, Option<Place>),
     Unknown,
 }
 
@@ -73,7 +258,7 @@ fn outcome(steps: &[Step], bits: u64) -> Outcome {
                 path,
                 needs,
                 short,
-                label,
+                place,
             } if *needs > bits => {
                 let problem = match short {
                     Short::NoTerminator(byte) => Problem::NoTerminator { byte: *byte },
@@ -84,9 +269,9 @@ fn outcome(steps: &[Step], bits: u64) -> Outcome {
                     },
                 };
                 let path = path.clone();
-                return Outcome::Fails(Failure { path, problem }, label);
+                return Outcome::Fails(Failure { path, problem }, Some(*place));
             }
-            Step::Fail(failure) => return Outcome::Fails(failure.clone(), "value"),
+            Step::Fail(failure) => return Outcome::Fails(failure.clone(), None),
             Step::More { at } if bits <= *at => return Outcome::Decodes,
             Step::Opaque { needs } if *needs > bits => return Outcome::Unknown,
             Step::Unknown => return Outcome::Unknown,
@@ -149,10 +334,7 @@ impl Picks {
 /// A fault, and what was planted, for a failing case's report.
 #[derive(Debug, Clone)]
 struct Plant {
-    /// Its kind, as faults are picked: `cut`, `more`, `count`, `shared
-    /// count`, `length` or `text`.
-    kind: &'static str,
-    route: String,
+    route: Route,
     change: Change,
     planted: String,
 }
@@ -187,11 +369,11 @@ fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks)
     };
     // A second fault of another kind; at most one of them cuts the
     // payload to a length.
-    let cuts = |kind: &str| matches!(kind, "cut" | "more");
+    let kind = first.route.kind();
     let second = picks.second.as_ref().and_then(|second| {
         pick(
             &plants,
-            |kind| kind != first.kind && !(cuts(kind) && cuts(first.kind)),
+            |other| other != kind && !(other.cuts() && kind.cuts()),
             second,
         )
     });
@@ -205,13 +387,7 @@ fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks)
         else {
             continue;
         };
-        let mut routes: Vec<String> = attempt.iter().map(|plant| plant.route.clone()).collect();
-        if attempt.len() > 1 {
-            routes.push("pair".to_string());
-        }
-        if valid.event_time == EventTime::Invalid {
-            routes.push("unreadable time".to_string());
-        }
+        let routes: Vec<Route> = attempt.iter().map(|plant| plant.route).collect();
         let planted: Vec<&str> = attempt.iter().map(|plant| plant.planted.as_str()).collect();
         return Message {
             payload,
@@ -230,22 +406,22 @@ fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks)
 /// plant of the route, by `picks`.
 fn pick<'p>(
     plants: &'p [Plant],
-    allowed: impl Fn(&str) -> bool,
+    allowed: impl Fn(FaultKind) -> bool,
     picks: &[Index; 3],
 ) -> Option<&'p Plant> {
     let [kind, route, which] = picks;
-    let mut kinds: Vec<&str> = plants
+    let mut kinds: Vec<FaultKind> = plants
         .iter()
-        .map(|plant| plant.kind)
-        .filter(|kind| allowed(kind))
+        .map(|plant| plant.route.kind())
+        .filter(|kind| allowed(*kind))
         .collect();
     kinds.sort_unstable();
     kinds.dedup();
     let kind = *kinds.get(kind.index(kinds.len().max(1)))?;
-    let mut routes: Vec<&str> = plants
+    let mut routes: Vec<Route> = plants
         .iter()
-        .filter(|plant| plant.kind == kind)
-        .map(|plant| plant.route.as_str())
+        .map(|plant| plant.route)
+        .filter(|route| route.kind() == kind)
         .collect();
     routes.sort_unstable();
     routes.dedup();
@@ -340,10 +516,9 @@ fn plants(
     let (_, steps, _) = write_message(packet, time, &draft.values, &mut noise, &draft.timing, None);
     // Every shorter length that fails.
     for cut in 1..length {
-        if let Outcome::Fails(_, label) = outcome(&steps, 8 * cut as u64) {
+        if let Outcome::Fails(_, Some(place)) = outcome(&steps, 8 * cut as u64) {
             plants.push(Plant {
-                kind: "cut",
-                route: format!("cut:{label}"),
+                route: Route::Cut(place),
                 change: Change::Cut(cut),
                 planted: format!("cut to {cut} bytes"),
             });
@@ -357,10 +532,9 @@ fn plants(
         let (_, steps, end) = write_message(packet, time, &values, &mut noise, &draft.timing, None);
         let end = end.map_or(0, |end| end.div_ceil(8) as usize);
         for cut in length + 1..end {
-            if let Outcome::Fails(_, label) = outcome(&steps, 8 * cut as u64) {
+            if let Outcome::Fails(_, Some(place)) = outcome(&steps, 8 * cut as u64) {
                 plants.push(Plant {
-                    kind: "more",
-                    route: format!("more:{label}"),
+                    route: Route::More(place),
                     change: Change::More(cut),
                     planted: format!("one more element, the payload cut to {cut} bytes"),
                 });
@@ -382,75 +556,66 @@ fn plants(
                 .iter()
                 .map(move |(multiply, add)| raw * i128::from(*multiply) + i128::from(*add))
         };
-        if counts(0).next().is_some_and(|first| first < 0) {
+        if counts(Held::Negative.raw(count.bits))
+            .next()
+            .is_some_and(|first| first < 0)
+        {
             held.push((
-                "count",
-                "count:negative",
+                Route::Count(Held::Negative),
                 count.spot.clone(),
                 &count.path,
-                0,
+                Held::Negative.raw(count.bits),
             ));
         }
-        let shared = (0..=largest(count.bits).min(8)).find(|&raw| {
+        let shared = (0..=Held::Largest.raw(count.bits).min(8)).find(|&raw| {
             counts(raw).next().is_some_and(|first| first >= 0) && counts(raw).any(|n| n < 0)
         });
         if let Some(raw) = shared {
-            held.push((
-                "shared count",
-                "shared count",
-                count.spot.clone(),
-                &count.path,
-                raw,
-            ));
+            held.push((Route::SharedCount, count.spot.clone(), &count.path, raw));
         }
         held.push((
-            "count",
-            "count:largest",
+            Route::Count(Held::Largest),
             count.spot.clone(),
             &count.path,
-            largest(count.bits),
+            Held::Largest.raw(count.bits),
         ));
     }
     for length in &found.lengths {
         if length.add < 0 {
             held.push((
-                "length",
-                "length:negative",
+                Route::Length(Held::Negative),
                 length.spot.clone(),
                 &length.path,
-                0,
+                Held::Negative.raw(length.bits),
             ));
         }
         held.push((
-            "length",
-            "length:largest",
+            Route::Length(Held::Largest),
             length.spot.clone(),
             &length.path,
-            largest(length.bits),
+            Held::Largest.raw(length.bits),
         ));
     }
-    for (kind, route, spot, path, raw) in held {
+    for (route, spot, path, raw) in held {
         let change = Change::Hold(spot, raw);
         if let (_, Outcome::Fails(..)) = apply(packet, time, draft, length, &[&change]) {
             plants.push(Plant {
-                kind,
-                route: route.to_string(),
+                route,
                 change,
                 planted: format!("{path} holding {raw}"),
             });
         }
     }
     for text in &found.texts {
-        for (form, sequence) in invalid_forms(text.text) {
-            let Some(bytes) = garble(text, form, sequence, detail) else {
+        for &form in garblings(text.text) {
+            let Some(bytes) = garble(text, form, detail) else {
                 continue;
             };
-            let planted = format!("{} as {bytes:02x?} ({form})", text.path);
+            let planted = format!("{} as {bytes:02x?} ({})", text.path, form.name());
             let change = Change::Garble(text.path.clone(), bytes);
             if let (_, Outcome::Fails(..)) = apply(packet, time, draft, length, &[&change]) {
                 plants.push(Plant {
-                    kind: "text",
-                    route: format!("text:{form}"),
+                    route: Route::Text(form),
                     change,
                     planted,
                 });
@@ -460,39 +625,28 @@ fn plants(
     plants
 }
 
-/// The largest raw value a field of `bits` holds.
-fn largest(bits: u32) -> u64 {
-    if bits >= 64 {
-        u64::MAX
-    } else {
-        (1 << bits) - 1
-    }
-}
-
-/// Bytes that aren't text in an encoding, by name: for UTF-8 a stray
-/// continuation byte, an overlong form, a surrogate, a code point past
-/// U+10FFFF, a byte UTF-8 never has, and a sequence cut off by the
-/// value's end; for ASCII a byte of 0x80 or more. Latin-1 has none.
-fn invalid_forms(text: Text) -> &'static [(&'static str, &'static [u8])] {
+/// The ways bytes can fail to be text in an encoding. Latin-1 has none.
+fn garblings(text: Text) -> &'static [Garbling] {
     match text {
         Text::Utf8 => &[
-            ("stray", &[0x80]),
-            ("overlong", &[0xc0, 0xaf]),
-            ("surrogate", &[0xed, 0xa0, 0x80]),
-            ("past_max", &[0xf4, 0x90, 0x80, 0x80]),
-            ("never", &[0xff]),
-            ("cut_off", &[0xe2, 0x82]),
+            Garbling::Stray,
+            Garbling::Overlong,
+            Garbling::Surrogate,
+            Garbling::PastMax,
+            Garbling::Never,
+            Garbling::CutOff,
         ],
-        Text::Ascii => &[("high", &[0xe9])],
+        Text::Ascii => &[Garbling::High],
         Text::Latin1 => &[],
     }
 }
 
 /// A string's value garbled: as many bytes as it had, letters but for
-/// `sequence`, at a place `detail` picks (at the very end, for a sequence
-/// the end cuts off). `None` if the value is too short, or the sequence
-/// holds its terminator.
-fn garble(text: &TextTarget, form: &str, sequence: &[u8], detail: &Index) -> Option<Vec<u8>> {
+/// `form`'s sequence, at a place `detail` picks (at the very end, for a
+/// sequence the end cuts off). `None` if the value is too short, or the
+/// sequence holds its terminator.
+fn garble(text: &TextTarget, form: Garbling, detail: &Index) -> Option<Vec<u8>> {
+    let sequence = form.sequence();
     let length = text.bytes.len();
     if length < sequence.len() || text.terminator.is_some_and(|t| sequence.contains(&t)) {
         return None;
@@ -503,7 +657,7 @@ fn garble(text: &TextTarget, form: &str, sequence: &[u8], detail: &Index) -> Opt
         b'a'
     };
     let mut bytes = vec![letter; length];
-    let at = if form == "cut_off" {
+    let at = if form == Garbling::CutOff {
         length - sequence.len()
     } else {
         detail.index(length - sequence.len() + 1)

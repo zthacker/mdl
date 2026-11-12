@@ -22,12 +22,12 @@ use serde_json::{Map, Value, json};
 
 use super::meaning::sample;
 use super::{
-    Failure, FieldSpec, Kind, Length, Meaning, Place, Placed, Problem, Raw, Sample, encode,
+    Failure, FieldSpec, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Slot, encode,
     field_json, field_spec, fit, inside_one_byte, kind, length_field, param_json, put_bits,
     raw_value, remaining_kind, scalar_json, spec_of,
 };
 use composite::{CompositeNode, CompositeSource, CompositeSpec, composite_source, resolve};
-use faults::{Short, Step};
+use faults::{Place, Short, Step};
 
 /// The most elements an array whose count varies has in a message.
 const MOST_ELEMENTS: u32 = 5;
@@ -256,7 +256,7 @@ fn element_spec(depth: u32, varying: bool) -> BoxedStrategy<ElementSpec> {
     // Integers narrower than a byte, often: bit-packed elements, and
     // little-endian ones that must each sit inside a byte.
     let kinds = prop_oneof![
-        3 => kind(Place::Element { varying }),
+        3 => kind(Slot::Element { varying }),
         1 => (1_u32..=7).prop_map(Kind::Uint),
         1 => (1_u32..=7).prop_map(Kind::Int),
     ];
@@ -1147,11 +1147,11 @@ impl<'p> Writer<'p> {
         let mut at = at;
         let mut values = record.iter();
         let padding = if path.is_empty() {
-            "padding"
+            Place::Padding
         } else if path.ends_with(']') {
-            "padding in an element"
+            Place::PaddingInElement
         } else {
-            "padding in a struct"
+            Place::PaddingInStruct
         };
         for node in nodes {
             if let Node::Padding(bits) = node {
@@ -1168,7 +1168,9 @@ impl<'p> Writer<'p> {
                 format!("{path}.{name}")
             };
             at = match (node, raw) {
-                (Node::Field(field), raw) => self.scalar(field, raw, at, &here, record, "field")?,
+                (Node::Field(field), raw) => {
+                    self.scalar(field, raw, at, &here, record, Place::Field)?
+                }
                 (Node::Array(array), Raw::Array(items)) => {
                     self.array(array, items, at, &here, record)?
                 }
@@ -1190,11 +1192,11 @@ impl<'p> Writer<'p> {
         at: u64,
         path: &str,
         scope: &[(String, Raw)],
-        label: &'static str,
+        place: Place,
     ) -> Option<u64> {
         let Some(length) = field.kind.length() else {
             let end = put(field, raw, self.payload, at);
-            self.reach(path, end, Short::PastEnd, label);
+            self.reach(path, end, Short::PastEnd, place);
             return Some(end);
         };
         let (value, text) = match (&field.kind, raw) {
@@ -1210,13 +1212,13 @@ impl<'p> Writer<'p> {
         let end = match length {
             Length::Fixed { .. } => {
                 let end = put_run(self.payload, at, &bytes, length);
-                self.reach(path, end, Short::PastEnd, label);
+                self.reach(path, end, Short::PastEnd, place);
                 end
             }
             // Decoding looks for the terminator in what the packet has.
             Length::Terminated(byte) => {
                 let end = put_run(self.payload, at, &bytes, length);
-                self.reach(path, end, Short::NoTerminator(byte), "terminator");
+                self.reach(path, end, Short::NoTerminator(byte), Place::Terminator);
                 end
             }
             // The length is checked against the bits left before anything
@@ -1231,11 +1233,11 @@ impl<'p> Writer<'p> {
                 };
                 let needs = at.saturating_add(said.saturating_mul(8));
                 if said != bytes.len() as u64 {
-                    self.reach(path, needs, Short::PastEnd, label);
+                    self.reach(path, needs, Short::PastEnd, place);
                     return self.unknown();
                 }
                 let end = put_run(self.payload, at, &bytes, length);
-                self.reach(path, end, Short::PastEnd, label);
+                self.reach(path, end, Short::PastEnd, place);
                 end
             }
             // It reads whatever is left. A packet that ends inside its
@@ -1298,11 +1300,11 @@ impl<'p> Writer<'p> {
         let exact = exact_bits(&array.element);
         let each = exact.unwrap_or(1);
         let needs = at.saturating_add(count.saturating_mul(each));
-        let label = match exact {
-            Some(_) => "array",
-            None => "array, a bit each",
+        let place = match exact {
+            Some(_) => Place::Array,
+            None => Place::ArrayBitEach,
         };
-        self.reach(path, needs, Short::PastEnd, label);
+        self.reach(path, needs, Short::PastEnd, place);
         if count > items.len() as u64 {
             return self.unknown();
         }
@@ -1315,7 +1317,7 @@ impl<'p> Writer<'p> {
     fn element(&mut self, element: &ElementNode, item: &Raw, at: u64, path: &str) -> Option<u64> {
         match (element, item) {
             (ElementNode::Scalar(element), raw) => {
-                self.scalar(element, raw, at, path, &[], "element")
+                self.scalar(element, raw, at, path, &[], Place::Element)
             }
             (ElementNode::Struct(ty), Raw::Record(fields)) => {
                 self.container(&ty.entries, fields, at, path)
@@ -1324,12 +1326,12 @@ impl<'p> Writer<'p> {
         }
     }
 
-    fn reach(&mut self, path: &str, needs: u64, short: Short, label: &'static str) {
+    fn reach(&mut self, path: &str, needs: u64, short: Short, place: Place) {
         self.steps.push(Step::Reach {
             path: path.to_string(),
             needs,
             short,
-            label,
+            place,
         });
     }
 

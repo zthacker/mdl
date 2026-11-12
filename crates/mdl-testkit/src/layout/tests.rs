@@ -541,6 +541,68 @@ fn the_oracle_agrees_with_third_party_libraries() {
     }
 }
 
+/// What the damaged-message reach test counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Reached {
+    Kind(super::FaultKind),
+    Route(super::Route),
+    /// Two faults planted in one message.
+    Pair,
+    /// A fault in a message whose event time can't be read.
+    UnreadableTime,
+    /// An error of this code.
+    Code(&'static str),
+    /// An error naming an entry here.
+    Named(Named),
+}
+
+/// Where the entry an error names is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Named {
+    /// Padding, named by its container: none at the top level, an element
+    /// or a struct.
+    PaddingAtTop,
+    PaddingInElement,
+    PaddingInStruct,
+    /// A field of an array's record.
+    InRecord,
+    /// A scalar element.
+    Element,
+    /// A field of a struct entry.
+    InStruct,
+    /// An entry at the top level.
+    AtTop,
+}
+
+impl Named {
+    const ALL: [Named; 7] = [
+        Named::PaddingAtTop,
+        Named::PaddingInElement,
+        Named::PaddingInStruct,
+        Named::InRecord,
+        Named::Element,
+        Named::InStruct,
+        Named::AtTop,
+    ];
+}
+
+/// Whether one more element must reach `place` in the reach test. A new
+/// place won't compile until it's decided here (and listed in
+/// `Place::ALL`).
+fn more_required(place: super::Place) -> bool {
+    use super::Place;
+
+    match place {
+        Place::Array | Place::Element | Place::Field | Place::Terminator => true,
+        // Inside an element, but rare: a bit-each check needs an element
+        // holding an array of elements without an exact size, and padding
+        // a cut can land in needs spare bits across a byte.
+        Place::ArrayBitEach | Place::PaddingInElement | Place::PaddingInStruct => false,
+        // Never inside an element.
+        Place::Header | Place::Padding | Place::TimeCode => false,
+    }
+}
+
 /// Damaged messages reach every route the faults take, and every error
 /// and place an error can name, at least five times each.
 #[test]
@@ -550,12 +612,12 @@ fn damaged_messages_reach_every_route() {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
-    use super::{Problem, damaged};
+    use super::{EventTime, FaultKind, Garbling, Held, Place, Problem, Route, damaged};
 
     let mut runner = TestRunner::deterministic();
     let strategy = damaged();
-    let mut found: BTreeMap<String, usize> = BTreeMap::new();
-    let mut note = |label: String| *found.entry(label).or_default() += 1;
+    let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
+    let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
     let (mut messages, mut damaged) = (0, 0);
     for _ in 0..1000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
@@ -566,22 +628,29 @@ fn damaged_messages_reach_every_route() {
             };
             damaged += 1;
             for route in &damage.routes {
-                note(route.clone());
+                note(Reached::Kind(route.kind()));
+                note(Reached::Route(*route));
+            }
+            if damage.routes.len() > 1 {
+                note(Reached::Pair);
+            }
+            if message.event_time == EventTime::Invalid {
+                note(Reached::UnreadableTime);
             }
             let failure = &damage.failure;
-            note(format!("code:{}", failure.problem.code()));
-            let place = match (failure.problem, failure.path.as_str()) {
-                (Problem::PastEnd { padding: true, .. }, "") => "padding at the top level",
+            note(Reached::Code(failure.problem.code()));
+            let named = match (failure.problem, failure.path.as_str()) {
+                (Problem::PastEnd { padding: true, .. }, "") => Named::PaddingAtTop,
                 (Problem::PastEnd { padding: true, .. }, path) if path.ends_with(']') => {
-                    "padding in an element"
+                    Named::PaddingInElement
                 }
-                (Problem::PastEnd { padding: true, .. }, _) => "padding in a struct",
-                (_, path) if path.contains("].") => "in a record",
-                (_, path) if path.ends_with(']') => "an element",
-                (_, path) if path.contains('.') => "in a struct",
-                _ => "at the top level",
+                (Problem::PastEnd { padding: true, .. }, _) => Named::PaddingInStruct,
+                (_, path) if path.contains("].") => Named::InRecord,
+                (_, path) if path.ends_with(']') => Named::Element,
+                (_, path) if path.contains('.') => Named::InStruct,
+                _ => Named::AtTop,
             };
-            note(format!("place:{place}"));
+            note(Reached::Named(named));
         }
     }
     println!("{damaged} of {messages} messages damaged; {found:#?}");
@@ -590,48 +659,23 @@ fn damaged_messages_reach_every_route() {
         damaged * 10 >= messages * 9,
         "{damaged} of {messages} damaged"
     );
-    for route in [
-        "cut:header",
-        "cut:time code",
-        "cut:field",
-        "cut:element",
-        "cut:array",
-        "cut:array, a bit each",
-        "cut:padding",
-        "cut:padding in a struct",
-        "cut:padding in an element",
-        "cut:terminator",
-        "more:element",
-        "more:terminator",
-        "more:field",
-        "more:array",
-        "count:negative",
-        "count:largest",
-        "shared count",
-        "length:negative",
-        "length:largest",
-        "text:stray",
-        "text:overlong",
-        "text:surrogate",
-        "text:past_max",
-        "text:never",
-        "text:cut_off",
-        "text:high",
-        "pair",
-        "unreadable time",
-        "code:past_end",
-        "code:no_terminator",
-        "code:invalid_text",
-        "code:bad_length",
-        "place:padding at the top level",
-        "place:padding in an element",
-        "place:padding in a struct",
-        "place:in a record",
-        "place:an element",
-        "place:in a struct",
-        "place:at the top level",
-    ] {
-        let count = found.get(route).copied().unwrap_or(0);
-        assert!(count >= 5, "{route} is reached {count} times");
+    let mut required: Vec<Reached> = FaultKind::ALL.map(Reached::Kind).to_vec();
+    required.extend(Place::ALL.map(|place| Reached::Route(Route::Cut(place))));
+    required.extend(
+        Place::ALL
+            .into_iter()
+            .filter(|place| more_required(*place))
+            .map(|place| Reached::Route(Route::More(place))),
+    );
+    required.extend(Held::ALL.map(|held| Reached::Route(Route::Count(held))));
+    required.extend(Held::ALL.map(|held| Reached::Route(Route::Length(held))));
+    required.push(Reached::Route(Route::SharedCount));
+    required.extend(Garbling::ALL.map(|form| Reached::Route(Route::Text(form))));
+    required.extend([Reached::Pair, Reached::UnreadableTime]);
+    required.extend(["past_end", "no_terminator", "invalid_text", "bad_length"].map(Reached::Code));
+    required.extend(Named::ALL.map(Reached::Named));
+    for reached in required {
+        let count = found.get(&reached).copied().unwrap_or(0);
+        assert!(count >= 5, "{reached:?} is reached {count} times");
     }
 }
