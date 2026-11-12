@@ -17,11 +17,11 @@
 //! (`units.md` §4); sentinels and qualities follow §7.2 and §7.3.
 
 use std::collections::BTreeSet;
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 
-pub use body::faults::{FaultKind, Garbling, Held, Place, Route};
+pub use body::faults::{FaultKind, Garbling, Held, Place, Route, Tamper};
 use body::faults::{Short, Step};
-use body::{Body, BodySpec, Writer, body_spec};
+use body::{Body, BodySpec, PacketLength, Writer, body_spec, fixed_checks};
 pub use fleet::{Fleet, Meta, Sent, fleet};
 use meaning::{UNIT_GROUPS, convert, convert_unit, table};
 use proptest::collection::{btree_set, vec};
@@ -80,7 +80,8 @@ pub struct Damage {
 pub struct Failure {
     /// The path of the entry the error names, every index included
     /// (`cells[1].volts`). Padding has no path, so for padding it's its
-    /// container's, empty at a packet's top level.
+    /// container's, empty at a packet's top level; empty too for a packet
+    /// too short for its length, which names no entry.
     pub path: String,
     pub problem: Problem,
 }
@@ -103,6 +104,17 @@ pub enum Problem {
     InvalidText { encoding: &'static str },
     /// `bad_length`: a count or length from a field is `value`, below 0.
     BadLength { value: i128 },
+    /// `too_short`: the payload has `given_bytes`, fewer than the packet's
+    /// `length` of `needed_bytes`, `exact` or at least (§5.1).
+    TooShort {
+        needed_bytes: u32,
+        given_bytes: usize,
+        exact: bool,
+    },
+    /// `bad_checksum`: the checksum holds `stored`, which its algorithm
+    /// doesn't accept for the bytes it covers, whose value is `computed`
+    /// (§5.6).
+    BadChecksum { stored: u64, computed: u64 },
 }
 
 impl Problem {
@@ -113,6 +125,8 @@ impl Problem {
             Problem::NoTerminator { .. } => "no_terminator",
             Problem::InvalidText { .. } => "invalid_text",
             Problem::BadLength { .. } => "bad_length",
+            Problem::TooShort { .. } => "too_short",
+            Problem::BadChecksum { .. } => "bad_checksum",
         }
     }
 }
@@ -816,6 +830,10 @@ impl PacketLayout {
     fn json(&self) -> Value {
         let mut json = json!({ "name": self.name, "identify": self.identify,
                                "entries": self.entries });
+        if let Some(length) = self.body.length {
+            let kind = if length.exact { "exact" } else { "at_least" };
+            json["length"] = json!({ "kind": kind, "bytes": length.bytes });
+        }
         if self.count.is_some() {
             json["time_field"] = json!("t");
         }
@@ -1180,13 +1198,18 @@ fn message_at(
 }
 
 /// What a message holds before it's packed: its body's values, the noise
-/// they're written over, and its header and time fields.
+/// they're written over, its header and time fields, and how many bytes
+/// past an exact length it has.
 #[derive(Debug, Clone)]
 struct Draft {
     values: Vec<(String, Raw)>,
     noise: Vec<u8>,
     timing: Timing,
+    extra: usize,
 }
+
+/// The most bytes a message has past its packet's exact length.
+const MOST_EXTRA: usize = 4;
 
 /// A draft of a message of `packet` received at `ground`, its header
 /// fields holding `header`: a raw value for each field, over random bytes,
@@ -1198,8 +1221,16 @@ fn draft(
     header: Vec<u64>,
 ) -> BoxedStrategy<Draft> {
     let time = time.clone();
-    let values = body::values(&packet.body.entries);
-    let length = usize::try_from(packet.body.most_bits.div_ceil(8)).unwrap_or(0);
+    let values = packet.body.values();
+    // Room for the most a message reaches, its packet's length, and bytes
+    // past an exact one, which decoding ignores (§5.1): now and then.
+    let floor = packet.body.length.map_or(0, |length| length.bytes as usize);
+    let most = usize::try_from(packet.body.most_bits.div_ceil(8)).unwrap_or(0);
+    let length = most.max(floor) + MOST_EXTRA;
+    let extra = match packet.body.length {
+        Some(PacketLength { exact: true, .. }) => prop_oneof![Just(0), 1..=MOST_EXTRA].boxed(),
+        _ => Just(0).boxed(),
+    };
     // Now and then a sentinel, which means ground time.
     let count = match packet.count {
         Some(count) if !packet.count_invalid.is_empty() => {
@@ -1261,9 +1292,9 @@ fn draft(
     };
     let timing = (count, week, cuc, correlation);
     let start = time_start(&packet.header) as usize / 8;
-    (values, vec(any::<u8>(), length), timing)
+    (values, vec(any::<u8>(), length), timing, extra)
         .prop_map(
-            move |(values, mut noise, (count, week, cuc, correlation))| {
+            move |(values, mut noise, (count, week, cuc, correlation), extra)| {
                 if let (Some(seconds), TimeSource::Cuc { coarse, .. }) = (cuc, &time) {
                     for k in 0..*coarse as usize {
                         let shift = 8 * (*coarse as usize - 1 - k);
@@ -1281,6 +1312,7 @@ fn draft(
                     values,
                     noise,
                     timing,
+                    extra,
                 }
             },
         )
@@ -1540,14 +1572,22 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
         values,
         mut noise,
         timing,
+        extra,
     } = draft;
-    let (mut record, _, end) = write_message(packet, time, &values, &mut noise, &timing, None);
-    // A valid message's values never stop decoding inside it.
-    let end = end.unwrap_or(8 * noise.len() as u64);
+    let written = write_message(packet, time, &values, &mut noise, &timing, None);
+    // A valid message's values never stop decoding inside it, and reach
+    // an `at_least` length. One of an exact length has its bytes, and now
+    // and then more.
+    let end = written.end.unwrap_or(8 * noise.len() as u64);
+    let reached = usize::try_from(end.div_ceil(8)).unwrap_or(noise.len());
+    let floor = packet
+        .body
+        .length
+        .map_or(0, |length| length.bytes as usize + extra);
     let mut payload = noise;
-    payload.truncate(usize::try_from(end.div_ceil(8)).unwrap_or(payload.len()));
+    payload.truncate(reached.max(floor));
     let samples = packet.body.samples(&values);
-    record.extend(values);
+    let record = written.record;
     let Timing {
         count,
         week,
@@ -1588,11 +1628,24 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
     }
 }
 
+/// A message as [`write_message`] writes it.
+struct Written {
+    /// Its record: its header and time fields, then its body's values,
+    /// each checksum holding the value written for it.
+    record: Vec<(String, Raw)>,
+    /// Every step decoding takes ([`Step`]).
+    steps: Vec<Step>,
+    /// Where the body ends: `None` when decoding stops inside it.
+    end: Option<u64>,
+    /// The bits nothing decoding does depends on but checksums over them:
+    /// the writer's, and a CUC time code's, padding to decoding.
+    inert: Vec<Range<u64>>,
+}
+
 /// Writes a message over the noise in `payload`: its id, header and time
 /// fields, then its body, with `garbled` written for a string's value if
-/// given. Returns the record of all but the body, every step decoding
-/// takes ([`Step`]), and where the body ends: `None` when decoding stops
-/// inside it.
+/// given. Decoding checks the packet's length first, then the checksums at
+/// static positions, before it reads any entry (§5.1, §5.6).
 fn write_message(
     packet: &PacketLayout,
     time: &TimeSource,
@@ -1600,8 +1653,19 @@ fn write_message(
     payload: &mut [u8],
     timing: &Timing,
     garbled: Option<(String, Vec<u8>)>,
-) -> (Vec<(String, Raw)>, Vec<Step>, Option<u64>) {
+) -> Written {
     let mut steps = Vec::new();
+    if let Some(length) = packet.body.length {
+        steps.push(Step::Packet {
+            bytes: length.bytes,
+            exact: length.exact,
+        });
+    }
+    steps.extend(
+        fixed_checks(&packet.body.entries)
+            .into_iter()
+            .map(Step::Verify),
+    );
     let header_step = |name: &str, needs: u64| Step::Reach {
         path: name.to_string(),
         needs,
@@ -1630,13 +1694,16 @@ fn write_message(
         steps.push(header_step("boot", boot_at + 32));
     }
     // The CUC code is padding to decoding, at the packet's top level.
+    let mut inert = Vec::new();
     if let TimeSource::Cuc { coarse, fine, .. } = time {
+        let end = start + u64::from(8 * (coarse + fine));
         steps.push(Step::Reach {
             path: String::new(),
-            needs: start + u64::from(8 * (coarse + fine)),
+            needs: end,
             short: Short::Padding,
             place: Place::TimeCode,
         });
+        inert.push(start..end);
     }
     // The count field comes after the GPS week, in the family's byte order.
     if let (Some(field), Some(raw)) = (packet.count, &timing.count) {
@@ -1662,7 +1729,16 @@ fn write_message(
     let mut writer = Writer::new(payload, garbled, steps);
     // The body's entries are the packet's: their offsets count from bit 0.
     let end = writer.container(&packet.body.entries, values, 0, packet.body.start, "");
-    (record, writer.steps(), end)
+    writer.unreached_checksums(&packet.body.entries);
+    record.extend(writer.record(values));
+    let (steps, body_inert) = writer.finish();
+    inert.extend(body_inert);
+    Written {
+        record,
+        steps,
+        end,
+        inert,
+    }
 }
 
 // ---- The bundle -----------------------------------------------------------

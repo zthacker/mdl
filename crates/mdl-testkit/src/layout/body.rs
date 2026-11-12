@@ -1,11 +1,12 @@
-//! A packet's body: the fields, arrays and structs after its header and
-//! time fields, and the composites over its numbers. Laid out as
-//! `spec/decoding.md` §5.2 reads them: entries one after another; arrays
-//! of fixed, field (§5.4) and remaining counts, each element starting
-//! where the last ended; struct entries and elements read from their own
-//! start, of struct types that nest. And the values a message holds in
-//! them, written bit by bit (§2.1, §2.2), with the record (§6) and samples
-//! (§7.3, §7.4) they decode to.
+//! A packet's body: the fields, arrays, structs and checksums after its
+//! header and time fields, the composites over its numbers, and the
+//! packet's `length`. Laid out as `spec/decoding.md` §5.2 reads them:
+//! entries one after another; arrays of fixed, field (§5.4) and remaining
+//! counts, each element starting where the last ended; struct entries and
+//! elements read from their own start, of struct types that nest;
+//! checksums over the bytes before them (§5.6). And the values a message
+//! holds in them, written bit by bit (§2.1, §2.2), with the record (§6)
+//! and samples (§7.3, §7.4) they decode to.
 //!
 //! What varies in size (an array counted by a field, or running to the
 //! end) is whole bytes, so where each later entry starts within a byte is
@@ -13,22 +14,24 @@
 
 use std::collections::BTreeMap;
 use std::iter::once;
-use std::ops::RangeInclusive;
+use std::ops::{Range, RangeInclusive};
 
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
-use proptest::sample::select;
+use proptest::sample::{Index, select};
 use proptest::strategy::Union;
 use serde_json::{Map, Value, json};
 
 use super::meaning::sample;
 use super::{
     Failure, FieldSpec, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Sentinel, Slot, Text,
-    encode, field_json, field_spec, fit, inside_one_byte, integer_json, kind, length_field,
-    meaning, param_json, put_bits, raw_value, remaining_kind, scalar_json, sentinels, spec_of,
+    bytes_value, encode, field_json, field_spec, fit, inside_one_byte, integer_json, kind,
+    length_field, meaning, param_json, put_bits, raw_value, remaining_kind, scalar_json, sentinels,
+    spec_of, text_value,
 };
+use crate::checksum::{Algorithm, algorithm};
 use composite::{CompositeNode, CompositeSource, CompositeSpec, composite_source, resolve};
-use faults::{Place, Short, Step};
+use faults::{Check, Place, Short, Step};
 
 /// The most elements an array whose count varies has in a message.
 const MOST_ELEMENTS: u32 = 5;
@@ -39,8 +42,12 @@ const MOST_ELEMENTS: u32 = 5;
 #[derive(Debug, Clone)]
 pub(super) struct BodySpec {
     items: Vec<ItemSpec>,
+    /// A checksum after the items, over the packet so far, as packets so
+    /// often end.
+    end: Option<ChecksumSpec>,
     /// What runs to the packet's end, last (§5.2).
     trailer: Option<Trailer>,
+    length: LengthSpec,
     composites: Vec<CompositeSpec>,
     /// The order the packet lists its composites in, which needn't be
     /// their names' (samples follow the names').
@@ -52,7 +59,9 @@ impl BodySpec {
     pub(super) fn fields(fields: Vec<FieldSpec>) -> BodySpec {
         BodySpec {
             items: fields.into_iter().map(ItemSpec::Field).collect(),
+            end: None,
             trailer: None,
+            length: LengthSpec::None,
             composites: Vec::new(),
             listed: Vec::new(),
         }
@@ -81,6 +90,8 @@ enum ItemSpec {
     },
     /// Two readings of the same bits ([`Alternatives`]).
     Alternatives(Box<Alternatives>),
+    /// A checksum, at a packet's top level (§5.6).
+    Checksum(ChecksumSpec),
 }
 
 /// Two fields reading the same bits at one offset, at most one of them
@@ -132,6 +143,49 @@ impl Selector {
             },
         }
     }
+}
+
+/// A checksum entry, before it's laid out.
+#[derive(Debug, Clone)]
+struct ChecksumSpec {
+    algorithm: Algorithm,
+    cover: Cover,
+    /// Whether an `iso8473` checksum that computes 0xFFFF holds 0x0000,
+    /// which decoders accept too (§5.6). Over no bytes it computes that.
+    zero: bool,
+}
+
+/// What a checksum covers.
+#[derive(Debug, Clone)]
+enum Cover {
+    /// The packet from its start, `from_bits` left out.
+    All,
+    /// From a byte this picks, up to where it starts at the earliest,
+    /// spelled as `from_bits`.
+    From(Index),
+    /// From where it starts at the earliest: nothing, where its position
+    /// is static.
+    Nothing,
+}
+
+/// A packet's `length` (§5.1), before its body is laid out, which decides
+/// the bytes a message fills it with.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum LengthSpec {
+    None,
+    /// `exact`, where every entry before what runs to the end has a static
+    /// position and an exact size (§5.2): `slack` unread bytes past the
+    /// last entry, or what runs to the end holding `fill` elements of an
+    /// exact size, or `fill` bytes. Elsewhere `at_least`, `slack` bytes
+    /// under the least a message reaches.
+    Exact {
+        slack: u32,
+        fill: u32,
+    },
+    /// `at_least`, from 1 byte up to the least a message reaches, as this
+    /// picks: a payload cut short of it is `too_short`, one cut past it
+    /// fails where its entries do.
+    AtLeast(Index),
 }
 
 /// What runs to the end of the packet.
@@ -190,17 +244,28 @@ struct TypeSpec {
 pub(super) fn body_spec() -> BoxedStrategy<BodySpec> {
     (
         vec(item_spec(2, true), 1..=6),
+        proptest::option::weighted(0.3, checksum_spec()),
         proptest::option::weighted(0.3, trailer_spec()),
+        length_spec(),
         vec(composite_source(), 0..=2),
     )
-        .prop_flat_map(|(items, trailer, sources)| {
+        .prop_flat_map(|(items, end, trailer, length, sources)| {
             let total = items.len() + sources.iter().map(|s| s.items.len()).sum::<usize>();
             let order = Just((0..total).collect::<Vec<usize>>()).prop_shuffle();
             let listed = Just((0..sources.len()).collect::<Vec<usize>>()).prop_shuffle();
-            (Just(items), Just(trailer), Just(sources), order, listed)
+            let tail = (end, trailer, length);
+            (Just(items), Just(tail), Just(sources), order, listed)
         })
-        .prop_map(|(items, trailer, sources, order, listed)| {
-            mix(items, trailer, sources, &order, listed)
+        .prop_map(|(items, (end, trailer, length), sources, order, listed)| {
+            let (items, composites) = mix(items, sources, &order);
+            BodySpec {
+                items,
+                end,
+                trailer,
+                length,
+                composites,
+                listed,
+            }
         })
         .boxed()
 }
@@ -210,11 +275,9 @@ pub(super) fn body_spec() -> BoxedStrategy<BodySpec> {
 /// went.
 fn mix(
     items: Vec<ItemSpec>,
-    trailer: Option<Trailer>,
     sources: Vec<CompositeSource>,
     order: &[usize],
-    listed: Vec<usize>,
-) -> BodySpec {
+) -> (Vec<ItemSpec>, Vec<CompositeSpec>) {
     let mut all: Vec<Option<ItemSpec>> = items.into_iter().map(Some).collect();
     let mut firsts = Vec::new();
     for source in &sources {
@@ -231,18 +294,14 @@ fn mix(
         .zip(firsts)
         .map(|(source, first)| source.placed(&position[first..]))
         .collect();
-    BodySpec {
-        items,
-        trailer,
-        composites,
-        listed,
-    }
+    (items, composites)
 }
 
 /// An entry of a body or struct type: struct entries and arrays of
 /// structs only while `depth` allows another level; now and then under a
 /// condition. At a packet's `top` level, also at an offset (a conditional
-/// one too), or a pair of alternative readings. In a struct type an entry
+/// one too), a pair of alternative readings, or a checksum, sometimes at
+/// an offset. In a struct type an entry
 /// with an offset makes the struct end, for what follows, wherever any of
 /// its entries can (§5.2), so offsets there come only in fixed records
 /// ([`record_spec`]), whose size is exact.
@@ -281,11 +340,46 @@ fn item_spec(depth: u32, top: bool) -> BoxedStrategy<ItemSpec> {
     if !top {
         return prop_oneof![10 => plain, 3 => conditional].boxed();
     }
+    let checksum = prop_oneof![
+        2 => checksum_spec().prop_map(ItemSpec::Checksum),
+        1 => (0_u32..=24, checksum_spec()).prop_map(|(gap, spec)| ItemSpec::Offset {
+            gap,
+            item: Box::new(ItemSpec::Checksum(spec)),
+        }),
+    ];
     prop_oneof![
         10 => plain,
         2 => offset,
         3 => conditional,
         1 => alternatives_spec(),
+        2 => checksum,
+    ]
+    .boxed()
+}
+
+/// A checksum of any algorithm, from the packet's start half the time.
+fn checksum_spec() -> BoxedStrategy<ChecksumSpec> {
+    let cover = prop_oneof![
+        4 => Just(Cover::All),
+        3 => any::<Index>().prop_map(Cover::From),
+        1 => Just(Cover::Nothing),
+    ];
+    (algorithm(), cover, any::<bool>())
+        .prop_map(|(algorithm, cover, zero)| ChecksumSpec {
+            algorithm,
+            cover,
+            zero,
+        })
+        .boxed()
+}
+
+/// No length half the time, else `exact` or `at_least`.
+fn length_spec() -> BoxedStrategy<LengthSpec> {
+    prop_oneof![
+        2 => Just(LengthSpec::None),
+        1 => (0_u32..=2, 0..=MOST_ELEMENTS)
+            .prop_map(|(slack, fill)| LengthSpec::Exact { slack, fill }),
+        1 => any::<Index>().prop_map(LengthSpec::AtLeast),
     ]
     .boxed()
 }
@@ -450,9 +544,15 @@ fn array_spec(depth: u32) -> BoxedStrategy<ArraySpec> {
         .boxed()
 }
 
-/// An array, string or bytes that runs to the end of the packet.
+/// An array, string or bytes that runs to the end of the packet. More of
+/// its arrays are of records than elsewhere: one more record, cut short,
+/// fails at what it holds, an array or padding as well as a field.
 fn trailer_spec() -> BoxedStrategy<Trailer> {
-    let array = element_spec(1, true)
+    let element = prop_oneof![
+        2 => element_spec(1, true),
+        1 => type_spec(0).prop_map(ElementSpec::Struct),
+    ];
+    let array = element
         .prop_flat_map(|element| (interval_for(&element), Just(element)))
         .prop_map(|(interval, element)| {
             Trailer::Array(ArraySpec {
@@ -582,14 +682,6 @@ pub(super) struct Entry {
     node: Node,
 }
 
-impl Entry {
-    /// Whether its size, or whether it's there, varies between messages.
-    fn varies(&self) -> bool {
-        self.when.is_some()
-            || node_bits(&self.node, Bound::Least) != node_bits(&self.node, Bound::Most)
-    }
-}
-
 /// What an entry reads.
 #[derive(Debug, Clone)]
 pub(super) enum Node {
@@ -597,6 +689,62 @@ pub(super) enum Node {
     Field(Placed),
     Array(ArrayNode),
     Struct(StructNode),
+    Checksum(ChecksumNode),
+}
+
+/// A checksum (§5.6), at a packet's top level, on a byte.
+#[derive(Debug, Clone)]
+pub(super) struct ChecksumNode {
+    name: String,
+    algorithm: Algorithm,
+    /// The first bit it covers, a byte boundary: spelled as `from_bits`
+    /// when `spelled`, even at 0.
+    from: u64,
+    spelled: bool,
+    /// Where it is in every message, when its position is static (§5.2):
+    /// decoding verifies it before it reads any entry then.
+    fixed: Option<u64>,
+    /// Whether the family is little-endian, which a CRC's or a sum's
+    /// value follows.
+    little: bool,
+    /// Whether an `iso8473` checksum that computes 0xFFFF holds 0x0000.
+    zero: bool,
+}
+
+impl ChecksumNode {
+    /// It as decoding verifies it, at `at` and named by `path`.
+    fn check(&self, path: &str, at: u64) -> Check {
+        Check {
+            path: path.to_string(),
+            from: self.from,
+            at,
+            algorithm: self.algorithm.clone(),
+            little: self.little,
+        }
+    }
+}
+
+/// The checksums at static positions (§5.2), in order of position, each
+/// with where it is.
+fn fixed_sums(entries: &[Entry]) -> Vec<(&ChecksumNode, u64)> {
+    let mut fixed: Vec<(&ChecksumNode, u64)> = entries
+        .iter()
+        .filter_map(|entry| match &entry.node {
+            Node::Checksum(node) => node.fixed.map(|at| (node, at)),
+            _ => None,
+        })
+        .collect();
+    fixed.sort_by_key(|(_, at)| *at);
+    fixed
+}
+
+/// The checksums decoding verifies before it reads any entry (§5.6), in
+/// order of position.
+pub(super) fn fixed_checks(entries: &[Entry]) -> Vec<Check> {
+    fixed_sums(entries)
+        .into_iter()
+        .map(|(node, at)| node.check(&node.name, at))
+        .collect()
 }
 
 /// A condition (§5.4) on a selector field of the entry's container: every
@@ -787,6 +935,18 @@ pub(super) struct Body {
     listed: Vec<usize>,
     /// The furthest bit a message reaches.
     pub(super) most_bits: u64,
+    /// Its packet's `length` (§5.1), if it has one.
+    pub(super) length: Option<PacketLength>,
+    /// For a packet of exact length ending in what runs to the end: the
+    /// elements or bytes each message gives it.
+    fill: Option<u32>,
+}
+
+/// A packet's `length` (§5.1), in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct PacketLength {
+    pub(super) bytes: u32,
+    pub(super) exact: bool,
 }
 
 /// How a body's params and struct types are named, and the types laid
@@ -816,12 +976,20 @@ pub(super) fn lay_out(
     for (position, item) in spec.items.into_iter().enumerate() {
         placer.item(format!("f{position}"), item, &mut names);
     }
+    if let Some(end) = spec.end {
+        placer.checksum("check".into(), end);
+    }
+    // Where every message's bytes are known up to what runs to the end.
+    let exact = placer.exact;
     match spec.trailer {
         Some(Trailer::Array(trailer)) => placer.array("rest".into(), trailer, None, &mut names),
         Some(Trailer::Field(trailer)) => placer.field("rest".into(), trailer, None),
         None => {}
     }
+    // Where what runs to the end starts, or where the last entry ends.
+    let at = placer.at;
     let entries = placer.entries;
+    let (length, fill) = packet_length(spec.length, &entries, exact, at, start);
     let composites = spec
         .composites
         .into_iter()
@@ -838,7 +1006,79 @@ pub(super) fn lay_out(
         composites,
         listed: spec.listed,
         most_bits,
+        length,
+        fill,
     }
+}
+
+/// The packet's `length` as `spec` asks for it, and what a message fills
+/// what runs to its end with, for entries ending at `at` (where what runs
+/// to the end starts, if something does) from `start`. `exact` only where
+/// `exact` says every entry before what runs to the end has a static
+/// position and an exact size, and only for elements of an exact size,
+/// so each message's bytes are known and validation finds every entry
+/// inside the length. Elsewhere `at_least`, at most the least a message
+/// reaches.
+fn packet_length(
+    spec: LengthSpec,
+    entries: &[Entry],
+    exact: bool,
+    at: u64,
+    start: u64,
+) -> (Option<PacketLength>, Option<u32>) {
+    let least = least_reach(entries, start).div_ceil(8);
+    let least = u32::try_from(least).unwrap_or(u32::MAX).max(1);
+    let at_least = |bytes: u32| {
+        let length = PacketLength {
+            bytes: bytes.max(1),
+            exact: false,
+        };
+        (Some(length), None)
+    };
+    let exactly = |bits: u64| {
+        let bytes = u32::try_from(bits.div_ceil(8)).unwrap_or(u32::MAX);
+        Some(PacketLength { bytes, exact: true })
+    };
+    let (slack, fill) = match spec {
+        LengthSpec::None => return (None, None),
+        LengthSpec::AtLeast(index) => {
+            let bytes = index.index(least as usize) + 1;
+            return at_least(u32::try_from(bytes).unwrap_or(least));
+        }
+        LengthSpec::Exact { slack, .. } if !exact => return at_least(least.saturating_sub(slack)),
+        LengthSpec::Exact { slack, fill } => (slack, fill),
+    };
+    match entries.last().map(|entry| &entry.node) {
+        Some(Node::Array(array)) if matches!(array.count, Counted::Remaining) => {
+            match exact_bits(&array.element) {
+                Some(each) => (exactly(at + u64::from(fill) * each), Some(fill)),
+                None => at_least(least.saturating_sub(slack)),
+            }
+        }
+        Some(Node::Field(field)) if field.kind.length() == Some(Length::Remaining) => {
+            (exactly(at + 8 * u64::from(fill)), Some(fill))
+        }
+        _ => (exactly(at + 8 * u64::from(slack)), None),
+    }
+}
+
+/// The least a message's body reaches, from `start` (§5.2): where its
+/// unconditional entries end, at their least, those with an offset placed
+/// at it.
+fn least_reach(entries: &[Entry], start: u64) -> u64 {
+    let mut at = start;
+    let mut furthest = start;
+    for entry in entries {
+        if let Some(offset) = entry.offset {
+            at = offset;
+        }
+        if entry.when.is_some() {
+            continue;
+        }
+        at += node_bits(&entry.node, Bound::Least);
+        furthest = furthest.max(at);
+    }
+    furthest
 }
 
 /// Places entries one after another (§5.2), or at offsets. `at` is where
@@ -847,6 +1087,8 @@ pub(super) fn lay_out(
 /// is known, which is exact anyway, since what varies is whole bytes.
 struct Placer {
     little: bool,
+    /// Where the container's entries start.
+    start: u64,
     at: u64,
     /// Whether `at` is where the next entry starts in every message.
     exact: bool,
@@ -872,6 +1114,7 @@ impl Placer {
     fn new(little: bool, at: u64, params: String) -> Placer {
         Placer {
             little,
+            start: at,
             at,
             exact: true,
             pending_offset: false,
@@ -888,7 +1131,8 @@ impl Placer {
     /// length field or padding: the item's entries move together. A
     /// conditional entry is whole bytes, so what follows starts at one
     /// place within a byte whether it's there or not; one that can't be is
-    /// always there.
+    /// always there. What follows an entry without an exact size, or with
+    /// a condition, has no static position (§5.2).
     fn push(&mut self, node: Node, when: Option<Condition>) {
         let whole = node_bits(&node, Bound::Least).is_multiple_of(8)
             && node_bits(&node, Bound::Most).is_multiple_of(8);
@@ -897,10 +1141,26 @@ impl Placer {
             when: when.filter(|_| whole),
             node,
         };
-        if entry.varies() {
+        if entry.when.is_some() || exact_node(&entry.node).is_none() {
             self.exact = false;
         }
         self.entries.push(entry);
+    }
+
+    /// The earliest the next entry can start: what's before it at its
+    /// least, conditional entries absent. Unlike `at`, which counts them
+    /// present.
+    fn least_at(&self) -> u64 {
+        let mut at = self.start;
+        for entry in &self.entries {
+            if let Some(offset) = entry.offset {
+                at = offset;
+            }
+            if entry.when.is_none() {
+                at += node_bits(&entry.node, Bound::Least);
+            }
+        }
+        at
     }
 
     fn pad_to_byte(&mut self) {
@@ -966,7 +1226,45 @@ impl Placer {
                 } = *pair;
                 self.alternatives(&name, when, other, first, second);
             }
+            // Never under a condition: a checksum is always there.
+            ItemSpec::Checksum(spec) => self.checksum(name, spec),
         }
+    }
+
+    /// A checksum (§5.6), on a byte: at an offset if one is pending, which
+    /// is rounded up to a byte so the checksum takes it. It covers the
+    /// packet from its start, or from a byte up to where it starts at the
+    /// earliest. Its position is static when what's before it has static
+    /// positions and exact sizes, or it has an offset (§5.2).
+    fn checksum(&mut self, name: String, spec: ChecksumSpec) {
+        // The earliest it starts: where its offset puts it, if it has one.
+        let least = if self.pending_offset {
+            self.at = self.at.next_multiple_of(8);
+            self.at
+        } else {
+            self.pad_to_byte();
+            self.least_at()
+        };
+        let from = match spec.cover {
+            Cover::All => None,
+            Cover::From(index) => {
+                let bytes = usize::try_from(least / 8).unwrap_or(0);
+                Some(8 * index.index(bytes + 1) as u64)
+            }
+            Cover::Nothing => Some(least),
+        };
+        let bits = u64::from(spec.algorithm.bits());
+        let node = ChecksumNode {
+            name,
+            algorithm: spec.algorithm,
+            from: from.unwrap_or(0),
+            spelled: from.is_some(),
+            fixed: self.exact.then_some(self.at),
+            little: self.little,
+            zero: spec.zero,
+        };
+        self.push(Node::Checksum(node), None);
+        self.at += bits;
     }
 
     /// The selector a condition tests: the container's last, if `share`
@@ -1310,6 +1608,7 @@ fn needs_byte(entries: &[Entry]) -> bool {
             ElementNode::Struct(ty) => needs_byte(&ty.entries),
         },
         Node::Struct(node) => needs_byte(&node.ty.entries),
+        Node::Checksum(_) => true,
     })
 }
 
@@ -1367,6 +1666,7 @@ fn node_bits(node: &Node, bound: Bound) -> u64 {
             u64::from(count) * element_bits(&array.element, bound)
         }
         Node::Struct(node) => extent(&node.ty.entries, 0, 0, bound),
+        Node::Checksum(node) => u64::from(node.algorithm.bits()),
     }
 }
 
@@ -1402,18 +1702,26 @@ fn exact_entries(entries: &[Entry]) -> Option<u64> {
         if let Some(offset) = entry.offset {
             at = offset;
         }
-        at += match &entry.node {
-            Node::Padding(bits) => *bits,
-            Node::Field(field) => exact_scalar(field)?,
-            Node::Array(array) => match array.count {
-                Counted::Fixed(count) => exact_bits(&array.element)? * u64::from(count),
-                Counted::Field { .. } | Counted::Remaining => return None,
-            },
-            Node::Struct(node) => exact_entries(&node.ty.entries)?,
-        };
+        at += exact_node(&entry.node)?;
         furthest = furthest.max(at);
     }
     Some(furthest)
+}
+
+/// What a node reads, if it has an exact size (§5.2): padding, a field of
+/// a fixed size, an array of a fixed count of elements with one, a struct
+/// whose type has one, or a checksum.
+fn exact_node(node: &Node) -> Option<u64> {
+    match node {
+        Node::Padding(bits) => Some(*bits),
+        Node::Field(field) => exact_scalar(field),
+        Node::Array(array) => match array.count {
+            Counted::Fixed(count) => Some(exact_bits(&array.element)? * u64::from(count)),
+            Counted::Field { .. } | Counted::Remaining => None,
+        },
+        Node::Struct(node) => exact_entries(&node.ty.entries),
+        Node::Checksum(node) => Some(u64::from(node.algorithm.bits())),
+    }
 }
 
 fn exact_scalar(field: &Placed) -> Option<u64> {
@@ -1576,6 +1884,14 @@ fn node_json(node: &Node) -> Value {
         Node::Struct(node) => {
             json!({ "kind": "struct", "name": node.name, "struct": node.ty.name })
         }
+        Node::Checksum(node) => {
+            let mut json = json!({ "kind": "checksum", "name": node.name,
+                                   "algorithm": node.algorithm.json() });
+            if node.spelled {
+                json["from_bits"] = json!(node.from);
+            }
+            json
+        }
     }
 }
 
@@ -1588,7 +1904,7 @@ fn params_of(entries: &[Entry], params: &mut Vec<(String, Value)>) {
     let mut inner = Vec::new();
     for entry in entries {
         match &entry.node {
-            Node::Padding(_) => {}
+            Node::Padding(_) | Node::Checksum(_) => {}
             Node::Field(field) => add(field),
             Node::Array(array) => match &array.element {
                 ElementNode::Scalar(element) => add(element),
@@ -1604,11 +1920,21 @@ fn params_of(entries: &[Entry], params: &mut Vec<(String, Value)>) {
 
 // ---- Values ---------------------------------------------------------------
 
+impl Body {
+    /// Values for a message's body ([`values`]), what runs to the end
+    /// holding what a packet of exact length gives it.
+    pub(super) fn values(&self) -> BoxedStrategy<Vec<(String, Raw)>> {
+        values(&self.entries, self.fill)
+    }
+}
+
 /// Values for a container's present entries: each one's raw value, by
 /// name, in order, its count fields holding counts its arrays can have,
-/// and its length fields the lengths of their values. An entry whose
-/// condition its selector's value fails is absent.
-pub(super) fn values(entries: &[Entry]) -> BoxedStrategy<Vec<(String, Raw)>> {
+/// and its length fields the lengths of their values; with `fill`, its
+/// last entry, which runs to the end, holding that many elements or
+/// bytes. An entry whose condition its selector's value fails is absent.
+/// A checksum holds 0 until it's written.
+fn values(entries: &[Entry], fill: Option<u32>) -> BoxedStrategy<Vec<(String, Raw)>> {
     let counts = count_ranges(entries);
     let selected = selector_values(entries);
     let raws: Vec<BoxedStrategy<u64>> = counts
@@ -1622,9 +1948,14 @@ pub(super) fn values(entries: &[Entry]) -> BoxedStrategy<Vec<(String, Raw)>> {
             .map(|(name, _)| name.clone())
             .zip(raws)
             .collect();
+        let last = entries.len().saturating_sub(1);
         let drawn: Vec<BoxedStrategy<Option<(String, Raw)>>> = entries
             .iter()
-            .map(|entry| entry_value(&entry.node, &held, &selected))
+            .enumerate()
+            .map(|(index, entry)| {
+                let fill = fill.filter(|_| index == last);
+                entry_value(&entry.node, &held, &selected, fill)
+            })
             .collect();
         let entries = entries.clone();
         drawn.prop_map(move |drawn| {
@@ -1769,10 +2100,13 @@ fn count_ranges(entries: &[Entry]) -> Vec<(String, (u64, u64))> {
         .collect()
 }
 
+/// A node's value, if it has one; with `fill`, what runs to the end
+/// holding that many elements or bytes.
 fn entry_value(
     node: &Node,
     held: &BTreeMap<String, u64>,
     selected: &BTreeMap<String, Vec<Raw>>,
+    fill: Option<u32>,
 ) -> BoxedStrategy<Option<(String, Raw)>> {
     let named = |name: &str, values: BoxedStrategy<Raw>| {
         let name = name.to_string();
@@ -1782,6 +2116,18 @@ fn entry_value(
     };
     match node {
         Node::Padding(_) => Just(None).boxed(),
+        Node::Checksum(node) => named(&node.name, Just(Raw::Uint(0)).boxed()),
+        Node::Field(field) if fill.is_some() => {
+            let length = Length::Fixed {
+                bytes: fill.unwrap_or(0),
+                terminator: None,
+            };
+            let values = match &field.kind {
+                Kind::Text { text, .. } => text_value(length, *text),
+                _ => bytes_value(length),
+            };
+            named(&field.name, values)
+        }
         Node::Field(field) => match (held.get(&field.name), selected.get(&field.name)) {
             (Some(raw), _) => named(&field.name, Just(Raw::Uint(*raw)).boxed()),
             (None, Some(leaned)) => {
@@ -1793,7 +2139,7 @@ fn entry_value(
         Node::Array(array) => {
             let element = match &array.element {
                 ElementNode::Scalar(element) => raw_value(element),
-                ElementNode::Struct(ty) => values(&ty.entries).prop_map(Raw::Record).boxed(),
+                ElementNode::Struct(ty) => values(&ty.entries, None).prop_map(Raw::Record).boxed(),
             };
             let items = match &array.count {
                 Counted::Fixed(count) => vec(element, *count as usize).boxed(),
@@ -1806,13 +2152,16 @@ fn entry_value(
                     let count = i128::from(raw) * i128::from(*multiply) + i128::from(*add);
                     vec(element, usize::try_from(count).unwrap_or(0)).boxed()
                 }
-                Counted::Remaining => vec(element, 0..=MOST_ELEMENTS as usize).boxed(),
+                Counted::Remaining => match fill {
+                    Some(count) => vec(element, count as usize).boxed(),
+                    None => vec(element, 0..=MOST_ELEMENTS as usize).boxed(),
+                },
             };
             named(&array.name, items.prop_map(Raw::Array).boxed())
         }
         Node::Struct(node) => named(
             &node.name,
-            values(&node.ty.entries).prop_map(Raw::Record).boxed(),
+            values(&node.ty.entries, None).prop_map(Raw::Record).boxed(),
         ),
     }
 }
@@ -1829,6 +2178,18 @@ pub(super) struct Writer<'p> {
     /// A string's path, and the bytes written for its value instead.
     garbled: Option<(String, Vec<u8>)>,
     steps: Vec<Step>,
+    /// Each checksum written, by name, with its value.
+    sums: Vec<(String, u64)>,
+    /// Bits nothing decoding does depends on but checksums over them, so
+    /// one of them flipped changes what decodes, not how: padding, numbers
+    /// and bools no condition, count or length takes, and bytes and
+    /// Latin-1 text no terminator ends (every byte is Latin-1, and a fixed
+    /// length takes its bytes wherever a terminator falls).
+    inert: Vec<Range<u64>>,
+    /// Bits present entries read that aren't inert. Where entries overlap
+    /// (an alternative reading of the same bits), an inert span loses
+    /// them.
+    read: Vec<Range<u64>>,
 }
 
 impl<'p> Writer<'p> {
@@ -1842,11 +2203,57 @@ impl<'p> Writer<'p> {
             payload,
             garbled,
             steps,
+            sums: Vec::new(),
+            inert: Vec::new(),
+            read: Vec::new(),
         }
     }
 
-    pub(super) fn steps(self) -> Vec<Step> {
-        self.steps
+    /// A container's `values` as its record has them: each checksum
+    /// holding the value written for it.
+    pub(super) fn record(&self, values: &[(String, Raw)]) -> Vec<(String, Raw)> {
+        values
+            .iter()
+            .map(|(name, raw)| {
+                let sum = self.sums.iter().find(|(sum, _)| sum == name);
+                let raw = sum.map_or_else(|| raw.clone(), |(_, value)| Raw::Uint(*value));
+                (name.clone(), raw)
+            })
+            .collect()
+    }
+
+    /// The steps decoding takes, and the inert bits no other present entry
+    /// reads.
+    pub(super) fn finish(self) -> (Vec<Step>, Vec<Range<u64>>) {
+        let inert = without(&self.inert, &self.read);
+        (self.steps, inert)
+    }
+
+    /// Writes each checksum at a static position the walk didn't reach, in
+    /// order of position: decoding verifies it before the walk all the
+    /// same (§5.6).
+    pub(super) fn unreached_checksums(&mut self, entries: &[Entry]) {
+        for (node, at) in fixed_sums(entries) {
+            if !self.sums.iter().any(|(name, _)| *name == node.name) {
+                self.sum(node, at, &node.name);
+            }
+        }
+    }
+
+    /// Writes a checksum's value at `at`, worked out over the bytes it
+    /// covers as they are. They're all written by now: entries are written
+    /// in order, and none at an offset is written before one already
+    /// written.
+    fn sum(&mut self, node: &ChecksumNode, at: u64, path: &str) {
+        let covered = &self.payload[(node.from / 8) as usize..(at / 8) as usize];
+        let mut value = node.algorithm.compute(covered);
+        if node.zero && node.algorithm == Algorithm::Iso8473 && value == 0xffff {
+            value = 0;
+        }
+        let stored = node.algorithm.stored(value, node.little);
+        let first = (at / 8) as usize;
+        self.payload[first..first + stored.len()].copy_from_slice(&stored);
+        self.sums.push((path.to_string(), value));
     }
 
     /// Writes a container's present values, leaving padding as it was, its
@@ -1866,6 +2273,7 @@ impl<'p> Writer<'p> {
         let mut at = at;
         let mut furthest = at;
         let mut values = record.iter();
+        let referenced = referenced(entries);
         let padding = if path.is_empty() {
             Place::Padding
         } else if path.ends_with(']') {
@@ -1881,6 +2289,7 @@ impl<'p> Writer<'p> {
                 continue;
             }
             if let Node::Padding(bits) = &entry.node {
+                self.inert.push(at..at + bits);
                 at += bits;
                 furthest = furthest.max(at);
                 self.reach(path, at, Short::Padding, padding);
@@ -1896,7 +2305,21 @@ impl<'p> Writer<'p> {
             };
             at = match (&entry.node, raw) {
                 (Node::Field(field), raw) => {
-                    self.scalar(field, raw, at, &here, record, Place::Field)?
+                    let end = self.scalar(field, raw, at, &here, record, Place::Field)?;
+                    if inert(field) && !referenced.contains(&field.name) {
+                        self.inert.push(at..end);
+                    } else {
+                        self.read.push(at..end);
+                    }
+                    end
+                }
+                (Node::Checksum(node), _) => {
+                    self.sum(node, at, &here);
+                    let check = node.check(&here, at);
+                    let end = check.end();
+                    let fixed = node.fixed.is_some();
+                    self.steps.push(Step::Checksum { check, fixed });
+                    end
                 }
                 (Node::Array(array), Raw::Array(items)) => {
                     self.array(array, items, at, &here, record)?
@@ -2050,7 +2473,13 @@ impl<'p> Writer<'p> {
     fn element(&mut self, element: &ElementNode, item: &Raw, at: u64, path: &str) -> Option<u64> {
         match (element, item) {
             (ElementNode::Scalar(element), raw) => {
-                self.scalar(element, raw, at, path, &[], Place::Element)
+                let end = self.scalar(element, raw, at, path, &[], Place::Element)?;
+                if inert(element) {
+                    self.inert.push(at..end);
+                } else {
+                    self.read.push(at..end);
+                }
+                Some(end)
             }
             (ElementNode::Struct(ty), Raw::Record(fields)) => {
                 self.container(&ty.entries, fields, at, at, path)
@@ -2082,6 +2511,60 @@ impl<'p> Writer<'p> {
         self.steps.push(Step::Unknown);
         None
     }
+}
+
+/// Whether a bit of the field's value can be flipped without changing
+/// anything decoding does but the value ([`Writer::inert`]), where no
+/// condition, count or length takes the field.
+fn inert(field: &Placed) -> bool {
+    match &field.kind {
+        Kind::Text {
+            text: Text::Latin1,
+            length,
+        }
+        | Kind::Bytes(length) => !matches!(length, Length::Terminated(_)),
+        Kind::Text { .. } => false,
+        Kind::Uint(_) | Kind::Int(_) | Kind::Float(_) | Kind::Bool => true,
+    }
+}
+
+/// `spans` without the bits of `taken`.
+fn without(spans: &[Range<u64>], taken: &[Range<u64>]) -> Vec<Range<u64>> {
+    let mut left = spans.to_vec();
+    for cut in taken {
+        left = left
+            .into_iter()
+            .flat_map(|span| {
+                [
+                    span.start..span.end.min(cut.start),
+                    span.start.max(cut.end)..span.end,
+                ]
+            })
+            .filter(|span| !span.is_empty())
+            .collect();
+    }
+    left
+}
+
+/// The fields of a container that conditions, counts and lengths take.
+fn referenced(entries: &[Entry]) -> Vec<String> {
+    let mut names = Vec::new();
+    for entry in entries {
+        if let Some(when) = &entry.when {
+            names.push(when.field.clone());
+        }
+        match &entry.node {
+            Node::Array(ArrayNode {
+                count: Counted::Field { field, .. },
+                ..
+            }) => names.push(field.clone()),
+            Node::Field(field) if matches!(field.kind.length(), Some(Length::Field { .. })) => {
+                names.push(length_field(&field.name));
+            }
+            _ => {}
+        }
+    }
+    names
 }
 
 /// A count or length field's raw value, among its container's values.

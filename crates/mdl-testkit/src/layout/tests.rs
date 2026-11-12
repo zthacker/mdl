@@ -107,6 +107,49 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
     for name in types.as_object().into_iter().flat_map(|types| types.keys()) {
         containers.push((true, entries_of(name)));
     }
+    for packet in set["packets"].as_array().into_iter().flatten() {
+        let entries = packet["entries"].as_array().cloned().unwrap_or_default();
+        let fixed = fixed_checksums(packet, types);
+        for (position, entry) in entries.iter().enumerate() {
+            if entry["kind"] != "checksum" {
+                continue;
+            }
+            let name = entry["name"].as_str().unwrap_or("");
+            let fixed = fixed.iter().any(|(checksum, _)| checksum == name);
+            found.insert(
+                if fixed {
+                    "checksum:static"
+                } else {
+                    "checksum:reached"
+                }
+                .to_string(),
+            );
+            if entry["from_bits"].as_u64().is_some_and(|from| from > 0) {
+                found.insert("checksum:from_later_byte".to_string());
+            }
+            if entry.get("offset_bits").is_some() {
+                found.insert("checksum:at_offset".to_string());
+            }
+            let algorithm = &entry["algorithm"];
+            if little
+                && matches!(algorithm["kind"].as_str(), Some("crc" | "sum"))
+                && algorithm["width"].as_u64().is_some_and(|width| width > 8)
+            {
+                found.insert("checksum:little_endian".to_string());
+            }
+            // Last, or before what runs to the end.
+            if entries[position + 1..]
+                .iter()
+                .all(|e| e["name"] == "rest" || e["kind"] == "padding")
+            {
+                found.insert("checksum:at_end".to_string());
+            }
+        }
+        let rest = entries.last().is_some_and(|e| e["name"] == "rest");
+        if packet["length"]["kind"] == "exact" && rest {
+            found.insert("length:exact/filled".to_string());
+        }
+    }
     for (in_type, entries) in &containers {
         // Where each entry starts within a byte: what varies is whole
         // bytes, so this is exact.
@@ -347,6 +390,34 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
                 found.insert("composite:absent".to_string());
             }
         }
+        let length = packet.map(|packet| &packet["length"]);
+        let bytes = length
+            .and_then(|length| length["bytes"].as_u64())
+            .and_then(|bytes| usize::try_from(bytes).ok());
+        if let (Some(length), Some(bytes)) = (length, bytes)
+            && message.payload.len() > bytes
+        {
+            found.insert(
+                if length["kind"] == "exact" {
+                    "length:extra_bytes"
+                } else {
+                    "length:at_least/longer"
+                }
+                .to_string(),
+            );
+        }
+        // Stored as 0x0000 for 0xFFFF: a computed ISO checksum never has a
+        // check byte of 0.
+        for entry in &entries {
+            if entry["algorithm"]["kind"] == "iso8473"
+                && message
+                    .record
+                    .iter()
+                    .any(|(name, raw)| *name == entry["name"] && *raw == super::Raw::Uint(0))
+            {
+                found.insert("checksum:iso8473_zero".to_string());
+            }
+        }
         for (name, raw) in &message.record {
             if matches!(raw, super::Raw::Array(items) if items.is_empty()) {
                 found.insert(
@@ -382,6 +453,76 @@ fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
                 }
             }
         }
+    }
+    found
+}
+
+/// An entry's exact size (§5.2), read from its IR JSON, if it has one:
+/// padding, a checksum, a field of `size_bits` or a fixed length, an array
+/// of a fixed count of elements with one, or a struct whose type has one.
+fn exact_size(entry: &serde_json::Value, types: &serde_json::Value) -> Option<u64> {
+    if entry.get("when").is_some() {
+        return None;
+    }
+    let scalar = |scalar: &serde_json::Value| {
+        scalar["size_bits"].as_u64().or_else(|| {
+            let length = &scalar["length"];
+            let bytes = length["bytes"]
+                .as_u64()
+                .filter(|_| length["kind"] == "fixed");
+            bytes.map(|bytes| 8 * bytes)
+        })
+    };
+    let record = |name: &str| {
+        let (mut at, mut furthest) = (0, 0);
+        for inner in types[name]["entries"].as_array()? {
+            if let Some(offset) = inner["offset_bits"].as_u64() {
+                at = offset;
+            }
+            at += exact_size(inner, types)?;
+            furthest = furthest.max(at);
+        }
+        Some(furthest)
+    };
+    match entry["kind"].as_str()? {
+        "padding" => entry["size_bits"].as_u64(),
+        "checksum" => match entry["algorithm"]["kind"].as_str()? {
+            "xor" => Some(8),
+            "iso8473" => Some(16),
+            _ => entry["algorithm"]["width"].as_u64(),
+        },
+        "field" => scalar(entry),
+        "struct" => record(entry["struct"].as_str()?),
+        "array" if entry["count"]["kind"] == "fixed" => {
+            let element = &entry["element"];
+            let each = match element["name"].as_str() {
+                Some(name) => record(name)?,
+                None => scalar(element)?,
+            };
+            Some(entry["count"]["count"].as_u64()? * each)
+        }
+        _ => None,
+    }
+}
+
+/// Each checksum of a packet (IR JSON) at a static position (§5.2), by
+/// name, with where its value ends: one with an offset, or one after
+/// entries with static positions and exact sizes.
+fn fixed_checksums(packet: &serde_json::Value, types: &serde_json::Value) -> Vec<(String, u64)> {
+    let mut found = Vec::new();
+    let mut at = Some(0_u64);
+    for entry in packet["entries"].as_array().into_iter().flatten() {
+        if let Some(offset) = entry["offset_bits"].as_u64() {
+            at = Some(offset);
+        }
+        let size = exact_size(entry, types);
+        if let (Some(start), Some(size)) = (at, size)
+            && entry["kind"] == "checksum"
+        {
+            let name = entry["name"].as_str().unwrap_or("").to_string();
+            found.push((name, start + size));
+        }
+        at = at.zip(size).map(|(at, size)| at + size);
     }
     found
 }
@@ -583,6 +724,27 @@ fn layouts_reach_every_meaning() {
         "composite:invalid",
         "composite:non_finite",
         "composite:out_of_calibration",
+        // Checksums and packet lengths.
+        "entry:checksum",
+        "checksum:crc",
+        "checksum:crc/reflected",
+        "checksum:sum",
+        "checksum:xor",
+        "checksum:iso8473",
+        "key:entry.from_bits",
+        "checksum:static",
+        "checksum:reached",
+        "checksum:from_later_byte",
+        "checksum:at_offset",
+        "checksum:at_end",
+        "checksum:little_endian",
+        "checksum:iso8473_zero",
+        "key:packet.length",
+        "length:exact",
+        "length:at_least",
+        "length:exact/filled",
+        "length:extra_bytes",
+        "length:at_least/longer",
     ] {
         assert!(found.contains(feature), "no layout uses {feature}");
     }
@@ -674,6 +836,10 @@ enum Reached {
     Code(&'static str),
     /// An error naming an entry here.
     Named(Named),
+    /// A cut short of a checksum at a static position, failing on what
+    /// reaches past the end first: the checksum isn't a problem yet
+    /// (§5.6).
+    Deferred,
 }
 
 /// Where the entry an error names is.
@@ -719,7 +885,7 @@ fn more_required(place: super::Place) -> bool {
         // a cut can land in needs spare bits across a byte.
         Place::ArrayBitEach | Place::PaddingInElement | Place::PaddingInStruct => false,
         // Never inside an element.
-        Place::Header | Place::Padding | Place::TimeCode => false,
+        Place::Checksum | Place::Header | Place::Length | Place::Padding | Place::TimeCode => false,
     }
 }
 
@@ -732,14 +898,16 @@ fn damaged_messages_reach_every_route() {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
-    use super::{EventTime, FaultKind, Garbling, Held, Place, Problem, Route, damaged};
+    use super::{EventTime, FaultKind, Garbling, Held, Place, Problem, Route, Tamper, damaged};
 
     let mut runner = TestRunner::deterministic();
     let strategy = damaged();
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
     let (mut messages, mut damaged) = (0, 0);
-    for _ in 0..1000 {
+    // The rarest routes (a shared count, a fault hidden behind a checksum)
+    // come about once in a hundred cases.
+    for _ in 0..1500 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         for message in &case.messages {
             messages += 1;
@@ -759,6 +927,24 @@ fn damaged_messages_reach_every_route() {
             }
             let failure = &damage.failure;
             note(Reached::Code(failure.problem.code()));
+            let set = &case.bundle["sets"][0];
+            let packet = set["packets"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|packet| packet["name"] == message.packet);
+            let cut = damage
+                .routes
+                .iter()
+                .any(|route| route.kind() == FaultKind::Cut);
+            let short = packet
+                .map(|packet| fixed_checksums(packet, &set["types"]))
+                .unwrap_or_default()
+                .into_iter()
+                .any(|(name, end)| end > 8 * message.payload.len() as u64 && name != failure.path);
+            if cut && short && failure.problem.code() == "past_end" {
+                note(Reached::Deferred);
+            }
             let named = match (failure.problem, failure.path.as_str()) {
                 (Problem::PastEnd { padding: true, .. }, "") => Named::PaddingAtTop,
                 (Problem::PastEnd { padding: true, .. }, path) if path.ends_with(']') => {
@@ -791,8 +977,19 @@ fn damaged_messages_reach_every_route() {
     required.extend(Held::ALL.map(|held| Reached::Route(Route::Length(held))));
     required.push(Reached::Route(Route::SharedCount));
     required.extend(Garbling::ALL.map(|form| Reached::Route(Route::Text(form))));
-    required.extend([Reached::Pair, Reached::UnreadableTime]);
-    required.extend(["past_end", "no_terminator", "invalid_text", "bad_length"].map(Reached::Code));
+    required.extend(Tamper::ALL.map(|tamper| Reached::Route(Route::Checksum(tamper))));
+    required.extend([Reached::Pair, Reached::UnreadableTime, Reached::Deferred]);
+    required.extend(
+        [
+            "past_end",
+            "no_terminator",
+            "invalid_text",
+            "bad_length",
+            "too_short",
+            "bad_checksum",
+        ]
+        .map(Reached::Code),
+    );
     required.extend(Named::ALL.map(Reached::Named));
     for reached in required {
         let count = found.get(&reached).copied().unwrap_or(0);
