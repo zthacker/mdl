@@ -6,6 +6,7 @@ mod artifacts;
 
 pub use artifacts::load;
 use mdl::decode::{Decoded, EventTime, SampleValue};
+use mdl::ir::Frame;
 use mdl_testkit::layout::{self, Expected, Raw, Sample};
 use proptest::prelude::*;
 
@@ -21,6 +22,9 @@ pub fn check(decoded: &Decoded<'_>, message: &layout::Message) -> Result<(), Tes
         .map(|sample| Sample {
             param: sample.param.to_string(),
             value: expected(&sample.value),
+            path: sample.path.clone(),
+            index: sample.index,
+            time_offset_ns: sample.time_offset_ns,
             quality: sample.quality.as_str(),
         })
         .collect();
@@ -64,6 +68,22 @@ fn expected(value: &SampleValue) -> Expected {
         SampleValue::Str(text) => Expected::Str(text.clone()),
         SampleValue::Bytes(bytes) => Expected::Bytes(bytes.clone()),
         SampleValue::Enum(name) => Expected::Enum(name.clone()),
+        SampleValue::Vec3 { frame, x, y, z } => Expected::Vector {
+            frame: frame_name(*frame),
+            members: vec![*x, *y, *z],
+        },
+        SampleValue::Quat { frame, w, x, y, z } => Expected::Vector {
+            frame: frame_name(*frame),
+            members: vec![*w, *x, *y, *z],
+        },
         other => Expected::Str(format!("not generated: {other:?}")),
     }
+}
+
+/// A frame as the IR spells it.
+fn frame_name(frame: Frame) -> String {
+    serde_json::to_value(frame)
+        .ok()
+        .and_then(|name| name.as_str().map(str::to_string))
+        .unwrap_or_default()
 }

@@ -2,7 +2,9 @@
 //! on agreeing with `mdl`. The whole-byte vectors are what Python's
 //! `struct.pack` gives (`<H`, `>H`, `<Q`, `>f`, `<f`).
 
-use super::{Scale, convert_unit, fit, put_bits, reference, sign_extend, spline, table, to_utc};
+use super::meaning::{convert_unit, spline, table};
+use super::time::{Scale, leaps, to_utc};
+use super::{fit, put_bits, reference, sign_extend};
 
 fn packed(length: usize, offset: u64, size: u32, value: u64, little: bool) -> Vec<u8> {
     let mut payload = vec![0; length];
@@ -53,9 +55,252 @@ fn writing_leaves_every_other_bit_as_it_was() {
     assert_eq!(payload, [0xf0, 0x0f]);
 }
 
+/// What a generated case holds that the IR's features don't name: how
+/// arrays, structs and composites are arranged, where they start within a
+/// byte, and what messages and samples come of them.
+fn labels(case: &super::Telemetry) -> std::collections::BTreeSet<String> {
+    use serde_json::Value;
+
+    let mut found = std::collections::BTreeSet::new();
+    let set = &case.bundle["sets"][0];
+    let types = &set["types"];
+    let little = case.bundle["families"][0]["byte_order"] == "little";
+    let entries_of = |name: &str| {
+        types[name]["entries"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+    // Each container's entries, with whether it's a struct type.
+    let mut containers: Vec<(bool, Vec<Value>)> = Vec::new();
+    for packet in set["packets"].as_array().into_iter().flatten() {
+        containers.push((
+            false,
+            packet["entries"].as_array().cloned().unwrap_or_default(),
+        ));
+        let composites = packet["composites"].as_array().cloned().unwrap_or_default();
+        let names: Vec<&str> = composites
+            .iter()
+            .filter_map(|c| c["canonical"].as_str())
+            .collect();
+        if names.windows(2).any(|pair| pair[0] > pair[1]) {
+            found.insert("composite:listed_out_of_order".to_string());
+        }
+        for composite in &composites {
+            for member in composite["members"].as_array().into_iter().flatten() {
+                let member = member.as_str().unwrap_or("");
+                let holder = match (member.contains('['), member.contains('.')) {
+                    (false, false) => "fields",
+                    (false, true) => "struct",
+                    (true, false) => "array",
+                    (true, true) => "records",
+                };
+                found.insert(format!("composite:{holder}"));
+            }
+            let canonical = composite["canonical"].as_str().unwrap_or("");
+            let param = &case.bundle["catalog"]["params"][canonical];
+            if param["frame"] != composite["frame"] {
+                found.insert("composite:converted_frame".to_string());
+            }
+        }
+    }
+    for name in types.as_object().into_iter().flat_map(|types| types.keys()) {
+        containers.push((true, entries_of(name)));
+    }
+    for (in_type, entries) in &containers {
+        // Where each entry starts within a byte: what varies is whole
+        // bytes, so this is exact.
+        let mut at = 0_u64;
+        let mut counted: Vec<(&str, &Value, &Value)> = Vec::new();
+        for entry in entries {
+            let kind = entry["kind"].as_str().unwrap_or("");
+            let element = &entry["element"];
+            let size = |entry: &Value| -> u64 {
+                entry["size_bits"]
+                    .as_u64()
+                    .or_else(|| entry["length"]["bytes"].as_u64().map(|b| b * 8))
+                    .unwrap_or(0)
+            };
+            let struct_bits = |name: &str| -> u64 {
+                // Fixed parts only: what varies is whole bytes.
+                fn bits(entries: &[Value], types: &Value) -> u64 {
+                    entries
+                        .iter()
+                        .map(|e| match e["kind"].as_str() {
+                            Some("struct") => {
+                                let name = e["struct"].as_str().unwrap_or("");
+                                let inner = types[name]["entries"]
+                                    .as_array()
+                                    .cloned()
+                                    .unwrap_or_default();
+                                bits(&inner, types)
+                            }
+                            Some("array") => {
+                                let count = e["count"]["count"].as_u64().unwrap_or(0);
+                                let each = match e["element"]["name"].as_str() {
+                                    Some(name) => {
+                                        let inner = types[name]["entries"]
+                                            .as_array()
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        bits(&inner, types)
+                                    }
+                                    None => e["element"]["size_bits"]
+                                        .as_u64()
+                                        .or_else(|| {
+                                            e["element"]["length"]["bytes"].as_u64().map(|b| b * 8)
+                                        })
+                                        .unwrap_or(0),
+                                };
+                                count * each
+                            }
+                            _ => e["size_bits"]
+                                .as_u64()
+                                .or_else(|| e["length"]["bytes"].as_u64().map(|b| b * 8))
+                                .unwrap_or(0),
+                        })
+                        .sum()
+                }
+                bits(&entries_of(name), types)
+            };
+            match kind {
+                "struct" => {
+                    let name = entry["struct"].as_str().unwrap_or("");
+                    if *in_type {
+                        found.insert("struct:nested".to_string());
+                    }
+                    if !at.is_multiple_of(8) {
+                        found.insert("struct:mid_byte".to_string());
+                    }
+                    at += struct_bits(name);
+                }
+                "array" => {
+                    if *in_type {
+                        found.insert("array:in_struct".to_string());
+                    }
+                    let count = &entry["count"];
+                    if let Some(field) = count["field"].as_str() {
+                        if let Some((_, multiply, add)) = counted.iter().find(|(f, ..)| *f == field)
+                        {
+                            found.insert("count:shared".to_string());
+                            if **multiply != count["multiply"] || **add != count["add"] {
+                                found.insert("count:shared/scaled".to_string());
+                            }
+                        }
+                        counted.push((field, &count["multiply"], &count["add"]));
+                        let counter = entries.iter().find(|e| e["name"] == field);
+                        if counter.is_some_and(|c| c.get("canonical").is_some()) {
+                            found.insert("count:mapped".to_string());
+                        }
+                    }
+                    if count["count"] == 0 {
+                        found.insert("count:zero".to_string());
+                    }
+                    let fixed = count["count"].as_u64();
+                    match element["name"].as_str() {
+                        Some(name) => {
+                            let inner = entries_of(name);
+                            if inner.iter().any(|e| e["kind"] == "array") {
+                                found.insert("records:holding_arrays".to_string());
+                            }
+                            if inner.iter().any(|e| e["kind"] == "struct") {
+                                found.insert("records:holding_structs".to_string());
+                            }
+                            let each = struct_bits(name);
+                            if fixed.is_some() && !each.is_multiple_of(8) {
+                                found.insert("records:bit_packed".to_string());
+                            }
+                            if count["kind"] == "remaining" {
+                                found.insert("records:remaining".to_string());
+                            }
+                            if !at.is_multiple_of(8) {
+                                found.insert("records:mid_byte".to_string());
+                            }
+                            at += fixed.unwrap_or(0) * each;
+                        }
+                        None => {
+                            let ty = element["type"].as_str().unwrap_or("");
+                            found.insert(format!("element:{ty}"));
+                            let bits = size(element);
+                            if !bits.is_multiple_of(8) && fixed.is_some_and(|n| n > 1) {
+                                found.insert("element:bit_packed".to_string());
+                                if little
+                                    && element.get("byte_order").is_none()
+                                    && matches!(ty, "uint" | "int")
+                                {
+                                    found.insert("element:narrow_little_endian".to_string());
+                                }
+                            }
+                            at += fixed.unwrap_or(0) * bits;
+                        }
+                    }
+                }
+                _ => at += size(entry),
+            }
+        }
+    }
+    for message in &case.messages {
+        for (name, raw) in &message.record {
+            if matches!(raw, super::Raw::Array(items) if items.is_empty()) {
+                found.insert(
+                    if name == "rest" {
+                        "array:remaining_empty"
+                    } else {
+                        "array:empty"
+                    }
+                    .to_string(),
+                );
+            }
+        }
+        for sample in &message.samples {
+            if let super::Expected::Vector { .. } = sample.value {
+                found.insert(format!("composite:{}", sample.quality));
+                continue;
+            }
+            if sample.path.contains("].") {
+                found.insert("sample:in_records".to_string());
+            }
+            if sample.path.matches('.').count() >= 2 {
+                found.insert("sample:nested".to_string());
+            }
+            if sample.index.is_some() && sample.quality == "invalid" {
+                found.insert("sample:element_invalid".to_string());
+            }
+            if let (Some(_), Some(index)) = (sample.time_offset_ns, sample.index) {
+                found.insert("sample:time_offset".to_string());
+                let interval = interval_of(set, &sample.param);
+                let exact = index as f64 * interval * 1_000_000.0;
+                if exact.fract().abs() == 0.5 {
+                    found.insert("sample:time_offset/tie".to_string());
+                }
+            }
+        }
+    }
+    found
+}
+
+/// The `sample_interval_ms` of the array that maps to `param`.
+fn interval_of(set: &serde_json::Value, param: &str) -> f64 {
+    fn find(entries: &[serde_json::Value], param: &str) -> Option<f64> {
+        entries
+            .iter()
+            .find(|e| e["canonical"] == param && e["kind"] == "array")
+            .and_then(|e| e["sample_interval_ms"].as_f64())
+    }
+    let packets = set["packets"].as_array().cloned().unwrap_or_default();
+    let types = set["types"].as_object().cloned().unwrap_or_default();
+    packets
+        .iter()
+        .filter_map(|p| p["entries"].as_array())
+        .chain(types.values().filter_map(|t| t["entries"].as_array()))
+        .find_map(|entries| find(entries, param))
+        .unwrap_or(0.0)
+}
+
 /// Generated layouts reach every meaning the oracle computes: each
-/// conversion kind and option, units, sentinels, and every quality a
-/// binary field can have.
+/// conversion kind and option, units, sentinels, every quality a binary
+/// field can have, and arrays, structs and composites in every
+/// arrangement the generator makes.
 #[test]
 fn layouts_reach_every_meaning() {
     use std::collections::BTreeSet;
@@ -70,12 +315,14 @@ fn layouts_reach_every_meaning() {
     let strategy = telemetry();
     let mut found = BTreeSet::new();
     let mut qualities = BTreeSet::new();
-    let leap_starts: Vec<i128> = super::leaps().map(|(start, _)| start).collect();
+    let leap_starts: Vec<i128> = leaps().map(|(start, _)| start).collect();
     let mut inside_leap = false;
     let mut unreadable = false;
-    for _ in 0..300 {
+    // A leap second's event time is the rarest: about 1 case in 60.
+    for _ in 0..600 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         found.extend(features(&case.bundle));
+        found.extend(labels(&case));
         for message in &case.messages {
             qualities.extend(message.samples.iter().map(|sample| sample.quality));
             match message.event_time {
@@ -117,6 +364,72 @@ fn layouts_reach_every_meaning() {
         "time_unit:us",
         "time_unit:ns",
         "key:packet.time_field",
+        // Arrays and structs.
+        "entry:array",
+        "entry:struct",
+        "element:scalar",
+        "element:struct",
+        "count:fixed",
+        "count:field",
+        "count:remaining",
+        "key:count.multiply",
+        "key:count.add",
+        "key:entry.sample_interval_ms",
+        "key:set.types",
+        "key:element.byte_order",
+        "key:element.length",
+        "key:element.text",
+        "key:element.conversion",
+        "key:element.unit",
+        "key:element.invalid",
+        "element:uint",
+        "element:int",
+        "element:float",
+        "element:bool",
+        "element:string",
+        "element:bytes",
+        "element:bit_packed",
+        "element:narrow_little_endian",
+        "struct:nested",
+        "struct:mid_byte",
+        "array:in_struct",
+        "records:holding_arrays",
+        "records:holding_structs",
+        "records:bit_packed",
+        "records:remaining",
+        "records:mid_byte",
+        "count:shared",
+        "count:shared/scaled",
+        "count:mapped",
+        "count:zero",
+        "array:empty",
+        "array:remaining_empty",
+        "sample:in_records",
+        "sample:nested",
+        "sample:element_invalid",
+        "sample:time_offset",
+        "sample:time_offset/tie",
+        // Composites.
+        "key:packet.composites",
+        "param_type:vec3",
+        "param_type:quat",
+        "key:param.frame",
+        "frame:ECEF",
+        "frame:ECI_J2000",
+        "frame:BODY",
+        "frame:NED",
+        "frame:ENU",
+        "frame:GEODETIC",
+        "composite:fields",
+        "composite:struct",
+        "composite:array",
+        "composite:records",
+        "composite:converted_frame",
+        "composite:listed_out_of_order",
+        "composite:good",
+        "composite:invalid",
+        "composite:non_finite",
+        "composite:out_of_calibration",
     ] {
         assert!(found.contains(feature), "no layout uses {feature}");
     }

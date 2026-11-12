@@ -13,8 +13,8 @@ use proptest::sample::select;
 use serde_json::{Map, Value, json};
 
 use super::{
-    Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND, TimeFields,
-    TimeSource, epoch, field_spec, instant_text, label, lay_out, message_at, param_json,
+    BodySpec, Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND,
+    TimeFields, TimeSource, epoch, field_spec, instant_text, label, lay_out, message_at,
     time_fields, time_json, time_scale, to_utc, unit,
 };
 
@@ -550,7 +550,7 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
                     &planned.time,
                     timed,
                     None,
-                    fields,
+                    BodySpec::fields(fields),
                 ));
             }
             if let Some(correlation) = &planned.correlation {
@@ -567,7 +567,7 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
                     &planned.time,
                     TimeFields::default(),
                     Some(correlation.clone()),
-                    Vec::new(),
+                    BodySpec::fields(Vec::new()),
                 ));
             }
             packets
@@ -825,24 +825,14 @@ fn assemble(
     messages: Vec<Message>,
 ) -> Fleet {
     let mut params = Map::new();
-    for field in layouts.iter().flatten().flat_map(|packet| &packet.fields) {
-        params.insert(field.param.clone(), param_json(&field.meaning));
+    for packet in layouts.iter().flatten() {
+        params.extend(packet.body.params());
     }
     let families = if plan.mirror { 2 } else { 1 };
     let mut sets = Vec::new();
     for family in 0..families {
         for (set, packets) in layouts.iter().enumerate() {
-            let packets: Vec<Value> = packets
-                .iter()
-                .map(|packet| {
-                    let mut json = json!({ "name": packet.name, "identify": packet.identify,
-                                           "entries": packet.entries });
-                    if packet.count.is_some() {
-                        json["time_field"] = json!("t");
-                    }
-                    json
-                })
-                .collect();
+            let packets: Vec<Value> = packets.iter().map(PacketLayout::json).collect();
             let mut json = json!({ "name": set_name(family, set), "family": family_name(family),
                                    "packets": packets });
             if plan.version != Version::None {
@@ -1027,7 +1017,7 @@ mod tests {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
-    use super::super::civil_from_days;
+    use super::super::time::civil_from_days;
     use super::{EventTime, Meta, fleet, instant_text, label};
 
     /// Generated fleets reach every routing and correlation case.
