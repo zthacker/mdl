@@ -42,8 +42,9 @@ checksums; this document uses those definitions and doesn't repeat them.
 - Arguments are checked in two passes, and the first problem is the
   error. First the given names, in the order given [`unknown_argument`,
   `duplicate_argument`]; then every argument of the command, in catalog
-  order: a given value by §2.2 to §2.5, in that order, or a left-out one
-  by its default [`missing_argument`]. So a request built from a map,
+  order: a given value by its type, range and list (§2.2, §2.3, §2.5),
+  then by §2.4, or a left-out one by its default [`missing_argument`].
+  So a request built from a map,
   whose keys come in no particular order, is refused the same way
   however they come.
 
@@ -372,7 +373,8 @@ only bytes before it, so bytes past the packet are covered by the link's
 framing alone; a `remaining` value or array takes in whatever follows it.
 Every constant field MUST hold its value, including those that took no
 part in identification and those in every record of an array
-[`wrong_constant`].
+[`wrong_constant`]. The error names the field by its path, as
+`decoding.md` §9 names an entry: `waypoints[1].kind` for a record's.
 
 ### 7.4 Arguments
 

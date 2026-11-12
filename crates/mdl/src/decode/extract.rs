@@ -217,7 +217,9 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
                 }
             }
             let end = match entry {
-                Entry::Padding(padding) => self.span(at, u64::from(padding.size_bits))?,
+                Entry::Padding(padding) => self
+                    .span(at, u64::from(padding.size_bits))
+                    .map_err(in_padding)?,
                 Entry::Field(field) => {
                     self.path.push(Segment::Name(&field.name));
                     let scope = Scope {
@@ -774,6 +776,21 @@ fn from_field(from: &FromField, scope: &Scope<'_, '_>) -> Result<u64, Problem> {
     let value = i128::from(*raw) * i128::from(from.multiply.unwrap_or(1))
         + i128::from(from.add.unwrap_or(0));
     u64::try_from(value).map_err(|_| Problem::BadLength { value })
+}
+
+/// A read past the end inside padding, which says so: padding has no path
+/// of its own to name it by.
+fn in_padding(problem: Problem) -> Problem {
+    match problem {
+        Problem::PastEnd {
+            needed_bits,
+            available_bits,
+        } => Problem::PaddingPastEnd {
+            needed_bits,
+            available_bits,
+        },
+        other => other,
+    }
 }
 
 fn text(bytes: &[u8], encoding: Option<TextEncoding>) -> Result<String, Problem> {

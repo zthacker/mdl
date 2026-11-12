@@ -78,6 +78,8 @@ pub enum CommandDecodeError {
     #[error("command packet {packet}, {field}: it holds {found}, not its constant {expected}")]
     Constant {
         packet: String,
+        /// The field's path, as an entry's error names it: its name, or in
+        /// a record of an array, `array[index].field`.
         field: String,
         expected: String,
         found: String,
@@ -278,24 +280,23 @@ fn check_constants(
     types: &BTreeMap<String, StructType>,
     record: &Record<'_>,
 ) -> Result<(), CommandDecodeError> {
-    let wrong = |field: &Field, found: Option<&Value<'_>>, expected: &Scalar| {
-        CommandDecodeError::Constant {
+    let wrong =
+        |path: String, found: Option<&Value<'_>>, expected: &Scalar| CommandDecodeError::Constant {
             packet: packet.name.clone(),
-            field: field.name.clone(),
+            field: path,
             expected: match expected {
                 Scalar::Int(n) => n.to_string(),
                 Scalar::Str(text) => format!("{text:?}"),
             },
             found: found.map_or_else(|| "nothing".to_string(), show),
-        }
-    };
+        };
     for entry in &packet.entries {
         match entry {
             Entry::Field(field) => {
                 if let Some(constant) = &field.value
                     && !holds(record.get(&field.name), constant)
                 {
-                    return Err(wrong(field, record.get(&field.name), constant));
+                    return Err(wrong(field.name.clone(), record.get(&field.name), constant));
                 }
             }
             Entry::Array(ArrayEntry {
@@ -308,7 +309,7 @@ fn check_constants(
                     Some(Value::Array(items)) => items.as_slice(),
                     _ => &[],
                 };
-                for item in items {
+                for (index, item) in items.iter().enumerate() {
                     let Value::Record(values) = item else {
                         continue;
                     };
@@ -317,7 +318,10 @@ fn check_constants(
                             && let Some(constant) = &field.value
                             && !holds(values.get(&field.name), constant)
                         {
-                            return Err(wrong(field, values.get(&field.name), constant));
+                            // Named by its path, as an entry's error is
+                            // (`decoding.md` §9).
+                            let path = format!("{name}[{index}].{}", field.name);
+                            return Err(wrong(path, values.get(&field.name), constant));
                         }
                     }
                 }

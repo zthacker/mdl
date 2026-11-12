@@ -1246,6 +1246,24 @@ fn a_payload_the_encoder_wouldnt_write_is_refused() {
 }
 
 #[test]
+fn a_payload_that_ends_inside_padding_says_so() {
+    // Padding has no path: the error names its container, here the
+    // packet, and says it's padding (decoding.md §5.2).
+    let mut bundle = lab();
+    bundle["sets"][4]["commands"][0]["entries"]
+        .as_array_mut()
+        .unwrap()
+        .insert(1, json!({ "kind": "padding", "size_bits": 16 }));
+    let sets = sets_of(&bundle, "lab");
+    let error = sets.decode_command("lab_v5", &binary(&[1])).unwrap_err();
+    assert_eq!(error.code(), "past_end");
+    assert_eq!(
+        error.to_string(),
+        "packet LOAD: padding needs the packet's bits up to 24, but the packet has 8"
+    );
+}
+
+#[test]
 fn every_constant_is_checked_not_only_those_that_identify_the_packet() {
     // A constant after a value of varying length can't identify the
     // packet, but it must still hold its value.
@@ -2061,12 +2079,17 @@ fn records_interleave_the_lists_their_fields_take() {
         "command packet ROUTE, waypoints: an array of 1 value doesn't fit: list lon has 1 value \
          and list lat 2, and lists that fill the same records have the same length"
     );
-    // A record's constant is checked in every record.
+    // A record's constant is checked in every record, and named by its
+    // path, as entries are (decoding.md §9).
     let mut corrupt = encoded.payload.clone();
     corrupt[13] = 8;
+    let error = sets
+        .decode_command("lab_v13", &binary(&corrupt))
+        .unwrap_err();
+    assert_eq!(error.code(), "wrong_constant");
     assert_eq!(
-        decode_code(sets.decode_command("lab_v13", &binary(&corrupt))),
-        "wrong_constant"
+        error.to_string(),
+        "command packet ROUTE, waypoints[1].kind: it holds 8, not its constant 7"
     );
 }
 
