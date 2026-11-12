@@ -223,11 +223,18 @@ struct).
     else every residue where its last entry can end (where any of its
     entries can end, if one has `offset_bits`). An entry with `when` adds
     0 to its size residues;
+  - an array's element `k` starts at every `(s + z₁ + … + zₖ) mod 8`, for
+    a start residue `s` of the array and size residues `z₁ … zₖ` of its
+    element, for every `k` below its largest count (every `k`, when the
+    count has no bound). Element 0 is checked even for a count of 0, so a
+    layout's validity doesn't depend on its count. Each element is held to
+    the rules above at each of its starts, as an entry is;
   - a struct type's entries are computed from residue 0, so a struct MUST
     start on a byte when its type holds (directly, in an array or in a
     nested struct) a string, bytes, a little-endian value of whole bytes,
     a little-endian value narrower than a byte, or a value of at most 8
-    bits that names its own `byte_order`.
+    bits that names its own `byte_order`. A `bool` has no byte order
+    (§2.1), so it is none of these.
 - **Fields** read a value (§2.1, §2.2). A string or bytes field's length
   is `fixed` (with a `terminator` inside it, or not), taken from a field
   (§5.4), up to a `terminator` byte (which ends the value but isn't part
@@ -432,8 +439,10 @@ sample, in record order; composites follow, in the order the set artifact
 lists them, by canonical name. A sample is
 `{param, value, path, index, time_offset, quality}`:
 
-- `path` is the record path of the value, every index included; `index`
-  is its position in its innermost array, for array elements.
+- `path` is the record path of the value, every index included. `index`,
+  for a value inside an array (a scalar element, or a field of a struct
+  element at any depth), is its position in the innermost array holding
+  it: `cells[2].volts` has index 2.
 - `time_offset`, for an array with `sample_interval_ms`: element *i* is
   taken *i* × interval after the packet's event time, in whole
   nanoseconds: `round(i × interval_ms × 1000000)`, evaluated in binary64
@@ -469,7 +478,22 @@ If any member is absent (a conditional or optional entry, an array index
 past a JSON array's end, a `null` element), there is no sample. Its
 quality is that of its least trustworthy member; if that isn't `good`,
 every member is its raw value. Its `path` is the members' paths joined
-by `,`.
+by `,`. It has no `index` and no `time_offset`, even when its members are
+array elements.
+
+A composite's `frame` is its source's, which validation requires to be
+one consumers can convert into its param's frame. A vec3's frame converts
+into itself and along any chain of these: `ECEF` and `ECI_J2000` into
+each other (with time), `NED` and `ENU` into each other (axis order), and
+`NED`, `ENU` and `GEODETIC` into `ECEF` (with the asset's position). A
+quat keeps its frame. A param's frame is never `GEODETIC`, which is
+latitude, longitude and altitude, a source's frame only. So:
+
+| Param's frame | A vec3's source frame |
+| --- | --- |
+| `ECEF`, `ECI_J2000` | `ECEF`, `ECI_J2000`, `NED`, `ENU`, `GEODETIC` |
+| `NED`, `ENU` | `NED`, `ENU` |
+| `BODY` | `BODY` |
 
 ### 7.5 Engineering values
 
