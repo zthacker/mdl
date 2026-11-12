@@ -22,11 +22,12 @@ use serde_json::{Map, Value, json};
 
 use super::meaning::sample;
 use super::{
-    FieldSpec, Kind, Length, Meaning, Place, Placed, Raw, Sample, encode, field_json, field_spec,
-    fit, inside_one_byte, kind, length_field, param_json, put_bits, raw_value, remaining_kind,
-    scalar_json, spec_of,
+    Failure, FieldSpec, Kind, Length, Meaning, Place, Placed, Problem, Raw, Sample, encode,
+    field_json, field_spec, fit, inside_one_byte, kind, length_field, param_json, put_bits,
+    raw_value, remaining_kind, scalar_json, spec_of,
 };
 use composite::{CompositeNode, CompositeSource, CompositeSpec, composite_source, resolve};
+use faults::{Short, Step};
 
 /// The most elements an array whose count varies has in a message.
 const MOST_ELEMENTS: u32 = 5;
@@ -175,7 +176,7 @@ fn item_spec(depth: u32) -> BoxedStrategy<ItemSpec> {
     let mut items = vec![
         (6, field_spec().prop_map(ItemSpec::Field).boxed()),
         (3, array_spec(depth).prop_map(ItemSpec::Array).boxed()),
-        (1, (1_u32..=16).prop_map(ItemSpec::Spare).boxed()),
+        (2, (1_u32..=16).prop_map(ItemSpec::Spare).boxed()),
     ];
     if depth > 0 {
         items.push((2, type_spec(depth - 1).prop_map(ItemSpec::Struct).boxed()));
@@ -221,21 +222,29 @@ fn trailer_spec() -> BoxedStrategy<Trailer> {
     .boxed()
 }
 
-/// A count field: 2 to 16 bits, scaled now and then.
+/// A count field: 2 to 16 bits, scaled now and then. An array that would
+/// share the last one takes a negative `add` a third of the time, so a
+/// raw value can give the arrays before it a count and it none.
 fn count_field() -> BoxedStrategy<CountSpec> {
     (
         2_u32..=16,
         prop_oneof![3 => Just(1_u32), 1 => 2_u32..=3],
-        prop_oneof![3 => Just(0_i64), 1 => -2_i64..=2],
-        proptest::bool::weighted(0.4),
+        proptest::bool::weighted(0.6),
         any::<bool>(),
     )
-        .prop_map(|(bits, multiply, add, share, mapped)| CountSpec::Field {
-            bits,
-            multiply,
-            add,
-            share,
-            mapped,
+        .prop_flat_map(|(bits, multiply, share, mapped)| {
+            let add = if share {
+                prop_oneof![Just(0_i64), -2_i64..=-1, 1_i64..=2].boxed()
+            } else {
+                prop_oneof![3 => Just(0_i64), 1 => -2_i64..=2].boxed()
+            };
+            add.prop_map(move |add| CountSpec::Field {
+                bits,
+                multiply,
+                add,
+                share,
+                mapped,
+            })
         })
         .boxed()
 }
@@ -256,7 +265,7 @@ fn element_spec(depth: u32, varying: bool) -> BoxedStrategy<ElementSpec> {
         return scalar.boxed();
     }
     prop_oneof![
-        3 => scalar,
+        2 => scalar,
         1 => type_spec(depth - 1).prop_map(ElementSpec::Struct),
     ]
     .boxed()
@@ -784,6 +793,42 @@ fn element_bits(element: &ElementNode, bound: Bound) -> u64 {
     }
 }
 
+/// An element's exact size (§5.2), if it has one: a number's, a bool's, a
+/// fixed length's, or a struct's whose entries all have one. An array has
+/// one only with a `fixed` count of elements that have one, even a count
+/// of 0, which makes every element the same size without giving it an
+/// exact one.
+fn exact_bits(element: &ElementNode) -> Option<u64> {
+    match element {
+        ElementNode::Scalar(element) => exact_scalar(element),
+        ElementNode::Struct(ty) => exact_entries(&ty.entries),
+    }
+}
+
+fn exact_entries(nodes: &[Node]) -> Option<u64> {
+    nodes
+        .iter()
+        .map(|node| match node {
+            Node::Padding(bits) => Some(*bits),
+            Node::Field(field) => exact_scalar(field),
+            Node::Array(array) => match array.count {
+                Counted::Fixed(count) => {
+                    exact_bits(&array.element).map(|bits| bits * u64::from(count))
+                }
+                Counted::Field { .. } | Counted::Remaining => None,
+            },
+            Node::Struct(node) => exact_entries(&node.ty.entries),
+        })
+        .sum()
+}
+
+fn exact_scalar(field: &Placed) -> Option<u64> {
+    match field.kind.length() {
+        None | Some(Length::Fixed { .. }) => Some(u64::from(field.kind.bits())),
+        Some(_) => None,
+    }
+}
+
 fn scalar_bits(field: &Placed, bound: Bound) -> u64 {
     u64::from(match bound {
         Bound::Least => field.kind.bits(),
@@ -1059,44 +1104,257 @@ fn entry_value(node: &Node, held: &BTreeMap<String, u64>) -> BoxedStrategy<Optio
 
 // ---- Writing --------------------------------------------------------------
 
-/// Writes a container's values from bit `start` (§2.1, §2.2), leaving
-/// padding as it was; returns where the container ends.
-pub(super) fn write(
-    nodes: &[Node],
-    record: &[(String, Raw)],
-    payload: &mut [u8],
-    start: u64,
-) -> u64 {
-    let mut at = start;
-    let mut values = record.iter().map(|(_, raw)| raw);
-    for node in nodes {
-        if let Node::Padding(bits) = node {
-            at += bits;
-            continue;
-        }
-        let Some(raw) = values.next() else {
-            break;
-        };
-        match (node, raw) {
-            (Node::Field(field), raw) => at = put(field, raw, payload, at),
-            (Node::Array(array), Raw::Array(items)) => {
-                for item in items {
-                    at = match (&array.element, item) {
-                        (ElementNode::Scalar(element), raw) => put(element, raw, payload, at),
-                        (ElementNode::Struct(ty), Raw::Record(fields)) => {
-                            write(&ty.entries, fields, payload, at)
-                        }
-                        _ => at,
-                    };
-                }
-            }
-            (Node::Struct(node), Raw::Record(fields)) => {
-                at = write(&node.ty.entries, fields, payload, at);
-            }
-            _ => {}
+/// Writes a message's values into its payload as decoding reads them back
+/// (§2.1, §2.2, §5.2), and notes each step decoding takes and the bits it
+/// needs ([`Step`]). Counts and lengths are worked out from their fields
+/// as decoding works them out (§5.4), so a planted count or length is
+/// followed as far as the values go.
+pub(super) struct Writer<'p> {
+    payload: &'p mut [u8],
+    /// A string's path, and the bytes written for its value instead.
+    garbled: Option<(String, Vec<u8>)>,
+    steps: Vec<Step>,
+}
+
+impl<'p> Writer<'p> {
+    /// A writer into `payload`, after the steps already taken.
+    pub(super) fn new(
+        payload: &'p mut [u8],
+        garbled: Option<(String, Vec<u8>)>,
+        steps: Vec<Step>,
+    ) -> Writer<'p> {
+        Writer {
+            payload,
+            garbled,
+            steps,
         }
     }
-    at
+
+    pub(super) fn steps(self) -> Vec<Step> {
+        self.steps
+    }
+
+    /// Writes a container's values from bit `at`, leaving padding as it
+    /// was, its entries named under `path`. Returns where it ends, or
+    /// `None` where decoding stops inside it.
+    pub(super) fn container(
+        &mut self,
+        nodes: &[Node],
+        record: &[(String, Raw)],
+        at: u64,
+        path: &str,
+    ) -> Option<u64> {
+        let mut at = at;
+        let mut values = record.iter();
+        let padding = if path.is_empty() {
+            "padding"
+        } else if path.ends_with(']') {
+            "padding in an element"
+        } else {
+            "padding in a struct"
+        };
+        for node in nodes {
+            if let Node::Padding(bits) = node {
+                at += bits;
+                self.reach(path, at, Short::Padding, padding);
+                continue;
+            }
+            let Some((name, raw)) = values.next() else {
+                return self.unknown();
+            };
+            let here = if path.is_empty() {
+                name.clone()
+            } else {
+                format!("{path}.{name}")
+            };
+            at = match (node, raw) {
+                (Node::Field(field), raw) => self.scalar(field, raw, at, &here, record, "field")?,
+                (Node::Array(array), Raw::Array(items)) => {
+                    self.array(array, items, at, &here, record)?
+                }
+                (Node::Struct(node), Raw::Record(fields)) => {
+                    self.container(&node.ty.entries, fields, at, &here)?
+                }
+                _ => return self.unknown(),
+            };
+        }
+        Some(at)
+    }
+
+    /// A field or scalar element at `at`. `scope` is its container's
+    /// values, which hold the field its length is taken from, if any.
+    fn scalar(
+        &mut self,
+        field: &Placed,
+        raw: &Raw,
+        at: u64,
+        path: &str,
+        scope: &[(String, Raw)],
+        label: &'static str,
+    ) -> Option<u64> {
+        let Some(length) = field.kind.length() else {
+            let end = put(field, raw, self.payload, at);
+            self.reach(path, end, Short::PastEnd, label);
+            return Some(end);
+        };
+        let (value, text) = match (&field.kind, raw) {
+            (Kind::Text { text, .. }, Raw::Str(value)) => (encode(value, *text), Some(*text)),
+            (Kind::Bytes(_), Raw::Bytes(value)) => (value.clone(), None),
+            _ => return self.unknown(),
+        };
+        let garbled = match &self.garbled {
+            Some((spot, bytes)) if spot == path => Some(bytes.clone()),
+            _ => None,
+        };
+        let bytes = garbled.clone().unwrap_or(value);
+        let end = match length {
+            Length::Fixed { .. } => {
+                let end = put_run(self.payload, at, &bytes, length);
+                self.reach(path, end, Short::PastEnd, label);
+                end
+            }
+            // Decoding looks for the terminator in what the packet has.
+            Length::Terminated(byte) => {
+                let end = put_run(self.payload, at, &bytes, length);
+                self.reach(path, end, Short::NoTerminator(byte), "terminator");
+                end
+            }
+            // The length is checked against the bits left before anything
+            // is copied (§5.5).
+            Length::Field { multiply, add, .. } => {
+                let Some(raw) = held(scope, &length_field(&field.name)) else {
+                    return self.unknown();
+                };
+                let said = raw * i128::from(multiply) + i128::from(add);
+                let Ok(said) = u64::try_from(said) else {
+                    return self.fail(path, Problem::BadLength { value: said });
+                };
+                let needs = at.saturating_add(said.saturating_mul(8));
+                if said != bytes.len() as u64 {
+                    self.reach(path, needs, Short::PastEnd, label);
+                    return self.unknown();
+                }
+                let end = put_run(self.payload, at, &bytes, length);
+                self.reach(path, end, Short::PastEnd, label);
+                end
+            }
+            // It reads whatever is left. A packet that ends inside its
+            // planted bytes may leave them out, so that's no longer known.
+            Length::Remaining => {
+                let end = put_run(self.payload, at, &bytes, length);
+                if garbled.is_some() {
+                    self.steps.push(Step::Opaque { needs: end });
+                }
+                end
+            }
+        };
+        match (garbled, text) {
+            (Some(_), Some(text)) => self.fail(
+                path,
+                Problem::InvalidText {
+                    encoding: text.name(),
+                },
+            ),
+            _ => Some(end),
+        }
+    }
+
+    /// An array at `at` (§5.2): elements one after another, as many as its
+    /// count, or until the packet ends.
+    fn array(
+        &mut self,
+        array: &ArrayNode,
+        items: &[Raw],
+        at: u64,
+        path: &str,
+        scope: &[(String, Raw)],
+    ) -> Option<u64> {
+        let mut at = at;
+        let count = match &array.count {
+            Counted::Fixed(count) => i128::from(*count),
+            Counted::Field {
+                field,
+                multiply,
+                add,
+            } => match held(scope, field) {
+                Some(raw) => raw * i128::from(*multiply) + i128::from(*add),
+                None => return self.unknown(),
+            },
+            Counted::Remaining => {
+                for (index, item) in items.iter().enumerate() {
+                    self.steps.push(Step::More { at });
+                    at = self.element(&array.element, item, at, &format!("{path}[{index}]"))?;
+                }
+                return Some(at);
+            }
+        };
+        let Ok(count) = u64::try_from(count) else {
+            return self.fail(path, Problem::BadLength { value: count });
+        };
+        // Checked against the bits left before any element is read (§5.5):
+        // as count × size for elements with an exact size, else a bit each.
+        // Validation refuses an element that never takes a bit (§5.2), so
+        // an exact size is at least 1.
+        let exact = exact_bits(&array.element);
+        let each = exact.unwrap_or(1);
+        let needs = at.saturating_add(count.saturating_mul(each));
+        let label = match exact {
+            Some(_) => "array",
+            None => "array, a bit each",
+        };
+        self.reach(path, needs, Short::PastEnd, label);
+        if count > items.len() as u64 {
+            return self.unknown();
+        }
+        for (index, item) in items.iter().take(count as usize).enumerate() {
+            at = self.element(&array.element, item, at, &format!("{path}[{index}]"))?;
+        }
+        Some(at)
+    }
+
+    fn element(&mut self, element: &ElementNode, item: &Raw, at: u64, path: &str) -> Option<u64> {
+        match (element, item) {
+            (ElementNode::Scalar(element), raw) => {
+                self.scalar(element, raw, at, path, &[], "element")
+            }
+            (ElementNode::Struct(ty), Raw::Record(fields)) => {
+                self.container(&ty.entries, fields, at, path)
+            }
+            _ => self.unknown(),
+        }
+    }
+
+    fn reach(&mut self, path: &str, needs: u64, short: Short, label: &'static str) {
+        self.steps.push(Step::Reach {
+            path: path.to_string(),
+            needs,
+            short,
+            label,
+        });
+    }
+
+    /// Decoding fails here: the walk stops.
+    fn fail(&mut self, path: &str, problem: Problem) -> Option<u64> {
+        self.steps.push(Step::Fail(Failure {
+            path: path.to_string(),
+            problem,
+        }));
+        None
+    }
+
+    /// What decoding does from here can't be told from the values.
+    fn unknown(&mut self) -> Option<u64> {
+        self.steps.push(Step::Unknown);
+        None
+    }
+}
+
+/// A count or length field's raw value, among its container's values.
+fn held(scope: &[(String, Raw)], name: &str) -> Option<i128> {
+    scope.iter().find_map(|(field, raw)| match raw {
+        Raw::Uint(n) if field == name => Some(i128::from(*n)),
+        _ => None,
+    })
 }
 
 /// Writes one scalar at `at`; returns where it ends.
@@ -1213,5 +1471,6 @@ fn offset_ns(position: u64, interval_ms: f64) -> i64 {
 }
 
 mod composite;
+pub(super) mod faults;
 #[cfg(test)]
 mod tests;

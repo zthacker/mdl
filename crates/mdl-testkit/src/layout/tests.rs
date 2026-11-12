@@ -540,3 +540,98 @@ fn the_oracle_agrees_with_third_party_libraries() {
         );
     }
 }
+
+/// Damaged messages reach every route the faults take, and every error
+/// and place an error can name, at least five times each.
+#[test]
+fn damaged_messages_reach_every_route() {
+    use std::collections::BTreeMap;
+
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+
+    use super::{Problem, damaged};
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = damaged();
+    let mut found: BTreeMap<String, usize> = BTreeMap::new();
+    let mut note = |label: String| *found.entry(label).or_default() += 1;
+    let (mut messages, mut damaged) = (0, 0);
+    for _ in 0..1000 {
+        let case = strategy.new_tree(&mut runner).unwrap().current();
+        for message in &case.messages {
+            messages += 1;
+            let Some(damage) = &message.damage else {
+                continue;
+            };
+            damaged += 1;
+            for route in &damage.routes {
+                note(route.clone());
+            }
+            let failure = &damage.failure;
+            note(format!("code:{}", failure.problem.code()));
+            let place = match (failure.problem, failure.path.as_str()) {
+                (Problem::PastEnd { padding: true, .. }, "") => "padding at the top level",
+                (Problem::PastEnd { padding: true, .. }, path) if path.ends_with(']') => {
+                    "padding in an element"
+                }
+                (Problem::PastEnd { padding: true, .. }, _) => "padding in a struct",
+                (_, path) if path.contains("].") => "in a record",
+                (_, path) if path.ends_with(']') => "an element",
+                (_, path) if path.contains('.') => "in a struct",
+                _ => "at the top level",
+            };
+            note(format!("place:{place}"));
+        }
+    }
+    println!("{damaged} of {messages} messages damaged; {found:#?}");
+    // A message is left as it is only when nothing can be planted in it.
+    assert!(
+        damaged * 10 >= messages * 9,
+        "{damaged} of {messages} damaged"
+    );
+    for route in [
+        "cut:header",
+        "cut:time code",
+        "cut:field",
+        "cut:element",
+        "cut:array",
+        "cut:array, a bit each",
+        "cut:padding",
+        "cut:padding in a struct",
+        "cut:padding in an element",
+        "cut:terminator",
+        "more:element",
+        "more:terminator",
+        "more:field",
+        "more:array",
+        "count:negative",
+        "count:largest",
+        "shared count",
+        "length:negative",
+        "length:largest",
+        "text:stray",
+        "text:overlong",
+        "text:surrogate",
+        "text:past_max",
+        "text:never",
+        "text:cut_off",
+        "text:high",
+        "pair",
+        "unreadable time",
+        "code:past_end",
+        "code:no_terminator",
+        "code:invalid_text",
+        "code:bad_length",
+        "place:padding at the top level",
+        "place:padding in an element",
+        "place:padding in a struct",
+        "place:in a record",
+        "place:an element",
+        "place:in a struct",
+        "place:at the top level",
+    ] {
+        let count = found.get(route).copied().unwrap_or(0);
+        assert!(count >= 5, "{route} is reached {count} times");
+    }
+}
