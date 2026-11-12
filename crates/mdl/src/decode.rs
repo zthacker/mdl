@@ -251,6 +251,15 @@ pub enum Problem {
         needed_bits: u64,
         available_bits: u64,
     },
+    /// Padding that runs past the end. Padding has no path, so the error
+    /// names its container and says it's padding (`decoding.md` §5.2).
+    #[error(
+        "padding needs the packet's bits up to {needed_bits}, but the packet has {available_bits}"
+    )]
+    PaddingPastEnd {
+        needed_bits: u64,
+        available_bits: u64,
+    },
     #[error("no {byte:#04x} byte ends it before the packet ends")]
     NoTerminator { byte: u8 },
     #[error("its bytes aren't valid {encoding}")]
@@ -283,7 +292,7 @@ pub enum Problem {
 impl Problem {
     pub fn code(&self) -> &'static str {
         match self {
-            Problem::PastEnd { .. } => "past_end",
+            Problem::PastEnd { .. } | Problem::PaddingPastEnd { .. } => "past_end",
             Problem::NoTerminator { .. } => "no_terminator",
             Problem::InvalidText { .. } => "invalid_text",
             Problem::EmptyElement => "empty_element",

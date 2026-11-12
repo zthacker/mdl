@@ -241,7 +241,10 @@ struct).
   packet ends. A packet ends on a byte, so an array with a `remaining`
   count MUST start on a byte and have elements of whole bytes; bits left
   after its last element would otherwise be read as another.
-- **Padding** skips its bits.
+- **Padding** skips its bits. It has no path: a packet that ends inside
+  it is [`past_end`], named by its container (an array element's or a
+  struct's path, or none at a packet's top level), and the error says
+  it's padding.
 - **Checksums** are verified (§5.6).
 
 ### 5.3 JSON entries
@@ -271,14 +274,17 @@ unconditional and not optional.
   or 1), or a string field with strings exactly. `mask_any` holds if
   `field & value` isn't 0; `mask_all` if it equals `value`.
 - A count or length from a field is `raw * multiply + add` (defaults 1
-  and 0). A negative result is [`bad_length`].
+  and 0). A negative result is [`bad_length`], named by the entry whose
+  count or length it is.
 
 ### 5.5 Safety
 
 A decoder MUST NOT allocate in proportion to a count or length before
-checking it against the bits left in the packet. Every array element
-takes at least one bit, so a count is first checked as `count * size`
-bits (or `count` bits, when elements vary in size), and an element that
+checking it against the bits left in the packet. Before reading any
+element of an array with a `fixed` or `field` count, the count is
+checked against the bits left: as `count * size` bits for elements of
+one size, else as `count` bits, since every element takes at least one.
+A count past them is [`past_end`], named by the array. An element that
 takes no bits is [`empty_element`]. Strings and bytes are checked before
 they're copied. A decoder MUST NOT recurse deeper than the definition
 nests (validation caps it at 32), and MUST NOT panic or crash on any
