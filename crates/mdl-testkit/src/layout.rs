@@ -1,10 +1,12 @@
 //! Valid layouts and the messages they decode, built from this module's
 //! own reading of `spec/decoding.md`, not from `mdl`: the oracle the
 //! decoder is checked against. A generated [`Telemetry`] is a binary family
-//! with one set of up to three packets, each a run of fields of every
-//! scalar type, size, position and byte order validation allows, mapped to
-//! catalog params; and messages packed bit by bit (§2.1), with what each
-//! decodes to: every raw value, and every sample.
+//! with one set of up to three packets, each a run of fields, arrays and
+//! structs of every scalar type, size, length, position and byte order
+//! validation allows, mapped to catalog params; and messages packed bit by
+//! bit (§2.1), with what each decodes to: every raw value, and every
+//! sample. [`damaged`] plants faults in such messages, with the error each
+//! then gives (§5, §9).
 //!
 //! Positions and meaning follow the spec's rules as written there:
 //! little-endian values are whole bytes on byte boundaries or sit inside
@@ -17,7 +19,8 @@
 use std::collections::BTreeSet;
 use std::ops::RangeInclusive;
 
-use body::{Body, BodySpec, body_spec};
+use body::faults::{Short, Step};
+use body::{Body, BodySpec, Writer, body_spec};
 pub use fleet::{Fleet, Meta, Sent, fleet};
 use meaning::{UNIT_GROUPS, convert, convert_unit, table};
 use proptest::collection::{btree_set, vec};
@@ -55,6 +58,63 @@ pub struct Message {
     /// Its ground time, in nanoseconds since 1970-01-01T00:00:00Z.
     pub received: i128,
     pub event_time: EventTime,
+    /// For a damaged message, what was done to it and the error decoding
+    /// it gives. Its record, samples and event time are then those of the
+    /// message before it was damaged.
+    pub damage: Option<Damage>,
+}
+
+/// Faults planted in a message, and the error they give.
+#[derive(Debug, Clone)]
+pub struct Damage {
+    /// Each fault's route, as the reach test counts them (`cut:array`,
+    /// `text:surrogate`).
+    pub routes: Vec<String>,
+    /// What was planted, for a failing case's report.
+    pub planted: String,
+    pub failure: Failure,
+}
+
+/// Why a message can't be decoded (`spec/decoding.md` §5, §9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Failure {
+    /// The path of the entry the error names, every index included
+    /// (`cells[1].volts`). Padding has no path, so for padding it's its
+    /// container's, empty at a packet's top level.
+    pub path: String,
+    pub problem: Problem,
+}
+
+/// What went wrong at an entry, with what the error reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Problem {
+    /// `past_end`: reading needs the packet's bits up to `needed_bits`,
+    /// but it has `available_bits`. `padding` when what runs past is
+    /// padding.
+    PastEnd {
+        needed_bits: u64,
+        available_bits: u64,
+        padding: bool,
+    },
+    /// `no_terminator`: no `byte` ends the value before the packet ends.
+    NoTerminator { byte: u8 },
+    /// `invalid_text`: the bytes aren't text in `encoding`, which is
+    /// spelled as the IR spells encodings (`utf8`, `ascii`).
+    InvalidText { encoding: &'static str },
+    /// `bad_length`: a count or length from a field is `value`, below 0.
+    BadLength { value: i128 },
+}
+
+impl Problem {
+    /// Its code (§9).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Problem::PastEnd { .. } => "past_end",
+            Problem::NoTerminator { .. } => "no_terminator",
+            Problem::InvalidText { .. } => "invalid_text",
+            Problem::BadLength { .. } => "bad_length",
+        }
+    }
 }
 
 /// A raw value, as decoding reads it before any conversion. Floats
@@ -163,12 +223,27 @@ impl PartialEq for Expected {
 /// Any telemetry layout validation accepts, of the kinds this module
 /// builds, with one to three messages for each packet.
 pub fn telemetry() -> BoxedStrategy<Telemetry> {
+    case(message)
+}
+
+/// Layouts as [`telemetry`] makes them, with messages damaged as
+/// `layout/body/faults.rs` plants faults in them: each fails with its
+/// [`Damage::failure`], or decodes when nothing could be planted in it.
+pub fn damaged() -> BoxedStrategy<Telemetry> {
+    case(body::faults::damaged_message)
+}
+
+/// A family and its set, with one to three messages from `message` for
+/// each packet.
+fn case(
+    message: fn(PacketLayout, TimeSource) -> BoxedStrategy<Message>,
+) -> BoxedStrategy<Telemetry> {
     (any::<bool>(), time_source())
         .prop_flat_map(|(little, time)| {
             let packet = (body_spec(), time_fields(&time));
             (Just(little), Just(time), vec(packet, 1..=3))
         })
-        .prop_flat_map(|(little, time, packets)| {
+        .prop_flat_map(move |(little, time, packets)| {
             let packets: Vec<PacketLayout> = packets
                 .into_iter()
                 .enumerate()
@@ -193,6 +268,17 @@ enum Text {
     Utf8,
     Ascii,
     Latin1,
+}
+
+impl Text {
+    /// Its name, as the IR spells it.
+    fn name(self) -> &'static str {
+        match self {
+            Text::Utf8 => "utf8",
+            Text::Ascii => "ascii",
+            Text::Latin1 => "latin1",
+        }
+    }
 }
 
 /// The most bytes a string or bytes value of a length that varies has in a
@@ -921,14 +1007,9 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
         }
         Kind::Text { length, text } => {
             json.insert("length".into(), length_json(*length, &field.name));
-            match text {
-                Text::Utf8 => {}
-                Text::Ascii => {
-                    json.insert("text".into(), json!("ascii"));
-                }
-                Text::Latin1 => {
-                    json.insert("text".into(), json!("latin1"));
-                }
+            // UTF-8 is the default, which the IR doesn't spell.
+            if *text != Text::Utf8 {
+                json.insert("text".into(), json!(text.name()));
             }
         }
         Kind::Bytes(length) => {
@@ -1092,6 +1173,30 @@ fn message_at(
     ground: i128,
     header: Vec<u64>,
 ) -> BoxedStrategy<Message> {
+    draft(&packet, &time, ground, header)
+        .prop_map(move |draft| pack(&packet, &time, draft))
+        .boxed()
+}
+
+/// What a message holds before it's packed: its body's values, the noise
+/// they're written over, and its header and time fields.
+#[derive(Debug, Clone)]
+struct Draft {
+    values: Vec<(String, Raw)>,
+    noise: Vec<u8>,
+    timing: Timing,
+}
+
+/// A draft of a message of `packet` received at `ground`, its header
+/// fields holding `header`: a raw value for each field, over random bytes,
+/// so padding and trailing bits are noise the decoder must skip.
+fn draft(
+    packet: &PacketLayout,
+    time: &TimeSource,
+    ground: i128,
+    header: Vec<u64>,
+) -> BoxedStrategy<Draft> {
+    let time = time.clone();
     let values = body::values(&packet.body.nodes);
     let length = usize::try_from(packet.body.most_bits.div_ceil(8)).unwrap_or(0);
     // Now and then a sentinel, which means ground time.
@@ -1171,7 +1276,11 @@ fn message_at(
                     header: header.clone(),
                     correlation,
                 };
-                pack(&packet, &time, values, noise, timing)
+                Draft {
+                    values,
+                    noise,
+                    timing,
+                }
             },
         )
         .boxed()
@@ -1425,66 +1534,25 @@ fn put_bits(payload: &mut [u8], offset: u64, size: u32, value: u64, little: bool
     }
 }
 
-fn pack(
-    packet: &PacketLayout,
-    time: &TimeSource,
-    values: Vec<(String, Raw)>,
-    mut payload: Vec<u8>,
-    timing: Timing,
-) -> Message {
+fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
+    let Draft {
+        values,
+        mut noise,
+        timing,
+    } = draft;
+    let (mut record, _, end) = write_message(packet, time, &values, &mut noise, &timing, None);
+    // A valid message's values never stop decoding inside it.
+    let end = end.unwrap_or(8 * noise.len() as u64);
+    let mut payload = noise;
+    payload.truncate(usize::try_from(end.div_ceil(8)).unwrap_or(payload.len()));
+    let samples = packet.body.samples(&values);
+    record.extend(values);
     let Timing {
         count,
         week,
         received,
-        header,
-        correlation,
+        ..
     } = timing;
-    put_bits(&mut payload, 0, 8, u64::from(packet.id), false);
-    let mut record = vec![("id".to_string(), Raw::Uint(u64::from(packet.id)))];
-    // In the family's byte order, whole bytes on byte boundaries.
-    let mut at = 8;
-    for ((name, bits), value) in packet.header.iter().zip(&header) {
-        put_bits(&mut payload, at, *bits, *value, packet.little);
-        record.push((name.to_string(), Raw::Uint(*value)));
-        at += u64::from(*bits);
-    }
-    let start = time_start(&packet.header);
-    if let (Some(fields), Some((clock, boot))) = (&packet.correlation, correlation) {
-        put_bits(&mut payload, start, fields.clock_bits, clock, packet.little);
-        put_bits(
-            &mut payload,
-            start + u64::from(fields.clock_bits),
-            32,
-            boot,
-            packet.little,
-        );
-        record.push(("clock".to_string(), Raw::Uint(clock)));
-        record.push(("boot".to_string(), Raw::Uint(boot)));
-    }
-    // The count field comes after the CUC code or the GPS week, in the
-    // family's byte order.
-    if let (Some(field), Some(raw)) = (packet.count, &count) {
-        let mut at = start;
-        if matches!(time, TimeSource::Gps { .. }) {
-            put_bits(&mut payload, start, 16, u64::from(week), packet.little);
-            record.push(("week".to_string(), Raw::Uint(u64::from(week))));
-            at = start + 16;
-        }
-        let bits = field.bits();
-        let value = match raw {
-            Raw::Uint(n) => *n,
-            Raw::Int(n) => fit(*n as u64, bits),
-            Raw::Float(x) if bits == 32 => u64::from((*x as f32).to_bits()),
-            Raw::Float(x) => x.to_bits(),
-            _ => 0,
-        };
-        put_bits(&mut payload, at, bits, value, packet.little);
-        record.push(("t".to_string(), raw.clone()));
-    }
-    let end = body::write(&packet.body.nodes, &values, &mut payload, packet.body.start);
-    payload.truncate(usize::try_from(end.div_ceil(8)).unwrap_or(payload.len()));
-    let samples = packet.body.samples(&values);
-    record.extend(values);
     // A count or a week holding a sentinel has no reading: ground time.
     let sentinel = count.as_ref().is_some_and(|raw| {
         packet.count_invalid.iter().any(|n| match raw {
@@ -1496,6 +1564,7 @@ fn pack(
     }) || (matches!(time, TimeSource::Gps { .. })
         && count.is_some()
         && packet.week_invalid.contains(&u64::from(week)));
+    let start = time_start(&packet.header);
     let event_time = if sentinel {
         EventTime::Ground
     } else {
@@ -1514,7 +1583,84 @@ fn pack(
         samples,
         received,
         event_time,
+        damage: None,
     }
+}
+
+/// Writes a message over the noise in `payload`: its id, header and time
+/// fields, then its body, with `garbled` written for a string's value if
+/// given. Returns the record of all but the body, every step decoding
+/// takes ([`Step`]), and where the body ends: `None` when decoding stops
+/// inside it.
+fn write_message(
+    packet: &PacketLayout,
+    time: &TimeSource,
+    values: &[(String, Raw)],
+    payload: &mut [u8],
+    timing: &Timing,
+    garbled: Option<(String, Vec<u8>)>,
+) -> (Vec<(String, Raw)>, Vec<Step>, Option<u64>) {
+    let mut steps = Vec::new();
+    let header_step = |name: &str, needs: u64| Step::Reach {
+        path: name.to_string(),
+        needs,
+        short: Short::PastEnd,
+        label: "header",
+    };
+    put_bits(payload, 0, 8, u64::from(packet.id), false);
+    let mut record = vec![("id".to_string(), Raw::Uint(u64::from(packet.id)))];
+    steps.push(header_step("id", 8));
+    // In the family's byte order, whole bytes on byte boundaries.
+    let mut at = 8;
+    for ((name, bits), value) in packet.header.iter().zip(&timing.header) {
+        put_bits(payload, at, *bits, *value, packet.little);
+        record.push((name.to_string(), Raw::Uint(*value)));
+        at += u64::from(*bits);
+        steps.push(header_step(name, at));
+    }
+    let start = time_start(&packet.header);
+    if let (Some(fields), Some((clock, boot))) = (&packet.correlation, timing.correlation) {
+        let boot_at = start + u64::from(fields.clock_bits);
+        put_bits(payload, start, fields.clock_bits, clock, packet.little);
+        put_bits(payload, boot_at, 32, boot, packet.little);
+        record.push(("clock".to_string(), Raw::Uint(clock)));
+        record.push(("boot".to_string(), Raw::Uint(boot)));
+        steps.push(header_step("clock", boot_at));
+        steps.push(header_step("boot", boot_at + 32));
+    }
+    // The CUC code is padding to decoding, at the packet's top level.
+    if let TimeSource::Cuc { coarse, fine, .. } = time {
+        steps.push(Step::Reach {
+            path: String::new(),
+            needs: start + u64::from(8 * (coarse + fine)),
+            short: Short::Padding,
+            label: "time code",
+        });
+    }
+    // The count field comes after the GPS week, in the family's byte order.
+    if let (Some(field), Some(raw)) = (packet.count, &timing.count) {
+        let mut at = start;
+        if matches!(time, TimeSource::Gps { .. }) {
+            put_bits(payload, start, 16, u64::from(timing.week), packet.little);
+            record.push(("week".to_string(), Raw::Uint(u64::from(timing.week))));
+            at = start + 16;
+            steps.push(header_step("week", at));
+        }
+        let bits = field.bits();
+        let value = match raw {
+            Raw::Uint(n) => *n,
+            Raw::Int(n) => fit(*n as u64, bits),
+            Raw::Float(x) if bits == 32 => u64::from((*x as f32).to_bits()),
+            Raw::Float(x) => x.to_bits(),
+            _ => 0,
+        };
+        put_bits(payload, at, bits, value, packet.little);
+        record.push(("t".to_string(), raw.clone()));
+        steps.push(header_step("t", at + u64::from(bits)));
+    }
+    let mut writer = Writer::new(payload, garbled, steps);
+    let end = writer.container(&packet.body.nodes, values, packet.body.start, "");
+    (record, writer.steps(), end)
 }
 
 // ---- The bundle -----------------------------------------------------------
