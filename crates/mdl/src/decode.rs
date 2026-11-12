@@ -66,9 +66,12 @@ use thiserror::Error;
 use crate::bindings::Resolver;
 use crate::bits::{read_bits, sign_extend};
 use crate::checksum::{Algorithm, Compiled};
-use crate::ir::{ByteOrder, Catalog, CommandPacket, Entry, Family, Length, Packet, Scalar, Set};
+use crate::ir::{
+    ByteOrder, Catalog, CommandPacket, Entry, Family, Length, Packet, Scalar, Set, TextEncoding,
+};
 use crate::message::{Message, MetaValue};
 use crate::route::{FamilySets, Readable, Route, RouteError, json_integer};
+use crate::text;
 use crate::validate::{
     KeyId, KeyValue, by_value, command_identities, decoding_facts, exact, static_offsets,
 };
@@ -262,8 +265,10 @@ pub enum Problem {
     },
     #[error("no {byte:#04x} byte ends it before the packet ends")]
     NoTerminator { byte: u8 },
-    #[error("its bytes aren't valid {encoding}")]
-    InvalidText { encoding: &'static str },
+    /// Bytes that aren't text in the field's encoding: the one it names,
+    /// or UTF-8.
+    #[error("its bytes aren't valid {}", text::name(*.encoding))]
+    InvalidText { encoding: TextEncoding },
     #[error("an array element took no bits; every element takes at least one")]
     EmptyElement,
     #[error("a length or count taken from a field is {value}")]

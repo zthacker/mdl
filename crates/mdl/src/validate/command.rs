@@ -1279,7 +1279,7 @@ fn check_text_value(field: &Field, value: &str, place: &Place, report: &mut Repo
             place,
             format!(
                 "{value:?} can't be written as {}, field {}'s text encoding",
-                text::name(field.text),
+                text::name(text::encoding_of(field.text)),
                 field.name
             ),
         );

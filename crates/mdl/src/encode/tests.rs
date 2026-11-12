@@ -576,7 +576,20 @@ fn fixed_strings_floats_padding_and_signed_fields_are_laid_out_bit_by_bit() {
     );
 
     assert_eq!(code(sets.encode(&tune("PIN"))), "bad_length");
-    assert_eq!(code(sets.encode(&tune("PÏNG"))), "invalid_text");
+    let err = sets.encode(&tune("PÏNG")).unwrap_err();
+    // The error carries the encoding, and its message names it.
+    let ascii = FieldProblem::InvalidText {
+        encoding: TextEncoding::Ascii,
+    };
+    assert!(
+        matches!(&err, EncodeError::Field { problem, .. } if *problem == ascii),
+        "{err:?}"
+    );
+    assert!(
+        err.to_string()
+            .ends_with("the text can't be written as ASCII"),
+        "{err}"
+    );
     assert_eq!(
         code(sets.encode(&tune("PING").with_argument("gain", 1e39))),
         "raw_range"
