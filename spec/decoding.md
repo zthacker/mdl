@@ -201,10 +201,12 @@ struct).
   Exact sizes are those of an entry without `when` that is a field with
   `size_bits` or a `fixed` length, padding, an array with a `fixed` count
   of elements with an exact size, a struct whose type has an exact size,
-  or any checksum. A struct type has an exact size when every entry of it
-  has a static position and an exact size; its size is then the furthest
-  end of its entries. Identification (§4) and checksums (§5.6) depend on
-  static positions, so every decoder MUST compute them this way.
+  or any checksum. A `fixed` count of 0 doesn't give an array of elements
+  without one an exact size, though it always takes no bits. A struct
+  type has an exact size when every entry of it has a static position
+  and an exact size; its size is then the furthest end of its entries.
+  Identification (§4), checksums (§5.6) and the count check (§5.5)
+  depend on them, so every decoder MUST compute them this way.
 - **Starts within a byte.** The alignment rules of §2.1 and §2.2, and
   whether a narrow value's `byte_order` can matter, depend on the bits
   within a byte (0 to 7) where an entry can start: its *start residues*.
@@ -247,7 +249,10 @@ struct).
   `fixed`, taken from a field (§5.4), or `remaining`: elements until the
   packet ends. A packet ends on a byte, so an array with a `remaining`
   count MUST start on a byte and have elements of whole bytes; bits left
-  after its last element would otherwise be read as another.
+  after its last element would otherwise be read as another. An element
+  MUST be able to take a bit: one that never does could never be read
+  (§5.5, [`empty_element`]). An array with a `remaining` count MUST have
+  elements that always take one, or it would never end.
 - **Padding** skips its bits. It has no path: a packet that ends inside
   it is [`past_end`], named by its container (an array element's or a
   struct's path, or none at a packet's top level), and the error says
@@ -289,13 +294,13 @@ unconditional and not optional.
 A decoder MUST NOT allocate in proportion to a count or length before
 checking it against the bits left in the packet. Before reading any
 element of an array with a `fixed` or `field` count, the count is
-checked against the bits left: as `count * size` bits for elements of
-one size, else as `count` bits, since every element takes at least one.
-A count past them is [`past_end`], named by the array. An element that
-takes no bits is [`empty_element`]. Strings and bytes are checked before
-they're copied. A decoder MUST NOT recurse deeper than the definition
-nests (validation caps it at 32), and MUST NOT panic or crash on any
-payload.
+checked against the bits left: as `count * size` bits for elements with
+an exact size (§5.2), else as `count` bits, since every element takes at
+least one. A count past them is [`past_end`], named by the array. An
+element that takes no bits is [`empty_element`]. Strings and bytes are
+checked before they're copied. A decoder MUST NOT recurse deeper than
+the definition nests (validation caps it at 32), and MUST NOT panic or
+crash on any payload.
 
 ### 5.6 Checksums
 
