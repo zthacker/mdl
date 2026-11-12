@@ -34,7 +34,7 @@
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
-use std::fmt::{self, Write};
+use std::fmt;
 
 use serde::de::{self, Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::error::Category;
@@ -432,6 +432,9 @@ pub(crate) fn format_double(n: f64) -> String {
     ryu_js::Buffer::new().format_finite(n).to_string()
 }
 
+/// The lowercase hex digits a `\u` escape is written with.
+const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
+
 pub(crate) fn write_string(out: &mut String, text: &str) {
     out.push('"');
     for c in text.chars() {
@@ -444,7 +447,13 @@ pub(crate) fn write_string(out: &mut String, text: &str) {
             '\u{0C}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
             c if c < '\u{20}' => {
-                let _ = write!(out, "\\u{:04x}", u32::from(c));
+                // A control character is \u00 and two lowercase hex
+                // digits.
+                let code = u32::from(c);
+                out.push_str("\\u00");
+                for nibble in [code >> 4, code & 0xF] {
+                    out.push(char::from(HEX_DIGITS[nibble as usize]));
+                }
             }
             c => out.push(c),
         }
