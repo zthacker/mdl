@@ -59,6 +59,7 @@ mod identify;
 mod meaning;
 
 use std::collections::BTreeMap;
+use std::fmt;
 
 use serde_json::Value as Json;
 use thiserror::Error;
@@ -67,7 +68,8 @@ use crate::bindings::Resolver;
 use crate::bits::{read_bits, sign_extend};
 use crate::checksum::{Algorithm, Compiled};
 use crate::ir::{
-    ByteOrder, Catalog, CommandPacket, Entry, Family, Length, Packet, Scalar, Set, TextEncoding,
+    ByteOrder, Catalog, CommandPacket, Entry, Family, Length, Packet, Scalar, ScalarType, Set,
+    TextEncoding,
 };
 use crate::message::{Message, MetaValue};
 use crate::route::{FamilySets, Readable, Route, RouteError, json_integer};
@@ -200,11 +202,13 @@ pub enum DecodeError {
     Route(#[from] RouteError),
     #[error("no packet of set {set} (family {family}) matches the message")]
     NoPacket { family: String, set: String },
+    /// The payload has `given` bytes, fewer than the packet's length of
+    /// `needed`, exactly or at least as `exact` says (`decoding.md` §5.1).
     #[error("{}", too_short(packet, *needed, *given, *exact))]
     TooShort {
         packet: String,
-        needed: u32,
-        given: usize,
+        needed: u64,
+        given: u64,
         exact: bool,
     },
     #[error("packet {packet}: its event time can't be read: {reason}")]
@@ -232,7 +236,7 @@ impl DecodeError {
     }
 }
 
-fn too_short(packet: &str, needed: u32, given: usize, exact: bool) -> String {
+fn too_short(packet: &str, needed: u64, given: u64, exact: bool) -> String {
     let least = if exact { "" } else { " at least" };
     format!("packet {packet} is{least} {needed} bytes, but the payload has {given}")
 }
@@ -275,16 +279,19 @@ pub enum Problem {
     BadLength { value: i128 },
     #[error("no value at {pointer}")]
     Missing { pointer: String },
-    #[error("expected {expected}, found {found}")]
-    WrongType {
-        expected: &'static str,
-        found: &'static str,
-    },
-    #[error("{value} doesn't fit {expected}")]
-    OutOfRange {
-        value: String,
-        expected: &'static str,
-    },
+    /// A JSON value of another type than the entry takes: a number for a
+    /// `uint`, `int` or `float` field, an array for an array, an object
+    /// for a struct or a record element (`decoding.md` §5.3).
+    #[error("expected {}, found {}", .expected.phrase(), .found.phrase())]
+    WrongType { expected: JsonType, found: JsonType },
+    /// A number that isn't an integer (§2.3) in the range of `expected`,
+    /// the field's type: `uint` or `int`. `value` is the number as text,
+    /// since no Rust integer holds every JSON number: an integer literal
+    /// within 64 bits as its digits, any other number as its double's
+    /// canonical JSON text (`1.50` is `1.5`, `1E20` is
+    /// `100000000000000000000`, `1e21` is `1e+21`).
+    #[error("{value} doesn't fit {}", type_name(*.expected))]
+    OutOfRange { value: String, expected: ScalarType },
     /// A checksum that doesn't match the bytes it covers: the message was
     /// damaged on the way.
     #[error("it reads {stored:#x}, but the bytes it covers give {computed:#x}")]
@@ -308,6 +315,70 @@ impl Problem {
             Problem::BadChecksum { .. } => "bad_checksum",
             Problem::Layout(_) => "invalid_layout",
         }
+    }
+}
+
+/// A field's type, as an `out_of_range` message names it.
+fn type_name(ty: ScalarType) -> &'static str {
+    match ty {
+        ScalarType::Uint => "an unsigned 64-bit integer",
+        ScalarType::Int => "a signed 64-bit integer",
+        ScalarType::Float => "a float",
+        ScalarType::Bool => "a boolean",
+        ScalarType::String => "a string",
+        ScalarType::Bytes => "bytes",
+    }
+}
+
+/// One of the six types of JSON value (RFC 8259 §1). JSON has no others,
+/// so matches on it needn't allow for more. It displays as RFC 8259
+/// names it: `null`, `boolean`, `array`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JsonType {
+    Null,
+    Boolean,
+    Number,
+    String,
+    Array,
+    Object,
+}
+
+impl JsonType {
+    /// The type of `value`.
+    pub(crate) fn of(value: &Json) -> JsonType {
+        match value {
+            Json::Null => JsonType::Null,
+            Json::Bool(_) => JsonType::Boolean,
+            Json::Number(_) => JsonType::Number,
+            Json::String(_) => JsonType::String,
+            Json::Array(_) => JsonType::Array,
+            Json::Object(_) => JsonType::Object,
+        }
+    }
+
+    /// As a message names it: `null`, `a boolean`, `an array`.
+    pub(crate) fn phrase(self) -> &'static str {
+        match self {
+            JsonType::Null => "null",
+            JsonType::Boolean => "a boolean",
+            JsonType::Number => "a number",
+            JsonType::String => "a string",
+            JsonType::Array => "an array",
+            JsonType::Object => "an object",
+        }
+    }
+}
+
+impl fmt::Display for JsonType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            JsonType::Null => "null",
+            JsonType::Boolean => "boolean",
+            JsonType::Number => "number",
+            JsonType::String => "string",
+            JsonType::Array => "array",
+            JsonType::Object => "object",
+        })
     }
 }
 
@@ -735,21 +806,17 @@ fn within_length<'p>(packet: &Packet, payload: &'p [u8]) -> Result<&'p [u8], Dec
         Some(Length::AtLeast { bytes }) => (bytes, false),
         None => return Ok(payload),
     };
-    let too_short = || DecodeError::TooShort {
-        packet: packet.name.clone(),
-        needed,
-        given: payload.len(),
-        exact,
-    };
-    let needed_len = usize::try_from(needed).map_err(|_| too_short())?;
-    if payload.len() < needed_len {
-        return Err(too_short());
+    match usize::try_from(needed) {
+        Ok(len) if len <= payload.len() => Ok(if exact { &payload[..len] } else { payload }),
+        // Shorter than a length that's at most u32::MAX, so the payload's
+        // length is exact as a u64.
+        _ => Err(DecodeError::TooShort {
+            packet: packet.name.clone(),
+            needed: u64::from(needed),
+            given: u64::try_from(payload.len()).unwrap_or(u64::MAX),
+            exact,
+        }),
     }
-    Ok(if exact {
-        &payload[..needed_len]
-    } else {
-        payload
-    })
 }
 
 fn entry_error(packet: &str, path: &[Segment<'_>], problem: Problem) -> DecodeError {

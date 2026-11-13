@@ -194,8 +194,8 @@ fn outcome(steps: &[Step], payload: &[u8]) -> Outcome {
                 let needed = usize::try_from(*bytes).unwrap_or(usize::MAX);
                 if payload.len() < needed {
                     let problem = Problem::TooShort {
-                        needed_bytes: *bytes,
-                        given_bytes: payload.len(),
+                        needed_bytes: u64::from(*bytes),
+                        given_bytes: payload.len() as u64,
                         exact: *exact,
                     };
                     let path = String::new();

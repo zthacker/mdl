@@ -110,8 +110,8 @@ pub enum Problem {
     /// `too_short`: the payload has `given_bytes`, fewer than the packet's
     /// `length` of `needed_bytes`, `exact` or at least (§5.1).
     TooShort {
-        needed_bytes: u32,
-        given_bytes: usize,
+        needed_bytes: u64,
+        given_bytes: u64,
         exact: bool,
     },
     /// `bad_checksum`: the checksum holds `stored`, which its algorithm
@@ -121,12 +121,14 @@ pub enum Problem {
     /// `missing_value`: nothing, or `null`, at a required JSON entry's
     /// `pointer` (§5.3).
     Missing { pointer: String },
-    /// `wrong_type`: a JSON entry that takes `wanted` found a value of
-    /// another kind (§5.3).
-    WrongType { wanted: Wanted, found: JsonKind },
+    /// `wrong_type`: a JSON entry that takes a value of kind `expected`
+    /// (a number, for any number field) found one of kind `found` (§5.3).
+    WrongType { expected: JsonKind, found: JsonKind },
     /// `out_of_range`: a number that isn't an integer (§2.3) in the
-    /// range of a `uint` field, or of an `int` one when `signed`.
-    OutOfRange { signed: bool },
+    /// range of a `uint` field, or of an `int` one when `signed`. `value`
+    /// is the number as MDL reports it: an integer literal within 64 bits
+    /// as its digits, any other number as its double's canonical text.
+    OutOfRange { signed: bool, value: String },
 }
 
 impl Problem {

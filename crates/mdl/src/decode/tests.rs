@@ -304,6 +304,14 @@ fn code<T: std::fmt::Debug>(result: Result<T, DecodeError>) -> &'static str {
     }
 }
 
+/// What went wrong with the entry that failed.
+fn problem<T: std::fmt::Debug>(result: Result<T, DecodeError>) -> Problem {
+    match result {
+        Err(DecodeError::Entry { problem, .. }) => problem,
+        other => panic!("expected an entry's failure, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_binary_packet_decodes_every_entry() {
     let artifacts = artifacts();
@@ -378,7 +386,18 @@ fn a_binary_packet_that_cant_be_decoded_is_rejected_with_the_entry() {
     .bytes();
 
     // At least 12 bytes; the alias (bytes 6 and 7) still routes.
-    assert_eq!(code(decode_hk(&full[..11])), "too_short");
+    let err = decode_hk(&full[..11]).unwrap_err();
+    let short = DecodeError::TooShort {
+        packet: "HK".into(),
+        needed: 12,
+        given: 11,
+        exact: false,
+    };
+    assert_eq!(err, short);
+    assert_eq!(
+        err.to_string(),
+        "packet HK is at least 12 bytes, but the payload has 11"
+    );
 
     // A count far beyond the bytes left is refused before allocating.
     let mut huge = full.clone();
@@ -536,6 +555,133 @@ fn a_json_struct_or_record_needs_an_object() {
 }
 
 #[test]
+fn json_errors_name_json_types_and_the_field_type() {
+    let mut bundle = bundle();
+    let set = &mut bundle["sets"][1];
+    assert_eq!(set["name"], "vendor_j_v1");
+    set["packets"].as_array_mut().unwrap().push(json!({
+        "name": "WIDE",
+        "identify": { "/ch": "WIDE" },
+        "entries": [
+            { "kind": "field", "name": "u", "type": "uint", "pointer": "/u" },
+            { "kind": "field", "name": "i", "type": "int", "pointer": "/i" }
+        ]
+    }));
+    let artifacts = artifacts_of(&bundle);
+    let sets = family_sets(&artifacts, "vendor_j");
+    let decode = |u: &str, i: &str| {
+        let text = format!(r#"{{"ch": "WIDE", "sat": "PX-9", "u": {u}, "i": {i}}}"#);
+        let message = Message::new(Payload::Json(text.as_bytes()), now());
+        sets.decode(&message, &registry())
+            .map(|decoded| shown(&decoded.record))
+    };
+    let wrong = |expected, found| Problem::WrongType { expected, found };
+
+    // Any number field takes a number; which numbers is out_of_range's
+    // to say.
+    assert_eq!(
+        problem(decode(r#""7""#, "0")),
+        wrong(JsonType::Number, JsonType::String)
+    );
+    assert_eq!(
+        decode(r#""7""#, "0").unwrap_err().to_string(),
+        "packet WIDE, u: expected a number, found a string"
+    );
+    assert_eq!(
+        problem(decode("0", "[7]")),
+        wrong(JsonType::Number, JsonType::Array)
+    );
+    let unsigned = Problem::OutOfRange {
+        value: "-1".into(),
+        expected: ScalarType::Uint,
+    };
+    assert_eq!(problem(decode("-1", "0")), unsigned);
+    assert_eq!(
+        decode("-1", "0").unwrap_err().to_string(),
+        "packet WIDE, u: -1 doesn't fit an unsigned 64-bit integer"
+    );
+    let signed = Problem::OutOfRange {
+        value: "9223372036854775808".into(),
+        expected: ScalarType::Int,
+    };
+    assert_eq!(problem(decode("0", "9223372036854775808")), signed);
+    assert_eq!(
+        decode("0", "9223372036854775808").unwrap_err().to_string(),
+        "packet WIDE, i: 9223372036854775808 doesn't fit a signed 64-bit integer"
+    );
+    // Past 64 bits, or with a fraction or an exponent, a number's value is
+    // its double's canonical text, whatever serde_json's features (`just
+    // check` runs these tests with `arbitrary_precision` too).
+    for (number, value) in [
+        ("18446744073709551616", "18446744073709552000"),
+        ("1E20", "100000000000000000000"),
+        ("2.5e21", "2.5e+21"),
+        ("1.50", "1.5"),
+        ("-1.0", "-1"),
+    ] {
+        let unsigned = Problem::OutOfRange {
+            value: value.into(),
+            expected: ScalarType::Uint,
+        };
+        assert_eq!(problem(decode(number, "0")), unsigned, "{number}");
+    }
+
+    // An array takes an array; a record element, an object.
+    let bus =
+        |cells: &str| format!(r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 1, "cells": {cells}}}"#);
+    assert_eq!(
+        problem(decode_json(&bus("{}"))),
+        wrong(JsonType::Array, JsonType::Object)
+    );
+    assert_eq!(
+        problem(decode_json(&bus("[true]"))),
+        wrong(JsonType::Object, JsonType::Boolean)
+    );
+}
+
+#[test]
+fn json_types_display_as_rfc_8259_names_them() {
+    let values = [
+        json!(null),
+        json!(true),
+        json!(1.5),
+        json!("a"),
+        json!([]),
+        json!({}),
+    ];
+    let types: Vec<JsonType> = values.iter().map(JsonType::of).collect();
+    assert_eq!(
+        types,
+        [
+            JsonType::Null,
+            JsonType::Boolean,
+            JsonType::Number,
+            JsonType::String,
+            JsonType::Array,
+            JsonType::Object
+        ]
+    );
+    let names: Vec<String> = types.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        names,
+        ["null", "boolean", "number", "string", "array", "object"]
+    );
+    // Messages give them an article.
+    let phrases: Vec<&str> = types.iter().map(|ty| ty.phrase()).collect();
+    assert_eq!(
+        phrases,
+        [
+            "null",
+            "a boolean",
+            "a number",
+            "a string",
+            "an array",
+            "an object"
+        ]
+    );
+}
+
+#[test]
 fn a_little_endian_packet_with_an_exact_length() {
     let artifacts = artifacts();
     let sets = family_sets(&artifacts, "legacy");
@@ -551,7 +697,18 @@ fn a_little_endian_packet_with_an_exact_length() {
     let mut longer = payload.clone();
     longer.extend_from_slice(&[0xFF; 4]);
     assert_eq!(decode(&longer).unwrap(), expected);
-    assert_eq!(code(decode(&payload[..11])), "too_short");
+    let err = decode(&payload[..11]).unwrap_err();
+    let short = DecodeError::TooShort {
+        packet: "TIME".into(),
+        needed: 12,
+        given: 11,
+        exact: true,
+    };
+    assert_eq!(err, short);
+    assert_eq!(
+        err.to_string(),
+        "packet TIME is 12 bytes, but the payload has 11"
+    );
 }
 
 #[test]

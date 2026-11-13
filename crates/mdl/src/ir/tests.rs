@@ -9,6 +9,19 @@ use crate::canonical::to_canonical_string;
 /// The fixture doubles as a reference document for other implementations.
 const FULL_BUNDLE: &str = include_str!("../../tests/fixtures/full_bundle.json");
 
+#[test]
+fn an_encoding_displays_as_families_spell_it() {
+    for encoding in [Encoding::Binary, Encoding::Json] {
+        // No fallback, so a new encoding doesn't compile until it's here.
+        let spelling = match encoding {
+            Encoding::Binary => "binary",
+            Encoding::Json => "json",
+        };
+        assert_eq!(encoding.to_string(), spelling);
+        assert_eq!(serde_json::to_value(encoding).unwrap(), json!(spelling));
+    }
+}
+
 fn canonical<T: Serialize>(value: &T) -> String {
     to_canonical_string(&serde_json::to_value(value).unwrap()).unwrap()
 }

@@ -56,8 +56,8 @@ use thiserror::Error;
 use crate::artifact::{AssembleError, assemble};
 use crate::bindings::{Binding, NativeId, Resolver};
 use crate::bits::{BitsError, read_bits};
-use crate::canonical::{CanonicalError, MAX_SAFE_INTEGER, parse_without_duplicates};
-use crate::decode::Program;
+use crate::canonical::{CanonicalError, MAX_SAFE_INTEGER, number_text, parse_without_duplicates};
+use crate::decode::{JsonType, Program};
 use crate::ir::{
     Artifact, Bundle, ByteOrder, Catalog, Digest, Encoding, Family, Locator, Scalar, Set,
 };
@@ -94,10 +94,10 @@ enum Kind {
 }
 
 impl Kind {
-    fn encoding(self) -> &'static str {
+    fn encoding(self) -> Encoding {
         match self {
-            Kind::Binary(_) => "binary",
-            Kind::Json => "json",
+            Kind::Binary(_) => Encoding::Binary,
+            Kind::Json => Encoding::Json,
         }
     }
 }
@@ -119,11 +119,12 @@ pub struct Route<'a> {
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum RouteError {
+    /// The payload isn't in the family's encoding, `expected`.
     #[error("family {family} is {expected}, but the message has a {given} payload")]
     WrongEncoding {
         family: String,
-        expected: &'static str,
-        given: &'static str,
+        expected: Encoding,
+        given: Encoding,
     },
     #[error("family {family}'s payload isn't JSON MDL can read: {problem}")]
     InvalidJson {
@@ -135,7 +136,7 @@ pub enum RouteError {
     #[error("family {family}'s {locator} locator can't be read: {reason}")]
     UnreadableLocator {
         family: String,
-        locator: &'static str,
+        locator: LocatorRole,
         reason: String,
     },
     #[error(
@@ -184,6 +185,26 @@ impl RouteError {
             RouteError::MissingSet { .. } => "missing_set",
             RouteError::UnexpectedSet { .. } => "unexpected_set",
         }
+    }
+}
+
+/// Which of a family's locators an error is about. It displays as the
+/// family's member is spelled: `alias`, `version`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LocatorRole {
+    /// The alias locator, which reads the native id.
+    Alias,
+    /// The version locator, which chooses the set.
+    Version,
+}
+
+impl fmt::Display for LocatorRole {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            LocatorRole::Alias => "alias",
+            LocatorRole::Version => "version",
+        })
     }
 }
 
@@ -334,7 +355,7 @@ impl FamilySets {
     ) -> Result<(Route<'_>, &LoadedSet), RouteError> {
         let family = &self.family.name;
         let native_id = self
-            .read(&self.family.alias, "alias", readable, message)?
+            .read(&self.family.alias, LocatorRole::Alias, readable, message)?
             .native_id();
         let Some(binding) = resolver.resolve(family, &native_id, message.ground_time) else {
             return Err(RouteError::UnknownAsset {
@@ -353,7 +374,7 @@ impl FamilySets {
                 });
             }
             (Some(locator), None) => {
-                let read = self.read(locator, "version", readable, message)?;
+                let read = self.read(locator, LocatorRole::Version, readable, message)?;
                 let key = read.version_key(is_exact(locator));
                 match self.by_version.get(&key) {
                     Some(name) => name,
@@ -392,13 +413,13 @@ impl FamilySets {
     fn read(
         &self,
         locator: &Locator,
-        which: &'static str,
+        role: LocatorRole,
         readable: &Readable<'_>,
         message: &Message<'_>,
     ) -> Result<Located, RouteError> {
         let unreadable = |reason: String| RouteError::UnreadableLocator {
             family: self.family.name.clone(),
-            locator: which,
+            locator: role,
             reason,
         };
         match (locator, readable) {
@@ -561,14 +582,15 @@ fn read_json(value: &Value) -> Result<Located, String> {
             match integer.and_then(|n| i64::try_from(n).ok()) {
                 Some(n) => Ok(Located::Int(n)),
                 None => Err(format!(
-                    "{number} isn't an integer that can be read exactly"
+                    "{} isn't an integer that can be read exactly",
+                    number_text(number)
                 )),
             }
         }
-        Value::Null => Err("found null, not an integer or a string".to_string()),
-        Value::Bool(_) => Err("found a boolean, not an integer or a string".to_string()),
-        Value::Array(_) => Err("found an array, not an integer or a string".to_string()),
-        Value::Object(_) => Err("found an object, not an integer or a string".to_string()),
+        other => Err(format!(
+            "found {}, not an integer or a string",
+            JsonType::of(other).phrase()
+        )),
     }
 }
 

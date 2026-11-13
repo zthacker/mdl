@@ -31,6 +31,19 @@ impl Unfit {
             Unfit::PastSafe => "9007199254740992.0",
         }
     }
+
+    /// The literal as `out_of_range` reports it: a 64-bit integer's
+    /// digits, or the double's canonical text (`spec/canonical-json.md`).
+    fn reported(self, signed: bool) -> &'static str {
+        match self {
+            Unfit::Fraction => "1.5",
+            Unfit::Large => "100000000000000000000",
+            Unfit::Literal if signed => "9223372036854775808",
+            Unfit::Literal => "18446744073709552000",
+            Unfit::Negative => "-1",
+            Unfit::PastSafe => "9007199254740992",
+        }
+    }
 }
 
 impl JsonKind {
@@ -59,41 +72,24 @@ impl Wanted {
         }
     }
 
-    /// The kinds of value it doesn't take. `null` is a missing value, not
-    /// one of another kind.
-    fn refused(self) -> &'static [JsonKind] {
+    /// The kind of value it takes.
+    fn kind(self) -> JsonKind {
         match self {
-            Wanted::Uint | Wanted::Int | Wanted::Float => &[
-                JsonKind::Array,
-                JsonKind::Bool,
-                JsonKind::Object,
-                JsonKind::String,
-            ],
-            Wanted::Bool => &[
-                JsonKind::Array,
-                JsonKind::Number,
-                JsonKind::Object,
-                JsonKind::String,
-            ],
-            Wanted::String => &[
-                JsonKind::Array,
-                JsonKind::Bool,
-                JsonKind::Number,
-                JsonKind::Object,
-            ],
-            Wanted::Array => &[
-                JsonKind::Bool,
-                JsonKind::Number,
-                JsonKind::Object,
-                JsonKind::String,
-            ],
-            Wanted::Object => &[
-                JsonKind::Array,
-                JsonKind::Bool,
-                JsonKind::Number,
-                JsonKind::String,
-            ],
+            Wanted::Uint | Wanted::Int | Wanted::Float => JsonKind::Number,
+            Wanted::Bool => JsonKind::Bool,
+            Wanted::String => JsonKind::String,
+            Wanted::Array => JsonKind::Array,
+            Wanted::Object => JsonKind::Object,
         }
+    }
+
+    /// The kinds of value it doesn't take: all but its own and `null`,
+    /// which is a missing value, not one of another kind.
+    fn refused(self) -> Vec<JsonKind> {
+        JsonKind::ALL
+            .into_iter()
+            .filter(|&kind| kind != self.kind() && kind != JsonKind::Null)
+            .collect()
     }
 
     /// Whether it's an integer field's, and signed, if so.
@@ -391,7 +387,10 @@ impl Walk<'_> {
             at,
             failure: Failure {
                 path: path.to_string(),
-                problem: Problem::WrongType { wanted, found },
+                problem: Problem::WrongType {
+                    expected: wanted.kind(),
+                    found,
+                },
             },
             planted: format!("{path}: {found:?} where it takes {wanted:?}"),
         });
@@ -409,7 +408,10 @@ impl Walk<'_> {
                 at,
                 failure: Failure {
                     path: path.to_string(),
-                    problem: Problem::OutOfRange { signed },
+                    problem: Problem::OutOfRange {
+                        signed,
+                        value: unfit.reported(signed).to_string(),
+                    },
                 },
                 planted: format!("{path}: {literal}"),
             });
