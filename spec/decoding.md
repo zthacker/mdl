@@ -85,9 +85,10 @@ rules are explicit:
   accepted).
 
 A JSON number is **an integer** when its value is an exact integer: an
-integer literal within 64 bits, or a number with no fractional part within
-±(2^53 − 1). So `42`, `42.0` and `4.2e1` are all 42; `1.5` and `1e20`
-are not integers, and neither is an integer literal beyond 64 bits.
+integer literal between −2^63 and 2^64 − 1, or a number with no fractional
+part within ±(2^53 − 1). So `42`, `42.0` and `4.2e1` are all 42, and
+`-0` is 0; `1.5` and `1e20` are not integers, and neither is an integer
+literal beyond that range.
 
 ## 3. Routing
 
@@ -276,12 +277,17 @@ struct).
 Entries have pointers relative to their container (the document, a
 struct's object, or an array element).
 
-- A field reads the value at its pointer: a `uint` or `int` field takes a
-  number that is an integer (§2.3) within its type's 64-bit range
-  [`out_of_range`]; a `float` field any number; `bool` and `string` fields
-  their JSON type [`wrong_type`].
+- A field reads the value at its pointer, which MUST be of its JSON type:
+  a number for a `uint`, `int` or `float` field, a boolean for a `bool`
+  field, a string for a `string` field [`wrong_type`]. A `uint` or `int`
+  field takes a number that is an integer (§2.3) within its type's 64-bit
+  range [`out_of_range`]; a `float` field takes any number's value as the
+  nearest binary64, so `-0` is −0.0 there.
 - A struct decodes its type's entries against the object at its pointer;
-  an array, each element of the JSON array at its pointer [`wrong_type`].
+  an array, each element of the JSON array at its pointer, a record
+  element against its object. A struct's value or a record element that
+  isn't an object, or an array's value that isn't an array, is
+  [`wrong_type`], even when every entry of the struct type is optional.
 - **Missing values.** If the pointer finds nothing, or `null`, an entry
   with `optional: true` is absent; any other entry is [`missing_value`].
 - **`null` elements.** A `null` element of an array is no reading at that

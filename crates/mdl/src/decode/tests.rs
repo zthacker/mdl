@@ -482,6 +482,60 @@ fn a_json_packet_that_cant_be_decoded_is_rejected_with_the_entry() {
 }
 
 #[test]
+fn a_json_struct_or_record_needs_an_object() {
+    // A struct's value and each record element are objects (decoding.md
+    // §5.3), even when every entry of the struct type is optional.
+    let mut bundle = bundle();
+    let set = &mut bundle["sets"][1];
+    assert_eq!(set["name"], "vendor_j_v1");
+    set["types"]["maybe"] = json!({ "entries": [
+        { "kind": "field", "name": "a", "type": "uint", "pointer": "/a", "optional": true }
+    ]});
+    set["packets"].as_array_mut().unwrap().push(json!({
+        "name": "BOXED",
+        "identify": { "/ch": "BOX" },
+        "entries": [{ "kind": "struct", "name": "box", "struct": "maybe", "pointer": "/box" }]
+    }));
+    let artifacts = artifacts_of(&bundle);
+    let sets = family_sets(&artifacts, "vendor_j");
+    let decode = |text: &str| {
+        sets.decode(
+            &Message::new(Payload::Json(text.as_bytes()), now()),
+            &registry(),
+        )
+        .map(|decoded| shown(&decoded.record))
+    };
+    let boxed = |value: &str| {
+        format!(r#"{{"ch": "BOX", "sat": "PX-9", "t": "2026-06-01T00:00:00Z", "box": {value}}}"#)
+    };
+    assert_eq!(
+        decode(&boxed(r#"{"a": 1}"#)).unwrap(),
+        pairs(&[("box", "{a: 1}")])
+    );
+    assert_eq!(decode(&boxed("{}")).unwrap(), pairs(&[("box", "{}")]));
+    for (value, found) in [
+        ("5", "a number"),
+        ("[{\"a\": 1}]", "an array"),
+        ("\"a\"", "a string"),
+        ("true", "a boolean"),
+    ] {
+        let err = decode(&boxed(value)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            format!("packet BOXED, box: expected an object, found {found}")
+        );
+    }
+    let err = decode_json(
+        r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "v": 1, "cells": [{"v": 1, "ok": true}, 7]}"#,
+    )
+    .unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "packet BUS, cells[1]: expected an object, found a number"
+    );
+}
+
+#[test]
 fn a_little_endian_packet_with_an_exact_length() {
     let artifacts = artifacts();
     let sets = family_sets(&artifacts, "legacy");
