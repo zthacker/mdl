@@ -562,7 +562,7 @@ impl<'a> JsonWalker<'a> {
                     self.path.push(Segment::Name(&inner.name));
                     if let Some(found) = member(node, inner.pointer.as_deref(), inner.optional)? {
                         let (entries, inner_names) = self.tables.struct_type(&inner.struct_type)?;
-                        let value = self.entries(entries, inner_names, found)?;
+                        let value = self.entries(entries, inner_names, object(found)?)?;
                         record.push(index, &inner.name, Value::Record(value));
                     }
                     self.path.pop();
@@ -590,7 +590,7 @@ impl<'a> JsonWalker<'a> {
                 Element::Scalar(scalar) => json_scalar(scalar.ty, item)?,
                 Element::Struct { name } => {
                     let (entries, names) = self.tables.struct_type(name)?;
-                    Value::Record(self.entries(entries, names, item)?)
+                    Value::Record(self.entries(entries, names, object(item)?)?)
                 }
             });
             self.path.pop();
@@ -613,6 +613,19 @@ fn member<'j>(
             pointer: pointer.to_string(),
         }),
         Some(value) => Ok(Some(value)),
+    }
+}
+
+/// A struct's value or a record element: an object, whatever its type's
+/// entries are (`decoding.md` §5.3).
+fn object(value: &Json) -> Result<&Json, Problem> {
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(Problem::WrongType {
+            expected: "an object",
+            found: json_kind(value),
+        })
     }
 }
 
