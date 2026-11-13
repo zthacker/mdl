@@ -467,10 +467,50 @@ fn a_json_packet_decodes_by_pointer() {
             ("cells", "[{volts: 3.7, ok: true}, {volts: 3.5, ok: false}]"),
         ])
     );
-    // 28000.0 is the integer 28000.
-    let text = r#"{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z",
-                   "v": 28000.0, "cells": []}"#;
-    assert_eq!(decode_json(text).unwrap()[0], ("v".into(), "28000".into()));
+    // 28000.0 is the integer 28000, and so is any number whose nearest
+    // double is (decoding.md §2.3).
+    for (v, raw) in [
+        ("28000.0", "28000"),
+        ("28000.000000000001", "28000"),
+        ("1e-400", "0"),
+        ("-1e-400", "0"),
+        // Halfway between two doubles: ties to even.
+        ("4503599627370496.5", "4503599627370496"),
+        ("4503599627370497.5", "4503599627370498"),
+    ] {
+        let text = format!(
+            r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z",
+                  "v": {v}, "cells": []}}"#
+        );
+        assert_eq!(
+            decode_json(&text).unwrap()[0],
+            ("v".into(), raw.into()),
+            "{v}"
+        );
+    }
+}
+
+#[test]
+fn a_json_number_is_refused_only_where_it_rounds_to_infinity() {
+    // decoding.md §2.3: as written it's past the largest double, but it
+    // rounds to it.
+    let cells = |v: &str| {
+        format!(
+            r#"{{"ch": "PWR.BUS.V", "sat": "PX-9", "t": "2026-06-01T00:00:00Z",
+                 "v": 1, "cells": [{{"v": {v}, "ok": true}}]}}"#
+        )
+    };
+    assert_eq!(
+        decode_json(&cells("1.7976931348623158e308")).unwrap()[1],
+        (
+            "cells".to_string(),
+            format!("[{{volts: {}, ok: true}}]", f64::MAX)
+        )
+    );
+    assert_eq!(
+        code(decode_json(&cells("1.7976931348623159e308"))),
+        "invalid_json"
+    );
 }
 
 #[test]
@@ -679,6 +719,114 @@ fn json_types_display_as_rfc_8259_names_them() {
             "an object"
         ]
     );
+}
+
+/// The bundle with a JSON family `doc`, whose alias is fixed, and its set
+/// `doc_v1` of these packets.
+fn with_doc_family(packets: Json) -> Artifacts {
+    let mut bundle = bundle();
+    bundle["families"].as_array_mut().unwrap().push(json!({
+        "name": "doc", "encoding": "json", "alias": { "kind": "fixed", "value": "d" }
+    }));
+    bundle["sets"].as_array_mut().unwrap().push(json!({
+        "name": "doc_v1", "family": "doc", "packets": packets
+    }));
+    artifacts_of(&bundle)
+}
+
+/// `doc`'s one asset, bound to `doc_v1`.
+fn doc_bindings() -> Bindings {
+    Bindings::from_toml(
+        r#"
+mdl_version = "2.0"
+
+[[binding]]
+family = "doc"
+native_id = "d"
+asset = "D-1"
+set = "doc_v1"
+effective_from = "2026-01-01T00:00:00Z"
+"#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_json_document_must_be_an_object() {
+    // The document is the packet's container (decoding.md §5.3). A fixed
+    // alias and a catch-all choose a packet without reading it.
+    let artifacts = with_doc_family(json!([
+        { "name": "ANY", "entries": [
+            { "kind": "field", "name": "a", "type": "uint", "pointer": "/a", "optional": true }
+        ]},
+        { "name": "KEYED", "identify": { "/kind": "k" }, "entries": [
+            { "kind": "field", "name": "b", "type": "uint", "pointer": "/b" }
+        ]}
+    ]));
+    let sets = family_sets(&artifacts, "doc");
+    let bindings = doc_bindings();
+    let decode = |text: &str| {
+        let message = Message::new(Payload::Json(text.as_bytes()), now());
+        sets.decode(&message, &bindings)
+            .map(|decoded| (decoded.packet.name.clone(), shown(&decoded.record)))
+    };
+    assert_eq!(
+        decode(r#"{"a": 1}"#).unwrap(),
+        ("ANY".into(), pairs(&[("a", "1")]))
+    );
+    assert_eq!(decode("{}").unwrap(), ("ANY".into(), Vec::new()));
+    for (text, found) in [
+        ("[1]", JsonType::Array),
+        (r#""x""#, JsonType::String),
+        ("5", JsonType::Number),
+        ("true", JsonType::Boolean),
+        ("null", JsonType::Null),
+    ] {
+        let expected = DecodeError::Entry {
+            packet: "ANY".into(),
+            path: String::new(),
+            problem: Problem::WrongType {
+                expected: JsonType::Object,
+                found,
+            },
+        };
+        assert_eq!(decode(text).unwrap_err(), expected, "{text}");
+    }
+    assert_eq!(
+        decode("[1]").unwrap_err().to_string(),
+        "packet ANY: expected an object, found an array"
+    );
+    // Parsed as decoding starts, a payload with a byte order mark is
+    // refused before identification (§2.3, §3.3).
+    assert_eq!(code(decode("\u{feff}{\"a\": 1}")), "invalid_json");
+}
+
+#[test]
+fn a_json_document_must_be_an_object_however_its_packet_is_chosen() {
+    // An index token finds an array's element (RFC 6901), so a packet
+    // keyed by `/0` is chosen by reading an array; it's still refused.
+    let artifacts = with_doc_family(json!([
+        { "name": "IDX", "identify": { "/0": 7 }, "entries": [
+            { "kind": "field", "name": "b", "type": "uint", "pointer": "/1" }
+        ]}
+    ]));
+    let sets = family_sets(&artifacts, "doc");
+    let bindings = doc_bindings();
+    let decode = |text: &str| {
+        let message = Message::new(Payload::Json(text.as_bytes()), now());
+        sets.decode(&message, &bindings)
+            .map(|decoded| shown(&decoded.record))
+    };
+    assert_eq!(decode(r#"{"0": 7, "1": 9}"#).unwrap(), pairs(&[("b", "9")]));
+    let expected = DecodeError::Entry {
+        packet: "IDX".into(),
+        path: String::new(),
+        problem: Problem::WrongType {
+            expected: JsonType::Object,
+            found: JsonType::Array,
+        },
+    };
+    assert_eq!(decode("[7, 9]").unwrap_err(), expected);
 }
 
 #[test]

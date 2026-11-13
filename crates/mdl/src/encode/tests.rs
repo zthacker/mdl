@@ -749,6 +749,35 @@ fn a_json_command_with_no_fields_is_an_empty_object() {
 }
 
 #[test]
+fn a_json_command_payload_is_an_object() {
+    // decoding.md §5.3, through encoding.md §7.3: web_v1's one command
+    // packet has no keys, so it's chosen without reading the payload.
+    use crate::decode::{DecodeError, JsonType, Problem};
+    let sets = sets_of(&lab(), "web");
+    let decode = |text: &'static [u8]| {
+        let message = Message::new(Payload::Json(text), Timestamp::UNIX_EPOCH);
+        sets.decode_command("web_v1", &message)
+    };
+    assert_eq!(decode(b"{}").unwrap().command(), "lab.ping");
+    let refused: [(&'static [u8], JsonType); 3] = [
+        (b"[5]", JsonType::Array),
+        (b"5", JsonType::Number),
+        (b"null", JsonType::Null),
+    ];
+    for (text, found) in refused {
+        let expected = CommandDecodeError::Decode(DecodeError::Entry {
+            packet: "PING".into(),
+            path: String::new(),
+            problem: Problem::WrongType {
+                expected: JsonType::Object,
+                found,
+            },
+        });
+        assert_eq!(decode(text).unwrap_err(), expected);
+    }
+}
+
+#[test]
 fn a_json_record_holds_what_decoding_the_text_gives() {
     let sets = sets_of(&fixture(), "vendor_j");
     let request = set_mode("vendor_j_v1")

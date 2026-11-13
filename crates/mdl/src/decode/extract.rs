@@ -525,6 +525,17 @@ impl<'a> JsonWalker<'a> {
         &self.path
     }
 
+    /// A packet's entries. The document is their container, so it's an
+    /// object, whatever the entries are (`decoding.md` §5.3).
+    pub(super) fn packet(
+        &mut self,
+        entries: &'a [Entry],
+        names: &'a FieldNames,
+        document: &Json,
+    ) -> Result<Record<'a>, Problem> {
+        self.entries(entries, names, object(document)?)
+    }
+
     /// A container's entries, with pointers relative to `node`.
     pub(super) fn entries(
         &mut self,
@@ -617,8 +628,8 @@ fn member<'j>(
     }
 }
 
-/// A struct's value or a record element: an object, whatever its type's
-/// entries are (`decoding.md` §5.3).
+/// A document, a struct's value or a record element: an object, whatever
+/// the entries it holds are (`decoding.md` §5.3).
 fn object(value: &Json) -> Result<&Json, Problem> {
     if value.is_object() {
         Ok(value)

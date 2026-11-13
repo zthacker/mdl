@@ -108,6 +108,25 @@ pub(crate) fn pointer_tokens(pointer: &str) -> Option<Vec<String>> {
     )
 }
 
+/// A pointer to a member of the object it's read in: the empty pointer is
+/// that whole object, and the document, a struct's value and a record
+/// element are objects (`decoding.md` §5.3), so `what` couldn't be read
+/// there.
+pub(super) fn check_member_pointer(pointer: &str, what: &str, place: &Place, report: &mut Report) {
+    if pointer.is_empty() {
+        report.error(
+            Code::InvalidPointer,
+            place,
+            format!(
+                "{what} can't be at the empty pointer, which is the whole JSON object it's read \
+                 in; point it at a member, like \"/value\""
+            ),
+        );
+    } else {
+        check_pointer(pointer, place, report);
+    }
+}
+
 pub(super) fn check_pointer(pointer: &str, place: &Place, report: &mut Report) {
     if !is_json_pointer(pointer) {
         report.error(

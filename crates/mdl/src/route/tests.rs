@@ -213,6 +213,10 @@ fn each_way_a_message_fails_to_route_has_its_own_code() {
 
     assert_eq!(code(json(b"{")), "invalid_json");
     assert_eq!(
+        code(json(b"\xef\xbb\xbf{\"sat\": \"PX-9\"}")),
+        "invalid_json"
+    );
+    assert_eq!(
         code(json(br#"{"sat": "PX-9", "sat": "PX-8"}"#)),
         "invalid_json"
     );

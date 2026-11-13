@@ -72,23 +72,34 @@ which a terminator doesn't describe.
 ### 2.3 JSON payloads
 
 A JSON payload MUST be valid UTF-8 JSON (RFC 8259) with no duplicate
-object member names at any depth, comparing names after unescaping;
-otherwise the message is `invalid_json`. Parsers differ on these, so the
-rules are explicit:
+object member names at any depth, comparing names after unescaping, code
+point by code point, with no normalization (RFC 8259 §8.3: `é` and `e`
+followed by U+0301 are two names); otherwise the message is
+`invalid_json`. Parsers differ on these, so the rules are explicit:
 
 - of two duplicate names, parsers keep different ones, so a payload with
   any is refused;
-- a number whose value is beyond the binary64 range (`1e400`) is refused;
+- a number whose value rounds to positive or negative infinity as a
+  binary64 (`1e400`) is refused, as artifacts refuse one
+  (`spec/canonical-json.md` §1); `1.7976931348623158e308` rounds to the
+  largest finite binary64 and is accepted;
 - a string with an unpaired surrogate, escaped (`\ud800`) or not, is
-  refused;
+  refused; noncharacters (U+FFFF) are accepted;
 - arrays and objects nested 128 or more deep are refused (127 levels are
-  accepted).
+  accepted, the document being the first);
+- a byte order mark before the document is refused, which RFC 8259 §8.1
+  lets a parser do (artifacts refuse one too, `spec/canonical-json.md`
+  §1).
 
 A JSON number is **an integer** when its value is an exact integer: an
 integer literal between −2^63 and 2^64 − 1, or a number with no fractional
-part within ±(2^53 − 1). So `42`, `42.0` and `4.2e1` are all 42, and
-`-0` is 0; `1.5` and `1e20` are not integers, and neither is an integer
-literal beyond that range.
+part within ±(2^53 − 1). The value of any number other than an integer
+literal in that range is its nearest binary64, ties to even (IEEE 754's
+default), as a `float` field reads it (§5.3). So `42`, `42.0` and `4.2e1`
+are all 42, and `-0` is 0; `1.0000000000000001` is 1, `1e-400` is 0, and
+`4503599627370496.5` is 4503599627370496 (a tie, to even); `1.5` and
+`1e20` are not integers, and neither is an integer literal beyond that
+range.
 
 ## 3. Routing
 
@@ -275,7 +286,17 @@ struct).
 ### 5.3 JSON entries
 
 Entries have pointers relative to their container (the document, a
-struct's object, or an array element).
+struct's object, or an array element). The document MUST be an object,
+whatever the packet's entries and however the packet was chosen
+[`wrong_type`, with an empty path]. A pointer finds nothing in a string, a
+number, a boolean or `null`, and in an array only an index token (`/0`)
+finds anything, so this mostly shows for a packet chosen without reading
+the document: a catch-all, or one keyed only by metadata.
+
+The empty pointer is its container's whole object, so validation refuses
+it for a field or an array, as it does for a `path` locator (§3.1), a
+pointer identify key (§4) and an `iso8601` time (§8) [`invalid_pointer`]. A struct may be at it: the
+struct reads that object's members itself.
 
 - A field reads the value at its pointer, which MUST be of its JSON type:
   a number for a `uint`, `int` or `float` field, a boolean for a `bool`
@@ -683,6 +704,6 @@ restarts.
 | `wrong_encoding`, `invalid_json`, `unreadable_locator`, `unknown_asset`, `unknown_version`, `unknown_set`, `missing_set`, `unexpected_set` | routing (§3) |
 | `no_packet` | identification (§4) |
 | `too_short` | length (§5.1) |
-| `past_end`, `no_terminator`, `invalid_text`, `empty_element`, `bad_length`, `missing_value`, `wrong_type`, `out_of_range`, `bad_checksum` | an entry (§5); the error names the entry's path |
+| `past_end`, `no_terminator`, `invalid_text`, `empty_element`, `bad_length`, `missing_value`, `wrong_type`, `out_of_range`, `bad_checksum` | an entry (§5); the error names the entry's path, which is empty for the document (§5.3) |
 | `invalid_time` | event time (§8) |
 | `invalid_layout` | a definition that didn't pass validation; never for a validated one |

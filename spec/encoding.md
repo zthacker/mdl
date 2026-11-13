@@ -366,7 +366,7 @@ doesn't match. No match is [`no_packet`].
 
 The packet's entries are read as `decoding.md` §5 reads a packet's, with
 the same errors (`past_end`, `bad_checksum`, `missing_value` and the
-rest). A command packet has no length: the payload is the packet, and
+rest; a JSON payload that isn't an object is `wrong_type`, §5.3). A command packet has no length: the payload is the packet, and
 bytes after its last entry, or keys of a JSON payload that no field
 reads, are ignored, so layouts may grow at the end. A checksum covers
 only bytes before it, so bytes past the packet are covered by the link's
