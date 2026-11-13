@@ -225,6 +225,64 @@ fn each_way_a_message_fails_to_route_has_its_own_code() {
 }
 
 #[test]
+fn route_errors_carry_the_encoding_and_the_locator() {
+    let artifacts = built(&fixture());
+    let vendor_x = family_sets(&artifacts, "vendor_x");
+    let vendor_j = family_sets(&artifacts, "vendor_j");
+    let registry = registry();
+
+    let wrong = Message::new(Payload::Json(b"{}"), now()).with_metadata(FMT_2);
+    let err = vendor_x.route(&wrong, &registry).unwrap_err();
+    let expected = RouteError::WrongEncoding {
+        family: "vendor_x".into(),
+        expected: Encoding::Binary,
+        given: Encoding::Json,
+    };
+    assert_eq!(err, expected);
+    assert_eq!(
+        err.to_string(),
+        "family vendor_x is binary, but the message has a json payload"
+    );
+
+    // vendor_x reads its version from metadata, after its alias.
+    let payload = vendor_x_payload(101);
+    let bare = Message::new(Payload::Binary(&payload), now());
+    let err = vendor_x.route(&bare, &registry).unwrap_err();
+    let expected = RouteError::UnreadableLocator {
+        family: "vendor_x".into(),
+        locator: LocatorRole::Version,
+        reason: "the message has no metadata fmt".into(),
+    };
+    assert_eq!(err, expected);
+    assert_eq!(
+        err.to_string(),
+        "family vendor_x's version locator can't be read: the message has no metadata fmt"
+    );
+
+    let message = Message::new(Payload::Json(br#"{"sat": true}"#), now());
+    let err = vendor_j.route(&message, &registry).unwrap_err();
+    let expected = RouteError::UnreadableLocator {
+        family: "vendor_j".into(),
+        locator: LocatorRole::Alias,
+        reason: "found a boolean, not an integer or a string".into(),
+    };
+    assert_eq!(err, expected);
+    assert_eq!(
+        err.to_string(),
+        "family vendor_j's alias locator can't be read: found a boolean, not an integer or a \
+         string"
+    );
+    // A number in a reason reads the same whatever serde_json's features.
+    let message = Message::new(Payload::Json(br#"{"sat": 1.50}"#), now());
+    let err = vendor_j.route(&message, &registry).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "family vendor_j's alias locator can't be read: 1.5 isn't an integer that can be read \
+         exactly"
+    );
+}
+
+#[test]
 fn route_errors_say_what_to_do() {
     let artifacts = built(&fixture());
     let vendor_j = family_sets(&artifacts, "vendor_j");

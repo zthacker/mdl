@@ -4,8 +4,9 @@ use std::collections::BTreeMap;
 
 use serde_json::Value as Json;
 
-use super::{Problem, Record, Value};
+use super::{JsonType, Problem, Record, Value};
 use crate::bits::{BitsError, read_bits, sign_extend};
+use crate::canonical::number_text;
 use crate::checksum::{Algorithm, Compiled};
 use crate::ir::{
     ArrayEntry, ByteLength, ByteOrder, ChecksumEntry, CompareOp, Condition, Count, Element, Entry,
@@ -577,8 +578,8 @@ impl<'a> JsonWalker<'a> {
     fn array(&mut self, array: &'a ArrayEntry, value: &Json) -> Result<Value<'a>, Problem> {
         let Json::Array(items) = value else {
             return Err(Problem::WrongType {
-                expected: "an array",
-                found: json_kind(value),
+                expected: JsonType::Array,
+                found: JsonType::of(value),
             });
         };
         let mut decoded = Vec::with_capacity(items.len());
@@ -623,38 +624,27 @@ fn object(value: &Json) -> Result<&Json, Problem> {
         Ok(value)
     } else {
         Err(Problem::WrongType {
-            expected: "an object",
-            found: json_kind(value),
+            expected: JsonType::Object,
+            found: JsonType::of(value),
         })
     }
 }
 
 fn json_scalar<'a>(ty: ScalarType, value: &Json) -> Result<Value<'a>, Problem> {
-    let wrong = |expected: &'static str| Problem::WrongType {
+    let wrong = |expected: JsonType| Problem::WrongType {
         expected,
-        found: json_kind(value),
+        found: JsonType::of(value),
     };
     match ty {
         ScalarType::Uint | ScalarType::Int => {
-            let (expected, low, high) = if ty == ScalarType::Uint {
-                ("an unsigned 64-bit integer", 0, i128::from(u64::MAX))
-            } else {
-                (
-                    "a signed 64-bit integer",
-                    i128::from(i64::MIN),
-                    i128::from(i64::MAX),
-                )
-            };
             let Json::Number(number) = value else {
-                return Err(wrong(expected));
+                return Err(wrong(JsonType::Number));
             };
             let out_of_range = || Problem::OutOfRange {
-                value: number.to_string(),
-                expected,
+                value: number_text(number),
+                expected: ty,
             };
-            let integer = json_integer(number)
-                .filter(|n| (low..=high).contains(n))
-                .ok_or_else(out_of_range)?;
+            let integer = json_integer(number).ok_or_else(out_of_range)?;
             if ty == ScalarType::Uint {
                 u64::try_from(integer)
                     .map(Value::Uint)
@@ -668,27 +658,16 @@ fn json_scalar<'a>(ty: ScalarType, value: &Json) -> Result<Value<'a>, Problem> {
         ScalarType::Float => value
             .as_f64()
             .map(Value::Float)
-            .ok_or_else(|| wrong("a number")),
+            .ok_or_else(|| wrong(JsonType::Number)),
         ScalarType::Bool => value
             .as_bool()
             .map(Value::Bool)
-            .ok_or_else(|| wrong("a boolean")),
+            .ok_or_else(|| wrong(JsonType::Boolean)),
         ScalarType::String => value
             .as_str()
             .map(|text| Value::Str(text.to_string()))
-            .ok_or_else(|| wrong("a string")),
+            .ok_or_else(|| wrong(JsonType::String)),
         ScalarType::Bytes => Err(Problem::Layout("bytes in a JSON payload")),
-    }
-}
-
-fn json_kind(value: &Json) -> &'static str {
-    match value {
-        Json::Null => "null",
-        Json::Bool(_) => "a boolean",
-        Json::Number(_) => "a number",
-        Json::String(_) => "a string",
-        Json::Array(_) => "an array",
-        Json::Object(_) => "an object",
     }
 }
 

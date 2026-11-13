@@ -225,7 +225,8 @@ impl Unfit {
     ];
 }
 
-/// A JSON value's kind (§2.3), as `wrong_type` reports what it found.
+/// A JSON value's kind (§2.3), as `wrong_type` reports what an entry
+/// takes and what it found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum JsonKind {
     Array,
@@ -247,9 +248,10 @@ impl JsonKind {
     ];
 }
 
-/// What a JSON entry takes (§5.3), as `wrong_type` reports it: a field's
-/// type, an array, or an object, for a struct or a record. The variants
-/// are in the order picking sorts them in.
+/// What a JSON entry takes (§5.3): a field's type, an array, or an object,
+/// for a struct or a record. `wrong_type` reports its kind of value, and
+/// `out_of_range` whether an integer field is signed. The variants are in
+/// the order picking sorts them in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Wanted {
     Array,

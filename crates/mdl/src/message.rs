@@ -1,5 +1,6 @@
 //! Messages: what a decoder is given.
 
+use crate::ir::Encoding;
 use crate::time::Timestamp;
 
 /// One message as the link delivered it: the payload, the metadata the
@@ -41,11 +42,11 @@ pub enum Payload<'a> {
 }
 
 impl Payload<'_> {
-    /// The encoding's name, as families spell it.
-    pub fn encoding(&self) -> &'static str {
+    /// The payload's encoding.
+    pub fn encoding(&self) -> Encoding {
         match self {
-            Payload::Binary(_) => "binary",
-            Payload::Json(_) => "json",
+            Payload::Binary(_) => Encoding::Binary,
+            Payload::Json(_) => Encoding::Json,
         }
     }
 }

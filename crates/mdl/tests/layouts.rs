@@ -8,11 +8,11 @@
 mod common;
 
 use mdl::bindings::Bindings;
-use mdl::decode::{DecodeError, Problem};
-use mdl::ir::TextEncoding;
+use mdl::decode::{DecodeError, JsonType, Problem};
+use mdl::ir::{ScalarType, TextEncoding};
 use mdl::message::{Message, Payload};
 use mdl::time::Timestamp;
-use mdl_testkit::layout::{self, JsonKind, Wanted, telemetry};
+use mdl_testkit::layout::{self, JsonKind, telemetry};
 use proptest::prelude::*;
 
 proptest! {
@@ -194,11 +194,16 @@ fn failure(error: &DecodeError) -> Option<layout::Failure> {
             pointer: pointer.clone(),
         },
         Problem::WrongType { expected, found } => layout::Problem::WrongType {
-            wanted: wanted(expected)?,
-            found: found_kind(found)?,
+            expected: kind(*expected),
+            found: kind(*found),
         },
-        Problem::OutOfRange { expected, .. } => layout::Problem::OutOfRange {
-            signed: wanted(expected)? == Wanted::Int,
+        Problem::OutOfRange { value, expected } => layout::Problem::OutOfRange {
+            signed: match expected {
+                ScalarType::Uint => false,
+                ScalarType::Int => true,
+                _ => return None,
+            },
+            value: value.clone(),
         },
         _ => return None,
     };
@@ -208,30 +213,15 @@ fn failure(error: &DecodeError) -> Option<layout::Failure> {
     })
 }
 
-/// What a JSON entry takes, as MDL's `wrong_type` and `out_of_range` say
-/// it.
-fn wanted(expected: &str) -> Option<Wanted> {
-    Some(match expected {
-        "an unsigned 64-bit integer" => Wanted::Uint,
-        "a signed 64-bit integer" => Wanted::Int,
-        "a number" => Wanted::Float,
-        "a boolean" => Wanted::Bool,
-        "a string" => Wanted::String,
-        "an array" => Wanted::Array,
-        "an object" => Wanted::Object,
-        _ => return None,
-    })
-}
-
-/// A JSON value's kind, as MDL's `wrong_type` says what it found.
-fn found_kind(found: &str) -> Option<JsonKind> {
-    Some(match found {
-        "null" => JsonKind::Null,
-        "a boolean" => JsonKind::Bool,
-        "a number" => JsonKind::Number,
-        "a string" => JsonKind::String,
-        "an array" => JsonKind::Array,
-        "an object" => JsonKind::Object,
-        _ => return None,
-    })
+/// A JSON type as the testkit names it. JSON has six, so a match on
+/// them needs no fallback.
+fn kind(ty: JsonType) -> JsonKind {
+    match ty {
+        JsonType::Null => JsonKind::Null,
+        JsonType::Boolean => JsonKind::Bool,
+        JsonType::Number => JsonKind::Number,
+        JsonType::String => JsonKind::String,
+        JsonType::Array => JsonKind::Array,
+        JsonType::Object => JsonKind::Object,
+    }
 }

@@ -432,6 +432,25 @@ pub(crate) fn format_double(n: f64) -> String {
     ryu_js::Buffer::new().format_finite(n).to_string()
 }
 
+/// A JSON number as text, the same whatever serde_json's features: an
+/// integer literal within 64 bits as its digits, any other number as its
+/// double's canonical text (`1e20` is `100000000000000000000`, `1e21` is
+/// `1e+21`). serde_json's own `Display` keeps the document's digits
+/// instead (`1.50`, `18446744073709551616`) when its `arbitrary_precision`
+/// feature is on in the build.
+pub(crate) fn number_text(number: &Number) -> String {
+    if let Some(n) = number.as_u64() {
+        n.to_string()
+    } else if let Some(n) = number.as_i64() {
+        n.to_string()
+    } else if let Some(x) = number.as_f64() {
+        format_double(x)
+    } else {
+        // Beyond a double, which parsing refuses.
+        number.to_string()
+    }
+}
+
 /// The lowercase hex digits a `\u` escape is written with.
 const HEX_DIGITS: &[u8; 16] = b"0123456789abcdef";
 

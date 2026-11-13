@@ -1011,6 +1011,16 @@ pub enum Encoding {
     Json,
 }
 
+/// As families spell it: `binary`, `json`.
+impl fmt::Display for Encoding {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str(match self {
+            Encoding::Binary => "binary",
+            Encoding::Json => "json",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ByteOrder {
