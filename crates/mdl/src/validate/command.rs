@@ -1112,9 +1112,9 @@ fn entry_place(container: &Place, index: usize, entry: &Entry) -> Place {
 }
 
 /// Each field and array of a JSON command packet, or of a record, is
-/// written at its own place inside its object: no pointer is empty (the
-/// whole object), and none equals another or leads into it (`/a` and
-/// `/a/b`).
+/// written at its own place inside its object: none equals another or
+/// leads into it (`/a` and `/a/b`). That none is empty, the whole object,
+/// holds for every field and array (`check_member_pointer`).
 fn check_pointers(entries: &[Entry], place: &Place, report: &mut Report) {
     let mut written: Vec<(Vec<String>, &str)> = Vec::new();
     for (index, entry) in entries.iter().enumerate() {
@@ -1128,14 +1128,6 @@ fn check_pointers(entries: &[Entry], place: &Place, report: &mut Report) {
         };
         let pointer_place = place.item("entries", index, label, name).key("pointer");
         if tokens.is_empty() {
-            report.error(
-                Code::CommandShape,
-                &pointer_place,
-                format!(
-                    "a command payload and its records are JSON objects, so {name} is written \
-                     under a key, not at the empty pointer"
-                ),
-            );
             continue;
         }
         if let Some((_, other)) = written

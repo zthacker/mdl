@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::rules::{check_not_empty, check_pointer, is_token};
+use super::rules::{check_member_pointer, check_not_empty, is_token};
 use crate::diagnostics::{Code, Place, Report};
 use crate::ir::{ByteOrder, Encoding, Family, Locator};
 
@@ -150,7 +150,7 @@ fn check_locator(family: &Family, locator: &Locator, place: &Place, report: &mut
                     "path locators only apply to self-describing families; use bits or metadata",
                 );
             }
-            check_pointer(pointer, place, report);
+            check_member_pointer(pointer, "a path locator", place, report);
         }
         Locator::Metadata { name } => {
             if !family.metadata.contains(name) {

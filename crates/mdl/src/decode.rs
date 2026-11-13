@@ -780,7 +780,7 @@ impl Program {
             }
             Walked::Json(document) => {
                 let mut walker = JsonWalker::new(self.tables(set));
-                let result = walker.entries(entries, names, document);
+                let result = walker.packet(entries, names, document);
                 result.map_err(|problem| entry_error(name, walker.path(), problem))
             }
         }

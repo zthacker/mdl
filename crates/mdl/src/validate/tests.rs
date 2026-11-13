@@ -3047,6 +3047,46 @@ fn a_sets_command_packets_can_be_told_apart() {
 }
 
 #[test]
+fn json_fields_locators_and_time_point_at_members() {
+    // The document, a struct's value and a record element are objects
+    // (decoding.md §5.3), so the empty pointer, a whole object, is never a
+    // field's, an array's, a locator's or a time stamp's.
+    let empty = json!("");
+    let bus = "/sets/1/packets/0/entries";
+    assert_one(Code::InvalidPointer, &format!("{bus}/0/pointer"), |v| {
+        v["sets"][1]["packets"][0]["entries"][0]["pointer"] = empty.clone();
+    });
+    assert_one(Code::InvalidPointer, &format!("{bus}/1/pointer"), |v| {
+        v["sets"][1]["packets"][0]["entries"][1]["pointer"] = empty.clone();
+    });
+    assert_one(
+        Code::InvalidPointer,
+        "/sets/1/types/cell/entries/0/pointer",
+        |v| v["sets"][1]["types"]["cell"]["entries"][0]["pointer"] = empty.clone(),
+    );
+    assert_one(Code::InvalidPointer, "/families/1/alias", |v| {
+        v["families"][1]["alias"]["pointer"] = empty.clone();
+    });
+    assert_one(Code::InvalidPointer, "/sets/1/time/pointer", |v| {
+        v["sets"][1]["time"]["pointer"] = empty.clone();
+    });
+    assert_one(Code::InvalidPointer, "/sets/1/packets/0/identify/", |v| {
+        v["sets"][1]["packets"][0]["identify"][""] = json!("x");
+    });
+    // A struct at the empty pointer reads its container's own object.
+    assert_eq!(
+        problems(|v| {
+            v["sets"][1]["packets"][0]["entries"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({ "kind": "struct", "name": "whole", "struct": "cell",
+                              "pointer": "" }));
+        }),
+        vec![]
+    );
+}
+
+#[test]
 fn each_field_of_a_json_command_is_written_at_its_own_place() {
     let push = |v: &mut Value, pointer: &str| {
         v["sets"][1]["commands"][0]["entries"]
@@ -3063,7 +3103,7 @@ fn each_field_of_a_json_command_is_written_at_its_own_place() {
     assert_eq!(problems(|v| push(v, "/args~1mode")), vec![]);
     assert_eq!(problems(|v| push(v, "/opx")), vec![]);
     // The payload is an object, so no field is the whole document.
-    assert_one(Code::CommandShape, at, |v| push(v, ""));
+    assert_one(Code::InvalidPointer, at, |v| push(v, ""));
 }
 
 #[test]

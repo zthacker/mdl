@@ -8,8 +8,8 @@ use super::command;
 use super::layout::{Container, Layout, Shape, exact_type_sizes, static_offsets, type_name};
 use super::mapping;
 use super::rules::{
-    check_finite, check_integer_spelling, check_not_empty, check_pointer, check_scalar,
-    check_unit_code, integer_value, is_identifier, is_token,
+    check_finite, check_integer_spelling, check_member_pointer, check_not_empty, check_pointer,
+    check_scalar, check_unit_code, integer_value, is_identifier, is_token,
 };
 use crate::checksum;
 use crate::convert::spline_is_finite;
@@ -382,7 +382,7 @@ fn check_time(set: &Set, encoding: Option<Encoding>, place: &Place, report: &mut
                     "iso8601 time is in self-describing payloads; binary families use cuc or boot",
                 );
             }
-            check_pointer(pointer, &place.key("pointer"), report);
+            check_member_pointer(pointer, "an iso8601 time", &place.key("pointer"), report);
         }
         Time::Boot { correlate, unit } => {
             let correlate_place = place.key("correlate");
@@ -924,6 +924,15 @@ impl PacketKeys<'_> {
             offsets,
         } = *self;
         let declared = family.metadata.iter().any(|m| m == key);
+        if key.is_empty() && family.encoding == Encoding::Json {
+            report.error(
+                Code::InvalidPointer,
+                place,
+                "the empty pointer is the whole document, a JSON object (decoding.md §5.3), \
+                 never a string or an integer to identify by; point it at a member, like \"/ch\"",
+            );
+            return None;
+        }
         if key.starts_with('/') {
             if family.encoding == Encoding::Binary {
                 report.error(
@@ -1293,7 +1302,7 @@ fn check_field(field: &Field, kind: Container, scope: &Scope, place: &Place, rep
         check_canonical(canonical, scope, &place.key("canonical"), report);
     }
     if let Some(pointer) = &field.pointer {
-        check_pointer(pointer, &place.key("pointer"), report);
+        check_member_pointer(pointer, "a field", &place.key("pointer"), report);
     }
     if let Some(unit) = &field.unit {
         check_unit_code(unit, &place.key("unit"), report);
@@ -1354,7 +1363,7 @@ fn check_array(
         }
     }
     if let Some(pointer) = &array.pointer {
-        check_pointer(pointer, &place.key("pointer"), report);
+        check_member_pointer(pointer, "an array", &place.key("pointer"), report);
     }
     match &array.element {
         Element::Scalar(element) => check_element(element, &place.key("element"), report),
