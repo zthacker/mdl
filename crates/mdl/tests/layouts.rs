@@ -9,8 +9,9 @@ mod common;
 
 use mdl::bindings::Bindings;
 use mdl::decode::{DecodeError, JsonType, Problem};
-use mdl::ir::{ScalarType, TextEncoding};
+use mdl::ir::{Encoding, ScalarType, TextEncoding};
 use mdl::message::{Message, Payload};
+use mdl::route::{LocatorRole, RouteError};
 use mdl::time::Timestamp;
 use mdl_testkit::layout::{self, JsonKind, telemetry};
 use proptest::prelude::*;
@@ -48,7 +49,7 @@ fn valid(case: &layout::Telemetry, json: bool) -> Result<(), TestCaseError> {
     let sets = common::load(&case.bundle, &case.family, &[])?;
     let bindings = bindings(case);
     for message in &case.messages {
-        let result = sets.decode(&message_of(message, json), &bindings);
+        let result = sets.decode(&message_of(message), &bindings);
         // An event time that can't be read is the message's error.
         if message.event_time == layout::EventTime::Invalid {
             prop_assert_eq!(
@@ -74,7 +75,7 @@ fn damaged(case: &layout::Telemetry, json: bool) -> Result<(), TestCaseError> {
     let sets = common::load(&case.bundle, &case.family, &[])?;
     let bindings = bindings(case);
     for message in &case.messages {
-        let result = sets.decode(&message_of(message, json), &bindings);
+        let result = sets.decode(&message_of(message), &bindings);
         match &message.damage {
             Some(damage) => {
                 let error = result.err();
@@ -125,13 +126,12 @@ fn bindings(case: &layout::Telemetry) -> Bindings {
     .unwrap()
 }
 
-/// A message as a link delivers it.
-fn message_of(message: &layout::Message, json: bool) -> Message<'_> {
+/// A message as a link delivers it, in the encoding the testkit says.
+fn message_of(message: &layout::Message) -> Message<'_> {
     let received = Timestamp::from_unix_nanos(i64::try_from(message.received).unwrap());
-    let payload = if json {
-        Payload::Json(&message.payload)
-    } else {
-        Payload::Binary(&message.payload)
+    let payload = match message.encoding {
+        layout::Encoding::Json => Payload::Json(&message.payload),
+        layout::Encoding::Binary => Payload::Binary(&message.payload),
     };
     Message::new(payload, received)
 }
@@ -139,7 +139,37 @@ fn message_of(message: &layout::Message, json: bool) -> Message<'_> {
 /// A decoding error as the testkit writes one: the entry it names and what
 /// it reports. `None` for an error of a kind the testkit doesn't plant.
 fn failure(error: &DecodeError) -> Option<layout::Failure> {
+    // Routing and identification name no entry.
+    let whole = |problem| {
+        Some(layout::Failure {
+            path: String::new(),
+            problem,
+        })
+    };
     let (path, problem) = match error {
+        DecodeError::Route(route) => {
+            return whole(match route {
+                RouteError::WrongEncoding {
+                    expected, given, ..
+                } => layout::Problem::WrongEncoding {
+                    expected: encoding(*expected)?,
+                    given: encoding(*given)?,
+                },
+                RouteError::InvalidJson { .. } => layout::Problem::InvalidJson,
+                RouteError::UnreadableLocator { locator, .. } => {
+                    layout::Problem::UnreadableLocator {
+                        role: match locator {
+                            LocatorRole::Alias => layout::LocatorRole::Alias,
+                            LocatorRole::Version => layout::LocatorRole::Version,
+                            _ => return None,
+                        },
+                    }
+                }
+                RouteError::UnknownAsset { .. } => layout::Problem::UnknownAsset,
+                _ => return None,
+            });
+        }
+        DecodeError::NoPacket { .. } => return whole(layout::Problem::NoPacket),
         // The packet's, so it names no entry.
         DecodeError::TooShort {
             needed,
@@ -210,6 +240,15 @@ fn failure(error: &DecodeError) -> Option<layout::Failure> {
     Some(layout::Failure {
         path: path.clone(),
         problem,
+    })
+}
+
+/// An encoding as the testkit names it.
+fn encoding(encoding: Encoding) -> Option<layout::Encoding> {
+    Some(match encoding {
+        Encoding::Binary => layout::Encoding::Binary,
+        Encoding::Json => layout::Encoding::Json,
+        _ => return None,
     })
 }
 

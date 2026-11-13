@@ -909,7 +909,7 @@ fn damaged_messages_reach_every_route() {
     let (mut messages, mut damaged) = (0, 0);
     // The rarest routes (a shared count, a fault hidden behind a checksum)
     // come about once in a hundred cases.
-    for _ in 0..1500 {
+    for _ in 0..2000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         for message in &case.messages {
             messages += 1;
@@ -984,9 +984,11 @@ fn damaged_messages_reach_every_route() {
     required.push(Reached::Route(Route::SharedCount));
     required.extend(Garbling::ALL.map(|form| Reached::Route(Route::Text(form))));
     required.extend(Tamper::ALL.map(|tamper| Reached::Route(Route::Checksum(tamper))));
+    required.push(Reached::Route(Route::AsJson));
     required.extend([Reached::Pair, Reached::UnreadableTime, Reached::Deferred]);
     required.extend(
         [
+            "wrong_encoding",
             "past_end",
             "no_terminator",
             "invalid_text",

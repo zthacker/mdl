@@ -14,7 +14,8 @@ use super::doc::{self, Doc, Spell};
 use super::{BOTCHED, json_damaged, json_telemetry};
 use crate::coverage::features;
 use crate::layout::{
-    EventTime, Family, FaultKind, Gone, JsonKind, Problem, Raw, Route, Unfit, Wanted,
+    EventTime, Family, FaultKind, Gone, JsonKind, Malformed, Problem, Raw, Route, Unfit, Unusable,
+    Wanted,
 };
 
 /// Any document: scalars of every kind, nested a few levels.
@@ -80,7 +81,8 @@ fn same(document: &Doc, value: &Value) -> bool {
 }
 
 /// A number's integer value by §2.3: an integer literal within 64 bits,
-/// or a number with no fractional part within ±(2^53 − 1).
+/// or a number whose nearest double has no fractional part within
+/// ±(2^53 − 1).
 fn integer(number: &Number) -> Option<i128> {
     if let Some(n) = number.as_u64() {
         return Some(i128::from(n));
@@ -221,9 +223,17 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
             let digits = number.trim_start_matches('-');
             if number.contains(['e', 'E']) {
                 found.insert("number:exponent".to_string());
+                if digits == "1e-400" {
+                    found.insert("number:below_smallest".to_string());
+                }
             } else if let Some((_, fraction)) = number.split_once('.') {
                 if fraction.chars().all(|c| c == '0') {
                     found.insert("number:fraction_zeros".to_string());
+                } else if fraction.len() >= 3
+                    && fraction.ends_with('1')
+                    && fraction[..fraction.len() - 1].chars().all(|c| c == '0')
+                {
+                    found.insert("number:past_double_digits".to_string());
                 }
             } else if let Ok(n) = digits.parse::<u128>() {
                 if n > 1 << 53 {
@@ -272,6 +282,28 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
         {
             found.insert("member:extra".to_string());
         }
+        if case.native_id == "17" && document.get("sat").is_some_and(Value::is_string) {
+            found.insert("alias:number_as_text".to_string());
+        }
+        if depth(&document) == 127 {
+            found.insert("edge:depth_127".to_string());
+        }
+        for (member, label) in [
+            ("alike", "edge:alike_names"),
+            ("tiny", "edge:tiny_number"),
+            ("", "edge:empty_name"),
+            ("zero", "edge:zero_huge_exponent"),
+        ] {
+            if document.get(member).is_some() {
+                found.insert(label.to_string());
+            }
+        }
+        if document
+            .as_object()
+            .is_some_and(|members| members.keys().any(|name| name.contains('\u{fdd0}')))
+        {
+            found.insert("edge:noncharacters".to_string());
+        }
         let Some(packet) = packets
             .iter()
             .find(|packet| packet["name"] == message.packet)
@@ -282,8 +314,28 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
         if keys == 2 {
             found.insert("identify:nested_match".to_string());
         }
-        if keys == 1 && document.get("sub").is_some() {
-            found.insert("identify:stray_sub".to_string());
+        match document.get("sub") {
+            Some(sub) if keys == 1 && (sub.is_u64() || sub.is_i64()) => {
+                found.insert("identify:stray_sub".to_string());
+            }
+            Some(_) if keys == 1 => {
+                found.insert("identify:stray_sub_unreadable".to_string());
+            }
+            _ => {}
+        }
+        if keys == 0 {
+            match document.get("kind") {
+                None => {
+                    found.insert("identify:catch_all_no_kind".to_string());
+                }
+                Some(Value::String(text)) if text.parse::<i64>().is_ok() => {
+                    found.insert("identify:catch_all_kind_as_text".to_string());
+                }
+                Some(Value::String(_)) => {}
+                Some(_) => {
+                    found.insert("identify:catch_all_kind_unreadable".to_string());
+                }
+            }
         }
         let recorded: BTreeMap<&str, &Raw> = message
             .record
@@ -392,6 +444,15 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
     found
 }
 
+/// How deep a value's arrays and objects nest, a scalar being 0.
+fn depth(value: &Value) -> usize {
+    match value {
+        Value::Array(items) => 1 + items.iter().map(depth).max().unwrap_or(0),
+        Value::Object(members) => 1 + members.values().map(depth).max().unwrap_or(0),
+        _ => 0,
+    }
+}
+
 /// Generated JSON layouts reach every feature the JSON oracle is for:
 /// each entry kind, field type, pointer form, key, alias and time source,
 /// absent entries both ways, `null` elements, and each spelling of
@@ -410,6 +471,7 @@ fn json_layouts_reach_every_feature() {
         "locator:fixed",
         "locator:path",
         "alias:number",
+        "alias:number_as_text",
         "time:iso8601",
         "time:elapsed",
         "time:gps",
@@ -442,6 +504,10 @@ fn json_layouts_reach_every_feature() {
         "identify:nested_match",
         "identify:catch_all",
         "identify:stray_sub",
+        "identify:stray_sub_unreadable",
+        "identify:catch_all_no_kind",
+        "identify:catch_all_kind_unreadable",
+        "identify:catch_all_kind_as_text",
         "identify:kind_field",
         "pointer:escaped_slash",
         "pointer:escaped_tilde",
@@ -453,6 +519,14 @@ fn json_layouts_reach_every_feature() {
         "number:negative_zero",
         "number:past_safe_literal",
         "number:past_i64_literal",
+        "number:past_double_digits",
+        "number:below_smallest",
+        "edge:depth_127",
+        "edge:alike_names",
+        "edge:noncharacters",
+        "edge:tiny_number",
+        "edge:empty_name",
+        "edge:zero_huge_exponent",
         "string:short_escape",
         "string:escaped_solidus",
         "string:unicode_escape",
@@ -506,6 +580,13 @@ enum Reached {
     /// Of two faults, the error is the one picked second: the one decoding
     /// reads first.
     SecondFirst,
+    /// Of two faults of these kinds, decoding met the first's first.
+    Over(FaultKind, FaultKind),
+    /// A document that isn't an object gave this error.
+    Document(&'static str),
+    /// With a fixed alias, of two faults the error is `invalid_json`, the
+    /// other met later.
+    ParsedFirst,
 }
 
 /// Where the entry an error names is.
@@ -515,11 +596,14 @@ enum Named {
     Element,
     InRecord,
     InStruct,
+    /// No entry: before any, or the document as a whole.
+    Whole,
 }
 
 /// Damaged JSON messages reach every route their faults take, every kind
-/// of value `wrong_type` can find, every place an error can name, and
-/// pairs, at least five times each.
+/// of value `wrong_type` can find, every place an error can name, each
+/// error a document that isn't an object can give, pairs, and §3.3's
+/// order between kinds, at least five times each.
 #[test]
 fn json_damaged_messages_reach_every_route() {
     let mut runner = TestRunner::deterministic();
@@ -527,8 +611,9 @@ fn json_damaged_messages_reach_every_route() {
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
     let (mut messages, mut damaged) = (0, 0);
-    for _ in 0..600 {
+    for _ in 0..800 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
+        let fixed = case.bundle["families"][0]["alias"]["kind"] == "fixed";
         for message in &case.messages {
             messages += 1;
             let Some(damage) = &message.damage else {
@@ -540,23 +625,45 @@ fn json_damaged_messages_reach_every_route() {
                 note(Reached::Route(*route));
             }
             let failure = &damage.failure;
-            note(Reached::Code(failure.problem.code()));
+            let code = failure.problem.code();
+            note(Reached::Code(code));
             if let Problem::WrongType { found, .. } = failure.problem {
                 note(Reached::Found(found));
+            }
+            if let [Route::Document(_)] = damage.routes.as_slice() {
+                note(Reached::Document(code));
             }
             if let [first, second] = damage.routes.as_slice() {
                 note(Reached::Pair);
                 let code_of = |route: &Route| match route.kind() {
+                    FaultKind::AsBinary => "wrong_encoding",
+                    FaultKind::Malformed => "invalid_json",
+                    FaultKind::Locator => "unreadable_locator",
+                    FaultKind::Unbound => "unknown_asset",
+                    FaultKind::Unmatched => "no_packet",
                     FaultKind::Missing => "missing_value",
                     FaultKind::WrongType => "wrong_type",
                     _ => "out_of_range",
                 };
-                if code_of(second) == failure.problem.code() && code_of(first) != code_of(second) {
+                if code_of(second) == code && code_of(first) != code_of(second) {
                     note(Reached::SecondFirst);
+                }
+                let (met, other) = if code_of(first) == code {
+                    (first, second)
+                } else {
+                    (second, first)
+                };
+                note(Reached::Over(met.kind(), other.kind()));
+                // §3.3: with a fixed alias nothing reads the document before
+                // decoding does, which parses it before identification.
+                if fixed && code == "invalid_json" && other.kind() != FaultKind::AsBinary {
+                    note(Reached::ParsedFirst);
                 }
             }
             let path = failure.path.as_str();
-            note(Reached::Named(if path.contains("].") {
+            note(Reached::Named(if path.is_empty() {
+                Named::Whole
+            } else if path.contains("].") {
                 Named::InRecord
             } else if path.ends_with(']') {
                 Named::Element
@@ -580,23 +687,56 @@ fn json_damaged_messages_reach_every_route() {
     required.extend(Gone::ALL.map(|gone| Reached::Route(Route::Missing(gone))));
     required.extend(Wanted::ALL.map(|wanted| Reached::Route(Route::WrongType(wanted))));
     required.extend(Unfit::ALL.map(|unfit| Reached::Route(Route::OutOfRange(unfit))));
+    required.extend(Malformed::ALL.map(|malformed| Reached::Route(Route::Malformed(malformed))));
+    required.extend(Unusable::ALL.map(|unusable| Reached::Route(Route::Locator(unusable))));
+    required.extend(Unusable::ALL.map(|unusable| Reached::Route(Route::Unmatched(unusable))));
+    required.extend([Route::AsBinary, Route::Unbound, Route::KindAsText].map(Reached::Route));
     required.extend(
         JsonKind::ALL
             .into_iter()
-            .filter(|kind| *kind != JsonKind::Null)
-            .map(Reached::Found),
+            .filter(|kind| *kind != JsonKind::Object)
+            .map(|kind| Reached::Route(Route::Document(kind))),
     );
-    required.extend(["missing_value", "wrong_type", "out_of_range"].map(Reached::Code));
+    // The document's own `wrong_type` finds `null` too.
+    required.extend(JsonKind::ALL.map(Reached::Found));
+    required.extend(
+        [
+            "missing_value",
+            "wrong_type",
+            "out_of_range",
+            "wrong_encoding",
+            "invalid_json",
+            "unreadable_locator",
+            "unknown_asset",
+            "no_packet",
+        ]
+        .map(Reached::Code),
+    );
+    required.extend(["unreadable_locator", "wrong_type", "no_packet"].map(Reached::Document));
     required.extend(
         [
             Named::AtTop,
             Named::Element,
             Named::InRecord,
             Named::InStruct,
+            Named::Whole,
         ]
         .map(Reached::Named),
     );
-    required.extend([Reached::Pair, Reached::SecondFirst]);
+    required.extend([Reached::Pair, Reached::SecondFirst, Reached::ParsedFirst]);
+    // §3.3's order, then identification before entries.
+    required.extend(
+        [
+            (FaultKind::AsBinary, FaultKind::Malformed),
+            (FaultKind::Malformed, FaultKind::Locator),
+            (FaultKind::Malformed, FaultKind::Unmatched),
+            (FaultKind::Locator, FaultKind::Unmatched),
+            (FaultKind::Unbound, FaultKind::Unmatched),
+            (FaultKind::Unmatched, FaultKind::Missing),
+            (FaultKind::Malformed, FaultKind::WrongType),
+        ]
+        .map(|(met, other)| Reached::Over(met, other)),
+    );
     for reached in required {
         let count = found.get(&reached).copied().unwrap_or(0);
         assert!(count >= 5, "{reached:?} is reached {count} times");

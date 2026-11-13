@@ -1,7 +1,7 @@
-//! The faults the telemetry oracles plant (`spec/decoding.md` §5, §9): their
-//! kinds and routes, as damaged messages report them, and how a message's
-//! faults are picked. `body/faults.rs` plants them in binary packets,
-//! `json/faults.rs` in JSON ones.
+//! The faults the telemetry oracles plant (`spec/decoding.md` §2.3, §3 to
+//! §5, §9): their kinds and routes, as damaged messages report them, and
+//! how a message's faults are picked. `body/faults.rs` plants them in
+//! binary packets, `json/faults.rs` in JSON ones.
 
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -10,14 +10,24 @@ use proptest::sample::Index;
 /// the others. The variants are in the order picking sorts them in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FaultKind {
+    /// A JSON message delivered as a binary payload.
+    AsBinary,
+    /// A binary message delivered as a JSON payload.
+    AsJson,
     /// A checksum's value, or what it covers, not matching ([`Tamper`]).
     Checksum,
     /// A count field holding a count below 0, or its largest.
     Count,
     /// The payload cut short.
     Cut,
+    /// A JSON document that isn't an object, by what it is ([`JsonKind`]).
+    Document,
     /// A length field holding a length below 0, or its largest.
     Length,
+    /// A `path` alias finding what it can't read ([`Unusable`]).
+    Locator,
+    /// A payload that isn't JSON MDL reads ([`Malformed`]).
+    Malformed,
     /// A required JSON entry with nothing, or `null`, at its pointer
     /// ([`Gone`]).
     Missing,
@@ -30,35 +40,55 @@ pub enum FaultKind {
     SharedCount,
     /// A string's bytes that aren't text in its encoding.
     Text,
+    /// A `path` alias reading a native id no binding names.
+    Unbound,
+    /// A JSON `kind` that no packet matches, in a set without a catch-all.
+    Unmatched,
     /// A JSON value of another kind than its entry takes ([`Wanted`]).
     WrongType,
 }
 
 impl FaultKind {
-    pub const ALL: [FaultKind; 10] = [
+    pub const ALL: [FaultKind; 17] = [
+        FaultKind::AsBinary,
+        FaultKind::AsJson,
         FaultKind::Checksum,
         FaultKind::Count,
         FaultKind::Cut,
+        FaultKind::Document,
         FaultKind::Length,
+        FaultKind::Locator,
+        FaultKind::Malformed,
         FaultKind::Missing,
         FaultKind::More,
         FaultKind::OutOfRange,
         FaultKind::SharedCount,
         FaultKind::Text,
+        FaultKind::Unbound,
+        FaultKind::Unmatched,
         FaultKind::WrongType,
     ];
 
     /// Which packets faults of the kind are planted in.
     pub fn family(self) -> Family {
         match self {
-            FaultKind::Checksum
+            FaultKind::AsJson
+            | FaultKind::Checksum
             | FaultKind::Count
             | FaultKind::Cut
             | FaultKind::Length
             | FaultKind::More
             | FaultKind::SharedCount
             | FaultKind::Text => Family::Binary,
-            FaultKind::Missing | FaultKind::OutOfRange | FaultKind::WrongType => Family::Json,
+            FaultKind::AsBinary
+            | FaultKind::Document
+            | FaultKind::Locator
+            | FaultKind::Malformed
+            | FaultKind::Missing
+            | FaultKind::OutOfRange
+            | FaultKind::Unbound
+            | FaultKind::Unmatched
+            | FaultKind::WrongType => Family::Json,
         }
     }
 }
@@ -275,20 +305,117 @@ impl Wanted {
     ];
 }
 
+/// What a locator or an identify key finds that it can't read (§3.1,
+/// §4): nothing, or a value that's neither a string nor an integer
+/// (§2.3). The variants are in the order picking sorts them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Unusable {
+    Array,
+    Bool,
+    /// A fraction: `1.5`.
+    Fraction,
+    /// Nothing there.
+    Gone,
+    /// Past ±(2^53 − 1), with an exponent: `1e20`.
+    Large,
+    Null,
+    Object,
+    /// An integer literal past 64 bits.
+    Wide,
+}
+
+impl Unusable {
+    pub const ALL: [Unusable; 8] = [
+        Unusable::Array,
+        Unusable::Bool,
+        Unusable::Fraction,
+        Unusable::Gone,
+        Unusable::Large,
+        Unusable::Null,
+        Unusable::Object,
+        Unusable::Wide,
+    ];
+}
+
+/// How a payload stops being JSON MDL reads (§2.3). The variants are in
+/// the order picking sorts them in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Malformed {
+    /// A byte order mark before the document.
+    Bom,
+    /// The text cut before the document ends.
+    Cut,
+    /// Arrays and objects nested 128 deep.
+    Deep,
+    /// A name twice in one object, at the top or deeper.
+    Duplicate,
+    /// No document: nothing, or only whitespace.
+    Empty,
+    /// A character JSON doesn't allow raw in a string, or an escape it
+    /// doesn't have.
+    Escape,
+    /// A number past binary64.
+    Huge,
+    /// A number JSON doesn't allow: `01`, `+1`, `.5`, `NaN`.
+    Number,
+    /// Two names in one object that differ only in how they're escaped.
+    Respelled,
+    /// An escaped surrogate with no partner.
+    Surrogate,
+    /// A token JSON doesn't have, a missing one, or whitespace it doesn't
+    /// allow.
+    Token,
+    /// A token after the document.
+    Trailing,
+    /// Bytes that aren't UTF-8.
+    Utf8,
+}
+
+impl Malformed {
+    pub const ALL: [Malformed; 13] = [
+        Malformed::Bom,
+        Malformed::Cut,
+        Malformed::Deep,
+        Malformed::Duplicate,
+        Malformed::Empty,
+        Malformed::Escape,
+        Malformed::Huge,
+        Malformed::Number,
+        Malformed::Respelled,
+        Malformed::Surrogate,
+        Malformed::Token,
+        Malformed::Trailing,
+        Malformed::Utf8,
+    ];
+}
+
 /// A fault's route: its kind, and what it reaches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Route {
+    AsBinary,
+    AsJson,
     Checksum(Tamper),
     Count(Held),
     /// A cut, by what decoding then reads short.
     Cut(Place),
+    /// The document replaced by a value of this kind.
+    Document(JsonKind),
+    /// A numbered `kind` written as text, which a pointer key compares
+    /// exactly (§3.2).
+    KindAsText,
     Length(Held),
+    /// What the alias's pointer finds.
+    Locator(Unusable),
+    Malformed(Malformed),
     Missing(Gone),
     /// One more element, by what in it decoding reads short.
     More(Place),
     OutOfRange(Unfit),
     SharedCount,
     Text(Garbling),
+    Unbound,
+    /// What `/kind` holds.
+    Unmatched(Unusable),
     /// A value of another kind, by what the entry takes.
     WrongType(Wanted),
 }
@@ -296,15 +423,22 @@ pub enum Route {
 impl Route {
     pub fn kind(self) -> FaultKind {
         match self {
+            Route::AsBinary => FaultKind::AsBinary,
+            Route::AsJson => FaultKind::AsJson,
             Route::Checksum(_) => FaultKind::Checksum,
             Route::Count(_) => FaultKind::Count,
             Route::Cut(_) => FaultKind::Cut,
+            Route::Document(_) => FaultKind::Document,
+            Route::KindAsText | Route::Unmatched(_) => FaultKind::Unmatched,
             Route::Length(_) => FaultKind::Length,
+            Route::Locator(_) => FaultKind::Locator,
+            Route::Malformed(_) => FaultKind::Malformed,
             Route::Missing(_) => FaultKind::Missing,
             Route::More(_) => FaultKind::More,
             Route::OutOfRange(_) => FaultKind::OutOfRange,
             Route::SharedCount => FaultKind::SharedCount,
             Route::Text(_) => FaultKind::Text,
+            Route::Unbound => FaultKind::Unbound,
             Route::WrongType(_) => FaultKind::WrongType,
         }
     }
