@@ -1,10 +1,12 @@
 //! JSON documents as the testkit writes them (`spec/decoding.md` §2.3):
 //! a value tree, and a writer that spells each value any way JSON allows
 //! while keeping what a reader takes it for. An integer keeps being one
-//! (`42`, `42.0`, `4.2e1`, `420E-1`, each within ±(2^53 − 1)); a float
-//! reads back to the same double; a string's characters come raw or
-//! escaped, a character beyond the BMP as a surrogate pair; members come
-//! in any order, with any whitespace between tokens.
+//! (`42`, `42.0`, `4.2e1`, `420E-1`, or a 1 too far past the point for a
+//! double to keep, `42.00000000000000001`, whose nearest double is 42; each within
+//! ±(2^53 − 1)); a float reads back to the same double; a string's
+//! characters come raw or escaped, a character beyond the BMP as a
+//! surrogate pair; members come in any order, with any whitespace between
+//! tokens.
 //!
 //! The choices come from [`Spell`], a small generator seeded once per
 //! message, so the spellings needn't be drawn one by one as strategies.
@@ -128,8 +130,9 @@ fn value(doc: &Doc, spell: &mut Spell, out: &mut String) {
 }
 
 /// An integer as JSON: its digits, or within ±(2^53 − 1) also with a
-/// fraction of zeros or an exponent, which keep it an integer (§2.3). 0
-/// may be `-0`.
+/// fraction of zeros, an exponent, or a 1 at the 19th significant digit,
+/// which a double (about 17) drops: all keep it an integer (§2.3). 0 may
+/// be `-0`, or `1e-400`, whose nearest double is 0.
 pub(in crate::layout) fn integer(n: i128, spell: &mut Spell) -> String {
     let plain = n.to_string();
     if n.abs() > SAFE {
@@ -139,7 +142,7 @@ pub(in crate::layout) fn integer(n: i128, spell: &mut Spell) -> String {
     let digits = n.unsigned_abs().to_string();
     let e = if spell.chance(2) { "e" } else { "E" };
     let plus = if spell.chance(2) { "+" } else { "" };
-    match spell.pick(8) {
+    match spell.pick(9) {
         0..=2 => plain,
         3 => format!("{plain}.0"),
         4 => format!("{plain}.{}", "0".repeat(1 + spell.pick(3))),
@@ -155,19 +158,30 @@ pub(in crate::layout) fn integer(n: i128, spell: &mut Spell) -> String {
             }
         }
         _ if n == 0 => {
-            const ZEROS: [&str; 4] = ["-0", "0e0", "-0.0", "0.0E+5"];
+            const ZEROS: [&str; 6] = ["-0", "0e0", "-0.0", "0.0E+5", "1e-400", "-1e-400"];
             ZEROS[spell.pick(ZEROS.len())].to_string()
         }
         // A zero too many and a negative exponent: 4200e-1.
         6 => format!("{sign}{digits}0{e}-1"),
+        // 42.00000000000000001: a 1 at the 19th significant digit, which a
+        // double drops, so its nearest double is 42.
+        7 => format!(
+            "{plain}.{}1",
+            "0".repeat(18_usize.saturating_sub(digits.len()))
+        ),
         _ => plain,
     }
 }
 
 /// A finite double as JSON: Rust's shortest round-trip digits, plain or
 /// with an exponent. Negative zero is `-0`, `-0e0` or `-0E0`, which a float
-/// field reads as −0.0 (§5.3).
+/// field reads as −0.0 (§5.3); a zero may be a number too small for a
+/// double, `1e-400` or `-1e-400`, whose nearest double is that zero.
 pub(in crate::layout) fn float(x: f64, spell: &mut Spell) -> String {
+    if x == 0.0 && spell.chance(4) {
+        let sign = if x.is_sign_negative() { "-" } else { "" };
+        return format!("{sign}1e-400");
+    }
     match spell.pick(4) {
         0 | 1 => format!("{x}"),
         2 => format!("{x:e}"),

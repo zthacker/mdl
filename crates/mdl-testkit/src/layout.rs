@@ -22,7 +22,8 @@ use std::ops::{Range, RangeInclusive};
 use body::faults::{Short, Step};
 use body::{Body, BodySpec, PacketLength, Writer, body_spec, fixed_checks};
 pub use faults::{
-    Family, FaultKind, Garbling, Gone, Held, JsonKind, Place, Route, Tamper, Unfit, Wanted,
+    Family, FaultKind, Garbling, Gone, Held, JsonKind, Malformed, Place, Route, Tamper, Unfit,
+    Unusable, Wanted,
 };
 pub use fleet::{Fleet, Meta, Sent, fleet};
 pub use json::{json_damaged, json_telemetry};
@@ -62,10 +63,27 @@ pub struct Message {
     /// Its ground time, in nanoseconds since 1970-01-01T00:00:00Z.
     pub received: i128,
     pub event_time: EventTime,
+    /// The encoding it's delivered in: its family's, unless a fault
+    /// delivers it in the other.
+    pub encoding: Encoding,
     /// For a damaged message, what was done to it and the error decoding
     /// it gives. Its record, samples and event time are then those of the
     /// message before it was damaged.
     pub damage: Option<Damage>,
+}
+
+/// A payload's encoding (`spec/decoding.md` §1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Encoding {
+    Binary,
+    Json,
+}
+
+/// Which of a family's locators an error is about (§3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocatorRole {
+    Alias,
+    Version,
 }
 
 /// Faults planted in a message, and the error they give.
@@ -78,18 +96,20 @@ pub struct Damage {
     pub failure: Failure,
 }
 
-/// Why a message can't be decoded (`spec/decoding.md` §5, §9).
+/// Why a message can't be decoded (`spec/decoding.md` §3 to §5, §9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
     /// The path of the entry the error names, every index included
     /// (`cells[1].volts`). Padding has no path, so for padding it's its
-    /// container's, empty at a packet's top level; empty too for a packet
-    /// too short for its length, which names no entry.
+    /// container's, empty at a packet's top level; empty too for an error
+    /// that names no entry: a packet too short for its length, a JSON
+    /// document that isn't an object, and routing and identification.
     pub path: String,
     pub problem: Problem,
 }
 
-/// What went wrong at an entry, with what the error reports.
+/// What went wrong, with what the error reports: at an entry, or before
+/// any (`invalid_json` to `no_packet`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
     /// `past_end`: reading needs the packet's bits up to `needed_bits`,
@@ -129,6 +149,18 @@ pub enum Problem {
     /// is the number as MDL reports it: an integer literal within 64 bits
     /// as its digits, any other number as its double's canonical text.
     OutOfRange { signed: bool, value: String },
+    /// `wrong_encoding`: a family that reads `expected` payloads given one
+    /// in `given` (§3.3).
+    WrongEncoding { expected: Encoding, given: Encoding },
+    /// `invalid_json`: a payload that isn't JSON MDL reads (§2.3).
+    InvalidJson,
+    /// `unreadable_locator`: a locator that finds nothing usable (§3.1).
+    UnreadableLocator { role: LocatorRole },
+    /// `unknown_asset`: a native id no binding names at the message's
+    /// ground time (§3.3).
+    UnknownAsset,
+    /// `no_packet`: no packet of the set matches (§4).
+    NoPacket,
 }
 
 impl Problem {
@@ -144,6 +176,11 @@ impl Problem {
             Problem::Missing { .. } => "missing_value",
             Problem::WrongType { .. } => "wrong_type",
             Problem::OutOfRange { .. } => "out_of_range",
+            Problem::WrongEncoding { .. } => "wrong_encoding",
+            Problem::InvalidJson => "invalid_json",
+            Problem::UnreadableLocator { .. } => "unreadable_locator",
+            Problem::UnknownAsset => "unknown_asset",
+            Problem::NoPacket => "no_packet",
         }
     }
 }
@@ -1669,6 +1706,7 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
         samples,
         received,
         event_time,
+        encoding: Encoding::Binary,
         damage: None,
     }
 }

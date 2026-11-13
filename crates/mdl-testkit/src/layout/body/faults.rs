@@ -20,8 +20,8 @@ use crate::checksum::Algorithm;
 use crate::layout::faults::{FaultKind, Garbling, Held, Picks, Place, Route, Tamper, pick};
 use crate::layout::time::received;
 use crate::layout::{
-    Damage, Draft, Failure, Kind, Length, Message, PacketLayout, Problem, Raw, Text, TimeSource,
-    draft, encode, length_field, pack, write_message,
+    Damage, Draft, Encoding, Failure, Kind, Length, Message, PacketLayout, Problem, Raw, Text,
+    TimeSource, draft, encode, length_field, pack, write_message,
 };
 
 impl Garbling {
@@ -68,13 +68,20 @@ impl FaultKind {
     fn cuts(self) -> bool {
         match self {
             FaultKind::Cut | FaultKind::More => true,
-            FaultKind::Checksum
+            FaultKind::AsBinary
+            | FaultKind::AsJson
+            | FaultKind::Checksum
             | FaultKind::Count
+            | FaultKind::Document
             | FaultKind::Length
+            | FaultKind::Locator
+            | FaultKind::Malformed
             | FaultKind::Missing
             | FaultKind::OutOfRange
             | FaultKind::SharedCount
             | FaultKind::Text
+            | FaultKind::Unbound
+            | FaultKind::Unmatched
             | FaultKind::WrongType => false,
         }
     }
@@ -289,6 +296,9 @@ struct Plant {
 
 #[derive(Debug, Clone)]
 enum Change {
+    /// The message delivered as a JSON payload, which the family's
+    /// encoding is checked against before anything else (§3.3).
+    AsJson,
     /// The payload cut to this many bytes.
     Cut(usize),
     /// One more element in the array that runs to the end, the payload
@@ -336,15 +346,29 @@ fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks)
     }
     for attempt in attempts {
         let changes: Vec<&Change> = attempt.iter().map(|plant| &plant.change).collect();
-        let (payload, Outcome::Fails(failure, _)) =
-            apply(packet, time, &draft, &valid.payload, &changes)
-        else {
-            continue;
+        let as_json = attempt.iter().any(|plant| plant.route == Route::AsJson);
+        let (payload, outcome) = apply(packet, time, &draft, &valid.payload, &changes);
+        let failure = match outcome {
+            // Whatever else is planted.
+            _ if as_json => Failure {
+                path: String::new(),
+                problem: Problem::WrongEncoding {
+                    expected: Encoding::Binary,
+                    given: Encoding::Json,
+                },
+            },
+            Outcome::Fails(failure, _) => failure,
+            Outcome::Decodes | Outcome::Unknown => continue,
         };
         let routes: Vec<Route> = attempt.iter().map(|plant| plant.route).collect();
         let planted: Vec<&str> = attempt.iter().map(|plant| plant.planted.as_str()).collect();
         return Message {
             payload,
+            encoding: if as_json {
+                Encoding::Json
+            } else {
+                Encoding::Binary
+            },
             damage: Some(Damage {
                 routes,
                 planted: planted.join("; "),
@@ -385,6 +409,7 @@ fn apply(
             change => change,
         };
         match change {
+            Change::AsJson => {}
             Change::Cut(cut) => bytes = bytes.min(*cut),
             Change::More(cut) => {
                 let Some(room) = one_more(&packet.body.entries, &mut values) else {
@@ -491,7 +516,11 @@ fn plants(
     detail: &Index,
 ) -> Vec<Plant> {
     let length = valid.len();
-    let mut plants = Vec::new();
+    let mut plants = vec![Plant {
+        route: Route::AsJson,
+        change: Change::AsJson,
+        planted: "delivered as a JSON payload".to_string(),
+    }];
     let mut noise = draft.noise.clone();
     let written = write_message(packet, time, &draft.values, &mut noise, &draft.timing, None);
     // Every shorter length that fails.

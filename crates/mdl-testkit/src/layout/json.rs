@@ -26,9 +26,9 @@ use super::time::{
     time_scale, unit, week_value,
 };
 use super::{
-    FieldSpec, Kind, Length, Meaning, Message, Placed, Raw, Sample, Sentinel, Telemetry, Text,
-    interval, letters, meaning, meaning_json, offset_ns, param_json, raw_value, sentinels,
-    type_name,
+    Encoding, FieldSpec, Kind, Length, Meaning, Message, Placed, Raw, Sample, Sentinel, Telemetry,
+    Text, Unusable, interval, letters, meaning, meaning_json, offset_ns, param_json, raw_value,
+    sentinels, type_name,
 };
 use doc::{Doc, Spell};
 
@@ -92,8 +92,8 @@ enum Alias {
     Fixed,
     /// The string `A1` at `/sat`.
     Text,
-    /// The integer 17 at `/sat`, in any spelling of it: the native id
-    /// `17` (§3.2).
+    /// The integer 17 at `/sat`, in any spelling of it, or the text
+    /// `"17"`, which is that integer: the native id `17` (§3.2).
     Number,
 }
 
@@ -784,7 +784,7 @@ struct JsonDraft {
     /// gives.
     stamp: Option<(Stamp, EventTime)>,
     /// Whether a message of a packet with one key carries a `sub` no
-    /// packet has.
+    /// packet has, or one that can't be read (§4).
     stray: bool,
     fills: Vec<Fill>,
     received: i128,
@@ -1083,6 +1083,7 @@ fn pack(set: &JsonSet, index: usize, draft: &JsonDraft) -> Message {
         samples: samples(packet, draft),
         received: draft.received,
         event_time: event_time_of(set, packet, draft),
+        encoding: Encoding::Json,
         damage: None,
     }
 }
@@ -1094,6 +1095,9 @@ fn document(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft, spell: &mut S
     let mut members: Vec<(String, Doc)> = Vec::new();
     match set.alias {
         Alias::Text => members.push(("sat".into(), Doc::Str("A1".into()))),
+        Alias::Number if spell.pick(4) == 0 => {
+            members.push(("sat".into(), Doc::Str("17".into())));
+        }
         Alias::Number => members.push(("sat".into(), Doc::Int(17))),
         Alias::Fixed => {}
     }
@@ -1101,10 +1105,19 @@ fn document(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft, spell: &mut S
         members.push((name.clone(), key_doc(key)));
     }
     if packet.keys.is_empty() {
-        members.push(("kind".into(), Doc::Str("Z".into())));
+        members.extend(catch_all_kind(set, spell).map(|kind| ("kind".to_string(), kind)));
     }
     if packet.keys.len() == 1 && draft.stray {
-        members.push(("sub".into(), Doc::Int(STRAY)));
+        // A `sub` no packet has, or one that can't be read: the packet
+        // that nests on this one doesn't match, so this one does (§4).
+        let sub = match spell.pick(2) {
+            0 => Doc::Int(STRAY),
+            _ => {
+                let unusable = UNREADABLE[spell.pick(UNREADABLE.len())];
+                unusable.value().unwrap_or(Doc::Int(STRAY))
+            }
+        };
+        members.push(("sub".into(), sub));
     }
     match &draft.stamp {
         Some((Stamp::Text(text), _)) => members.push(("t".into(), Doc::Str(text.clone()))),
@@ -1119,6 +1132,7 @@ fn document(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft, spell: &mut S
     }
     members.extend(members_of(&packet.entries, &draft.fills, spell));
     extras(&mut members, spell);
+    edges(&mut members, spell);
     spell.shuffle(&mut members);
     Doc::Object(members)
 }
@@ -1127,6 +1141,56 @@ fn key_doc(key: &Key) -> Doc {
     match key {
         Key::Text(text) => Doc::Str(text.clone()),
         Key::Int(n) => Doc::Int(i128::from(*n)),
+    }
+}
+
+/// What a value of a key or locator that can't be read is (§3.1, §4),
+/// each kind but nothing there.
+const UNREADABLE: [Unusable; 7] = [
+    Unusable::Array,
+    Unusable::Bool,
+    Unusable::Fraction,
+    Unusable::Large,
+    Unusable::Null,
+    Unusable::Object,
+    Unusable::Wide,
+];
+
+impl Unusable {
+    /// What a member holds for it; `None` for nothing there.
+    fn value(self) -> Option<Doc> {
+        Some(match self {
+            Unusable::Array => Doc::Array(vec![Doc::Int(7)]),
+            Unusable::Bool => Doc::Bool(true),
+            Unusable::Fraction => Doc::Literal("1.5".into()),
+            Unusable::Gone => return None,
+            Unusable::Large => Doc::Literal("1e20".into()),
+            Unusable::Null => Doc::Null,
+            Unusable::Object => Doc::Object(vec![("v".into(), Doc::Int(7))]),
+            Unusable::Wide => Doc::Literal("18446744073709551616".into()),
+        })
+    }
+}
+
+/// What a catch-all's message holds at `/kind`, if anything: a kind no
+/// packet has, a value that can't be read, or a numbered packet's kind
+/// written as text, which a pointer compares exactly (§3.2). None of
+/// them matches a keyed packet, so the catch-all is the message's (§4).
+fn catch_all_kind(set: &JsonSet, spell: &mut Spell) -> Option<Doc> {
+    let numbered = set
+        .packets
+        .iter()
+        .find_map(|packet| match packet.keys.first() {
+            Some((_, Key::Int(n))) => Some(*n),
+            _ => None,
+        });
+    match spell.pick(4) {
+        0 => UNREADABLE[spell.pick(UNREADABLE.len())].value(),
+        1 => None,
+        2 => numbered.map_or(Some(Doc::Str("Z".into())), |n| {
+            Some(Doc::Str(n.to_string()))
+        }),
+        _ => Some(Doc::Str("Z".into())),
     }
 }
 
@@ -1202,6 +1266,58 @@ fn extras(members: &mut Vec<(String, Doc)>, spell: &mut Spell) {
         };
         members.push((format!("x{k}"), value));
     }
+}
+
+/// Now and then a document's member no entry reads that §2.3 accepts, at
+/// its edges: nesting 127 deep, the document being the first level; names
+/// alike but not equal, `é` composed and not; noncharacters; numbers
+/// whose nearest double is 0; the empty name; NUL and U+2028 in a string.
+fn edges(members: &mut Vec<(String, Doc)>, spell: &mut Spell) {
+    if spell.pick(8) == 0 {
+        members.push(("deep".into(), nested(DEEPEST - 1, spell.pick(2) == 0)));
+    }
+    if spell.pick(8) == 0 {
+        let alike = ["a", "A", "a ", "\u{e9}", "e\u{301}"];
+        let members_alike = alike
+            .iter()
+            .enumerate()
+            .map(|(k, name)| (name.to_string(), Doc::Int(k as i128)))
+            .collect();
+        members.push(("alike".into(), Doc::Object(members_alike)));
+    }
+    if spell.pick(8) == 0 {
+        members.push((
+            "\u{fdd0}x\u{ffff}".into(),
+            Doc::Str("\u{1fffe}\u{10ffff}".into()),
+        ));
+    }
+    if spell.pick(8) == 0 {
+        members.push(("tiny".into(), Doc::Literal("1e-400".into())));
+    }
+    // The empty name, which `/` points at; NUL (escaped) and U+2028 in a
+    // string; a zero with a huge exponent, which is 0.
+    if spell.pick(8) == 0 {
+        members.push((String::new(), Doc::Str("\u{0}\u{2028}".into())));
+    }
+    if spell.pick(8) == 0 {
+        members.push(("zero".into(), Doc::Literal("0e999999999".into())));
+    }
+}
+
+/// The deepest arrays and objects nest that MDL reads (§2.3).
+const DEEPEST: usize = 127;
+
+/// Arrays, or objects, nested `levels` deep.
+fn nested(levels: usize, objects: bool) -> Doc {
+    let mut doc = Doc::Int(1);
+    for _ in 0..levels {
+        doc = if objects {
+            Doc::Object(vec![("n".into(), doc)])
+        } else {
+            Doc::Array(vec![doc])
+        };
+    }
+    doc
 }
 
 /// The record a message decodes to: its time fields, `kind` where a field

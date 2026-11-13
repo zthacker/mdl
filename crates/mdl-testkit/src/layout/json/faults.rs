@@ -1,23 +1,33 @@
 //! Faults planted in valid JSON messages, and the error each gives
-//! (`spec/decoding.md` §5.3, §9): a required member gone, a value of
-//! another kind than its entry takes, a number an integer field can't
-//! take. Decoding reads a packet's entries in order, a struct's or a
-//! record's entries inside it, and stops at the first that fails (§3.3),
-//! so of two faults the error is the one whose entry it reads first,
+//! (`spec/decoding.md` §2.3 to §5.3, §9). Before any entry: the message
+//! delivered as a binary payload, a payload that isn't JSON MDL reads
+//! (`malformed.rs`), a `path` alias that can't be read or names no bound
+//! asset, a `kind` no packet matches, a document that isn't an object.
+//! Then at entries: a required member gone, a value of another kind than
+//! its entry takes, a number an integer field can't take.
+//!
+//! The checks run in §3.3's order, then decoding reads a packet's entries
+//! in order, a struct's or a record's entries inside it, and stops at the
+//! first that fails, so of two faults the error is the one met first,
 //! whatever order the document's members are in. Extraction comes before
 //! the event time, so a fault is the error even where `/t` can't be read.
+
+mod malformed;
 
 use proptest::prelude::*;
 use proptest::sample::Index;
 
 use super::doc::{self, Doc, Spell};
 use super::{
-    Element, Fill, JsonDraft, JsonElement, JsonEntry, JsonNode, JsonSet, JsonTime, document, draft,
-    pack, pointer,
+    Alias, Element, Fill, JsonDraft, JsonElement, JsonEntry, JsonNode, JsonPacket, JsonSet,
+    JsonTime, Key, document, draft, pack, pointer,
 };
-use crate::layout::faults::{Gone, JsonKind, Picks, Route, Unfit, Wanted, pick};
+use crate::layout::faults::{
+    FaultKind, Gone, JsonKind, Malformed, Picks, Route, Unfit, Unusable, Wanted, pick,
+};
 use crate::layout::time::{Count, TimeSource};
-use crate::layout::{Damage, Failure, Kind, Message, Problem};
+use crate::layout::{Damage, Encoding, Failure, Kind, LocatorRole, Message, Problem};
+use malformed::TextEdit;
 
 impl Unfit {
     /// A number of this kind a field takes none of, signed or not.
@@ -116,18 +126,42 @@ pub(super) fn damaged_message(set: JsonSet, index: usize) -> BoxedStrategy<Messa
 struct Plant {
     route: Route,
     edit: Edit,
-    /// How many entries and elements decoding reads before its own.
+    /// Where decoding meets it: a check before any entry (§3.3), or after
+    /// them, how many entries and elements decoding reads before its own.
     at: usize,
     failure: Failure,
     planted: String,
 }
 
+/// Where decoding meets each fault before any entry, in §3.3's order: the
+/// encoding, the parse (the alias reads the document, or decoding parses
+/// it first), the alias, the asset, identification, then the document as
+/// the packet's container. Entries come after. With a fixed alias the
+/// parse comes after the asset and set checks, which nothing here fails:
+/// this oracle's one asset is always bound.
+const ENCODING: usize = 0;
+const PARSE: usize = 1;
+const ALIAS: usize = 2;
+const ASSET: usize = 3;
+const IDENTIFY: usize = 4;
+const CONTAINER: usize = 5;
+const ENTRIES: usize = 6;
+
 #[derive(Debug, Clone)]
 enum Edit {
     /// The member at this place removed.
     Remove(Vec<Step>),
-    /// The value at this place replaced.
+    /// The value at this place replaced; with no steps, the document.
     Replace(Vec<Step>, Doc),
+    /// A member added to the document.
+    Add(String, Doc),
+    /// One of the document's members, by its position (wrapping), added
+    /// again; two members of one name if it has none.
+    Twice(usize),
+    /// The written text changed.
+    Text(TextEdit),
+    /// The message delivered as a binary payload.
+    AsBinary,
 }
 
 /// A step into a document: a member's name, or an element's index.
@@ -159,6 +193,27 @@ impl Edit {
                 }
                 None => false,
             },
+            Edit::Add(name, value) => match document {
+                Doc::Object(members) => {
+                    members.push((name.clone(), value.clone()));
+                    true
+                }
+                _ => false,
+            },
+            Edit::Twice(position) => match document {
+                Doc::Object(members) if members.is_empty() => {
+                    members.push(("d".into(), Doc::Int(1)));
+                    members.push(("d".into(), Doc::Int(2)));
+                    true
+                }
+                Doc::Object(members) => {
+                    let (name, _) = members[position % members.len()].clone();
+                    members.insert(position % (members.len() + 1), (name, Doc::Int(0)));
+                    true
+                }
+                _ => false,
+            },
+            Edit::Text(_) | Edit::AsBinary => true,
         }
     }
 }
@@ -185,12 +240,15 @@ fn damage(set: &JsonSet, index: usize, draft: &JsonDraft, picks: &Picks) -> Mess
     let Some(first) = pick(&plants, |plant| plant.route, |_| true, &picks.first) else {
         return valid;
     };
-    // A second fault of another kind, at another entry.
+    // A second fault of another kind, met elsewhere.
     let kind = first.route.kind();
     let second = picks
         .second
         .as_ref()
-        .and_then(|second| pick(&plants, |plant| plant.route, |other| other != kind, second))
+        .and_then(|second| {
+            let allowed = |other| other != kind && !conflict(kind, other);
+            pick(&plants, |plant| plant.route, allowed, second)
+        })
         .filter(|second| second.at != first.at);
     let chosen: Vec<&Plant> = std::iter::once(first).chain(second).collect();
     let Some(failing) = chosen.iter().min_by_key(|plant| plant.at) else {
@@ -198,21 +256,37 @@ fn damage(set: &JsonSet, index: usize, draft: &JsonDraft, picks: &Picks) -> Mess
     };
     let mut spell = Spell::new(draft.seed);
     let mut document = document(set, &set.packets[index], draft, &mut spell);
-    if !failing.edit.apply(&mut document) {
-        return valid;
-    }
-    // A later fault is the error only where nothing before it fails; one
-    // inside what the first removes isn't there to make.
+    // The fault met later goes in first, so the one met first is made
+    // whatever the later one changed: a member put in twice stays twice
+    // where the later fault removes that member. A later fault inside
+    // what the first removes is then gone with it.
     for plant in &chosen {
         if plant.at != failing.at {
             plant.edit.apply(&mut document);
         }
     }
-    let payload = doc::write(&document, &mut spell).into_bytes();
+    if !failing.edit.apply(&mut document) {
+        return valid;
+    }
+    let mut payload = doc::write(&document, &mut spell).into_bytes();
+    let empty = matches!(&document, Doc::Object(members) if members.is_empty());
+    for plant in &chosen {
+        if let Edit::Text(edit) = &plant.edit {
+            payload = edit.apply(payload, empty);
+        }
+    }
+    let as_binary = chosen
+        .iter()
+        .any(|plant| matches!(plant.edit, Edit::AsBinary));
     let routes = chosen.iter().map(|plant| plant.route).collect();
     let planted: Vec<&str> = chosen.iter().map(|plant| plant.planted.as_str()).collect();
     Message {
         payload,
+        encoding: if as_binary {
+            Encoding::Binary
+        } else {
+            Encoding::Json
+        },
         damage: Some(Damage {
             routes,
             planted: planted.join("; "),
@@ -222,14 +296,25 @@ fn damage(set: &JsonSet, index: usize, draft: &JsonDraft, picks: &Picks) -> Mess
     }
 }
 
-/// Every fault the message can be given, for each entry and element in
-/// the order decoding reads them: its time fields, `kind` (a key, never
-/// damaged: a message that matched no packet would be another error),
-/// then its entries.
+/// Whether faults of two kinds can't be planted together: a document that
+/// isn't an object leaves nothing for another fault to change, and both
+/// alias faults change the alias's member.
+fn conflict(a: FaultKind, b: FaultKind) -> bool {
+    let both = |x, y| (a == x && b == y) || (a == y && b == x);
+    a == FaultKind::Document
+        || b == FaultKind::Document
+        || both(FaultKind::Locator, FaultKind::Unbound)
+}
+
+/// Every fault the message can be given: those met before any entry, in
+/// §3.3's order, then for each entry and element in the order decoding
+/// reads them: its time fields, `kind` (a key, damaged only before any
+/// entry, as one no packet matches), then its entries.
 fn plants(set: &JsonSet, index: usize, draft: &JsonDraft, detail: &Index) -> Vec<Plant> {
     let packet = &set.packets[index];
+    let mut plants = whole_message(set, packet, detail);
     let mut walk = Walk {
-        at: 0,
+        at: ENTRIES,
         detail,
         plants: Vec::new(),
     };
@@ -248,7 +333,135 @@ fn plants(set: &JsonSet, index: usize, draft: &JsonDraft, detail: &Index) -> Vec
         walk.next();
     }
     walk.entries(&packet.entries, &draft.fills, &[], "");
-    walk.plants
+    plants.append(&mut walk.plants);
+    plants
+}
+
+/// The faults met before any entry (§3.3): the encoding, the parse
+/// (§2.3), a `path` alias that can't be read or names no bound asset,
+/// a `kind` no packet matches (where there's no catch-all to match
+/// instead), and a document that isn't an object.
+fn whole_message(set: &JsonSet, packet: &JsonPacket, detail: &Index) -> Vec<Plant> {
+    let failure = |problem| Failure {
+        path: String::new(),
+        problem,
+    };
+    let member = |name: &str, value: Option<Doc>| {
+        let steps = vec![Step::Member(name.to_string())];
+        match value {
+            Some(value) => Edit::Replace(steps, value),
+            None => Edit::Remove(steps),
+        }
+    };
+    let mut plants = vec![Plant {
+        route: Route::AsBinary,
+        edit: Edit::AsBinary,
+        at: ENCODING,
+        failure: failure(Problem::WrongEncoding {
+            expected: Encoding::Json,
+            given: Encoding::Binary,
+        }),
+        planted: "delivered as a binary payload".to_string(),
+    }];
+    for malformed in Malformed::ALL {
+        let (edit, planted) = malformed::plant(malformed, detail);
+        plants.push(Plant {
+            route: Route::Malformed(malformed),
+            edit,
+            at: PARSE,
+            failure: failure(Problem::InvalidJson),
+            planted,
+        });
+    }
+    let unreadable_alias = failure(Problem::UnreadableLocator {
+        role: LocatorRole::Alias,
+    });
+    if set.alias != Alias::Fixed {
+        for unusable in Unusable::ALL {
+            plants.push(Plant {
+                route: Route::Locator(unusable),
+                edit: member("sat", unusable.value()),
+                at: ALIAS,
+                failure: unreadable_alias.clone(),
+                planted: format!("{unusable:?} at the alias's /sat"),
+            });
+        }
+        // Text no binding names: not the integer's one spelling (§3.2),
+        // or another text or integer than the bound one.
+        let text = |texts: [&str; 4]| texts.map(|text| Doc::Str(text.to_string())).to_vec();
+        let mut strangers = match set.alias {
+            Alias::Number => text(["017", "+17", "17 ", "17.0"]),
+            _ => text(["a1", "A1 ", " A1", "A01"]),
+        };
+        strangers.push(Doc::Int(if set.alias == Alias::Number { 18 } else { 17 }));
+        let stranger = strangers[detail.index(strangers.len())].clone();
+        plants.push(Plant {
+            route: Route::Unbound,
+            planted: format!("{stranger:?} at the alias's /sat"),
+            edit: member("sat", Some(stranger)),
+            at: ASSET,
+            failure: failure(Problem::UnknownAsset),
+        });
+    }
+    let catch_all = set.packets.iter().any(|packet| packet.keys.is_empty());
+    if !catch_all && !packet.keys.is_empty() {
+        for unusable in Unusable::ALL {
+            plants.push(Plant {
+                route: Route::Unmatched(unusable),
+                edit: member("kind", unusable.value()),
+                at: IDENTIFY,
+                failure: failure(Problem::NoPacket),
+                planted: format!("{unusable:?} at /kind"),
+            });
+        }
+        if let Some((_, Key::Int(n))) = packet.keys.first() {
+            plants.push(Plant {
+                route: Route::KindAsText,
+                edit: member("kind", Some(Doc::Str(n.to_string()))),
+                at: IDENTIFY,
+                failure: failure(Problem::NoPacket),
+                planted: format!("the kind {n} written as text"),
+            });
+        }
+    }
+    // Neither `/sat` nor `/kind` finds anything in a document that isn't
+    // an object, so the alias can't be read, or no keyed packet matches;
+    // a catch-all is the message's, and then the document is `wrong_type`
+    // (§5.3).
+    for kind in [
+        JsonKind::Array,
+        JsonKind::Bool,
+        JsonKind::Null,
+        JsonKind::Number,
+        JsonKind::String,
+    ] {
+        let (at, problem) = if set.alias != Alias::Fixed {
+            (
+                ALIAS,
+                Problem::UnreadableLocator {
+                    role: LocatorRole::Alias,
+                },
+            )
+        } else if catch_all {
+            (
+                CONTAINER,
+                Problem::WrongType {
+                    expected: JsonKind::Object,
+                    found: kind,
+                },
+            )
+        } else {
+            (IDENTIFY, Problem::NoPacket)
+        };
+        plants.push(Plant {
+            route: Route::Document(kind),
+            edit: Edit::Replace(Vec::new(), kind.value()),
+            at,
+            failure: failure(problem),
+            planted: format!("the document {kind:?}"),
+        });
+    }
+    plants
 }
 
 /// Walks a message's entries in the order decoding reads them, noting the
