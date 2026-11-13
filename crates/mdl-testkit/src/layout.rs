@@ -19,10 +19,13 @@
 use std::collections::BTreeSet;
 use std::ops::{Range, RangeInclusive};
 
-pub use body::faults::{FaultKind, Garbling, Held, Place, Route, Tamper};
 use body::faults::{Short, Step};
 use body::{Body, BodySpec, PacketLength, Writer, body_spec, fixed_checks};
+pub use faults::{
+    Family, FaultKind, Garbling, Gone, Held, JsonKind, Place, Route, Tamper, Unfit, Wanted,
+};
 pub use fleet::{Fleet, Meta, Sent, fleet};
+pub use json::{json_damaged, json_telemetry};
 use meaning::{UNIT_GROUPS, convert, convert_unit, table};
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
@@ -30,8 +33,8 @@ use proptest::sample::select;
 use serde_json::{Map, Value, json};
 pub use time::EventTime;
 use time::{
-    Count, SECOND, TimeFields, TimeSource, count_value, epoch, event_time, near_leap, received,
-    time_fields, time_json, time_scale, time_source, to_utc, unit, week_value,
+    Count, SECOND, TimeFields, TimeSource, count_value, epoch, event_time, near_leap, no_reading,
+    received, time_fields, time_json, time_scale, time_source, to_utc, unit, week_value,
 };
 pub(crate) use time::{instant_text, label};
 
@@ -87,7 +90,7 @@ pub struct Failure {
 }
 
 /// What went wrong at an entry, with what the error reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Problem {
     /// `past_end`: reading needs the packet's bits up to `needed_bits`,
     /// but it has `available_bits`. `padding` when what runs past is
@@ -115,6 +118,15 @@ pub enum Problem {
     /// doesn't accept for the bytes it covers, whose value is `computed`
     /// (§5.6).
     BadChecksum { stored: u64, computed: u64 },
+    /// `missing_value`: nothing, or `null`, at a required JSON entry's
+    /// `pointer` (§5.3).
+    Missing { pointer: String },
+    /// `wrong_type`: a JSON entry that takes `wanted` found a value of
+    /// another kind (§5.3).
+    WrongType { wanted: Wanted, found: JsonKind },
+    /// `out_of_range`: a number that isn't an integer (§2.3) in the
+    /// range of a `uint` field, or of an `int` one when `signed`.
+    OutOfRange { signed: bool },
 }
 
 impl Problem {
@@ -127,6 +139,9 @@ impl Problem {
             Problem::BadLength { .. } => "bad_length",
             Problem::TooShort { .. } => "too_short",
             Problem::BadChecksum { .. } => "bad_checksum",
+            Problem::Missing { .. } => "missing_value",
+            Problem::WrongType { .. } => "wrong_type",
+            Problem::OutOfRange { .. } => "out_of_range",
         }
     }
 }
@@ -146,6 +161,9 @@ pub enum Raw {
     Array(Vec<Raw>),
     /// A record: each of its fields' raw values, by name, in order.
     Record(Vec<(String, Raw)>),
+    /// No reading: a `null` element of a JSON array, which keeps its
+    /// position (§5.3).
+    Null,
 }
 
 /// A sample (`spec/decoding.md` §7.3).
@@ -200,6 +218,7 @@ impl PartialEq for Raw {
             (Raw::Bytes(a), Raw::Bytes(b)) => a == b,
             (Raw::Array(a), Raw::Array(b)) => a == b,
             (Raw::Record(a), Raw::Record(b)) => a == b,
+            (Raw::Null, Raw::Null) => true,
             _ => false,
         }
     }
@@ -702,6 +721,17 @@ fn number_in(
         .boxed()
 }
 
+/// The time between a block's samples, in milliseconds: some at half a
+/// nanosecond's tie (2.5e-6 puts element 1 at 2.5 ns, which rounds to 3),
+/// and any from a microsecond to ten seconds.
+fn interval() -> BoxedStrategy<f64> {
+    prop_oneof![
+        1 => select(&[5e-7, 1.5e-6, 2.5e-6, 0.125, 1.0, 1000.0 / 3.0][..]),
+        2 => 1e-3..1e4_f64,
+    ]
+    .boxed()
+}
+
 /// A field's unit and its param's, of one dimension (maybe the same code).
 fn units() -> BoxedStrategy<(&'static str, &'static str)> {
     select(UNIT_GROUPS)
@@ -1008,15 +1038,7 @@ fn field_json(field: &Placed) -> Value {
 /// length, byte order, text, conversion, unit and sentinels.
 fn scalar_json(field: &Placed) -> Map<String, Value> {
     let mut json = Map::new();
-    let ty = match field.kind {
-        Kind::Uint(_) => "uint",
-        Kind::Int(_) => "int",
-        Kind::Float(_) => "float",
-        Kind::Bool => "bool",
-        Kind::Text { .. } => "string",
-        Kind::Bytes(_) => "bytes",
-    };
-    json.insert("type".into(), json!(ty));
+    json.insert("type".into(), json!(type_name(&field.kind)));
     match &field.kind {
         Kind::Uint(bits) | Kind::Int(bits) | Kind::Float(bits) => {
             json.insert("size_bits".into(), json!(bits));
@@ -1041,6 +1063,25 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
             json!(if field.little { "little" } else { "big" }),
         );
     }
+    meaning_json(field, &mut json);
+    json
+}
+
+/// A field type's name, as the IR spells it.
+fn type_name(kind: &Kind) -> &'static str {
+    match kind {
+        Kind::Uint(_) => "uint",
+        Kind::Int(_) => "int",
+        Kind::Float(_) => "float",
+        Kind::Bool => "bool",
+        Kind::Text { .. } => "string",
+        Kind::Bytes(_) => "bytes",
+    }
+}
+
+/// What a field means, as IR JSON keys: its conversion, unit and
+/// sentinels, whatever encoding it's read from.
+fn meaning_json(field: &Placed, json: &mut Map<String, Value>) {
     match &field.meaning {
         Meaning::States(states) => {
             let states: Vec<Value> = states
@@ -1073,7 +1114,6 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
             .collect();
         json.insert("invalid".into(), json!(invalid));
     }
-    json
 }
 
 /// A length as IR JSON. A length field is named after the entry it serves
@@ -1162,6 +1202,13 @@ fn param_json(meaning: &Meaning) -> Value {
             None => json!({ "type": "f64" }),
         },
     }
+}
+
+/// How long after the packet's event time element `position` of a block
+/// was taken, in whole nanoseconds: `round(i × interval_ms × 1000000)` in
+/// binary64, left to right, ties away from zero (§7.3).
+fn offset_ns(position: u64, interval_ms: f64) -> i64 {
+    (position as f64 * interval_ms * 1_000_000.0).round() as i64
 }
 
 /// An integer as the IR writes it: a number within ±(2^53 - 1), else a
@@ -1594,18 +1641,14 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
         received,
         ..
     } = timing;
-    // A count or a week holding a sentinel has no reading: ground time.
-    let sentinel = count.as_ref().is_some_and(|raw| {
-        packet.count_invalid.iter().any(|n| match raw {
-            Raw::Uint(m) => i128::from(*m) == *n,
-            Raw::Int(m) => i128::from(*m) == *n,
-            Raw::Float(x) => *x == *n as f64,
-            _ => false,
-        })
-    }) || (matches!(time, TimeSource::Gps { .. })
-        && count.is_some()
-        && packet.week_invalid.contains(&u64::from(week)));
     let start = time_start(&packet.header);
+    let sentinel = no_reading(
+        time,
+        count.as_ref(),
+        week,
+        &packet.count_invalid,
+        &packet.week_invalid,
+    );
     let event_time = if sentinel {
         EventTime::Ground
     } else {
@@ -1785,7 +1828,10 @@ fn assemble(
 
 mod body;
 pub mod command;
+mod condition;
+mod faults;
 mod fleet;
+mod json;
 mod meaning;
 #[cfg(test)]
 mod reference;

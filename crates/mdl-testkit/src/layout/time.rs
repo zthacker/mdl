@@ -615,6 +615,115 @@ pub(super) fn time_json(time: &TimeSource, cuc_offset: u64) -> Option<Value> {
     })
 }
 
+/// Whether a packet's time fields hold a sentinel (§7.2): its count, or a
+/// GPS week beside a count. Then it has no reading, and ground time.
+pub(super) fn no_reading(
+    time: &TimeSource,
+    count: Option<&Raw>,
+    week: u16,
+    count_invalid: &[i128],
+    week_invalid: &[u64],
+) -> bool {
+    let count_sentinel = count.is_some_and(|raw| {
+        count_invalid.iter().any(|n| match raw {
+            Raw::Uint(m) => i128::from(*m) == *n,
+            Raw::Int(m) => i128::from(*m) == *n,
+            Raw::Float(x) => *x == *n as f64,
+            _ => false,
+        })
+    });
+    let week_sentinel = matches!(time, TimeSource::Gps { .. })
+        && count.is_some()
+        && week_invalid.contains(&u64::from(week));
+    count_sentinel || week_sentinel
+}
+
+/// How an RFC 3339 instant is written (§8).
+#[derive(Debug, Clone)]
+pub(super) struct Rfc3339 {
+    /// The UTC offset, in minutes: −23:59 to +23:59.
+    pub(super) offset: i32,
+    /// `T`, `t` or a space.
+    pub(super) separator: char,
+    /// For an offset of 0: `Z`, `z`, or `+00:00`.
+    pub(super) zone: usize,
+    /// Fraction digits, 0 to 12; past nine, digits reading drops.
+    pub(super) digits: usize,
+    /// Whether the minute's second 59 is written as 60, which reads as its
+    /// last nanosecond.
+    pub(super) leap: bool,
+}
+
+/// Any way §8 lets an RFC 3339 instant be written.
+pub(super) fn rfc3339_form() -> BoxedStrategy<Rfc3339> {
+    (
+        prop_oneof![
+            3 => Just(0_i32),
+            2 => -1439_i32..=1439,
+            1 => select(&[-1439_i32, 1439, -60, 60, 330, -570][..]),
+        ],
+        select(&['T', 't', ' '][..]),
+        0_usize..3,
+        prop_oneof![3 => Just(0_usize), 3 => 1_usize..=9, 1 => 10_usize..=12],
+        proptest::bool::weighted(0.1),
+    )
+        .prop_map(|(offset, separator, zone, digits, leap)| Rfc3339 {
+            offset,
+            separator,
+            zone,
+            digits,
+            leap,
+        })
+        .boxed()
+}
+
+/// `unix` (nanoseconds) written as `form` says, and the instant the text
+/// reads as (§8): its fraction cut to the digits written, and a second of
+/// 60 the last nanosecond of second 59, whatever its fraction. `None`
+/// where the local date isn't in years 0000 to 9999, which four digits
+/// write.
+pub(super) fn rfc3339(unix: i128, form: &Rfc3339) -> Option<(String, i128)> {
+    let offset = i128::from(form.offset) * 60 * SECOND;
+    let local = unix + offset;
+    let seconds = local.div_euclid(SECOND);
+    let nanos = local.rem_euclid(SECOND);
+    let (year, month, day) = civil_from_days(i64::try_from(seconds.div_euclid(86_400)).ok()?);
+    if !(0..=9999).contains(&year) {
+        return None;
+    }
+    let of_day = seconds.rem_euclid(86_400);
+    let (hour, minute, second) = (of_day / 3600, of_day % 3600 / 60, of_day % 60);
+    let minute_start = local - second * SECOND - nanos;
+    let (second, read) = if form.leap {
+        (60, minute_start + 60 * SECOND - 1 - offset)
+    } else {
+        let cut = 10_i128.pow(9_u32.saturating_sub(form.digits as u32));
+        (second, local - nanos % cut - offset)
+    };
+    let mut fraction = String::new();
+    if form.digits > 0 {
+        let digits = format!("{nanos:09}");
+        fraction.push('.');
+        fraction.push_str(&digits[..form.digits.min(9)]);
+        for k in 9..form.digits {
+            fraction.push(char::from(b'0' + ((nanos + k as i128) % 10) as u8));
+        }
+    }
+    let zone = match (form.offset, form.zone) {
+        (0, 0) => "Z".to_string(),
+        (0, 1) => "z".to_string(),
+        (offset, _) => {
+            let sign = if offset < 0 { '-' } else { '+' };
+            format!("{sign}{:02}:{:02}", offset.abs() / 60, offset.abs() % 60)
+        }
+    };
+    let separator = form.separator;
+    let text = format!(
+        "{year:04}-{month:02}-{day:02}{separator}{hour:02}:{minute:02}:{second:02}{fraction}{zone}"
+    );
+    Some((text, read))
+}
+
 /// A packet's event time (§8, §8.1); `payload` starts where its time
 /// fields do.
 pub(super) fn event_time(

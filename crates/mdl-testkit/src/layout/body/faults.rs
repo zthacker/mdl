@@ -17,137 +17,14 @@ use proptest::sample::Index;
 
 use super::{Bound, Counted, ElementNode, Entry, Node, element_bits, fixed_checks, present};
 use crate::checksum::Algorithm;
+use crate::layout::faults::{FaultKind, Garbling, Held, Picks, Place, Route, Tamper, pick};
 use crate::layout::time::received;
 use crate::layout::{
     Damage, Draft, Failure, Kind, Length, Message, PacketLayout, Problem, Raw, Text, TimeSource,
     draft, encode, length_field, pack, write_message,
 };
 
-/// A kind of fault, as faults are picked: a kind first, each as likely as
-/// the others. The variants are in the order picking sorts them in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FaultKind {
-    /// A checksum's value, or what it covers, not matching ([`Tamper`]).
-    Checksum,
-    /// A count field holding a count below 0, or its largest.
-    Count,
-    /// The payload cut short.
-    Cut,
-    /// A length field holding a length below 0, or its largest.
-    Length,
-    /// Part of one more element after an array that runs to the end.
-    More,
-    /// A count field shared by arrays, holding a count the first can have
-    /// and a later one can't.
-    SharedCount,
-    /// A string's bytes that aren't text in its encoding.
-    Text,
-}
-
-impl FaultKind {
-    pub const ALL: [FaultKind; 7] = [
-        FaultKind::Checksum,
-        FaultKind::Count,
-        FaultKind::Cut,
-        FaultKind::Length,
-        FaultKind::More,
-        FaultKind::SharedCount,
-        FaultKind::Text,
-    ];
-
-    /// Whether faults of the kind give the payload its length. Of two
-    /// faults planted together, at most one does.
-    fn cuts(self) -> bool {
-        match self {
-            FaultKind::Cut | FaultKind::More => true,
-            FaultKind::Checksum
-            | FaultKind::Count
-            | FaultKind::Length
-            | FaultKind::SharedCount
-            | FaultKind::Text => false,
-        }
-    }
-}
-
-/// What a step reads, and so where a payload that ends too soon fails. The
-/// variants are in the order picking sorts them in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Place {
-    /// An array's count, checked as `count × size` (§5.5).
-    Array,
-    /// An array's count, checked a bit per element.
-    ArrayBitEach,
-    /// A checksum's value.
-    Checksum,
-    /// A scalar element.
-    Element,
-    /// A field, at the top level or in a struct.
-    Field,
-    /// A header or time field.
-    Header,
-    /// The packet's `length`, which a shorter payload is `too_short` for,
-    /// before any entry is read (§5.1).
-    Length,
-    /// Padding at a packet's top level.
-    Padding,
-    /// Padding in a struct entry.
-    PaddingInStruct,
-    /// Padding in an array's element.
-    PaddingInElement,
-    /// A value up to a terminator.
-    Terminator,
-    /// A CUC time code, padding to decoding.
-    TimeCode,
-}
-
-impl Place {
-    pub const ALL: [Place; 12] = [
-        Place::Array,
-        Place::ArrayBitEach,
-        Place::Checksum,
-        Place::Element,
-        Place::Field,
-        Place::Header,
-        Place::Length,
-        Place::Padding,
-        Place::PaddingInStruct,
-        Place::PaddingInElement,
-        Place::Terminator,
-        Place::TimeCode,
-    ];
-}
-
-/// Bytes that aren't text in an encoding. The variants are in the order
-/// picking sorts them in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Garbling {
-    /// A UTF-8 sequence cut off by the value's end.
-    CutOff,
-    /// An ASCII byte of 0x80 or more.
-    High,
-    /// A byte UTF-8 never has.
-    Never,
-    /// An overlong UTF-8 form.
-    Overlong,
-    /// A UTF-8 code point past U+10FFFF.
-    PastMax,
-    /// A stray UTF-8 continuation byte.
-    Stray,
-    /// A UTF-8 surrogate.
-    Surrogate,
-}
-
 impl Garbling {
-    pub const ALL: [Garbling; 7] = [
-        Garbling::CutOff,
-        Garbling::High,
-        Garbling::Never,
-        Garbling::Overlong,
-        Garbling::PastMax,
-        Garbling::Stray,
-        Garbling::Surrogate,
-    ];
-
     /// Its name, for a failing case's report.
     fn name(self) -> &'static str {
         match self {
@@ -174,17 +51,7 @@ impl Garbling {
     }
 }
 
-/// What a count or length field is made to hold: its largest raw value,
-/// or 0 where that gives a count or length below 0.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Held {
-    Largest,
-    Negative,
-}
-
 impl Held {
-    pub const ALL: [Held; 2] = [Held::Largest, Held::Negative];
-
     /// The raw value it puts in a field of `bits`.
     fn raw(self, bits: u32) -> u64 {
         match self {
@@ -195,49 +62,20 @@ impl Held {
     }
 }
 
-/// What a checksum fault changes. The variants are in the order picking
-/// sorts them in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Tamper {
-    /// A bit the checksum covers that nothing else depends on, flipped.
-    Covered,
-    /// A count, length or string changed as their faults change them,
-    /// with each checksum at a static position holding the valid
-    /// message's value: decoding verifies those first, so the error is
-    /// `bad_checksum`, not the change's own (§5.6).
-    Hidden,
-    /// A bit of the checksum's value, flipped.
-    Stored,
-}
-
-impl Tamper {
-    pub const ALL: [Tamper; 3] = [Tamper::Covered, Tamper::Hidden, Tamper::Stored];
-}
-
-/// A fault's route: its kind, and what it reaches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Route {
-    Checksum(Tamper),
-    Count(Held),
-    /// A cut, by what decoding then reads short.
-    Cut(Place),
-    Length(Held),
-    /// One more element, by what in it decoding reads short.
-    More(Place),
-    SharedCount,
-    Text(Garbling),
-}
-
-impl Route {
-    pub fn kind(self) -> FaultKind {
+impl FaultKind {
+    /// Whether faults of the kind give the payload its length. Of two
+    /// faults planted together, at most one does.
+    fn cuts(self) -> bool {
         match self {
-            Route::Checksum(_) => FaultKind::Checksum,
-            Route::Count(_) => FaultKind::Count,
-            Route::Cut(_) => FaultKind::Cut,
-            Route::Length(_) => FaultKind::Length,
-            Route::More(_) => FaultKind::More,
-            Route::SharedCount => FaultKind::SharedCount,
-            Route::Text(_) => FaultKind::Text,
+            FaultKind::Cut | FaultKind::More => true,
+            FaultKind::Checksum
+            | FaultKind::Count
+            | FaultKind::Length
+            | FaultKind::Missing
+            | FaultKind::OutOfRange
+            | FaultKind::SharedCount
+            | FaultKind::Text
+            | FaultKind::WrongType => false,
         }
     }
 }
@@ -441,32 +279,6 @@ pub(in crate::layout) fn damaged_message(
         .boxed()
 }
 
-/// What a damaged message's faults are picked by: a kind, a route of it
-/// and one of the route's faults, for the first fault and for a second,
-/// planted a third of the time; and where a garbled value's bytes go.
-#[derive(Debug, Clone)]
-struct Picks {
-    first: [Index; 3],
-    second: Option<[Index; 3]>,
-    detail: Index,
-}
-
-impl Picks {
-    fn arbitrary() -> BoxedStrategy<Picks> {
-        (
-            any::<[Index; 3]>(),
-            proptest::option::weighted(0.35, any::<[Index; 3]>()),
-            any::<Index>(),
-        )
-            .prop_map(|(first, second, detail)| Picks {
-                first,
-                second,
-                detail,
-            })
-            .boxed()
-    }
-}
-
 /// A fault, and what was planted, for a failing case's report.
 #[derive(Debug, Clone)]
 struct Plant {
@@ -504,7 +316,7 @@ enum Seg {
 fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks) -> Message {
     let valid = pack(packet, time, draft.clone());
     let plants = plants(packet, time, &draft, &valid.payload, &picks.detail);
-    let Some(first) = pick(&plants, |_| true, &picks.first) else {
+    let Some(first) = pick(&plants, |plant| plant.route, |_| true, &picks.first) else {
         return valid;
     };
     // A second fault of another kind; at most one of them cuts the
@@ -513,6 +325,7 @@ fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks)
     let second = picks.second.as_ref().and_then(|second| {
         pick(
             &plants,
+            |plant| plant.route,
             |other| other != kind && !(other.cuts() && kind.cuts()),
             second,
         )
@@ -541,34 +354,6 @@ fn damage(packet: &PacketLayout, time: &TimeSource, draft: Draft, picks: &Picks)
         };
     }
     valid
-}
-
-/// A plant among those `allowed` by kind: a kind, a route of it and a
-/// plant of the route, by `picks`.
-fn pick<'p>(
-    plants: &'p [Plant],
-    allowed: impl Fn(FaultKind) -> bool,
-    picks: &[Index; 3],
-) -> Option<&'p Plant> {
-    let [kind, route, which] = picks;
-    let mut kinds: Vec<FaultKind> = plants
-        .iter()
-        .map(|plant| plant.route.kind())
-        .filter(|kind| allowed(*kind))
-        .collect();
-    kinds.sort_unstable();
-    kinds.dedup();
-    let kind = *kinds.get(kind.index(kinds.len().max(1)))?;
-    let mut routes: Vec<Route> = plants
-        .iter()
-        .map(|plant| plant.route)
-        .filter(|route| route.kind() == kind)
-        .collect();
-    routes.sort_unstable();
-    routes.dedup();
-    let route = *routes.get(route.index(routes.len().max(1)))?;
-    let of_route: Vec<&Plant> = plants.iter().filter(|plant| plant.route == route).collect();
-    of_route.get(which.index(of_route.len().max(1))).copied()
 }
 
 /// The payload with `changes` made to the message, cut to the `valid`
