@@ -68,6 +68,7 @@ fn raw(value: &Value<'_>) -> Raw {
         Value::Bytes(bytes) => Raw::Bytes(bytes.clone()),
         Value::Array(values) => Raw::Array(values.iter().map(raw).collect()),
         Value::Record(fields) => Raw::Record(record(fields)),
+        Value::Null => Raw::Null,
         other => Raw::Str(format!("not generated: {other:?}")),
     }
 }

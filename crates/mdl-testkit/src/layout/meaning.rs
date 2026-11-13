@@ -174,8 +174,8 @@ pub(super) fn as_raw(raw: &Raw) -> Expected {
         Raw::Bool(b) => Expected::Bool(*b),
         Raw::Str(text) => Expected::Str(text.clone()),
         Raw::Bytes(bytes) => Expected::Bytes(bytes.clone()),
-        // Only scalars give samples.
-        Raw::Array(_) | Raw::Record(_) => Expected::Str(format!("{raw:?}")),
+        // Only scalars give samples; a null element gives none.
+        Raw::Array(_) | Raw::Record(_) | Raw::Null => Expected::Str(format!("{raw:?}")),
     }
 }
 

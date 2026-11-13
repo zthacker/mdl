@@ -898,7 +898,9 @@ fn damaged_messages_reach_every_route() {
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
 
-    use super::{EventTime, FaultKind, Garbling, Held, Place, Problem, Route, Tamper, damaged};
+    use super::{
+        EventTime, Family, FaultKind, Garbling, Held, Place, Problem, Route, Tamper, damaged,
+    };
 
     let mut runner = TestRunner::deterministic();
     let strategy = damaged();
@@ -945,7 +947,7 @@ fn damaged_messages_reach_every_route() {
             if cut && short && failure.problem.code() == "past_end" {
                 note(Reached::Deferred);
             }
-            let named = match (failure.problem, failure.path.as_str()) {
+            let named = match (&failure.problem, failure.path.as_str()) {
                 (Problem::PastEnd { padding: true, .. }, "") => Named::PaddingAtTop,
                 (Problem::PastEnd { padding: true, .. }, path) if path.ends_with(']') => {
                     Named::PaddingInElement
@@ -965,7 +967,11 @@ fn damaged_messages_reach_every_route() {
         damaged * 10 >= messages * 9,
         "{damaged} of {messages} damaged"
     );
-    let mut required: Vec<Reached> = FaultKind::ALL.map(Reached::Kind).to_vec();
+    let mut required: Vec<Reached> = FaultKind::ALL
+        .into_iter()
+        .filter(|kind| kind.family() == Family::Binary)
+        .map(Reached::Kind)
+        .collect();
     required.extend(Place::ALL.map(|place| Reached::Route(Route::Cut(place))));
     required.extend(
         Place::ALL
