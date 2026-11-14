@@ -31,6 +31,9 @@ pub enum EventTime {
 pub(super) const SECOND: i128 = 1_000_000_000;
 pub(super) const WEEK: i128 = 604_800 * SECOND;
 
+/// The name of a boot set's correlation packet (§8.2).
+pub(super) const CORRELATION_PACKET: &str = "CORR";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scale {
     Utc,
@@ -275,12 +278,18 @@ pub(super) fn count_nanos(raw: &Raw, unit: Unit) -> Option<i128> {
 /// The UTC instant of a label, if it can be read and lies within years
 /// 0001 to 9999.
 pub(super) fn instant(on_scale: Option<i128>, scale: Scale) -> EventTime {
-    let first = label((1, 1, 1), (0, 0, 0), 0);
-    let last = label((9999, 12, 31), (23, 59, 59), SECOND - 1);
     match on_scale.map(|on_scale| to_utc(on_scale, scale)) {
-        Some(at) if (first..=last).contains(&at) => EventTime::At(at),
+        Some(at) if within_years(at) => EventTime::At(at),
         _ => EventTime::Invalid,
     }
+}
+
+/// Whether a UTC instant lies within years 0001 to 9999, where every
+/// instant MDL gives does (§8, §8.2).
+pub(super) fn within_years(at: i128) -> bool {
+    let first = label((1, 1, 1), (0, 0, 0), 0);
+    let last = label((9999, 12, 31), (23, 59, 59), SECOND - 1);
+    (first..=last).contains(&at)
 }
 
 pub(super) fn time_scale() -> BoxedStrategy<Scale> {
@@ -338,6 +347,20 @@ pub(super) fn epoch() -> BoxedStrategy<Epoch> {
         },
     );
     prop_oneof![known, any].boxed()
+}
+
+/// A boot time source (§8): counts since boot in its unit, tied to
+/// instants by a correlation packet's clock, in its own unit from an epoch
+/// on a scale (§8.2).
+pub(super) fn boot_source() -> BoxedStrategy<TimeSource> {
+    (unit(), unit(), epoch(), time_scale())
+        .prop_map(|(unit, clock_unit, epoch, scale)| TimeSource::Boot {
+            unit,
+            clock_unit,
+            epoch,
+            scale,
+        })
+        .boxed()
 }
 
 pub(super) fn time_source() -> BoxedStrategy<TimeSource> {
@@ -401,9 +424,12 @@ pub(super) fn count(time: &TimeSource) -> BoxedStrategy<Option<Count>> {
     let widths = |least: u32, most: u32| -> Vec<u32> { (least..=most).step_by(8).collect() };
     match time {
         TimeSource::None | TimeSource::Cuc { .. } => Just(None).boxed(),
-        TimeSource::Boot { .. } => {
-            proptest::option::of(select(widths(8, 32)).prop_map(Count::Uint)).boxed()
-        }
+        // Up to 32 bits, or now and then 64, whose counts can put a boot
+        // time's instant past year 9999 (§8.2).
+        TimeSource::Boot { .. } => proptest::option::of(
+            prop_oneof![3 => select(widths(8, 32)), 1 => Just(64_u32)].prop_map(Count::Uint),
+        )
+        .boxed(),
         // Now and then 64 bits, whose counts can run past year 9999.
         TimeSource::Elapsed { unit, .. } => {
             let bits = widths(8, unit.count_bits());
@@ -608,7 +634,7 @@ pub(super) fn time_json(time: &TimeSource, cuc_offset: u64) -> Option<Value> {
         } => json!({
             "kind": "boot", "unit": unit.name(),
             "correlate": {
-                "packet": "CORR", "clock_field": "clock", "clock_unit": clock_unit.name(),
+                "packet": CORRELATION_PACKET, "clock_field": "clock", "clock_unit": clock_unit.name(),
                 "epoch": epoch.text, "scale": scale.name(), "boot_field": "boot"
             }
         }),
