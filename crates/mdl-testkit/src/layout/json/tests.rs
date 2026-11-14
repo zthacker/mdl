@@ -14,8 +14,8 @@ use super::doc::{self, Doc, Spell};
 use super::{BOTCHED, json_damaged, json_telemetry};
 use crate::coverage::features;
 use crate::layout::{
-    EventTime, Family, FaultKind, Gone, JsonKind, Malformed, Problem, Raw, Route, Unfit, Unusable,
-    Wanted,
+    EventTime, Expected, Family, FaultKind, Gone, JsonKind, Malformed, Meta, Problem, Raw, Route,
+    Unfit, Unmet, Unusable, Wanted,
 };
 
 /// Any document: scalars of every kind, nested a few levels.
@@ -164,6 +164,13 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
                 if keys.len() > 1 {
                     found.insert("identify:nested".to_string());
                 }
+                for value in keys.values().filter_map(Value::as_i64) {
+                    if value < 0 {
+                        found.insert("identify:negative_integer".to_string());
+                    } else if value > 1 << 32 {
+                        found.insert("identify:wide_integer".to_string());
+                    }
+                }
                 for value in keys.values() {
                     found.insert(
                         if value.is_string() {
@@ -190,6 +197,79 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
     {
         for entry in ty["entries"].as_array().into_iter().flatten() {
             pointers.push(entry["pointer"].as_str().unwrap_or("").to_string());
+        }
+    }
+    // Pointers through a container of an entry's own (RFC 6901).
+    for pointer in &pointers {
+        let tokens: Vec<&str> = pointer.split('/').skip(1).collect();
+        if let Some(at) = tokens.iter().position(|token| token.ends_with("_at")) {
+            let label = match tokens.get(at + 1).copied().unwrap_or("") {
+                "-" => "pointer:element_dash",
+                "" => "pointer:element_empty",
+                token if token.starts_with('+') => "pointer:element_plus",
+                token if token.contains('.') => "pointer:element_decimal",
+                token if token.len() > 1 && token.starts_with('0') => {
+                    "pointer:element_leading_zero"
+                }
+                token if token.len() > 1 => "pointer:element_two_digits",
+                _ => "pointer:element_index",
+            };
+            found.insert(label.to_string());
+            if tokens.len() > at + 2 {
+                found.insert("pointer:through_element".to_string());
+            }
+        }
+    }
+    // String states and sentinels beyond letters, compared exactly.
+    let letters = |text: &str| text.chars().all(|c| c.is_ascii_alphabetic());
+    for param in case.bundle["catalog"]["params"]
+        .as_object()
+        .into_iter()
+        .flat_map(|params| params.values())
+    {
+        let states: Vec<&str> = param["states"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        if states.iter().any(|state| !letters(state)) {
+            found.insert("state:beyond_letters".to_string());
+        }
+    }
+    let mut entries: Vec<&Value> = Vec::new();
+    for packet in &packets {
+        entries.extend(packet["entries"].as_array().into_iter().flatten());
+    }
+    for ty in set["types"]
+        .as_object()
+        .into_iter()
+        .flat_map(|types| types.values())
+    {
+        entries.extend(ty["entries"].as_array().into_iter().flatten());
+    }
+    for entry in entries {
+        for sentinel in entry["invalid"].as_array().into_iter().flatten() {
+            match sentinel.as_str() {
+                Some("") => {
+                    found.insert("sentinel:empty_text".to_string());
+                }
+                Some(text) if !letters(text) => {
+                    found.insert("sentinel:beyond_letters".to_string());
+                }
+                _ => {}
+            }
+        }
+    }
+    let by_metadata = case.bundle["families"][0]["metadata"]
+        .as_array()
+        .is_some_and(|names| names.iter().any(|name| name == "kind"));
+    if by_metadata {
+        found.insert("identify:by_metadata".to_string());
+        if packets.iter().any(|packet| {
+            packet["identify"].get("kind").is_some() && packet["identify"].get("/sub").is_some()
+        }) {
+            found.insert("identify:metadata_and_pointer".to_string());
         }
     }
     for pointer in &pointers {
@@ -323,7 +403,43 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
             }
             _ => {}
         }
-        if keys == 0 {
+        if by_metadata {
+            let kinds: Vec<&Meta> = message
+                .metadata
+                .iter()
+                .filter(|(name, _)| name == "kind")
+                .map(|(_, value)| value)
+                .collect();
+            let label = match kinds.as_slice() {
+                [] => "metadata:none",
+                [_, _, ..] => "metadata:twice",
+                [Meta::Text(text)] if keys == 0 && text.starts_with('0') => "metadata:leading_zero",
+                [Meta::Text(text)] if text.parse::<i64>().is_ok() => "metadata:integer_as_text",
+                [Meta::Text(_)] => "metadata:text",
+                [_] => "metadata:integer",
+            };
+            found.insert(label.to_string());
+            if document.get("kind").is_some() {
+                found.insert("metadata:decoy_member".to_string());
+            }
+        }
+        for sample in &message.samples {
+            match &sample.value {
+                Expected::Enum(state) if !letters(state) => {
+                    found.insert("state:read_beyond_letters".to_string());
+                }
+                // A state's name with `é` the other way round: no state.
+                Expected::Str(text)
+                    if sample.quality == "unknown_state"
+                        && (text.contains('\u{e9}') || text.contains('\u{301}')) =>
+                {
+                    found.insert("state:twin_unknown".to_string());
+                }
+                _ => {}
+            }
+        }
+        // A catch-all's `/kind`, where a member is its key.
+        if keys == 0 && !by_metadata {
             match document.get("kind") {
                 None => {
                     found.insert("identify:catch_all_no_kind".to_string());
@@ -354,6 +470,31 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
                         }
                         .to_string(),
                     );
+                    // Absent through an array: one ending before the index,
+                    // or one a token that isn't an index finds nothing in.
+                    let tokens: Vec<&str> = pointer.split('/').skip(1).collect();
+                    let index = |token: &str| {
+                        let digits = !token.is_empty() && token.bytes().all(|b| b.is_ascii_digit());
+                        let leading_zero = token.len() > 1 && token.starts_with('0');
+                        (digits && !leading_zero)
+                            .then(|| token.parse::<usize>().ok())
+                            .flatten()
+                    };
+                    if let [outer, token, ..] = tokens.as_slice()
+                        && outer.ends_with("_at")
+                        && let Some(Value::Array(items)) = document.get(*outer)
+                        && document.pointer(pointer).is_none()
+                    {
+                        match index(token) {
+                            Some(at) if items.len() <= at => {
+                                found.insert("absent:array_ends_before".to_string());
+                            }
+                            Some(_) => {}
+                            None => {
+                                found.insert("absent:array_and_no_index".to_string());
+                            }
+                        }
+                    }
                 }
                 None if entry.get("when").is_some() => {
                     found.insert("when:skipped".to_string());
@@ -372,6 +513,22 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
                     );
                 }
                 _ => {}
+            }
+            // Read through a container of its own: an array, or an object.
+            let tokens: Vec<&str> = pointer.split('/').skip(1).collect();
+            if recorded.contains_key(name)
+                && let [outer, ..] = tokens.as_slice()
+                && outer.ends_with("_at")
+            {
+                match document.get(*outer) {
+                    Some(Value::Array(_)) => {
+                        found.insert("element:in_an_array".to_string());
+                    }
+                    Some(Value::Object(_)) => {
+                        found.insert("element:as_a_member".to_string());
+                    }
+                    _ => {}
+                }
             }
         }
         found.insert(
@@ -508,6 +665,34 @@ fn json_layouts_reach_every_feature() {
         "identify:catch_all_no_kind",
         "identify:catch_all_kind_unreadable",
         "identify:catch_all_kind_as_text",
+        "identify:by_metadata",
+        "identify:metadata_and_pointer",
+        "metadata:none",
+        "metadata:twice",
+        "metadata:leading_zero",
+        "metadata:integer_as_text",
+        "metadata:text",
+        "metadata:integer",
+        "metadata:decoy_member",
+        "pointer:element_index",
+        "pointer:element_two_digits",
+        "pointer:element_leading_zero",
+        "pointer:element_dash",
+        "pointer:element_plus",
+        "pointer:element_decimal",
+        "pointer:element_empty",
+        "identify:negative_integer",
+        "identify:wide_integer",
+        "pointer:through_element",
+        "element:in_an_array",
+        "element:as_a_member",
+        "absent:array_ends_before",
+        "absent:array_and_no_index",
+        "state:beyond_letters",
+        "state:twin_unknown",
+        "state:read_beyond_letters",
+        "sentinel:empty_text",
+        "sentinel:beyond_letters",
         "identify:kind_field",
         "pointer:escaped_slash",
         "pointer:escaped_tilde",
@@ -690,6 +875,7 @@ fn json_damaged_messages_reach_every_route() {
     required.extend(Malformed::ALL.map(|malformed| Reached::Route(Route::Malformed(malformed))));
     required.extend(Unusable::ALL.map(|unusable| Reached::Route(Route::Locator(unusable))));
     required.extend(Unusable::ALL.map(|unusable| Reached::Route(Route::Unmatched(unusable))));
+    required.extend(Unmet::ALL.map(|unmet| Reached::Route(Route::Unmet(unmet))));
     required.extend([Route::AsBinary, Route::Unbound, Route::KindAsText].map(Reached::Route));
     required.extend(
         JsonKind::ALL

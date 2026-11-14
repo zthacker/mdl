@@ -23,7 +23,7 @@ use body::faults::{Short, Step};
 use body::{Body, BodySpec, PacketLength, Writer, body_spec, fixed_checks};
 pub use faults::{
     Family, FaultKind, Garbling, Gone, Held, JsonKind, Malformed, Place, Route, Tamper, Unfit,
-    Unusable, Wanted,
+    Unmet, Unusable, Wanted,
 };
 pub use fleet::{Fleet, Meta, Sent, fleet};
 pub use json::{json_damaged, json_telemetry};
@@ -66,6 +66,8 @@ pub struct Message {
     /// The encoding it's delivered in: its family's, unless a fault
     /// delivers it in the other.
     pub encoding: Encoding,
+    /// The metadata its link delivers it with, by name (§1).
+    pub metadata: Vec<(String, Meta)>,
     /// For a damaged message, what was done to it and the error decoding
     /// it gives. Its record, samples and event time are then those of the
     /// message before it was damaged.
@@ -707,6 +709,25 @@ fn meaning(kind: &Kind) -> BoxedStrategy<Meaning> {
         Kind::Text { .. } => Just(Meaning::Str).boxed(),
         Kind::Bytes(_) => Just(Meaning::Bytes).boxed(),
     }
+}
+
+/// `text` with each `é` decomposed (`e` and U+0301) and each decomposed
+/// one composed: the same to a reader that normalizes, other text to one
+/// that doesn't.
+fn twin(text: &str) -> String {
+    let mut twin = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\u{e9}' => twin.push_str("e\u{301}"),
+            'e' if chars.peek() == Some(&'\u{301}') => {
+                chars.next();
+                twin.push('\u{e9}');
+            }
+            c => twin.push(c),
+        }
+    }
+    twin
 }
 
 /// ASCII letters that fit a field that [`Kind::takes_letters`]: at least
@@ -1438,6 +1459,16 @@ fn raw_value(field: &Placed) -> BoxedStrategy<Raw> {
         }
         Meaning::TextState(names) => {
             choices.push((6, select(names.clone()).prop_map(Raw::Str).boxed()));
+            // A name with `é` composed where it's decomposed, or the other
+            // way: other text, so no state, as raw strings compare exactly.
+            let twins: Vec<String> = names
+                .iter()
+                .map(|name| twin(name))
+                .filter(|twin| !names.contains(twin))
+                .collect();
+            if !twins.is_empty() {
+                choices.push((2, select(twins).prop_map(Raw::Str).boxed()));
+            }
         }
         Meaning::Number {
             conversion: Numeric::Table { points, .. } | Numeric::Spline { points, .. },
@@ -1707,6 +1738,7 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
         received,
         event_time,
         encoding: Encoding::Binary,
+        metadata: Vec::new(),
         damage: None,
     }
 }
