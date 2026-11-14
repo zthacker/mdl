@@ -357,7 +357,9 @@ fields that can be read without decoding anything else:
   value fills it): `"PING"` in an 8-byte NUL-terminated buffer is the
   5-byte key `PING\0`. Constants of one length then share a key, and
   constants of different lengths are different keys;
-- JSON: integer and string fields, by pointer, compared exactly.
+- JSON: integer and string fields, by pointer, compared exactly: a
+  string with a string, a number by its value (`decoding.md` §2.3, so
+  `42.0` is the key 42), never a string with a number.
 
 Fields inside arrays are never keys.
 
@@ -438,11 +440,15 @@ exactly. A terminated buffer's padding isn't part of its value, so a
 payload padded otherwise than §3.4 pads decodes, and encodes again with
 §3.4's padding.
 
-A list argument is its array's elements in order, each converted as
-above from its raw value: a scalar element's, or in each record the
-field that names the argument. The list's length MUST be one `list`
-allows [`list_length`]; then the first value the catalog doesn't allow
-is the error, naming its index.
+A list argument is its array's elements in order, each converted as above
+from its raw value: a scalar element's, or in each record the field that
+names the argument. The list's length MUST be one `list` allows
+[`list_length`]; then the first value the catalog doesn't allow is the
+error, naming its index. A `null` element, which `decoding.md` §5.3 reads
+as no reading, is no value: it's [`wrong_type`], naming its index. A
+`null` record gives none to any of its lists, so the first of them in
+catalog order is refused at that index; it has no constants to check
+(§7.3).
 
 An argument the set doesn't encode is its default, and the result lists
 it as defaulted. A packet with a target field gives the target's native
