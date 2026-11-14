@@ -20,13 +20,13 @@ use proptest::sample::Index;
 use super::doc::{self, Doc, Spell};
 use super::{
     Alias, Element, Fill, JsonDraft, JsonElement, JsonEntry, JsonNode, JsonPacket, JsonSet,
-    JsonTime, Key, document, draft, pack, pointer,
+    JsonTime, Key, document, draft, element_token, index_of, leading_zero, pack, pointer,
 };
 use crate::layout::faults::{
-    FaultKind, Gone, JsonKind, Malformed, Picks, Route, Unfit, Unusable, Wanted, pick,
+    FaultKind, Gone, JsonKind, Malformed, Picks, Route, Unfit, Unmet, Unusable, Wanted, pick,
 };
 use crate::layout::time::{Count, TimeSource};
-use crate::layout::{Damage, Encoding, Failure, Kind, LocatorRole, Message, Problem};
+use crate::layout::{Damage, Encoding, Failure, Kind, LocatorRole, Message, Meta, Problem};
 use malformed::TextEdit;
 
 impl Unfit {
@@ -158,10 +158,16 @@ enum Edit {
     /// One of the document's members, by its position (wrapping), added
     /// again; two members of one name if it has none.
     Twice(usize),
+    /// The object at this place, holding the value at this token, made an
+    /// array with the value where a reader taking the token for an index
+    /// would look: at `n` for `0n`, last for `-`.
+    Arrayed(Vec<Step>, String),
     /// The written text changed.
     Text(TextEdit),
     /// The message delivered as a binary payload.
     AsBinary,
+    /// The metadata `kind` taken away, given twice, or holding this value.
+    Metadata(Unmet, Meta),
 }
 
 /// A step into a document: a member's name, or an element's index.
@@ -179,12 +185,23 @@ impl Edit {
                 let Some((Step::Member(name), parent)) = steps.split_last() else {
                     return false;
                 };
-                let Some(Doc::Object(members)) = find(document, parent) else {
-                    return false;
-                };
-                let before = members.len();
-                members.retain(|(member, _)| member != name);
-                members.len() < before
+                match find(document, parent) {
+                    Some(Doc::Object(members)) => {
+                        let before = members.len();
+                        members.retain(|(member, _)| member != name);
+                        members.len() < before
+                    }
+                    // An array's element goes with those after it, so none
+                    // takes its index.
+                    Some(Doc::Array(items)) => match index_of(name) {
+                        Some(index) if index < items.len() => {
+                            items.truncate(index);
+                            true
+                        }
+                        _ => false,
+                    },
+                    _ => false,
+                }
             }
             Edit::Replace(steps, value) => match find(document, steps) {
                 Some(slot) => {
@@ -213,7 +230,27 @@ impl Edit {
                 }
                 _ => false,
             },
-            Edit::Text(_) | Edit::AsBinary => true,
+            Edit::Arrayed(steps, token) => {
+                let Some(container) = find(document, steps) else {
+                    return false;
+                };
+                let Doc::Object(members) = container else {
+                    return false;
+                };
+                let Some(value) = members
+                    .iter()
+                    .find(|(member, _)| member == token)
+                    .map(|(_, value)| value.clone())
+                else {
+                    return false;
+                };
+                let at = token.parse::<usize>().unwrap_or(0);
+                let mut items: Vec<Doc> = (0..at).map(|_| Doc::Null).collect();
+                items.push(value);
+                *container = Doc::Array(items);
+                true
+            }
+            Edit::Text(_) | Edit::AsBinary | Edit::Metadata(..) => true,
         }
     }
 }
@@ -228,6 +265,8 @@ fn find<'d>(document: &'d mut Doc, steps: &[Step]) -> Option<&'d mut Doc> {
             .iter_mut()
             .find(|(member, _)| member == name)
             .map(|(_, value)| value)?,
+        // A pointer's token is an array's index where it meets one.
+        (Step::Member(name), Doc::Array(items)) => items.get_mut(index_of(name)?)?,
         (Step::Index(index), Doc::Array(items)) => items.get_mut(*index)?,
         _ => return None,
     };
@@ -278,6 +317,19 @@ fn damage(set: &JsonSet, index: usize, draft: &JsonDraft, picks: &Picks) -> Mess
     let as_binary = chosen
         .iter()
         .any(|plant| matches!(plant.edit, Edit::AsBinary));
+    let mut metadata = valid.metadata.clone();
+    for plant in &chosen {
+        if let Edit::Metadata(unmet, value) = &plant.edit {
+            match unmet {
+                Unmet::Missing => metadata.retain(|(name, _)| name != "kind"),
+                Unmet::Twice => metadata.push(("kind".to_string(), value.clone())),
+                Unmet::Unknown => {
+                    metadata.retain(|(name, _)| name != "kind");
+                    metadata.push(("kind".to_string(), value.clone()));
+                }
+            }
+        }
+    }
     let routes = chosen.iter().map(|plant| plant.route).collect();
     let planted: Vec<&str> = chosen.iter().map(|plant| plant.planted.as_str()).collect();
     Message {
@@ -287,6 +339,7 @@ fn damage(set: &JsonSet, index: usize, draft: &JsonDraft, picks: &Picks) -> Mess
         } else {
             Encoding::Json
         },
+        metadata,
         damage: Some(Damage {
             routes,
             planted: planted.join("; "),
@@ -404,7 +457,33 @@ fn whole_message(set: &JsonSet, packet: &JsonPacket, detail: &Index) -> Vec<Plan
         });
     }
     let catch_all = set.packets.iter().any(|packet| packet.keys.is_empty());
-    if !catch_all && !packet.keys.is_empty() {
+    if !catch_all && set.by_metadata {
+        if let Some((_, key)) = packet.keys.first() {
+            let given = match key {
+                Key::Text(text) => Meta::Text(text.clone()),
+                Key::Int(n) => Meta::Int(*n),
+            };
+            // Text no packet has; or a number, which no text key equals.
+            let unknown = match key {
+                Key::Int(n) => Meta::Text(leading_zero(*n)),
+                Key::Text(_) if detail.index(2) == 0 => Meta::Uint(7),
+                Key::Text(_) => Meta::Text("NONE".into()),
+            };
+            for (unmet, value) in [
+                (Unmet::Missing, given.clone()),
+                (Unmet::Twice, given),
+                (Unmet::Unknown, unknown),
+            ] {
+                plants.push(Plant {
+                    route: Route::Unmet(unmet),
+                    planted: format!("the metadata kind {unmet:?} ({value:?})"),
+                    edit: Edit::Metadata(unmet, value),
+                    at: IDENTIFY,
+                    failure: failure(Problem::NoPacket),
+                });
+            }
+        }
+    } else if !catch_all && !packet.keys.is_empty() {
         for unusable in Unusable::ALL {
             plants.push(Plant {
                 route: Route::Unmatched(unusable),
@@ -425,9 +504,11 @@ fn whole_message(set: &JsonSet, packet: &JsonPacket, detail: &Index) -> Vec<Plan
         }
     }
     // Neither `/sat` nor `/kind` finds anything in a document that isn't
-    // an object, so the alias can't be read, or no keyed packet matches;
-    // a catch-all is the message's, and then the document is `wrong_type`
-    // (§5.3).
+    // an object, so the alias can't be read, or no keyed packet matches; a
+    // catch-all is the message's, and then the document is `wrong_type`
+    // (§5.3). Keyed by metadata, a packet matches all the same, the one a
+    // nested packet nests on if `/sub` can't be read, and its document is
+    // `wrong_type`.
     for kind in [
         JsonKind::Array,
         JsonKind::Bool,
@@ -442,7 +523,7 @@ fn whole_message(set: &JsonSet, packet: &JsonPacket, detail: &Index) -> Vec<Plan
                     role: LocatorRole::Alias,
                 },
             )
-        } else if catch_all {
+        } else if catch_all || set.by_metadata {
             (
                 CONTAINER,
                 Problem::WrongType {
@@ -484,7 +565,7 @@ impl Walk<'_> {
     fn field(&mut self, name: &str, wanted: Wanted) {
         let at = self.next();
         let steps = vec![Step::Member(name.to_string())];
-        self.gone(at, name, &steps, None, &format!("/{name}"));
+        self.gone(at, name, &steps, None, None, &format!("/{name}"));
         self.value(at, name, &steps, wanted);
     }
 
@@ -507,10 +588,14 @@ impl Walk<'_> {
             };
             let leaf = within(&entry.tokens);
             let parent = (entry.tokens.len() > 1).then(|| within(&entry.tokens[..1]));
+            // A token into a container of its own that isn't an index.
+            let arrayed = element_token(&entry.tokens)
+                .filter(|token| index_of(token).is_none())
+                .map(|token| (within(&entry.tokens[..1]), token.to_string()));
             let at = self.next();
             // An optional entry with nothing at its pointer is absent.
             if !entry.optional {
-                self.gone(at, &path, &leaf, parent, &pointer(&entry.tokens));
+                self.gone(at, &path, &leaf, parent, arrayed, &pointer(&entry.tokens));
             }
             let wanted = match &entry.node {
                 JsonNode::Field(field) => Wanted::of(&field.kind),
@@ -554,6 +639,7 @@ impl Walk<'_> {
         path: &str,
         leaf: &[Step],
         parent: Option<Vec<Step>>,
+        arrayed: Option<(Vec<Step>, String)>,
         pointer: &str,
     ) {
         let failure = Failure {
@@ -575,6 +661,13 @@ impl Walk<'_> {
                 Gone::Parent,
                 Edit::Remove(parent),
                 "the object its pointer goes through removed",
+            ));
+        }
+        if let Some((container, token)) = arrayed {
+            ways.push((
+                Gone::NotIndex,
+                Edit::Arrayed(container, token),
+                "its container an array, which a token that isn't an index finds nothing in",
             ));
         }
         for (gone, edit, what) in ways {

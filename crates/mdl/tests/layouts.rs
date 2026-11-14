@@ -10,7 +10,7 @@ mod common;
 use mdl::bindings::Bindings;
 use mdl::decode::{DecodeError, JsonType, Problem};
 use mdl::ir::{Encoding, ScalarType, TextEncoding};
-use mdl::message::{Message, Payload};
+use mdl::message::{Message, MetaValue, Payload};
 use mdl::route::{LocatorRole, RouteError};
 use mdl::time::Timestamp;
 use mdl_testkit::layout::{self, JsonKind, telemetry};
@@ -49,7 +49,8 @@ fn valid(case: &layout::Telemetry, json: bool) -> Result<(), TestCaseError> {
     let sets = common::load(&case.bundle, &case.family, &[])?;
     let bindings = bindings(case);
     for message in &case.messages {
-        let result = sets.decode(&message_of(message), &bindings);
+        let metadata = metadata_of(message);
+        let result = sets.decode(&message_of(message).with_metadata(&metadata), &bindings);
         // An event time that can't be read is the message's error.
         if message.event_time == layout::EventTime::Invalid {
             prop_assert_eq!(
@@ -75,7 +76,8 @@ fn damaged(case: &layout::Telemetry, json: bool) -> Result<(), TestCaseError> {
     let sets = common::load(&case.bundle, &case.family, &[])?;
     let bindings = bindings(case);
     for message in &case.messages {
-        let result = sets.decode(&message_of(message), &bindings);
+        let metadata = metadata_of(message);
+        let result = sets.decode(&message_of(message).with_metadata(&metadata), &bindings);
         match &message.damage {
             Some(damage) => {
                 let error = result.err();
@@ -134,6 +136,22 @@ fn message_of(message: &layout::Message) -> Message<'_> {
         layout::Encoding::Binary => Payload::Binary(&message.payload),
     };
     Message::new(payload, received)
+}
+
+/// The metadata a link delivers a message with.
+fn metadata_of(message: &layout::Message) -> Vec<(&str, MetaValue<'_>)> {
+    message
+        .metadata
+        .iter()
+        .map(|(name, value)| {
+            let value = match value {
+                layout::Meta::Uint(n) => MetaValue::Uint(*n),
+                layout::Meta::Int(n) => MetaValue::Int(*n),
+                layout::Meta::Text(text) => MetaValue::Text(text),
+            };
+            (name.as_str(), value)
+        })
+        .collect()
 }
 
 /// A decoding error as the testkit writes one: the entry it names and what

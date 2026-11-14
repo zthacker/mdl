@@ -216,16 +216,20 @@ impl Tamper {
 /// order picking sorts them in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Gone {
+    /// The object its pointer reads `01` or `-` in made an array, which
+    /// those tokens, not being indices, find nothing in (RFC 6901), with
+    /// the value where a reader taking them for one would look.
+    NotIndex,
     /// `null` in its place.
     Null,
     /// The object its pointer goes through removed.
     Parent,
-    /// Removed.
+    /// Removed; an array's element removed with those after it.
     Removed,
 }
 
 impl Gone {
-    pub const ALL: [Gone; 3] = [Gone::Null, Gone::Parent, Gone::Removed];
+    pub const ALL: [Gone; 4] = [Gone::NotIndex, Gone::Null, Gone::Parent, Gone::Removed];
 }
 
 /// A number a JSON integer field can't take (§2.3, §5.3). The variants
@@ -337,6 +341,22 @@ impl Unusable {
     ];
 }
 
+/// Why a message's metadata `kind` matches no packet (§4, §3.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Unmet {
+    /// Not given.
+    Missing,
+    /// Given twice, so it can't be read.
+    Twice,
+    /// A value no packet has: a numbered kind's text with a leading zero,
+    /// which isn't its integer's one spelling, or other text.
+    Unknown,
+}
+
+impl Unmet {
+    pub const ALL: [Unmet; 3] = [Unmet::Missing, Unmet::Twice, Unmet::Unknown];
+}
+
 /// How a payload stops being JSON MDL reads (§2.3). The variants are in
 /// the order picking sorts them in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -416,6 +436,8 @@ pub enum Route {
     Unbound,
     /// What `/kind` holds.
     Unmatched(Unusable),
+    /// What's wrong with the metadata `kind`.
+    Unmet(Unmet),
     /// A value of another kind, by what the entry takes.
     WrongType(Wanted),
 }
@@ -429,7 +451,7 @@ impl Route {
             Route::Count(_) => FaultKind::Count,
             Route::Cut(_) => FaultKind::Cut,
             Route::Document(_) => FaultKind::Document,
-            Route::KindAsText | Route::Unmatched(_) => FaultKind::Unmatched,
+            Route::KindAsText | Route::Unmatched(_) | Route::Unmet(_) => FaultKind::Unmatched,
             Route::Length(_) => FaultKind::Length,
             Route::Locator(_) => FaultKind::Locator,
             Route::Malformed(_) => FaultKind::Malformed,

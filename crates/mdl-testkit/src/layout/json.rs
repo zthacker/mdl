@@ -26,8 +26,8 @@ use super::time::{
     time_scale, unit, week_value,
 };
 use super::{
-    Encoding, FieldSpec, Kind, Length, Meaning, Message, Placed, Raw, Sample, Sentinel, Telemetry,
-    Text, Unusable, interval, letters, meaning, meaning_json, offset_ns, param_json, raw_value,
+    Encoding, FieldSpec, Kind, Length, Meaning, Message, Meta, Placed, Raw, Sample, Sentinel,
+    Telemetry, Text, Unusable, interval, meaning, meaning_json, offset_ns, param_json, raw_value,
     sentinels, type_name,
 };
 pub(in crate::layout) use doc::Doc;
@@ -81,6 +81,10 @@ fn case(message: fn(JsonSet, usize) -> BoxedStrategy<Message>) -> BoxedStrategy<
 #[derive(Debug, Clone)]
 pub(in crate::layout) struct JsonSet {
     alias: Alias,
+    /// Whether its packets' `kind` is the metadata `kind`, which the
+    /// family declares, rather than the member `/kind`; `sub` is a member
+    /// either way.
+    by_metadata: bool,
     time: JsonTime,
     packets: Vec<JsonPacket>,
     /// Its struct types, for the set.
@@ -208,6 +212,47 @@ enum PathSpec {
     Odd(usize),
     /// Two tokens: its name, inside an object of its own.
     Nested,
+    /// Through a container of its own, `<name>_at`, at `token`, then with
+    /// `inner` at its name inside what's there.
+    Element { token: ElementToken, inner: bool },
+}
+
+/// A pointer's token into a container (RFC 6901).
+#[derive(Debug, Clone, Copy)]
+enum ElementToken {
+    /// An index, of one digit or two: an array's element, or an object's
+    /// member of that name.
+    Index(usize),
+    /// An index with a leading zero, `01` or `010`, which is no index:
+    /// only an object's member. So are the others.
+    LeadingZero(usize),
+    /// `-`, past an array's last element.
+    Dash,
+    /// An index with a sign, `+1`.
+    Plus(usize),
+    /// An index with a fraction, `1.0`.
+    Decimal(usize),
+    /// The empty token.
+    Empty,
+}
+
+/// The token an entry's pointer reads in a container of its own
+/// (`<name>_at`), if it goes through one.
+fn element_token(tokens: &[String]) -> Option<&str> {
+    match tokens {
+        [outer, token, ..] if outer.ends_with("_at") => Some(token),
+        _ => None,
+    }
+}
+
+/// The array index a token is (RFC 6901): `0`, or digits without a
+/// leading zero.
+fn index_of(token: &str) -> Option<usize> {
+    let digits = !token.is_empty() && token.bytes().all(|b| b.is_ascii_digit());
+    let leading_zero = token.len() > 1 && token.starts_with('0');
+    (digits && !leading_zero)
+        .then(|| token.parse().ok())
+        .flatten()
 }
 
 /// Endings a member name may have that a pointer escapes (`/` as `~1`,
@@ -221,24 +266,32 @@ const ODD: [&str; 6] = ["/x", "~x", "~1", "a b", "é", "\u{1F600}"];
 type PacketSpec = (Vec<EntrySpec>, TimeFields, bool, bool);
 
 fn set() -> BoxedStrategy<JsonSet> {
-    set_of(alias(), String::new())
+    set_of(
+        alias(),
+        String::new(),
+        proptest::bool::weighted(0.3).boxed(),
+    )
 }
 
 /// A set of a fleet's (`fleet.rs`): the fleet writes its alias and version
 /// members, so its own alias is fixed; its params are named
 /// `{prefix}j<i>.<entry>`, so sets of one catalog don't share them.
 pub(in crate::layout) fn fleet_set(prefix: String) -> BoxedStrategy<JsonSet> {
-    set_of(Just(Alias::Fixed).boxed(), prefix)
+    set_of(Just(Alias::Fixed).boxed(), prefix, Just(false).boxed())
 }
 
-fn set_of(alias: BoxedStrategy<Alias>, prefix: String) -> BoxedStrategy<JsonSet> {
+fn set_of(
+    alias: BoxedStrategy<Alias>,
+    prefix: String,
+    by_metadata: BoxedStrategy<bool>,
+) -> BoxedStrategy<JsonSet> {
     (
-        alias,
+        (alias, by_metadata),
         json_time(),
-        any::<bool>(),
+        proptest::option::of(select(&[10_i64, -1_000, 1 << 52][..])),
         proptest::bool::weighted(0.25),
     )
-        .prop_flat_map(|(alias, time, numbered, catch_all)| {
+        .prop_flat_map(|((alias, by_metadata), time, numbered, catch_all)| {
             let fields = match &time {
                 JsonTime::Fields(source) => time_fields(source),
                 JsonTime::Iso8601 => Just(TimeFields::default()).boxed(),
@@ -250,16 +303,24 @@ fn set_of(alias: BoxedStrategy<Alias>, prefix: String) -> BoxedStrategy<JsonSet>
                 proptest::bool::weighted(0.4),
             );
             (
-                Just(alias),
+                Just((alias, by_metadata)),
                 Just(time),
                 Just(numbered),
                 Just(catch_all),
                 vec(packet, 1..=3),
             )
         })
-        .prop_map(move |(alias, time, numbered, catch_all, packets)| {
-            lay_out(&prefix, alias, time, numbered, catch_all, packets)
-        })
+        .prop_map(
+            move |((alias, by_metadata), time, numbered, catch_all, packets)| {
+                let mut set = lay_out(&prefix, alias, time, numbered, catch_all, packets);
+                set.by_metadata = by_metadata;
+                for packet in &mut set.packets {
+                    // `/kind` holds nothing a field could read.
+                    packet.kind_field &= !by_metadata;
+                }
+                set
+            },
+        )
         .boxed()
 }
 
@@ -317,10 +378,20 @@ fn entry_spec(depth: u32) -> BoxedStrategy<EntrySpec> {
             .boxed();
         shapes.push((2, record));
     }
+    let n = prop_oneof![3 => 0..3_usize, 1 => 10..13_usize].boxed();
+    let token = prop_oneof![
+        4 => n.clone().prop_map(ElementToken::Index),
+        1 => n.clone().prop_map(ElementToken::LeadingZero),
+        1 => Just(ElementToken::Dash),
+        1 => n.clone().prop_map(ElementToken::Plus),
+        1 => n.prop_map(ElementToken::Decimal),
+        1 => Just(ElementToken::Empty),
+    ];
     let path = prop_oneof![
         5 => Just(PathSpec::Plain),
         2 => (0..ODD.len()).prop_map(PathSpec::Odd),
         2 => Just(PathSpec::Nested),
+        2 => (token, any::<bool>()).prop_map(|(token, inner)| PathSpec::Element { token, inner }),
     ];
     (
         Union::new_weighted(shapes),
@@ -379,12 +450,12 @@ fn json_field_spec() -> BoxedStrategy<FieldSpec> {
 }
 
 /// A JSON field's meaning: as a binary field of its kind has, and for a
-/// string, states of letters too.
+/// string, states named by any text too.
 fn json_meaning(kind: &Kind) -> BoxedStrategy<Meaning> {
     match kind {
         Kind::Text { .. } => prop_oneof![
             Just(Meaning::Str),
-            btree_set(letters(kind), 1..=3)
+            btree_set(json_text(1), 1..=3)
                 .prop_map(|names| Meaning::TextState(names.into_iter().collect())),
         ]
         .boxed(),
@@ -393,14 +464,40 @@ fn json_meaning(kind: &Kind) -> BoxedStrategy<Meaning> {
 }
 
 /// A JSON field's sentinels: as a binary field of its kind has, and for a
-/// string, letters.
+/// string, any text, the empty string too.
 fn json_sentinels(kind: &Kind) -> BoxedStrategy<Vec<Sentinel>> {
     match kind {
-        Kind::Text { .. } => btree_set(letters(kind).prop_map(Sentinel::Text), 0..=2)
+        Kind::Text { .. } => btree_set(json_text(0).prop_map(Sentinel::Text), 0..=2)
             .prop_map(|set| set.into_iter().collect())
             .boxed(),
         _ => sentinels(kind),
     }
+}
+
+/// Text of at least `least` pieces, as a string state or sentinel holds
+/// it: letters, digits, spaces and punctuation, what JSON escapes, text
+/// beyond ASCII and the BMP, and `é` both composed and not, which are
+/// different text: a raw string compares exactly, with no normalization.
+fn json_text(least: usize) -> BoxedStrategy<String> {
+    const PIECES: [&str; 14] = [
+        "a",
+        "Z",
+        "7",
+        " ",
+        "-",
+        "\"",
+        "\\",
+        "/",
+        "\n",
+        "\t",
+        "\u{1}",
+        "\u{e9}",
+        "e\u{301}",
+        "\u{1f600}",
+    ];
+    vec(select(&PIECES[..]), least..=4)
+        .prop_map(|pieces| pieces.concat())
+        .boxed()
 }
 
 /// How a set's entries, params and struct types are named, and its types
@@ -412,16 +509,16 @@ struct Names {
 }
 
 /// The set: packet `i` named `J<i>`, its params `{prefix}j<i>.<entry>`. Each
-/// keyed packet's `kind` is `K<i>`, or the integer `10 + i` if
-/// `numbered`; one that nests shares the packet before's kind (when that
-/// one has only it) and adds `sub`, the integer `i`, so it's the more
-/// specific of the two (§4). With `catch_all` the first packet has no
-/// keys.
+/// keyed packet's `kind` is `K<i>`, or the integer `base + i` if
+/// `numbered` with a base (10, −1000 or 2^52, so negative and wide kinds
+/// too); one that nests shares the packet before's kind (when that one has
+/// only it) and adds `sub`, the integer `i`, so it's the more specific of
+/// the two (§4). With `catch_all` the first packet has no keys.
 fn lay_out(
     prefix: &str,
     alias: Alias,
     time: JsonTime,
-    numbered: bool,
+    numbered: Option<i64>,
     catch_all: bool,
     specs: Vec<PacketSpec>,
 ) -> JsonSet {
@@ -444,8 +541,10 @@ fn lay_out(
                 let sub = i64::try_from(index).unwrap_or(0);
                 vec![previous.keys[0].clone(), ("sub".to_string(), Key::Int(sub))]
             }
-            _ if numbered => vec![("kind".to_string(), Key::Int(10 + index as i64))],
-            _ => vec![("kind".to_string(), Key::Text(format!("K{index}")))],
+            _ => match numbered {
+                Some(base) => vec![("kind".to_string(), Key::Int(base + index as i64))],
+                None => vec![("kind".to_string(), Key::Text(format!("K{index}")))],
+            },
         };
         packets.push(JsonPacket {
             name,
@@ -457,6 +556,7 @@ fn lay_out(
     }
     JsonSet {
         alias,
+        by_metadata: false,
         time,
         packets,
         types,
@@ -559,6 +659,21 @@ fn tokens(name: &str, path: PathSpec) -> Vec<String> {
         PathSpec::Plain => vec![name.to_string()],
         PathSpec::Odd(k) => vec![format!("{name}{}", ODD[k % ODD.len()])],
         PathSpec::Nested => vec![format!("{name}_in"), name.to_string()],
+        PathSpec::Element { token, inner } => {
+            let token = match token {
+                ElementToken::Index(n) => n.to_string(),
+                ElementToken::LeadingZero(n) => format!("0{n}"),
+                ElementToken::Dash => "-".to_string(),
+                ElementToken::Plus(n) => format!("+{n}"),
+                ElementToken::Decimal(n) => format!("{n}.0"),
+                ElementToken::Empty => String::new(),
+            };
+            let mut tokens = vec![format!("{name}_at"), token];
+            if inner {
+                tokens.push(name.to_string());
+            }
+            tokens
+        }
     }
 }
 
@@ -579,10 +694,14 @@ fn assemble(set: &JsonSet, messages: Vec<Message>) -> Telemetry {
         Alias::Fixed => json!({ "kind": "fixed", "value": "A1" }),
         Alias::Text | Alias::Number => json!({ "kind": "path", "pointer": "/sat" }),
     };
+    let mut family = json!({ "name": "fam", "encoding": "json", "alias": alias });
+    if set.by_metadata {
+        family["metadata"] = json!(["kind"]);
+    }
     let bundle = json!({
         "mdl_version": "2.0",
         "catalog": { "params": params },
-        "families": [{ "name": "fam", "encoding": "json", "alias": alias }],
+        "families": [family],
         "sets": [set_json(set, "fam_v1", "fam")]
     });
     let native_id = match set.alias {
@@ -661,7 +780,12 @@ fn packet_json(set: &JsonSet, packet: &JsonPacket) -> Value {
                     Key::Text(text) => json!(text),
                     Key::Int(n) => json!(n),
                 };
-                (format!("/{name}"), value)
+                // A metadata key is its name, a member's its pointer.
+                if set.by_metadata && name == "kind" {
+                    (name.clone(), value)
+                } else {
+                    (format!("/{name}"), value)
+                }
             })
             .collect();
         json["identify"] = Value::Object(identify);
@@ -1189,6 +1313,8 @@ fn pack_routed(
         received: draft.received,
         event_time: event_time_of(set, packet, draft),
         encoding: Encoding::Json,
+        // Its own sequence, so the document's spellings don't depend on it.
+        metadata: metadata_of(set, packet, &mut Spell::new(draft.seed.rotate_left(17))),
         damage: None,
     }
 }
@@ -1207,9 +1333,19 @@ fn document(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft, spell: &mut S
         Alias::Fixed => {}
     }
     for (name, key) in &packet.keys {
-        members.push((name.clone(), key_doc(key)));
+        if !(set.by_metadata && name == "kind") {
+            members.push((name.clone(), key_doc(key)));
+        }
     }
-    if packet.keys.is_empty() {
+    if set.by_metadata {
+        // Now and then a member `kind` too, which identifies nothing: the
+        // key is the metadata.
+        if spell.pick(3) == 0
+            && let Some((_, key)) = set.packets.iter().find_map(|other| other.keys.first())
+        {
+            members.push(("kind".into(), key_doc(key)));
+        }
+    } else if packet.keys.is_empty() {
         members.extend(catch_all_kind(set, spell).map(|kind| ("kind".to_string(), kind)));
     }
     if packet.keys.len() == 1 && draft.stray {
@@ -1277,6 +1413,53 @@ impl Unusable {
     }
 }
 
+/// The metadata a message is delivered with: in a set keyed by metadata,
+/// its packet's `kind`, an integer as a number or as its text (which
+/// compares by value, §3.2); for a catch-all's, no `kind`, one no packet
+/// has, one given twice, or a numbered kind's text with a leading zero,
+/// none of which matches a keyed packet (§4).
+fn metadata_of(set: &JsonSet, packet: &JsonPacket, spell: &mut Spell) -> Vec<(String, Meta)> {
+    if !set.by_metadata {
+        return Vec::new();
+    }
+    let kind = |meta: Meta| ("kind".to_string(), meta);
+    match packet.keys.first() {
+        Some((_, Key::Text(text))) => vec![kind(Meta::Text(text.clone()))],
+        Some((_, Key::Int(n))) => vec![kind(match (spell.pick(3), u64::try_from(*n)) {
+            (0, _) => Meta::Text(n.to_string()),
+            (_, Ok(n)) => Meta::Uint(n),
+            (_, Err(_)) => Meta::Int(*n),
+        })],
+        None => {
+            let numbered = set
+                .packets
+                .iter()
+                .find_map(|other| match other.keys.first() {
+                    Some((_, Key::Int(n))) => Some(*n),
+                    _ => None,
+                });
+            match spell.pick(4) {
+                0 => Vec::new(),
+                1 => vec![kind(Meta::Text("Z".into())), kind(Meta::Text("Z".into()))],
+                2 => numbered.map_or(vec![kind(Meta::Text("Z".into()))], |n| {
+                    vec![kind(Meta::Text(leading_zero(n)))]
+                }),
+                _ => vec![kind(Meta::Text("Z".into()))],
+            }
+        }
+    }
+}
+
+/// An integer's text with a leading zero after any sign (`011`, `-01000`):
+/// not its one spelling, so text, which no integer key is (§3.2).
+fn leading_zero(n: i64) -> String {
+    if n < 0 {
+        format!("-0{}", n.unsigned_abs())
+    } else {
+        format!("0{n}")
+    }
+}
+
 /// What a catch-all's message holds at `/kind`, if anything: a kind no
 /// packet has, a value that can't be read, or a numbered packet's kind
 /// written as text, which a pointer compares exactly (§3.2). None of
@@ -1335,22 +1518,68 @@ fn members_of(entries: &[JsonEntry], fills: &[Fill], spell: &mut Spell) -> Vec<(
             (JsonNode::Struct(ty), Fill::Struct(fills)) => Some(object(&ty.entries, fills, spell)),
             (_, Fill::Absent { null: true }) => Some(Doc::Null),
             (_, Fill::Skipped(junk)) => junk.clone(),
+            // Absent through a container of its own: now and then an array
+            // is there, ending before an index's element, or holding values
+            // where a reader taking `01` or `-` for an index would look
+            // (§5.3, RFC 6901).
+            (_, Fill::Absent { null: false }) => {
+                if let Some(token) = element_token(&entry.tokens)
+                    && spell.pick(2) == 0
+                {
+                    let items = match index_of(token) {
+                        Some(index) => (0..index).map(|_| filler(spell)).collect(),
+                        None => {
+                            let at = token.parse::<usize>().unwrap_or(0);
+                            (0..=at).map(|_| Doc::Str("x".into())).collect()
+                        }
+                    };
+                    members.push((entry.tokens[0].clone(), Doc::Array(items)));
+                }
+                None
+            }
             _ => None,
         };
         if let Some(doc) = doc {
-            match entry.tokens.as_slice() {
-                [name] => members.push((name.clone(), doc)),
-                [outer, inner] => {
-                    members.push((outer.clone(), Doc::Object(vec![(inner.clone(), doc)])));
-                }
-                _ => {}
-            }
+            members.extend(nest(&entry.tokens, doc, spell));
         }
     }
     members
 }
 
 /// A struct's or record's object.
+/// The member a value at `tokens` makes: the first token's name, and a
+/// container for each token after it. A token that's an array index is an
+/// array's element half the time, the elements before it values nothing
+/// reads, and a member of an object of that name otherwise; any other
+/// token is an object's member.
+fn nest(tokens: &[String], value: Doc, spell: &mut Spell) -> Option<(String, Doc)> {
+    let (first, rest) = tokens.split_first()?;
+    let mut doc = value;
+    for token in rest.iter().rev() {
+        doc = match index_of(token) {
+            Some(index) if spell.pick(2) == 0 => {
+                let mut items: Vec<Doc> = (0..index).map(|_| filler(spell)).collect();
+                items.push(doc);
+                for _ in 0..spell.pick(3) {
+                    items.push(filler(spell));
+                }
+                Doc::Array(items)
+            }
+            _ => Doc::Object(vec![(token.clone(), doc)]),
+        };
+    }
+    Some((first.clone(), doc))
+}
+
+/// A value nothing reads, beside an element that's read.
+fn filler(spell: &mut Spell) -> Doc {
+    match spell.pick(3) {
+        0 => Doc::Null,
+        1 => Doc::Int(spell.pick(100) as i128),
+        _ => Doc::Str("x".into()),
+    }
+}
+
 fn object(entries: &[JsonEntry], fills: &[Fill], spell: &mut Spell) -> Doc {
     let mut members = members_of(entries, fills, spell);
     extras(&mut members, spell);
