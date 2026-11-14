@@ -22,6 +22,7 @@ use proptest::sample::{Index, select};
 use proptest::strategy::Union;
 use serde_json::{Map, Value, json};
 
+use super::composite::{CompositeNode, CompositeSpec, mix};
 use super::condition::{
     Condition, Op, Operand, Selector, Test, WhenSpec, condition_json, leaning, when_spec,
 };
@@ -34,7 +35,7 @@ use super::{
     sentinels, spec_of, text_value,
 };
 use crate::checksum::{Algorithm, algorithm};
-use composite::{CompositeNode, CompositeSource, CompositeSpec, composite_source, resolve};
+use composite::{composite_source, resolve};
 use faults::{Check, Short, Step};
 
 /// The most elements an array whose count varies has in a message.
@@ -232,33 +233,6 @@ pub(super) fn body_spec() -> BoxedStrategy<BodySpec> {
             }
         })
         .boxed()
-}
-
-/// The body's items and its composites' items, in `order` (a permutation
-/// of them all, the body's first), with each member found where its item
-/// went.
-fn mix(
-    items: Vec<ItemSpec>,
-    sources: Vec<CompositeSource>,
-    order: &[usize],
-) -> (Vec<ItemSpec>, Vec<CompositeSpec>) {
-    let mut all: Vec<Option<ItemSpec>> = items.into_iter().map(Some).collect();
-    let mut firsts = Vec::new();
-    for source in &sources {
-        firsts.push(all.len());
-        all.extend(source.items.iter().cloned().map(Some));
-    }
-    let mut position = vec![0; all.len()];
-    for (at, &item) in order.iter().enumerate() {
-        position[item] = at;
-    }
-    let items = order.iter().filter_map(|&item| all[item].take()).collect();
-    let composites = sources
-        .into_iter()
-        .zip(firsts)
-        .map(|(source, first)| source.placed(&position[first..]))
-        .collect();
-    (items, composites)
 }
 
 /// An entry of a body or struct type: struct entries and arrays of
