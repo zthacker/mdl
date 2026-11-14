@@ -1,7 +1,8 @@
 # Roadmap
 
-MDL v0.1 is the first public release. It is complete when every box below is
-checked. Phases are ordered by dependency: each builds on the previous one.
+MDL v0.1 is the first public release. It is complete when every box in
+Phases 0 to 10 is checked. Phases are ordered by dependency: each builds on
+the previous one. What's wanted after v0.1 is listed last.
 
 ## Phase 0: foundation
 
@@ -122,9 +123,6 @@ silent drop ([spec/frontends.md](spec/frontends.md)).
       frontend, all producing identical artifacts
 - [ ] Real-world corpora: public XTCE definitions imported, validated and
       decoded
-- [ ] Differential tests (`just diff-test`, optional, run in CI): traffic
-      generated with reference implementations (Yamcs) decoded by MDL and
-      compared
 - [ ] Fuzzing (`cargo-fuzz`): reader, bindings, decoder, encoder and
       importers, plus generated definitions
 - [ ] `encode → decode` and `decode → encode` round trips across the
@@ -167,3 +165,9 @@ results as JSON or CBOR, so each binding stays thin.
 - [ ] CI: fmt, clippy, tests, MSRV, fuzz smoke, `cargo-deny`, conformance
 - [ ] Final crate names; publish to crates.io, PyPI, npm, Hex
 - [ ] CHANGELOG, CONTRIBUTING, SECURITY, versioning policy
+
+## After v0.1
+
+- [ ] Differential tests (`just diff-test`, optional, run in CI): traffic
+      generated with reference implementations (Yamcs) decoded by MDL and
+      compared
