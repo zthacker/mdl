@@ -30,7 +30,8 @@ use super::{
     Text, Unusable, interval, letters, meaning, meaning_json, offset_ns, param_json, raw_value,
     sentinels, type_name,
 };
-use doc::{Doc, Spell};
+pub(in crate::layout) use doc::Doc;
+use doc::Spell;
 
 mod doc;
 pub(super) mod faults;
@@ -75,9 +76,10 @@ fn case(message: fn(JsonSet, usize) -> BoxedStrategy<Message>) -> BoxedStrategy<
 
 // ---- What a set is ----------------------------------------------------------
 
-/// A JSON family's one set, laid out.
+/// A JSON family's one set, laid out; or one of a fleet's sets
+/// (`fleet.rs`), whose routing members the fleet writes.
 #[derive(Debug, Clone)]
-struct JsonSet {
+pub(in crate::layout) struct JsonSet {
     alias: Alias,
     time: JsonTime,
     packets: Vec<JsonPacket>,
@@ -219,8 +221,19 @@ const ODD: [&str; 6] = ["/x", "~x", "~1", "a b", "é", "\u{1F600}"];
 type PacketSpec = (Vec<EntrySpec>, TimeFields, bool, bool);
 
 fn set() -> BoxedStrategy<JsonSet> {
+    set_of(alias(), String::new())
+}
+
+/// A set of a fleet's (`fleet.rs`): the fleet writes its alias and version
+/// members, so its own alias is fixed; its params are named
+/// `{prefix}j<i>.<entry>`, so sets of one catalog don't share them.
+pub(in crate::layout) fn fleet_set(prefix: String) -> BoxedStrategy<JsonSet> {
+    set_of(Just(Alias::Fixed).boxed(), prefix)
+}
+
+fn set_of(alias: BoxedStrategy<Alias>, prefix: String) -> BoxedStrategy<JsonSet> {
     (
-        alias(),
+        alias,
         json_time(),
         any::<bool>(),
         proptest::bool::weighted(0.25),
@@ -244,10 +257,29 @@ fn set() -> BoxedStrategy<JsonSet> {
                 vec(packet, 1..=3),
             )
         })
-        .prop_map(|(alias, time, numbered, catch_all, packets)| {
-            lay_out(alias, time, numbered, catch_all, packets)
+        .prop_map(move |(alias, time, numbered, catch_all, packets)| {
+            lay_out(&prefix, alias, time, numbered, catch_all, packets)
         })
         .boxed()
+}
+
+impl JsonSet {
+    pub(in crate::layout) fn packet_count(&self) -> usize {
+        self.packets.len()
+    }
+
+    /// Whether a packet of it is a catch-all, which a message no keyed
+    /// packet matches is then (§4).
+    pub(in crate::layout) fn has_catch_all(&self) -> bool {
+        self.packets.iter().any(|packet| packet.keys.is_empty())
+    }
+
+    /// Whether packet `index` has keys.
+    pub(in crate::layout) fn keyed(&self, index: usize) -> bool {
+        self.packets
+            .get(index)
+            .is_some_and(|packet| !packet.keys.is_empty())
+    }
 }
 
 fn alias() -> BoxedStrategy<Alias> {
@@ -379,13 +411,14 @@ struct Names {
     types: Vec<JsonType>,
 }
 
-/// The set: packet `i` named `J<i>`, its params `j<i>.<entry>`. Each
+/// The set: packet `i` named `J<i>`, its params `{prefix}j<i>.<entry>`. Each
 /// keyed packet's `kind` is `K<i>`, or the integer `10 + i` if
 /// `numbered`; one that nests shares the packet before's kind (when that
 /// one has only it) and adds `sub`, the integer `i`, so it's the more
 /// specific of the two (§4). With `catch_all` the first packet has no
 /// keys.
 fn lay_out(
+    prefix: &str,
     alias: Alias,
     time: JsonTime,
     numbered: bool,
@@ -396,12 +429,13 @@ fn lay_out(
     let mut types = Vec::new();
     for (index, (entries, timing, kind_field, nests)) in specs.into_iter().enumerate() {
         let name = format!("J{index}");
+        let params = format!("{prefix}j{index}");
         let mut names = Names {
             packet: name.clone(),
-            params: format!("j{index}"),
+            params: params.clone(),
             types: Vec::new(),
         };
-        let entries = lay_out_entries(entries, &format!("j{index}"), &mut names);
+        let entries = lay_out_entries(entries, &params, &mut names);
         types.append(&mut names.types);
         let previous = packets.last().filter(|packet| packet.keys.len() == 1);
         let keys = match previous {
@@ -540,17 +574,48 @@ fn pointer(tokens: &[String]) -> String {
 // ---- As IR JSON -------------------------------------------------------------
 
 fn assemble(set: &JsonSet, messages: Vec<Message>) -> Telemetry {
+    let params: Map<String, Value> = set_params(set).into_iter().collect();
+    let alias = match set.alias {
+        Alias::Fixed => json!({ "kind": "fixed", "value": "A1" }),
+        Alias::Text | Alias::Number => json!({ "kind": "path", "pointer": "/sat" }),
+    };
+    let bundle = json!({
+        "mdl_version": "2.0",
+        "catalog": { "params": params },
+        "families": [{ "name": "fam", "encoding": "json", "alias": alias }],
+        "sets": [set_json(set, "fam_v1", "fam")]
+    });
+    let native_id = match set.alias {
+        Alias::Number => "17",
+        Alias::Fixed | Alias::Text => "A1",
+    };
+    Telemetry {
+        bundle,
+        family: "fam".into(),
+        set: "fam_v1".into(),
+        native_id: native_id.into(),
+        messages,
+    }
+}
+
+/// The params `set`'s entries map to, for the catalog.
+pub(in crate::layout) fn set_params(set: &JsonSet) -> Vec<(String, Value)> {
     let mut params = Vec::new();
     for packet in &set.packets {
         params_of(&packet.entries, &mut params);
     }
-    let params: Map<String, Value> = params.into_iter().collect();
+    params
+}
+
+/// `set` as IR JSON, named `name`, of family `family`: its packets, time
+/// and struct types.
+pub(in crate::layout) fn set_json(set: &JsonSet, name: &str, family: &str) -> Value {
     let packets: Vec<Value> = set
         .packets
         .iter()
         .map(|packet| packet_json(set, packet))
         .collect();
-    let mut set_json = json!({ "name": "fam_v1", "family": "fam", "packets": packets });
+    let mut set_json = json!({ "name": name, "family": family, "packets": packets });
     match &set.time {
         JsonTime::Fields(source) => {
             if let Some(time) = time_json(source, 0) {
@@ -570,27 +635,7 @@ fn assemble(set: &JsonSet, messages: Vec<Message>) -> Telemetry {
             .collect();
         set_json["types"] = Value::Object(types);
     }
-    let alias = match set.alias {
-        Alias::Fixed => json!({ "kind": "fixed", "value": "A1" }),
-        Alias::Text | Alias::Number => json!({ "kind": "path", "pointer": "/sat" }),
-    };
-    let bundle = json!({
-        "mdl_version": "2.0",
-        "catalog": { "params": params },
-        "families": [{ "name": "fam", "encoding": "json", "alias": alias }],
-        "sets": [set_json]
-    });
-    let native_id = match set.alias {
-        Alias::Number => "17",
-        Alias::Fixed | Alias::Text => "A1",
-    };
-    Telemetry {
-        bundle,
-        family: "fam".into(),
-        set: "fam_v1".into(),
-        native_id: native_id.into(),
-        messages,
-    }
+    set_json
 }
 
 fn packet_json(set: &JsonSet, packet: &JsonPacket) -> Value {
@@ -802,50 +847,75 @@ fn message(set: JsonSet, index: usize) -> BoxedStrategy<Message> {
 }
 
 fn draft(set: &JsonSet, index: usize) -> BoxedStrategy<JsonDraft> {
-    let packet = set.packets[index].clone();
-    let time = set.time.clone();
+    let set = set.clone();
     received()
-        .prop_flat_map(move |ground| {
-            let count = match (&time, packet.timing.count) {
-                (JsonTime::Fields(source), Some(count)) => {
-                    count_draw(source, count, &packet.timing.count_invalid)
-                        .prop_map(Some)
-                        .boxed()
-                }
-                _ => Just(None).boxed(),
-            };
-            let week = match &time {
-                JsonTime::Fields(source @ TimeSource::Gps { .. }) => {
-                    week_draw(source, ground, &packet.timing.week_invalid)
-                }
-                _ => Just(0).boxed(),
-            };
-            let stamp = match &time {
-                JsonTime::Iso8601 => stamp(ground).prop_map(Some).boxed(),
-                JsonTime::Fields(_) => Just(None).boxed(),
-            };
-            (
-                Just(ground),
-                count,
-                week,
-                stamp,
-                fills(&packet.entries),
-                any::<bool>(),
-                any::<u64>(),
-            )
-        })
-        .prop_map(
-            |(received, count, week, stamp, fills, stray, seed)| JsonDraft {
-                count,
-                week,
-                stamp,
-                stray,
-                fills,
-                received,
-                seed,
-            },
-        )
+        .prop_flat_map(move |ground| draft_parts(&set, index, ground))
+        .prop_map(into_draft)
         .boxed()
+}
+
+/// A message of packet `index` drafted at the ground time `ground`.
+fn draft_at(set: &JsonSet, index: usize, ground: i128) -> BoxedStrategy<JsonDraft> {
+    draft_parts(set, index, ground).prop_map(into_draft).boxed()
+}
+
+/// What a draft is drawn as: its ground time, count, GPS week, stamp,
+/// fills, whether it carries a stray `sub`, and its spellings' seed.
+type DraftParts = (
+    i128,
+    Option<Raw>,
+    u16,
+    Option<(Stamp, EventTime)>,
+    Vec<Fill>,
+    bool,
+    u64,
+);
+
+/// The parts of a draft of packet `index` at the ground time `ground`.
+/// [`draft`] and [`draft_at`] draw them the same way, so a draft's ground
+/// time coming from the fleet changes nothing else about it.
+fn draft_parts(set: &JsonSet, index: usize, ground: i128) -> BoxedStrategy<DraftParts> {
+    let packet = &set.packets[index];
+    let count = match (&set.time, packet.timing.count) {
+        (JsonTime::Fields(source), Some(count)) => {
+            count_draw(source, count, &packet.timing.count_invalid)
+                .prop_map(Some)
+                .boxed()
+        }
+        _ => Just(None).boxed(),
+    };
+    let week = match &set.time {
+        JsonTime::Fields(source @ TimeSource::Gps { .. }) => {
+            week_draw(source, ground, &packet.timing.week_invalid)
+        }
+        _ => Just(0).boxed(),
+    };
+    let stamp = match &set.time {
+        JsonTime::Iso8601 => stamp(ground).prop_map(Some).boxed(),
+        JsonTime::Fields(_) => Just(None).boxed(),
+    };
+    (
+        Just(ground),
+        count,
+        week,
+        stamp,
+        fills(&packet.entries),
+        any::<bool>(),
+        any::<u64>(),
+    )
+        .boxed()
+}
+
+fn into_draft((received, count, week, stamp, fills, stray, seed): DraftParts) -> JsonDraft {
+    JsonDraft {
+        count,
+        week,
+        stamp,
+        stray,
+        fills,
+        received,
+        seed,
+    }
 }
 
 /// A count field's value: as the binary oracle draws one, a sentinel now
@@ -1072,9 +1142,44 @@ fn selector_values(entries: &[JsonEntry]) -> BTreeMap<String, Vec<Raw>> {
 /// A drafted message, valid: its document written, and the record,
 /// samples and event time decoding it gives.
 fn pack(set: &JsonSet, index: usize, draft: &JsonDraft) -> Message {
+    pack_routed(set, index, draft, &[])
+}
+
+/// A message of a fleet's (`fleet.rs`): packet `index` of `set` at ground
+/// time `ground`, each member of `routing` written into its document
+/// (`Some`), or taken out of it (`None`): the alias, the version, a `kind`
+/// no packet has.
+pub(in crate::layout) fn routed_message(
+    set: JsonSet,
+    index: usize,
+    ground: i128,
+    routing: Vec<(String, Option<Doc>)>,
+) -> BoxedStrategy<Message> {
+    draft_at(&set, index, ground)
+        .prop_map(move |draft| pack_routed(&set, index, &draft, &routing))
+        .boxed()
+}
+
+/// [`pack`], with `routing`'s members written into the document or taken
+/// out of it, each written at a place the message's spelling picks.
+fn pack_routed(
+    set: &JsonSet,
+    index: usize,
+    draft: &JsonDraft,
+    routing: &[(String, Option<Doc>)],
+) -> Message {
     let packet = &set.packets[index];
     let mut spell = Spell::new(draft.seed);
-    let document = document(set, packet, draft, &mut spell);
+    let mut document = document(set, packet, draft, &mut spell);
+    if let Doc::Object(members) = &mut document {
+        for (name, value) in routing {
+            members.retain(|(member, _)| member != name);
+            if let Some(value) = value {
+                let at = spell.pick(members.len() + 1);
+                members.insert(at, (name.clone(), value.clone()));
+            }
+        }
+    }
     let payload = doc::write(&document, &mut spell).into_bytes();
     Message {
         packet: packet.name.clone(),
@@ -1158,7 +1263,7 @@ const UNREADABLE: [Unusable; 7] = [
 
 impl Unusable {
     /// What a member holds for it; `None` for nothing there.
-    fn value(self) -> Option<Doc> {
+    pub(in crate::layout) fn value(self) -> Option<Doc> {
         Some(match self {
             Unusable::Array => Doc::Array(vec![Doc::Int(7)]),
             Unusable::Bool => Doc::Bool(true),

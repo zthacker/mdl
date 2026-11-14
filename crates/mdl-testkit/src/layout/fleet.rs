@@ -4,6 +4,11 @@
 //! `spec/bindings.md` §4), identification by more than one key with the
 //! more specific packet winning (§4), boot time tied to instants by
 //! correlation (§8.2), and the errors a message can route to.
+//!
+//! A fleet is binary or JSON. A JSON fleet's sets are the JSON oracle's
+//! (`json.rs`), its alias and version read at pointers or from metadata,
+//! and a JSON payload is parsed where §3.3 says: by the first locator
+//! that reads it, or as decoding starts.
 
 use std::collections::BTreeMap;
 
@@ -12,9 +17,10 @@ use proptest::prelude::*;
 use proptest::sample::select;
 use serde_json::{Map, Value, json};
 
+use super::json::{self, Doc, JsonSet};
 use super::{
     BodySpec, Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND,
-    TimeFields, TimeSource, epoch, field_spec, instant_text, label, lay_out, message_at,
+    TimeFields, TimeSource, Unusable, epoch, field_spec, instant_text, label, lay_out, message_at,
     time_fields, time_json, time_scale, to_utc, unit,
 };
 
@@ -59,6 +65,11 @@ pub struct Sent {
     /// The instant a correlator gives it: its event time if absolute, its
     /// boot time after the asset's boot instant once one is known.
     pub absolute: Option<i128>,
+    /// Whether its JSON payload was spoiled, so it isn't JSON MDL reads;
+    /// with the error it would give unspoiled, to show what `invalid_json`
+    /// comes before and after (§3.3).
+    pub spoiled: bool,
+    pub unspoiled_error: Option<&'static str>,
 }
 
 /// Where a family's messages say which asset sent them.
@@ -67,6 +78,8 @@ enum Alias {
     Fixed,
     Bits,
     Metadata,
+    /// The JSON value at `/sat`.
+    Path,
 }
 
 /// Where they say which set decodes them, if they do.
@@ -75,6 +88,8 @@ enum Version {
     None,
     Bits,
     Metadata,
+    /// The JSON value at `/v`, compared exactly (§3.2).
+    Path,
 }
 
 /// A native id: an integer, a negative one, the text of one (which reads
@@ -84,6 +99,8 @@ enum Native {
     Int(u64),
     Negative(i64),
     IntText(u64),
+    /// A negative integer's text, which reads as that integer too.
+    NegativeText(i64),
     Text(String),
 }
 
@@ -98,12 +115,25 @@ enum Key {
 const MAX_SAFE: u64 = (1 << 53) - 1;
 
 impl Native {
+    /// How a JSON message carries it at `/sat`: an integer as a number in
+    /// any spelling, text as a string.
+    fn doc(&self) -> Doc {
+        match self {
+            Native::Int(n) => Doc::Int(i128::from(*n)),
+            Native::Negative(n) => Doc::Int(i128::from(*n)),
+            Native::IntText(n) => Doc::Str(n.to_string()),
+            Native::NegativeText(n) => Doc::Str(n.to_string()),
+            Native::Text(text) => Doc::Str(text.clone()),
+        }
+    }
+
     /// How a message carries it.
     fn meta(&self) -> Meta {
         match self {
             Native::Int(n) => Meta::Uint(*n),
             Native::Negative(n) => Meta::Int(*n),
             Native::IntText(n) => Meta::Text(n.to_string()),
+            Native::NegativeText(n) => Meta::Text(n.to_string()),
             Native::Text(text) => Meta::Text(text.clone()),
         }
     }
@@ -115,7 +145,7 @@ impl Native {
         match self {
             Native::Int(n) | Native::IntText(n) if *n > MAX_SAFE => format!("\"{n}\""),
             Native::Int(n) | Native::IntText(n) => n.to_string(),
-            Native::Negative(n) => n.to_string(),
+            Native::Negative(n) | Native::NegativeText(n) => n.to_string(),
             Native::Text(text) => format!("\"{text}\""),
         }
     }
@@ -123,7 +153,7 @@ impl Native {
     fn key(&self) -> Key {
         match self {
             Native::Int(n) | Native::IntText(n) => Key::Int(i128::from(*n)),
-            Native::Negative(n) => Key::Int(i128::from(*n)),
+            Native::Negative(n) | Native::NegativeText(n) => Key::Int(i128::from(*n)),
             Native::Text(text) => Key::Text(text.clone()),
         }
     }
@@ -143,6 +173,9 @@ enum Fault {
     /// It gives a metadata name its family reads twice, which can't be
     /// read (§3.1).
     Twice,
+    /// A JSON family's path locator, the alias's or the version's, finds
+    /// what it can't read (§3.1).
+    Unreadable,
 }
 
 /// How a family with a version locator writes versions.
@@ -150,10 +183,11 @@ enum Fault {
 enum Versions {
     /// Integers, sent as integers.
     Int,
-    /// Integers, sent from metadata as their text, which compares by value
-    /// (`"2"` is 2).
+    /// From metadata, integers sent as their text, which compares by value
+    /// (`"2"` is 2); at a pointer, which compares exactly, set versions
+    /// that are text spelling an integer (`"2"`), sent as that text.
     IntText,
-    /// Text (`v2`), sent from metadata as text.
+    /// Text (`v2`), sent as text.
     Text,
 }
 
@@ -172,10 +206,20 @@ struct MessagePlan {
     fault: Option<Fault>,
     /// A bindings change to arrive at exactly, or 1 ns before.
     snap: Option<(usize, bool)>,
+    /// A JSON payload spoiled, so it isn't JSON MDL reads, whatever its
+    /// fault.
+    spoiled: bool,
+    /// Picks the details of a JSON fault: which path locator can't be
+    /// read and what it finds, which wrong version is sent, how a payload
+    /// is spoiled.
+    detail: usize,
 }
 
 #[derive(Debug, Clone)]
 struct Plan {
+    /// A JSON fleet, whose sets are `json_sets`; else binary, with `sets`.
+    json: bool,
+    json_sets: Vec<JsonSet>,
     little: bool,
     alias: Alias,
     version: Version,
@@ -203,6 +247,16 @@ struct Plan {
     messages: Vec<MessagePlan>,
     /// The first message's ground time, in whole seconds.
     start: i128,
+}
+
+impl Plan {
+    fn set_count(&self) -> usize {
+        if self.json {
+            self.json_sets.len()
+        } else {
+            self.sets.len()
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -249,6 +303,7 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
             any::<bool>(),
             any::<bool>(),
         ),
+        proptest::bool::weighted(0.4),
     );
     shape
         .prop_flat_map(
@@ -256,10 +311,21 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                 (little, alias, version, two_keys, mirror),
                 (sets, assets, boot, text, faults),
                 (node_bits, version_bits, versions, malformed, unloaded),
+                json,
             )| {
+                // A JSON family reads at a pointer where a binary one reads
+                // bits.
+                let (alias, version) = match (json, alias, version) {
+                    (true, Alias::Bits, version) => (Alias::Path, version),
+                    (_, alias, version) => (alias, version),
+                };
+                let version = match (json, version) {
+                    (true, Version::Bits) => Version::Path,
+                    (_, version) => version,
+                };
                 let assets = if alias == Alias::Fixed { 1 } else { assets };
-                // Text versions come from metadata only.
-                let versions = if version == Version::Metadata {
+                // Bits versions are integers.
+                let versions = if matches!(version, Version::Metadata | Version::Path) {
                     versions
                 } else {
                     Versions::Int
@@ -293,9 +359,16 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                     (-20_000_000_i64..50_000_000, any::<bool>()),
                     fault(alias, version, faults),
                     proptest::option::weighted(0.2, (0_usize..4, any::<bool>())),
+                    (proptest::bool::weighted(0.25), any::<usize>()),
                 )
                     .prop_map(
-                        move |((asset, named, choice, general_sub), (gap, other), fault, snap)| {
+                        move |(
+                            (asset, named, choice, general_sub),
+                            (gap, other),
+                            fault,
+                            snap,
+                            (spoiled, detail),
+                        )| {
                             MessagePlan {
                                 asset,
                                 named,
@@ -305,13 +378,27 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                                 mirror: mirror && other,
                                 fault,
                                 snap,
+                                spoiled: spoiled && json && faults,
+                                detail,
                             }
                         },
                     );
+                let binary_sets = if json {
+                    Just(Vec::new()).boxed()
+                } else {
+                    vec(set_plan(boot), sets).boxed()
+                };
+                let json_sets: Vec<BoxedStrategy<JsonSet>> = if json {
+                    (0..sets)
+                        .map(|set| json::fleet_set(format!("s{set}")))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 (
-                    Just((little, alias, version, versions, two_keys, mirror)),
+                    Just((json, little, alias, version, versions, two_keys, mirror)),
                     (Just((node_bits, version_bits)), malformed, unloaded),
-                    vec(set_plan(boot), sets),
+                    (binary_sets, json_sets),
                     ids,
                     (switch, retire),
                     vec(message, 1..=12),
@@ -324,14 +411,16 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
         )
         .prop_map(
             |(
-                (little, alias, version, versions, two_keys, mirror),
+                (json, little, alias, version, versions, two_keys, mirror),
                 ((node_bits, version_bits), malformed, unloaded),
-                sets,
+                (sets, json_sets),
                 ids,
                 (switch, retire),
                 messages,
                 start,
             )| Plan {
+                json,
+                json_sets,
                 little,
                 alias,
                 version,
@@ -357,12 +446,21 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
             let messages: Vec<BoxedStrategy<Message>> = routed
                 .iter()
                 .map(|routed| {
-                    message_at(
-                        layouts[routed.set][routed.packet].clone(),
-                        plan.sets[routed.set].time.clone(),
-                        routed.ground,
-                        routed.header.clone(),
-                    )
+                    if plan.json {
+                        json::routed_message(
+                            plan.json_sets[routed.set].clone(),
+                            routed.packet,
+                            routed.ground,
+                            routed.members.clone(),
+                        )
+                    } else {
+                        message_at(
+                            layouts[routed.set][routed.packet].clone(),
+                            plan.sets[routed.set].time.clone(),
+                            routed.ground,
+                            routed.header.clone(),
+                        )
+                    }
                 })
                 .collect();
             (
@@ -396,19 +494,25 @@ fn native_ids(alias: Alias, assets: usize, text: bool, bits: u32) -> BoxedStrate
                 .prop_map(|ids| ids.into_iter().map(Native::Int).collect())
                 .boxed()
         }
-        Alias::Metadata if text => btree_set(0_u64..1000, assets)
+        Alias::Metadata | Alias::Path if text => btree_set(0_u64..1000, assets)
             .prop_flat_map(|numbers| {
                 let count = numbers.len();
-                (Just(numbers), vec(0_u8..3, count))
+                (Just(numbers), vec(0_u8..6, count))
             })
             .prop_map(|(numbers, forms)| {
+                // Text in an integer's one spelling within −2^63 to
+                // 2^64 − 1 is that integer, negative or past 2^53 too;
+                // other text, and digits past 2^64 − 1, stay text (§3.2).
                 numbers
                     .into_iter()
                     .zip(forms)
                     .map(|(n, form)| match form {
                         0 => Native::IntText(n),
                         1 => Native::Text(format!("{n:03}x")),
-                        _ => Native::Text(format!("00{n}")),
+                        2 => Native::Text(format!("00{n}")),
+                        3 => Native::IntText((1 << 60) + n),
+                        4 => Native::NegativeText(-1 - i64::try_from(n).unwrap_or(0)),
+                        _ => Native::Text((u128::from(u64::MAX) + 1 + u128::from(n)).to_string()),
                     })
                     .collect()
             })
@@ -423,6 +527,24 @@ fn native_ids(alias: Alias, assets: usize, text: bool, bits: u32) -> BoxedStrate
                     .collect()
             })
             .boxed(),
+        // A JSON integer literal within 64 bits is exact, past 2^53 too.
+        Alias::Path => {
+            let id = prop_oneof![
+                -(1_i128 << 40)..1 << 40,
+                1_i128 << 53..=i128::from(u64::MAX),
+            ];
+            btree_set(id, assets)
+                .prop_map(|ids| {
+                    ids.into_iter()
+                        .map(|n| match (u64::try_from(n), i64::try_from(n)) {
+                            (Ok(n), _) => Native::Int(n),
+                            (_, Ok(n)) => Native::Negative(n),
+                            _ => Native::Int(0),
+                        })
+                        .collect()
+                })
+                .boxed()
+        }
     }
 }
 
@@ -443,6 +565,9 @@ fn fault(alias: Alias, version: Version, faults: bool) -> BoxedStrategy<Option<F
     }
     if alias == Alias::Metadata || version == Version::Metadata {
         kinds.push(Fault::Twice);
+    }
+    if alias == Alias::Path || version == Version::Path {
+        kinds.push(Fault::Unreadable);
     }
     proptest::option::weighted(0.25, select(kinds)).boxed()
 }
@@ -597,7 +722,7 @@ fn header(plan: &Plan) -> Vec<(&'static str, u32)> {
 /// asset.
 fn bound_set(plan: &Plan, asset: usize) -> Option<usize> {
     let named = plan.version == Version::None;
-    (named != (plan.malformed == Some(asset))).then_some(asset % plan.sets.len())
+    (named != (plan.malformed == Some(asset))).then_some(asset % plan.set_count())
 }
 
 /// The bindings, as rows: each asset from 1980-01-06, then the rebinding,
@@ -666,14 +791,23 @@ struct Routed {
     packet: usize,
     ground: i128,
     header: Vec<u64>,
+    /// A JSON message's members the fleet writes (`Some`) or takes out
+    /// (`None`): the alias, the version, a `kind` no packet has.
+    members: Vec<(String, Option<Doc>)>,
     metadata: Vec<(String, Meta)>,
     fault: Option<Fault>,
+    spoiled: bool,
+    detail: usize,
     error: Option<&'static str>,
+    unspoiled_error: Option<&'static str>,
 }
 
 /// Each message's route, in the order `spec/decoding.md` §3.3 checks it:
 /// the alias locator, the asset bound at its ground time, the version
-/// locator and the set, then identification (§4).
+/// locator and the set, then identification (§4). A JSON payload that
+/// isn't JSON MDL reads is `invalid_json` where it's first parsed: by a
+/// path locator reading it, else as decoding starts, before
+/// identification.
 fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed> {
     let mut ground = plan.start;
     let changes: Vec<i128> = rows
@@ -694,70 +828,146 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
             let id = match message.fault {
                 Some(Fault::Unbound) => match (plan.alias, &plan.ids[0]) {
                     (Alias::Bits, _) => Native::Int(unbound_id(plan)),
-                    (_, Native::Text(_) | Native::IntText(_)) => Native::Text("unbound".into()),
+                    (_, Native::Text(_) | Native::IntText(_) | Native::NegativeText(_)) => {
+                        Native::Text("unbound".into())
+                    }
                     _ => Native::Int(1 << 50),
                 },
                 _ => plan.ids[message.asset].clone(),
             };
             let bound = resolve(rows, &id, at);
             let versioned = plan.version != Version::None;
-            let short = message.fault == Some(Fault::Short);
-            let twice = message.fault == Some(Fault::Twice);
-            let alias_unreadable =
-                (short && plan.alias == Alias::Bits) || (twice && plan.alias == Alias::Metadata);
-            let version_unreadable = (short && plan.version == Version::Bits)
-                || (twice && plan.alias != Alias::Metadata && plan.version == Version::Metadata);
-            let routing = if alias_unreadable {
-                Some("unreadable_locator")
-            } else {
-                match bound {
-                    None => Some("unknown_asset"),
-                    Some((_, Some(_))) if versioned => Some("unexpected_set"),
-                    Some(_) if versioned && version_unreadable => Some("unreadable_locator"),
-                    // A version no loaded set has.
-                    Some(_)
-                        if versioned
-                            && (message.fault == Some(Fault::UnknownVersion)
-                                || plan.unloaded == Some(message.named)) =>
-                    {
-                        Some("unknown_version")
-                    }
-                    Some((_, None)) if !versioned => Some("missing_set"),
-                    Some((_, Some(set))) if plan.unloaded == Some(set) => Some("unknown_set"),
-                    _ => None,
-                }
-            };
-            let error = routing.or((message.fault == Some(Fault::NoPacket)).then_some("no_packet"));
             let asset = bound.map_or(message.asset, |(asset, _)| asset);
             let set = match bound {
                 _ if versioned => message.named,
                 Some((_, Some(set))) => set,
                 // Laid out as the asset's own set would be.
-                _ => message.asset % plan.sets.len(),
+                _ => message.asset % plan.set_count(),
             };
-            let packets = &layouts[set];
-            let packet = message.choice % packets.len();
-            let layout = &packets[packet];
+            let packets = if plan.json {
+                plan.json_sets[set].packet_count()
+            } else {
+                layouts[set].len()
+            };
+            let packet = message.choice % packets;
+            // A JSON set's catch-all is the message of a kind no other packet
+            // has, so no packet matching takes a set without one.
+            let no_packet = message.fault == Some(Fault::NoPacket)
+                && (!plan.json
+                    || (!plan.json_sets[set].has_catch_all() && plan.json_sets[set].keyed(packet)));
             let unknown_version = message.fault == Some(Fault::UnknownVersion);
             let version = if unknown_version { 99 } else { set as u64 + 1 };
+            // A JSON fault's details, from `detail`.
+            let unusable = Unusable::ALL[message.detail % Unusable::ALL.len()];
+            let paths = (plan.alias == Alias::Path, plan.version == Version::Path);
+            let unreadable_version = match paths {
+                (true, true) => message.detail / 8 % 2 == 1,
+                (false, true) => true,
+                _ => false,
+            };
+            let other_type = message.detail / 16 % 2 == 1;
+            let short = message.fault == Some(Fault::Short);
+            let twice = message.fault == Some(Fault::Twice);
+            let unreadable = message.fault == Some(Fault::Unreadable);
+            let alias_unreadable = (short && plan.alias == Alias::Bits)
+                || (twice && plan.alias == Alias::Metadata)
+                || (unreadable && paths.0 && !unreadable_version);
+            let version_unreadable = (short && plan.version == Version::Bits)
+                || (twice && plan.alias != Alias::Metadata && plan.version == Version::Metadata)
+                || (unreadable && unreadable_version);
+            let error_of = |spoiled: bool| -> Option<&'static str> {
+                if spoiled && plan.alias == Alias::Path {
+                    return Some("invalid_json");
+                }
+                if alias_unreadable {
+                    return Some("unreadable_locator");
+                }
+                match bound {
+                    None => return Some("unknown_asset"),
+                    Some((_, Some(_))) if versioned => return Some("unexpected_set"),
+                    _ => {}
+                }
+                if spoiled && plan.version == Version::Path {
+                    return Some("invalid_json");
+                }
+                if versioned {
+                    if version_unreadable {
+                        return Some("unreadable_locator");
+                    }
+                    // A version no loaded set has.
+                    if unknown_version || plan.unloaded == Some(message.named) {
+                        return Some("unknown_version");
+                    }
+                } else {
+                    match bound {
+                        Some((_, None)) => return Some("missing_set"),
+                        Some((_, Some(set))) if plan.unloaded == Some(set) => {
+                            return Some("unknown_set");
+                        }
+                        _ => {}
+                    }
+                }
+                if spoiled {
+                    return Some("invalid_json");
+                }
+                no_packet.then_some("no_packet")
+            };
             let mut header = Vec::new();
-            if plan.alias == Alias::Bits {
-                header.push(match id.key() {
-                    Key::Int(n) => u64::try_from(n).unwrap_or(0),
-                    Key::Text(_) => 0,
-                });
-            }
-            if plan.version == Version::Bits {
-                header.push(version);
-            }
-            if plan.two_keys {
-                // The least specific packet takes subs no other one has.
-                let sub = match layout.identify.get("sub").and_then(Value::as_u64) {
-                    Some(sub) => sub,
-                    None if layout.name == "GENERAL" => message.general_sub,
-                    None => 0,
-                };
-                header.push(sub);
+            let mut members = Vec::new();
+            if plan.json {
+                if plan.alias == Alias::Path {
+                    let value = if alias_unreadable {
+                        unusable.value()
+                    } else {
+                        Some(id.doc())
+                    };
+                    members.push(("sat".to_string(), value));
+                }
+                if plan.version == Version::Path {
+                    let value = match plan.versions {
+                        _ if version_unreadable => unusable.value(),
+                        // The set's version, but the other JSON type: a path
+                        // compares exactly (§3.2).
+                        Versions::Int if unknown_version && other_type => {
+                            Some(Doc::Str((set + 1).to_string()))
+                        }
+                        Versions::IntText if unknown_version && other_type => {
+                            Some(Doc::Int(set as i128 + 1))
+                        }
+                        // The set's version with a leading zero: text no set
+                        // has, compared exactly.
+                        Versions::IntText if unknown_version => {
+                            Some(Doc::Str(format!("0{}", set + 1)))
+                        }
+                        Versions::Int => Some(Doc::Int(i128::from(version))),
+                        Versions::IntText => Some(Doc::Str(version.to_string())),
+                        Versions::Text => Some(Doc::Str(format!("v{version}"))),
+                    };
+                    members.push(("v".to_string(), value));
+                }
+                if no_packet {
+                    members.push(("kind".to_string(), Some(Doc::Str("NONE".into()))));
+                }
+            } else {
+                let layout = &layouts[set][packet];
+                if plan.alias == Alias::Bits {
+                    header.push(match id.key() {
+                        Key::Int(n) => u64::try_from(n).unwrap_or(0),
+                        Key::Text(_) => 0,
+                    });
+                }
+                if plan.version == Version::Bits {
+                    header.push(version);
+                }
+                if plan.two_keys {
+                    // The least specific packet takes subs no other one has.
+                    let sub = match layout.identify.get("sub").and_then(Value::as_u64) {
+                        Some(sub) => sub,
+                        None if layout.name == "GENERAL" => message.general_sub,
+                        None => 0,
+                    };
+                    header.push(sub);
+                }
             }
             let mut metadata = Vec::new();
             if plan.alias == Alias::Metadata {
@@ -786,9 +996,13 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
                 packet,
                 ground: at,
                 header,
+                members,
                 metadata,
                 fault: message.fault,
-                error,
+                spoiled: message.spoiled,
+                detail: message.detail,
+                error: error_of(message.spoiled),
+                unspoiled_error: error_of(false),
             }
         })
         .collect()
@@ -828,23 +1042,48 @@ fn assemble(
     for packet in layouts.iter().flatten() {
         params.extend(packet.body.params());
     }
+    for set in &plan.json_sets {
+        params.extend(json::set_params(set));
+    }
     let families = if plan.mirror { 2 } else { 1 };
     let mut sets = Vec::new();
     for family in 0..families {
-        for (set, packets) in layouts.iter().enumerate() {
-            let packets: Vec<Value> = packets.iter().map(PacketLayout::json).collect();
-            let mut json = json!({ "name": set_name(family, set), "family": family_name(family),
-                                   "packets": packets });
-            if plan.version != Version::None {
-                json["version"] = if plan.versions == Versions::Text {
-                    json!(format!("v{}", set + 1))
-                } else {
-                    json!(set + 1)
-                };
-            }
+        let bodies: Vec<Value> = if plan.json {
+            plan.json_sets
+                .iter()
+                .enumerate()
+                .map(|(set, json_set)| {
+                    json::set_json(json_set, &set_name(family, set), &family_name(family))
+                })
+                .collect()
+        } else {
             let header: u64 = header(plan).iter().map(|(_, bits)| u64::from(*bits)).sum();
-            if let Some(time) = time_json(&plan.sets[set].time, 8 + header) {
-                json["time"] = time;
+            layouts
+                .iter()
+                .zip(&plan.sets)
+                .enumerate()
+                .map(|(set, (packets, planned))| {
+                    let packets: Vec<Value> = packets.iter().map(PacketLayout::json).collect();
+                    let mut json = json!({ "name": set_name(family, set),
+                                           "family": family_name(family), "packets": packets });
+                    if let Some(time) = time_json(&planned.time, 8 + header) {
+                        json["time"] = time;
+                    }
+                    json
+                })
+                .collect()
+        };
+        for (set, mut json) in bodies.into_iter().enumerate() {
+            if plan.version != Version::None {
+                json["version"] = match plan.versions {
+                    Versions::Text => json!(format!("v{}", set + 1)),
+                    // At a pointer, text spelling an integer is its own
+                    // version, which only that text matches (§3.2).
+                    Versions::IntText if plan.version == Version::Path => {
+                        json!((set + 1).to_string())
+                    }
+                    Versions::Int | Versions::IntText => json!(set + 1),
+                };
             }
             sets.push(json);
         }
@@ -861,30 +1100,44 @@ fn assemble(
     for (routed, mut message) in routed.into_iter().zip(messages) {
         match routed.fault {
             Some(Fault::Short) => message.payload.truncate(1),
-            Some(Fault::NoPacket) => message.payload[0] = NO_PACKET_ID,
+            Some(Fault::NoPacket) if !plan.json => message.payload[0] = NO_PACKET_ID,
             _ => {}
         }
-        let teaches = routed.error.is_none() && correlate(plan, &routed, &message, &mut booted);
-        let absolute = match (&routed.error, &message.event_time) {
+        if routed.spoiled {
+            spoil(&mut message.payload, routed.detail / 32);
+        }
+        // Once routed and decoded, an event time that can't be read is the
+        // message's error (§3.3, §8).
+        let unreadable_time = message.event_time == EventTime::Invalid;
+        let error = routed.error.or(unreadable_time.then_some("invalid_time"));
+        let unspoiled_error = routed
+            .unspoiled_error
+            .or(unreadable_time.then_some("invalid_time"));
+        let teaches = error.is_none() && correlate(plan, &routed, &message, &mut booted);
+        let absolute = match (&error, &message.event_time) {
             (Some(_), _) => None,
             (None, EventTime::At(at)) => Some(*at),
-            (None, EventTime::SinceBoot { value, .. }) => match &plan.sets[routed.set].time {
-                TimeSource::Boot { unit, .. } => booted
-                    .get(&(routed.family, routed.asset))
-                    .map(|boot| boot + i128::from(*value) * unit.nanos()),
-                _ => None,
-            },
+            (None, EventTime::SinceBoot { value, .. }) => {
+                match plan.sets.get(routed.set).map(|set| &set.time) {
+                    Some(TimeSource::Boot { unit, .. }) => booted
+                        .get(&(routed.family, routed.asset))
+                        .map(|boot| boot + i128::from(*value) * unit.nanos()),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         sent.push(Sent {
             family: family_name(routed.family),
             metadata: routed.metadata,
             message,
-            error: routed.error,
+            error,
             asset: asset_name(routed.asset),
             set: set_name(routed.family, routed.set),
             teaches,
             absolute,
+            spoiled: routed.spoiled,
+            unspoiled_error,
         });
     }
     Fleet {
@@ -901,11 +1154,15 @@ fn assemble(
 }
 
 fn family_json(plan: &Plan, family: usize) -> Value {
-    let mut json = json!({
-        "name": family_name(family),
-        "encoding": "binary",
-        "byte_order": if plan.little { "little" } else { "big" },
-    });
+    let mut json = if plan.json {
+        json!({ "name": family_name(family), "encoding": "json" })
+    } else {
+        json!({
+            "name": family_name(family),
+            "encoding": "binary",
+            "byte_order": if plan.little { "little" } else { "big" },
+        })
+    };
     let mut metadata = Vec::new();
     json["alias"] = match plan.alias {
         Alias::Fixed => json!({ "kind": "fixed", "value": "A1" }),
@@ -914,6 +1171,7 @@ fn family_json(plan: &Plan, family: usize) -> Value {
             metadata.push("node");
             json!({ "kind": "metadata", "name": "node" })
         }
+        Alias::Path => json!({ "kind": "path", "pointer": "/sat" }),
     };
     match plan.version {
         Version::None => {}
@@ -930,6 +1188,7 @@ fn family_json(plan: &Plan, family: usize) -> Value {
             metadata.push("ver");
             json["version"] = json!({ "kind": "metadata", "name": "ver" });
         }
+        Version::Path => json["version"] = json!({ "kind": "path", "pointer": "/v" }),
     }
     if !metadata.is_empty() {
         json["metadata"] = json!(metadata);
@@ -947,16 +1206,20 @@ fn correlate(
     message: &Message,
     booted: &mut BTreeMap<(usize, usize), i128>,
 ) -> bool {
+    // JSON sets have no boot time here.
+    let Some(set) = plan.sets.get(routed.set).filter(|_| !plan.json) else {
+        return false;
+    };
     let TimeSource::Boot {
         unit,
         clock_unit,
         epoch,
         scale,
-    } = &plan.sets[routed.set].time
+    } = &set.time
     else {
         return false;
     };
-    let Some(correlation) = &plan.sets[routed.set].correlation else {
+    let Some(correlation) = &set.correlation else {
         return false;
     };
     if message.packet != "CORR" {
@@ -980,6 +1243,30 @@ fn correlate(
         instant - i128::from(boot) * unit.nanos(),
     );
     true
+}
+
+/// A JSON payload made into one that isn't JSON MDL reads (§2.3), one of
+/// four ways by `way`: cut before its closing brace, a token after the
+/// document, a byte order mark before it, a byte that isn't UTF-8 inside
+/// it.
+fn spoil(payload: &mut Vec<u8>, way: usize) {
+    let inside = payload
+        .iter()
+        .position(|&b| b == b'{')
+        .map_or(0, |open| open + 1);
+    match way % 4 {
+        0 => {
+            let close = payload.iter().rposition(|&b| b == b'}').unwrap_or(0);
+            payload.truncate(close);
+        }
+        1 => payload.extend_from_slice(b" x"),
+        2 => {
+            payload.splice(0..0, [0xEF, 0xBB, 0xBF]);
+        }
+        _ => {
+            payload.insert(inside, 0xFF);
+        }
+    }
 }
 
 /// The bindings file: every row, for each family.
@@ -1016,9 +1303,40 @@ mod tests {
 
     use proptest::strategy::{Strategy, ValueTree};
     use proptest::test_runner::TestRunner;
+    use serde_json::Value;
 
     use super::super::time::civil_from_days;
     use super::{EventTime, Meta, fleet, instant_text, label};
+
+    /// Whether a path locator reads `value`: a string, or a number that is
+    /// an integer by §2.3 (`17.0` is 17).
+    fn readable(value: Option<&Value>) -> bool {
+        value.is_some_and(|value| {
+            value.is_string()
+                || value.is_u64()
+                || value.is_i64()
+                || value
+                    .as_f64()
+                    .is_some_and(|x| x.fract() == 0.0 && x.abs() <= 9_007_199_254_740_991.0)
+        })
+    }
+
+    /// How text a locator reads compares (§3.2): as an integer, when it's
+    /// one's one spelling between −2^63 and 2^64 − 1, else as text.
+    fn text_kind(text: &str) -> &'static str {
+        let spelled = |n: String| n == text;
+        match (
+            text.parse::<i64>(),
+            text.parse::<u64>(),
+            text.parse::<u128>(),
+        ) {
+            (Ok(n), _, _) if n < 0 && spelled(n.to_string()) => "negative text",
+            (_, Ok(n), _) if spelled(n.to_string()) && n > 1 << 53 => "wide text",
+            (_, Ok(n), _) if spelled(n.to_string()) => "integer text",
+            (_, _, Ok(n)) if spelled(n.to_string()) => "text past 64 bits",
+            _ => "text",
+        }
+    }
 
     /// Generated fleets reach every routing and correlation case.
     #[test]
@@ -1026,9 +1344,27 @@ mod tests {
         let mut runner = TestRunner::deterministic();
         let strategy = fleet();
         let mut seen = BTreeSet::new();
-        for _ in 0..600 {
+        for _ in 0..2500 {
             let case = strategy.new_tree(&mut runner).unwrap().current();
             let family = &case.bundle["families"][0];
+            let json = family["encoding"] == "json";
+            if json {
+                seen.insert("encoding:json".to_string());
+            }
+            let set_version = &case.bundle["sets"][0]["version"];
+            let path_version = family["version"]["kind"] == "path";
+            if path_version {
+                seen.insert(
+                    match set_version {
+                        Value::String(text) if text.parse::<u64>().is_ok() => {
+                            "path version:integer text"
+                        }
+                        Value::String(_) => "path version:text",
+                        _ => "path version:integer",
+                    }
+                    .to_string(),
+                );
+            }
             seen.insert(format!(
                 "alias:{}",
                 family["alias"]["kind"].as_str().unwrap_or("")
@@ -1055,6 +1391,72 @@ mod tests {
             }
             let mut previous = i128::MIN;
             for sent in &case.messages {
+                // §3.3's order around the parse: which of a spoiled payload's
+                // `invalid_json` and the error it would give otherwise comes
+                // first.
+                if sent.spoiled {
+                    // Where the payload is parsed: by the alias, the version,
+                    // or as decoding starts.
+                    let point = if family["alias"]["kind"] == "path" {
+                        "the alias"
+                    } else if path_version {
+                        "the version"
+                    } else {
+                        "decoding"
+                    };
+                    seen.insert(match sent.error {
+                        Some("invalid_json") => format!(
+                            "invalid_json at {point} over {}",
+                            sent.unspoiled_error.unwrap_or("nothing")
+                        ),
+                        Some(code) => format!("{code} over invalid_json at {point}"),
+                        None => "spoiled, decoded".to_string(),
+                    });
+                }
+                let document: Option<Value> = serde_json::from_slice(&sent.message.payload).ok();
+                let member = |name: &str| document.as_ref().and_then(|doc| doc.get(name));
+                if json && sent.error == Some("unreadable_locator") && !sent.spoiled {
+                    if family["alias"]["kind"] == "path" && !readable(member("sat")) {
+                        seen.insert("unreadable:alias at a pointer".to_string());
+                    } else if path_version && !readable(member("v")) {
+                        seen.insert("unreadable:version at a pointer".to_string());
+                    }
+                }
+                // The set's version in the other JSON type, or its text with a
+                // leading zero: a path compares exactly (§3.2). A set that
+                // isn't loaded is no version's.
+                let loaded = !case.unloaded.contains(&sent.set);
+                if path_version && loaded && sent.error == Some("unknown_version") {
+                    match (member("v"), set_version) {
+                        (Some(Value::String(_)), Value::Number(_)) => {
+                            seen.insert("exact:text for an integer version".to_string());
+                        }
+                        (Some(Value::Number(_)), Value::String(_)) => {
+                            seen.insert("exact:integer for a text version".to_string());
+                        }
+                        (Some(Value::String(text)), Value::String(_)) if text.starts_with('0') => {
+                            seen.insert("exact:a leading zero".to_string());
+                        }
+                        _ => {}
+                    }
+                }
+                if sent.error.is_none() && path_version && member("v").is_some_and(|v| v.is_f64()) {
+                    seen.insert("path version:spelled as a double".to_string());
+                }
+                if sent.error.is_none() && family["alias"]["kind"] == "path" {
+                    match member("sat") {
+                        Some(Value::String(text)) => {
+                            seen.insert(format!("{}:sat", text_kind(text)));
+                        }
+                        Some(Value::Number(n)) if n.is_i64() && !n.is_u64() => {
+                            seen.insert("negative:sat".to_string());
+                        }
+                        Some(Value::Number(n)) if n.as_u64().is_some_and(|n| n > 1 << 53) => {
+                            seen.insert("wide:sat".to_string());
+                        }
+                        _ => {}
+                    }
+                }
                 if let Some(code) = sent.error {
                     seen.insert(format!("error:{code}"));
                     continue;
@@ -1077,11 +1479,8 @@ mod tests {
                 }
                 for (name, value) in &sent.metadata {
                     match value {
-                        Meta::Text(text) if text.parse::<u64>().is_ok() => {
-                            seen.insert(format!("integer text:{name}"));
-                        }
-                        Meta::Text(_) => {
-                            seen.insert(format!("text:{name}"));
+                        Meta::Text(text) => {
+                            seen.insert(format!("{}:{name}", text_kind(text)));
                         }
                         Meta::Int(_) => {
                             seen.insert(format!("negative:{name}"));
@@ -1091,7 +1490,7 @@ mod tests {
                 }
             }
         }
-        for case in [
+        let required = [
             "alias:fixed",
             "alias:bits",
             "alias:metadata",
@@ -1112,6 +1511,9 @@ mod tests {
             "text:ver",
             "integer text:node",
             "integer text:ver",
+            "negative text:node",
+            "wide text:node",
+            "text past 64 bits:node",
             "negative:node",
             "alias:64",
             "wide or negative id",
@@ -1122,9 +1524,50 @@ mod tests {
             "error:missing_set",
             "error:unknown_set",
             "error:no_packet",
-        ] {
-            assert!(seen.contains(case), "no fleet reaches {case}: {seen:?}");
-        }
+            "encoding:json",
+            "alias:path",
+            "version:path",
+            "path version:integer",
+            "path version:integer text",
+            "path version:text",
+            "integer text:sat",
+            "text:sat",
+            "negative text:sat",
+            "wide text:sat",
+            "text past 64 bits:sat",
+            "negative:sat",
+            "wide:sat",
+            "path version:spelled as a double",
+            "unreadable:alias at a pointer",
+            "unreadable:version at a pointer",
+            "exact:text for an integer version",
+            "exact:integer for a text version",
+            "exact:a leading zero",
+            "error:invalid_json",
+            "error:invalid_time",
+            // §3.3's order around each place the payload is parsed.
+            "invalid_json at the alias over nothing",
+            "invalid_json at the alias over unknown_asset",
+            "invalid_json at the alias over unreadable_locator",
+            "unknown_asset over invalid_json at the version",
+            "unexpected_set over invalid_json at the version",
+            "invalid_json at the version over unreadable_locator",
+            "invalid_json at the version over unknown_version",
+            "unknown_asset over invalid_json at decoding",
+            "unexpected_set over invalid_json at decoding",
+            "unreadable_locator over invalid_json at decoding",
+            "unknown_version over invalid_json at decoding",
+            "missing_set over invalid_json at decoding",
+            "unknown_set over invalid_json at decoding",
+            "invalid_json at decoding over nothing",
+            "invalid_json at decoding over no_packet",
+            "invalid_json at decoding over invalid_time",
+        ];
+        let missing: Vec<&str> = required
+            .into_iter()
+            .filter(|case| !seen.contains(*case))
+            .collect();
+        assert!(missing.is_empty(), "no fleet reaches {missing:?}: {seen:?}");
     }
 
     #[test]
