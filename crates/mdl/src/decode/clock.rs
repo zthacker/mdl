@@ -236,9 +236,11 @@ impl Correlator {
         Correlator::default()
     }
 
-    /// Learn from a decoded message if it's its set's correlation packet
-    /// and both clocks have a good reading (a sentinel on either doesn't
-    /// count). Returns whether it learned.
+    /// Learn from a decoded message if it's its set's correlation packet,
+    /// both clocks have a good reading (a sentinel on either doesn't
+    /// count), and the boot instant they give, counted exactly, is within
+    /// years 0001 to 9999. Returns whether it learned; when it doesn't,
+    /// the asset keeps the boot instant it had.
     pub fn observe(&mut self, decoded: &Decoded<'_>) -> bool {
         let set = decoded.route.set;
         let Some(Time::Boot { unit, correlate }) = &set.time else {
@@ -264,7 +266,8 @@ impl Correlator {
 
     /// The instant a decoded message's values were taken: its event time
     /// if that's absolute, its boot time after the asset's boot instant,
-    /// or `None` for ground time only or an asset not yet correlated.
+    /// or `None` for ground time only, an asset not yet correlated, or a
+    /// boot time that would end past year 9999.
     pub fn absolute(&self, decoded: &Decoded<'_>) -> Option<Timestamp> {
         match decoded.event_time {
             EventTime::At(instant) => Some(instant),
