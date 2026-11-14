@@ -540,13 +540,14 @@ lists them, by canonical name. A sample is
 A composite gives one `vec3` (x, y, z) or `quat` (w, x, y, z) sample from
 its members, numbers through their conversions and then into the param's
 unit (a geodetic position's latitude and longitude into `deg`), in the
-composite's frame.
-If any member is absent (a conditional or optional entry, an array index
-past a JSON array's end, a `null` element), there is no sample. Its
-quality is that of its least trustworthy member; if that isn't `good`,
-every member is its raw value. Its `path` is the members' paths joined
-by `,`. It has no `index` and no `time_offset`, even when its members are
-array elements.
+composite's frame. There is no sample when any member is absent: when its
+entry, or a struct or array entry holding it, is absent (a conditional
+entry whose condition fails, an optional entry that finds nothing or
+`null`), when its index is past a JSON array's end, or when it, or the
+record element holding it, is a `null` element. Its quality is that of its
+least trustworthy member; if that isn't `good`, every member is its raw
+value. Its `path` is the members' paths joined by `,`. It has no `index`
+and no `time_offset`, even when its members are array elements.
 
 A composite's `frame` is its source's, which validation requires to be
 one consumers can convert into its param's frame. A vec3's frame converts
@@ -703,12 +704,18 @@ correlation's `epoch` on its `scale` (converted as §8.1; Unix time is
 source's unit), both read at one moment. If either clock's quality isn't
 `good`, the packet teaches nothing: its engineering quality (§7.5),
 whether or not it's mapped, which for these unconverted fields is
-`invalid` when it holds one of its sentinels and `good` otherwise. A
-boot time's instant is the boot instant plus the boot time. Messages
-before an asset's first correlation have no instant; those between a
-reboot and the next correlation get the previous boot's. Boot instants
-are ordinary instants, so a consumer can save and restore them across
-restarts.
+`invalid` when it holds one of its sentinels and `good` otherwise. The
+counts are taken exactly, however large: a 64-bit count of seconds is some
+1.8 × 10^28 nanoseconds, past what 64 bits hold (96 are enough). A
+`clock_field` instant past year 9999 is no fault in itself, but a boot
+instant outside years 0001 to 9999 is no instant, so a packet giving one
+teaches nothing too. A packet that teaches nothing leaves the asset's boot
+instant as it was. A boot time's instant is the boot instant plus the boot
+time, if that's within years 0001 to 9999; otherwise its message has no
+instant. Messages before an asset's first correlation have no instant;
+those between a reboot and the next correlation get the previous boot's.
+Boot instants are ordinary instants, so a consumer can save and restore
+them across restarts.
 
 ## 9. Error codes
 
