@@ -1900,6 +1900,7 @@ fn assemble(
 
 mod body;
 pub mod command;
+mod composite;
 mod condition;
 mod faults;
 mod fleet;
