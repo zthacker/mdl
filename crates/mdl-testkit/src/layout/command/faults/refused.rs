@@ -9,7 +9,9 @@ use proptest::strategy::Union;
 
 use super::{argument_name, entry_name, list_place};
 use crate::layout::command::requests::{Parts, parts};
-use crate::layout::command::values::{list_value, list_values, spell, spell_list, value};
+use crate::layout::command::values::{
+    list_value, list_values, spell, spell_list, unrounded, value,
+};
 use crate::layout::command::{
     Arg, ArgType, Bounds, Counted, Elements, Encoder, Fault, Given, Layout, Len, Placed, Refused,
     RefusedKind, Scale, Shape, Source, Stage, Target, Through,
@@ -1130,15 +1132,35 @@ fn field_faults(
         Through::Plain | Through::Exact(Numeric::Linear { .. })
     );
     match (&encoder.ty, &encoder.shape) {
-        // An unranged f64 past binary32's largest (§3.1).
-        (ArgType::F64, Shape::Float(32))
-            if encoder.min.is_none() && encoder.max.is_none() && invertible =>
-        {
-            faults.push((
-                select(vec![1e300, -1e300]).prop_map(Given::Float).boxed(),
-                at,
-                "raw_range",
-            ));
+        // An f64 its range allows whose raw value isn't finite (§3.1): past
+        // binary32's largest, or past binary64's through a scale under 1
+        // or into a smaller unit. Validation makes each end a range gives
+        // a finite raw value, so only past an absent end.
+        (ArgType::F64, Shape::Float(bits)) if invertible => {
+            let overflows: Vec<f64> = [1e300, -1e300, f64::MAX, f64::MIN]
+                .into_iter()
+                .filter(|value| {
+                    encoder.min.is_none_or(|min| *value >= min)
+                        && encoder.max.is_none_or(|max| *value <= max)
+                })
+                .filter(|value| {
+                    unrounded(encoder, *value).is_none_or(|raw| {
+                        let raw = if *bits == 32 {
+                            f64::from(raw as f32)
+                        } else {
+                            raw
+                        };
+                        !raw.is_finite()
+                    })
+                })
+                .collect();
+            if !overflows.is_empty() {
+                faults.push((
+                    select(overflows).prop_map(Given::Float).boxed(),
+                    at,
+                    "raw_range",
+                ));
+            }
         }
         (ArgType::Str, Shape::Text(_, len)) | (ArgType::Bytes, Shape::Bytes(len))
             if !matches!(len, Len::Remaining) =>
@@ -1235,20 +1257,19 @@ fn length_field_bits(layout: &Layout, entry: usize) -> Option<u32> {
     })
 }
 
-/// Targets the target field refuses (§3.3, §3.4), each with its code.
+/// Targets the target field refuses (§3.3, §3.4), each with its code: an
+/// integer field's, ids one past its ends that a native id can be.
 fn target_faults(shape: &Shape) -> Vec<(Option<Target>, &'static str)> {
     let mut faults = vec![(None, "missing_target")];
     match shape {
-        Shape::Uint(bits) | Shape::Int(bits) => {
+        Shape::Uint(_) | Shape::Int(_) => {
             faults.push((Some(Target::Text("SN-x".into())), "target_type"));
-            let signed = matches!(shape, Shape::Int(_));
-            let past = if signed {
-                1_i128 << (bits - 1)
-            } else {
-                1_i128 << bits
-            };
-            if past <= i128::from(u64::MAX) {
-                faults.push((Some(Target::Int(past)), "raw_range"));
+            let held = shape.integers().unwrap_or(0..=0);
+            let ids = i128::from(i64::MIN)..=i128::from(u64::MAX);
+            for past in [*held.end() + 1, *held.start() - 1] {
+                if ids.contains(&past) {
+                    faults.push((Some(Target::Int(past)), "raw_range"));
+                }
             }
         }
         Shape::Text(text, len) => {
