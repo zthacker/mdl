@@ -7,8 +7,8 @@ use proptest::sample::select;
 
 use super::values::{list_value, spell, text_for, to_argument, unrounded, value, value_of};
 use super::{
-    Arg, ArgType, Const, Counted, Decoded, Elements, Encoder, Given, Layout, Len, Placed, Request,
-    Shape, Source, Target, Through,
+    Arg, ArgType, Const, Counted, Decoded, Elements, Encoder, Encoding, Given, Layout, Len, Placed,
+    Request, Shape, Source, Target, Through, json,
 };
 use crate::layout::{Raw, convert, encode, fit, put_bits};
 
@@ -214,11 +214,11 @@ fn outcome(
     named: Vec<(String, Given)>,
 ) -> Request {
     let values = values(layout, given);
-    let packed = pack(layout, &values, target.as_ref());
+    let written = packed(layout, &values, target.as_ref());
     let decoded_values: Vec<Option<Arg>> = layout
         .arguments
         .iter()
-        .zip(&packed.arguments)
+        .zip(&written.arguments)
         .map(|((encoder, _), raw)| raw.as_ref().map(|raw| decoded_value(encoder, raw)))
         .collect();
     let arguments: Vec<(String, Arg)> = layout
@@ -235,13 +235,13 @@ fn outcome(
             value.map(|value| (format!("a{index}"), value))
         })
         .collect();
-    let decoded_target = packed.target.as_ref().map(|raw| match raw {
+    let decoded_target = written.target.as_ref().map(|raw| match raw {
         Raw::Uint(n) => Target::Int(i128::from(*n)),
         Raw::Int(n) => Target::Int(i128::from(*n)),
         Raw::Str(text) => native(text),
         other => Target::Text(format!("not generated: {other:?}")),
     });
-    let again = pack(layout, &decoded_values, decoded_target.as_ref()).payload;
+    let again = packed(layout, &decoded_values, decoded_target.as_ref()).payload;
     let names = |pick: &dyn Fn(usize, bool) -> bool| -> Vec<String> {
         layout
             .arguments
@@ -259,8 +259,8 @@ fn outcome(
             .apid
             .map(|apid| vec![("apid".to_string(), apid)])
             .unwrap_or_default(),
-        payload: packed.payload,
-        record: packed.record,
+        payload: written.payload,
+        record: written.record,
         defaulted: names(&|index, _| given[index].is_none()),
         decoded: Decoded {
             arguments,
@@ -309,12 +309,23 @@ pub(super) struct ElementPlace {
     pub(super) fields: Vec<(u64, u64)>,
 }
 
-/// Packs a packet (`spec/encoding.md` §3, §4): each field's raw value, an
-/// array's elements or records, a length field's from the field it
-/// measures and a count field's from the arrays it counts, written bit by
-/// bit in place, then each checksum in order of position over the bytes it
-/// covers.
-pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
+/// What a request encodes to, in its packet's encoding: a binary packet
+/// as [`pack`] packs it, a JSON one as `json.rs` writes it.
+pub(super) fn packed(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
+    match layout.encoding {
+        Encoding::Binary => pack(layout, values, target),
+        Encoding::Json => json::pack(layout, values, target),
+    }
+}
+
+/// Each field's raw value and each array's elements or records, by entry
+/// index (§3.1 to §3.4, §3.6); none yet for a length or count field, whose
+/// values follow from others.
+pub(super) fn raws(
+    layout: &Layout,
+    values: &[Option<Arg>],
+    target: Option<&Target>,
+) -> Vec<Option<Raw>> {
     let field_raw = |shape: &Shape, source: &Source, item: Option<usize>| match source {
         Source::Constant(value) => Some(constant_raw(shape, value)),
         Source::Argument(index) => {
@@ -328,7 +339,7 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
         Source::Target => target.map(|target| target_raw(shape, target)),
         Source::Length(_) | Source::Count => None,
     };
-    let mut raws: Vec<Option<Raw>> = layout
+    layout
         .entries
         .iter()
         .map(|entry| match entry {
@@ -384,7 +395,16 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
             })),
             _ => None,
         })
-        .collect();
+        .collect()
+}
+
+/// Packs a binary packet (`spec/encoding.md` §3, §4): each field's raw
+/// value, an array's elements or records, a length field's from the field
+/// it measures and a count field's from the arrays it counts, written bit
+/// by bit in place, then each checksum in order of position over the bytes
+/// it covers.
+pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
+    let mut raws = raws(layout, values, target);
     // A count field holds the number of elements of the arrays it counts,
     // which is one number.
     for k in 0..layout.entries.len() {
@@ -505,6 +525,28 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
     for (k, value) in write_checksums(layout, &mut payload, &places) {
         raws[k] = Some(Raw::Uint(value));
     }
+    let gathered = gathered(layout, raws);
+    Packed {
+        payload,
+        record: gathered.record,
+        arguments: gathered.arguments,
+        target: gathered.target,
+        places,
+        elements: elements_at,
+    }
+}
+
+/// What decoding a payload gives back of its entries' raw values.
+pub(super) struct Gathered {
+    /// Each field, checksum and array, in packet order.
+    pub(super) record: Vec<(String, Raw)>,
+    /// Each encoded argument's raw value, by argument index.
+    pub(super) arguments: Vec<Option<Raw>>,
+    pub(super) target: Option<Raw>,
+}
+
+/// What decoding gives back, from each entry's raw value.
+pub(super) fn gathered(layout: &Layout, raws: Vec<Option<Raw>>) -> Gathered {
     let mut record = Vec::new();
     let mut arguments = vec![None; layout.arguments.len()];
     let mut target_raw = None;
@@ -529,13 +571,10 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
         };
         record.push((name.clone(), raw));
     }
-    Packed {
-        payload,
+    Gathered {
         record,
         arguments,
         target: target_raw,
-        places,
-        elements: elements_at,
     }
 }
 

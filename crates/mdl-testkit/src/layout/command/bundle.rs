@@ -3,14 +3,17 @@
 
 use serde_json::{Map, Value, json};
 
+use super::json::pointer_text;
 use super::{
-    Arg, ArgType, Commands, Const, Counted, Elements, Encoder, Layout, Len, Placed, Request, Shape,
-    Source, Through,
+    Arg, ArgType, Commands, Const, Counted, Elements, Encoder, Encoding, Layout, Len, Placed,
+    Request, Shape, Source, Through,
 };
 use crate::layout::{Text, conversion_json, integer_json};
 
-/// The case: the bundle the packets make, and their requests.
+/// The case: the bundle the packets make, in a family of `encoding` (and
+/// for a binary one, byte order), and their requests.
 pub(super) fn assemble(
+    encoding: Encoding,
     little: bool,
     metadata: bool,
     layouts: &[Layout],
@@ -27,12 +30,19 @@ pub(super) fn assemble(
         commands.insert(layout.command.clone(), json!({ "arguments": arguments }));
     }
     let packets: Vec<Value> = layouts.iter().map(packet_json).collect();
-    let mut family = json!({
-        "name": "fam",
-        "encoding": "binary",
-        "byte_order": if little { "little" } else { "big" },
-        "alias": { "kind": "fixed", "value": "A1" }
-    });
+    let mut family = match encoding {
+        Encoding::Binary => json!({
+            "name": "fam",
+            "encoding": "binary",
+            "byte_order": if little { "little" } else { "big" },
+            "alias": { "kind": "fixed", "value": "A1" }
+        }),
+        Encoding::Json => json!({
+            "name": "fam",
+            "encoding": "json",
+            "alias": { "kind": "fixed", "value": "A1" }
+        }),
+    };
     if metadata {
         family["metadata"] = json!(["apid"]);
     }
@@ -150,7 +160,7 @@ fn packet_json(layout: &Layout) -> Value {
 }
 
 fn entry_json(layout: &Layout, entry: &Placed) -> Value {
-    let (name, shape, little, explicit, source) = match entry {
+    let field = match entry {
         Placed::Padding(bits) => return json!({ "kind": "padding", "size_bits": bits }),
         Placed::Checksum {
             name,
@@ -168,19 +178,28 @@ fn entry_json(layout: &Layout, entry: &Placed) -> Value {
             name,
             count,
             elements,
-        } => return array_json(layout, name, count, elements),
+            pointer,
+        } => return array_json(layout, name, count, elements, pointer),
         Placed::Field {
             name,
             shape,
             little,
             explicit,
             source,
-        } => (name, shape, little, explicit, source),
+            pointer,
+        } => (name, shape, little, explicit, source, pointer),
     };
+    let (name, shape, little, explicit, source, pointer) = field;
     let mut json = Map::new();
     json.insert("kind".into(), json!("field"));
     json.insert("name".into(), json!(name));
-    shape_json(&mut json, name, shape, *little, *explicit);
+    match layout.encoding {
+        Encoding::Binary => shape_json(&mut json, name, shape, *little, *explicit),
+        Encoding::Json => {
+            json.insert("type".into(), json!(shape.type_name()));
+            json.insert("pointer".into(), json!(pointer_text(pointer)));
+        }
+    }
     match source {
         Source::Constant(value) => {
             let value = match value {
@@ -202,9 +221,16 @@ fn entry_json(layout: &Layout, entry: &Placed) -> Value {
     Value::Object(json)
 }
 
-/// An array: its count, and its elements, a scalar that encodes a list
-/// argument or a struct type whose fields do.
-fn array_json(layout: &Layout, name: &str, count: &Counted, elements: &Elements) -> Value {
+/// An array: its count (a JSON one has none, but its pointer), and its
+/// elements, a scalar that encodes a list argument or a struct type whose
+/// fields do.
+fn array_json(
+    layout: &Layout,
+    name: &str,
+    count: &Counted,
+    elements: &Elements,
+    pointer: &[String],
+) -> Value {
     let count = match count {
         Counted::Fixed(count) => json!({ "kind": "fixed", "count": count }),
         Counted::Field {
@@ -223,7 +249,11 @@ fn array_json(layout: &Layout, name: &str, count: &Counted, elements: &Elements)
         }
         Counted::Remaining => json!({ "kind": "remaining" }),
     };
-    let mut json = json!({ "kind": "array", "name": name, "count": count });
+    let mut json = json!({ "kind": "array", "name": name });
+    match layout.encoding {
+        Encoding::Binary => json["count"] = count,
+        Encoding::Json => json["pointer"] = json!(pointer_text(pointer)),
+    }
     match elements {
         Elements::Scalar {
             argument,
@@ -233,7 +263,12 @@ fn array_json(layout: &Layout, name: &str, count: &Counted, elements: &Elements)
         } => {
             let mut element = Map::new();
             element.insert("kind".into(), json!("scalar"));
-            shape_json(&mut element, name, shape, *little, *explicit);
+            match layout.encoding {
+                Encoding::Binary => shape_json(&mut element, name, shape, *little, *explicit),
+                Encoding::Json => {
+                    element.insert("type".into(), json!(shape.type_name()));
+                }
+            }
             through_json(&mut element, &layout.arguments[*argument].0);
             json["element"] = Value::Object(element);
             json["argument"] = json!(format!("a{argument}"));

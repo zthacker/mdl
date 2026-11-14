@@ -10,8 +10,8 @@ use super::encoders::{
 };
 use super::values::{list_value, text_for};
 use super::{
-    Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Group, Layout, Len, Placed, Scale,
-    Shape, Source, TEXTS, encoder_of,
+    Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Encoding, Group, Layout, Len, Placed,
+    Scale, Shape, Source, TEXTS, encoder_of,
 };
 use crate::checksum::{Algorithm, algorithm};
 use crate::layout::{Text, inside_one_byte};
@@ -98,7 +98,7 @@ struct ArrayDraft {
 
 /// A group's default count, if any member has a default, and each
 /// member's default list, of the length that count gives it, or none.
-type GroupDefaults = (Option<i64>, Vec<Option<Arg>>);
+pub(super) type GroupDefaults = (Option<i64>, Vec<Option<Arg>>);
 
 #[derive(Debug, Clone)]
 enum DraftElement {
@@ -351,7 +351,7 @@ fn place_arrays(
 
 /// Each group's defaults: maybe a count, then for most members a list of
 /// the length that count gives it, the others left without one (§2.5).
-fn group_defaults(
+pub(super) fn group_defaults(
     groups: &[Group],
     arguments: &[(Encoder, bool)],
 ) -> Vec<BoxedStrategy<GroupDefaults>> {
@@ -554,7 +554,7 @@ fn remaining_draft(little: bool) -> BoxedStrategy<ArrayDraft> {
 
 /// A list argument the set leaves out (§2.4), so it has a default: any
 /// element, any bounds.
-fn left_out_list() -> BoxedStrategy<Encoder> {
+pub(super) fn left_out_list() -> BoxedStrategy<Encoder> {
     (
         element_encoder(false, false),
         0_u32..=2,
@@ -756,6 +756,7 @@ impl Placer {
             little,
             explicit,
             source,
+            pointer: Vec::new(),
         });
         match bits {
             Some(bits) => self.at += u64::from(bits),
@@ -941,6 +942,7 @@ impl Placer {
             name,
             count,
             elements,
+            pointer: Vec::new(),
         });
         match (spec.count, element_bits) {
             (CountKind::Fixed(count), Some(bits)) => {
@@ -1029,6 +1031,7 @@ pub(super) fn lay_out(
     Layout {
         name: format!("C{index}"),
         command: format!("cmd.c{index}"),
+        encoding: Encoding::Binary,
         little,
         apid,
         arguments: spec.arguments,

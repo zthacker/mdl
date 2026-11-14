@@ -355,6 +355,7 @@ fn list_faults_in(
             name,
             count,
             elements,
+            ..
         } = placed
         else {
             continue;

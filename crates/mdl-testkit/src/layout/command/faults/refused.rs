@@ -817,6 +817,7 @@ fn count_faults(layout: &Layout) -> Vec<(RefusedKind, Staged)> {
             name,
             count,
             elements,
+            ..
         } = placed
         else {
             continue;

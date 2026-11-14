@@ -18,6 +18,20 @@ pub(super) fn encoder() -> BoxedStrategy<Encoder> {
     with_default(any_encoder())
 }
 
+/// An argument of any type and a field that encodes it, with a default.
+pub(super) fn defaulted() -> BoxedStrategy<Encoder> {
+    any_encoder()
+        .prop_flat_map(|encoder| {
+            let default = value(&encoder);
+            (Just(encoder), default)
+        })
+        .prop_map(|(mut encoder, default)| {
+            encoder.default = Some(as_literal(default));
+            encoder
+        })
+        .boxed()
+}
+
 /// An argument of any type and a field that encodes it, without a default.
 fn any_encoder() -> BoxedStrategy<Encoder> {
     prop_oneof![

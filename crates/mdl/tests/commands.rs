@@ -1,13 +1,13 @@
-//! Random command layouts (`mdl_testkit::layout::command`): each request
-//! encodes to exactly the payload, raw values and defaulted arguments the
-//! testkit worked out from `spec/encoding.md` on its own; the payload
-//! decodes back to the command, every argument in catalog order and the
-//! target, as §7.4 says; and the decoded request encodes to the payload the
-//! testkit expects of it, the same one wherever each inverse undoes its
-//! conversion. A request with faults planted in it is refused with the
-//! code, and naming the argument or field, of the first problem the spec
-//! reaches; a payload with a fault planted in it fails to decode with the
-//! code the fault gives.
+//! Random command layouts (`mdl_testkit::layout::command`), binary and
+//! JSON: each request encodes to exactly the payload, raw values and
+//! defaulted arguments the testkit worked out from `spec/encoding.md` on
+//! its own; the payload decodes back to the command, every argument in
+//! catalog order and the target, as §7.4 says; and the decoded request
+//! encodes to the payload the testkit expects of it, the same one wherever
+//! each inverse undoes its conversion. A request with faults planted in it
+//! is refused with the code, and naming the argument or field, of the
+//! first problem the spec reaches; a payload with a fault planted in it
+//! fails to decode with the code the fault gives.
 
 #[path = "common/artifacts.rs"]
 mod artifacts;
@@ -17,76 +17,129 @@ use mdl::decode::{CommandDecodeError, DecodeError};
 use mdl::encode::{ArgumentProblem, ArgumentValue, CommandRequest, EncodeError, FieldProblem};
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::time::Timestamp;
-use mdl_testkit::layout::command::{Arg, Encoding, Given, Target, commands};
+use mdl_testkit::layout::command::{
+    Arg, Commands, Encoding, Given, Target, commands, json_commands,
+};
 use proptest::prelude::*;
 
 proptest! {
     #[test]
     fn a_command_encodes_and_decodes_as_the_spec_says(case in commands()) {
-        let sets = artifacts::load(&case.bundle, &case.family, &[])?;
-        for request in &case.requests {
-            let encoded = sets
-                .encode(&sent(&case.set, &request.command, &request.arguments, request.target.as_ref())?)
-                .map_err(|error| TestCaseError::fail(format!("{error}: {request:#?}")))?;
-            prop_assert_eq!(&encoded.payload, &request.payload, "{:#?}", request);
-            prop_assert_eq!(&artifacts::record(&encoded.record), &request.record);
-            prop_assert_eq!(&names(&encoded.defaulted), &request.defaulted);
-            let metadata = encoded.metadata();
-            prop_assert_eq!(&meta(&metadata), &request.metadata);
-
-            let message = Message::new(Payload::Binary(&encoded.payload), Timestamp::from_unix_nanos(0))
-                .with_metadata(&metadata);
-            let decoded = sets
-                .decode_command(&case.set, &message)
-                .map_err(|error| TestCaseError::fail(format!("{error}: {request:#?}")))?;
-            prop_assert_eq!(decoded.command(), request.command.as_str());
-            let arguments: Vec<(String, Arg)> = decoded
-                .arguments
-                .iter()
-                .map(|(name, value)| (name.to_string(), arg(value)))
-                .collect();
-            prop_assert_eq!(&arguments, &request.decoded.arguments, "{:#?}", request);
-            prop_assert_eq!(&names(&decoded.defaulted), &request.decoded.defaulted);
-            prop_assert_eq!(&decoded.target.as_ref().map(target), &request.decoded.target);
-            prop_assert_eq!(&artifacts::record(&decoded.record), &request.record);
-
-            let again = sets
-                .encode(&decoded.request())
-                .map_err(|error| TestCaseError::fail(format!("again: {error}: {request:#?}")))?;
-            prop_assert_eq!(&again.payload, &request.again, "{:#?}", request);
-        }
-        for refused in &case.refused {
-            let request = sent(&refused.set, &refused.command, &refused.arguments, refused.target.as_ref())?;
-            let error = match sets.encode(&request) {
-                Ok(encoded) => {
-                    return Err(TestCaseError::fail(format!("encoded {:?}: {refused:#?}", encoded.payload)));
-                }
-                Err(error) => error,
-            };
-            prop_assert_eq!(error.code(), refused.code, "{}: {:#?}", error, refused);
-            prop_assert_eq!(named(&error), refused.at.clone(), "{}: {:#?}", error, refused);
-        }
-        for garbled in &case.garbled {
-            let metadata: Vec<(&str, MetaValue<'_>)> = garbled
-                .metadata
-                .iter()
-                .map(|(name, n)| (name.as_str(), MetaValue::Int(*n)))
-                .collect();
-            let payload = match garbled.encoding {
-                Encoding::Json => Payload::Json(&garbled.payload),
-                Encoding::Binary => Payload::Binary(&garbled.payload),
-            };
-            let message = Message::new(payload, Timestamp::from_unix_nanos(0)).with_metadata(&metadata);
-            let error = match sets.decode_command(&garbled.set, &message) {
-                Ok(decoded) => {
-                    return Err(TestCaseError::fail(format!("decoded {:?}: {garbled:#?}", decoded.arguments)));
-                }
-                Err(error) => error,
-            };
-            prop_assert_eq!(error.code(), garbled.code, "{}: {:#?}", error, garbled);
-            prop_assert_eq!(decode_named(&error), garbled.at.clone(), "{}: {:#?}", error, garbled);
-        }
+        encodes_and_decodes(&case)?;
     }
+
+    /// JSON command packets (`spec/encoding.md` §5): each payload is the
+    /// canonical JSON the testkit wrote on its own.
+    #[test]
+    fn a_json_command_encodes_and_decodes_as_the_spec_says(case in json_commands()) {
+        encodes_and_decodes(&case)?;
+    }
+}
+
+/// Every request of the case encodes, decodes and encodes again as the
+/// testkit worked out; every refused request and damaged payload fails as
+/// it says.
+fn encodes_and_decodes(case: &Commands) -> Result<(), TestCaseError> {
+    let json = case.bundle["families"][0]["encoding"] == "json";
+    let sets = artifacts::load(&case.bundle, &case.family, &[])?;
+    for request in &case.requests {
+        let encoded = sets
+            .encode(&sent(
+                &case.set,
+                &request.command,
+                &request.arguments,
+                request.target.as_ref(),
+            )?)
+            .map_err(|error| TestCaseError::fail(format!("{error}: {request:#?}")))?;
+        prop_assert_eq!(&encoded.payload, &request.payload, "{:#?}", request);
+        prop_assert_eq!(&artifacts::record(&encoded.record), &request.record);
+        prop_assert_eq!(&names(&encoded.defaulted), &request.defaulted);
+        let metadata = encoded.metadata();
+        prop_assert_eq!(&meta(&metadata), &request.metadata);
+
+        let payload = if json {
+            Payload::Json(&encoded.payload)
+        } else {
+            Payload::Binary(&encoded.payload)
+        };
+        let message = Message::new(payload, Timestamp::from_unix_nanos(0)).with_metadata(&metadata);
+        let decoded = sets
+            .decode_command(&case.set, &message)
+            .map_err(|error| TestCaseError::fail(format!("{error}: {request:#?}")))?;
+        prop_assert_eq!(decoded.command(), request.command.as_str());
+        let arguments: Vec<(String, Arg)> = decoded
+            .arguments
+            .iter()
+            .map(|(name, value)| (name.to_string(), arg(value)))
+            .collect();
+        prop_assert_eq!(&arguments, &request.decoded.arguments, "{:#?}", request);
+        prop_assert_eq!(&names(&decoded.defaulted), &request.decoded.defaulted);
+        prop_assert_eq!(
+            &decoded.target.as_ref().map(target),
+            &request.decoded.target
+        );
+        prop_assert_eq!(&artifacts::record(&decoded.record), &request.record);
+
+        let again = sets
+            .encode(&decoded.request())
+            .map_err(|error| TestCaseError::fail(format!("again: {error}: {request:#?}")))?;
+        prop_assert_eq!(&again.payload, &request.again, "{:#?}", request);
+    }
+    for refused in &case.refused {
+        let request = sent(
+            &refused.set,
+            &refused.command,
+            &refused.arguments,
+            refused.target.as_ref(),
+        )?;
+        let error = match sets.encode(&request) {
+            Ok(encoded) => {
+                return Err(TestCaseError::fail(format!(
+                    "encoded {:?}: {refused:#?}",
+                    encoded.payload
+                )));
+            }
+            Err(error) => error,
+        };
+        prop_assert_eq!(error.code(), refused.code, "{}: {:#?}", error, refused);
+        prop_assert_eq!(
+            named(&error),
+            refused.at.clone(),
+            "{}: {:#?}",
+            error,
+            refused
+        );
+    }
+    for garbled in &case.garbled {
+        let metadata: Vec<(&str, MetaValue<'_>)> = garbled
+            .metadata
+            .iter()
+            .map(|(name, n)| (name.as_str(), MetaValue::Int(*n)))
+            .collect();
+        let payload = match garbled.encoding {
+            Encoding::Json => Payload::Json(&garbled.payload),
+            Encoding::Binary => Payload::Binary(&garbled.payload),
+        };
+        let message = Message::new(payload, Timestamp::from_unix_nanos(0)).with_metadata(&metadata);
+        let error = match sets.decode_command(&garbled.set, &message) {
+            Ok(decoded) => {
+                return Err(TestCaseError::fail(format!(
+                    "decoded {:?}: {garbled:#?}",
+                    decoded.arguments
+                )));
+            }
+            Err(error) => error,
+        };
+        prop_assert_eq!(error.code(), garbled.code, "{}: {:#?}", error, garbled);
+        prop_assert_eq!(
+            decode_named(&error),
+            garbled.at.clone(),
+            "{}: {:#?}",
+            error,
+            garbled
+        );
+    }
+    Ok(())
 }
 
 /// The request as a caller makes it.

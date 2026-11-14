@@ -7,12 +7,13 @@ use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use serde_json::Value;
 
+use super::canonical::{ecmascript, utf16_order};
 use super::encoders::f64_encoder;
 use super::requests::{buffer, decoded_value, native, raw_of};
 use super::values::{unrounded, value};
 use super::{
     Arg, ArgType, Commands, GarbledKind, Given, Len, RefusedKind, Shape, Stage, Target, Through,
-    commands, encoder_of,
+    commands, encoder_of, json_commands,
 };
 use crate::coverage::features;
 use crate::layout::{Numeric, Raw};
@@ -669,6 +670,328 @@ impl RefusedRoute {
         RefusedRoute::CountAfterLengthField,
         RefusedRoute::RecordsBeforeElement,
     ];
+}
+
+/// What a JSON case uses that `labels` doesn't name: its pointers' forms,
+/// names whose UTF-16 order isn't their code points' (`spec/encoding.md`
+/// §5), and in its records, integers at 64 bits' ends, each form a double
+/// is written in, strings with each kind of character JSON escapes or
+/// doesn't, and empty arrays.
+fn json_labels(case: &Commands) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    let set = &case.bundle["sets"][0];
+    let mut scopes: Vec<Vec<Value>> = Vec::new();
+    for packet in set["commands"].as_array().into_iter().flatten() {
+        scopes.push(packet["entries"].as_array().cloned().unwrap_or_default());
+    }
+    for ty in set["types"]
+        .as_object()
+        .into_iter()
+        .flat_map(|types| types.values())
+    {
+        scopes.push(ty["entries"].as_array().cloned().unwrap_or_default());
+    }
+    for entries in &scopes {
+        // The members each object of the payload holds, by its path.
+        let mut objects: BTreeMap<Vec<String>, BTreeSet<String>> = BTreeMap::new();
+        for entry in entries {
+            let text = entry["pointer"].as_str().unwrap_or("");
+            let tokens: Vec<String> = text
+                .split('/')
+                .skip(1)
+                .map(|token| token.replace("~1", "/").replace("~0", "~"))
+                .collect();
+            for k in 0..tokens.len() {
+                objects
+                    .entry(tokens[..k].to_vec())
+                    .or_default()
+                    .insert(tokens[k].clone());
+            }
+            let (containers, name) = tokens.split_at(tokens.len().saturating_sub(1));
+            let mut note = |label: &str| {
+                found.insert(format!("pointer:{label}"));
+            };
+            match containers.len() {
+                0 => {}
+                1 => note("container"),
+                _ => note("two_containers"),
+            }
+            for container in containers {
+                if container.is_empty() {
+                    note("empty_name");
+                } else if container.bytes().all(|b| b.is_ascii_digit()) {
+                    note("digit_name");
+                }
+            }
+            if text.contains("~01") {
+                note("looks_escaped");
+            } else if text.contains("~1") {
+                note("escaped_slash");
+            }
+            if text.contains("~0") && !text.contains("~01") {
+                note("escaped_tilde");
+            }
+            for token in containers.iter().chain(name) {
+                if token.chars().any(|c| u32::from(c) > 0xffff) {
+                    note("astral");
+                } else if !token.is_ascii() {
+                    note("non_ascii");
+                }
+                if token.chars().any(|c| c < '\u{20}') {
+                    note("control");
+                }
+                if token.contains(['"', '\\']) {
+                    note("quote_or_backslash");
+                }
+            }
+        }
+        for names in objects.values() {
+            let mut by_utf16: Vec<&String> = names.iter().collect();
+            by_utf16.sort_by(|a, b| utf16_order(a, b));
+            if !by_utf16.iter().copied().eq(names.iter()) {
+                found.insert("pointer:utf16_order_differs".to_string());
+            }
+        }
+    }
+    fn raw_labels(raw: &Raw, found: &mut BTreeSet<String>) {
+        let mut note = |label: &str| {
+            found.insert(label.to_string());
+        };
+        match raw {
+            Raw::Uint(u64::MAX) => note("raw:u64_max"),
+            Raw::Int(i64::MIN) => note("raw:i64_min"),
+            Raw::Int(i64::MAX) => note("raw:i64_max"),
+            Raw::Float(x) => {
+                let text = ecmascript(*x);
+                note(if *x == 0.0 {
+                    "double:zero"
+                } else if text.contains("e+") {
+                    "double:exponent_large"
+                } else if text.contains("e-") {
+                    "double:exponent_small"
+                } else if text.contains('.') {
+                    "double:fraction"
+                } else {
+                    "double:integer"
+                });
+                if *x != 0.0 && x.abs() < f64::MIN_POSITIVE {
+                    note("double:subnormal");
+                }
+            }
+            Raw::Str(text) => {
+                if text.is_empty() {
+                    note("string:empty");
+                }
+                for c in text.chars() {
+                    note(match c {
+                        '"' | '\\' => "string:quote_or_backslash",
+                        '\u{8}' | '\t' | '\n' | '\u{c}' | '\r' => "string:short_escape",
+                        c if c < '\u{20}' => "string:control",
+                        '\u{7f}' => "string:del",
+                        '\u{2028}' => "string:line_separator",
+                        c if u32::from(c) > 0xffff => "string:astral",
+                        c if !c.is_ascii() => "string:non_ascii",
+                        _ => continue,
+                    });
+                }
+            }
+            Raw::Array(items) => {
+                if items.is_empty() {
+                    note("array:empty");
+                }
+                for item in items {
+                    raw_labels(item, found);
+                }
+            }
+            Raw::Record(fields) => {
+                for (_, raw) in fields {
+                    raw_labels(raw, found);
+                }
+            }
+            _ => {}
+        }
+    }
+    for request in &case.requests {
+        for (_, raw) in &request.record {
+            raw_labels(raw, &mut found);
+        }
+        // −0.0 given to a float field that writes it as it is: `0`, which
+        // decodes as 0.0.
+        for (name, given) in &request.arguments {
+            let Given::Float(x) = given else { continue };
+            if *x != 0.0 || x.is_sign_positive() {
+                continue;
+            }
+            let plain = scopes.iter().flatten().any(|entry| {
+                entry["argument"] == name.as_str()
+                    && entry["type"] == "float"
+                    && entry.get("conversion").is_none()
+            });
+            if plain {
+                found.insert("double:negative_zero_given".to_string());
+            }
+        }
+    }
+    found
+}
+
+/// Generated JSON command layouts reach every feature their packets have
+/// and every edge of the JSON a payload is written in.
+#[test]
+fn json_commands_reach_every_feature() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = json_commands();
+    let mut found = BTreeSet::new();
+    for _ in 0..600 {
+        let case = strategy.new_tree(&mut runner).unwrap().current();
+        found.extend(features(&case.bundle));
+        found.extend(labels(&case));
+        found.extend(json_labels(&case));
+    }
+    let required = [
+        "encoding:json",
+        "key:entry.pointer",
+        "entry:field",
+        "entry:array",
+        "element:scalar",
+        "element:struct",
+        "key:set.types",
+        "field_type:uint",
+        "field_type:int",
+        "field_type:float",
+        "field_type:bool",
+        "field_type:string",
+        "param_type:bool",
+        "param_type:u64",
+        "param_type:i64",
+        "param_type:f64",
+        "param_type:enum",
+        "param_type:str",
+        "param_type:bytes",
+        "conversion:linear",
+        "conversion:poly",
+        "conversion:states",
+        "conversion:table",
+        "conversion:table/step",
+        "conversion:table/extrapolate",
+        "conversion:spline",
+        "conversion:spline/extrapolate",
+        "key:entry.value",
+        "key:entry.argument",
+        "key:entry.inverse",
+        "key:entry.target",
+        "key:entry.unit",
+        "key:command_packet.metadata",
+        "default:bool",
+        "default:int",
+        "default:float",
+        "default:str",
+        "default:list",
+        "range:string_integer",
+        "range:zero_end",
+        "range:one_value",
+        // Each argument type into each JSON field that takes it, alone and
+        // as an array's element; left out, bytes too.
+        "argument:bool>bool",
+        "argument:bool>uint",
+        "argument:bool>int",
+        "argument:u64>uint",
+        "argument:i64>int",
+        "argument:i64>uint",
+        "argument:f64>float",
+        "argument:f64>uint",
+        "argument:f64>int",
+        "argument:enum>uint/states",
+        "argument:enum>int/states",
+        "argument:enum>string",
+        "argument:str>string",
+        "element:bool>bool",
+        "element:u64>uint",
+        "element:i64>int",
+        "element:f64>float",
+        "element:f64>int",
+        "element:enum>uint/states",
+        "element:enum>string",
+        "element:str>string",
+        "argument:left_out/bytes",
+        "argument:left_out/list",
+        "f64:plain",
+        "f64:linear",
+        "f64:table",
+        "f64:table/falling",
+        "inverse:linear",
+        "inverse:poly",
+        "inverse:table",
+        "forward:poly",
+        "forward:spline",
+        "forward:table/step",
+        "units:converted",
+        "target>uint",
+        "target>int",
+        "target>string",
+        "target:int",
+        "target:integer_text",
+        "target:text",
+        "key:uint",
+        "key:int",
+        "key:string",
+        "given:Int-for-f64",
+        "given:Uint-for-i64",
+        "given:Float-for-u64",
+        "given:wide Float-for-u64",
+        "request:defaulted",
+        "request:metadata",
+        "list:defaulted",
+        "list:default/partial",
+        "list:given/0",
+        "list:given/1",
+        "list:given/2",
+        "list:given/3",
+        "list:record/argument",
+        "list:record/constant",
+        "again:same",
+        "again:differs",
+        // The JSON itself (§5).
+        "pointer:container",
+        "pointer:two_containers",
+        "pointer:empty_name",
+        "pointer:digit_name",
+        "pointer:escaped_slash",
+        "pointer:escaped_tilde",
+        "pointer:looks_escaped",
+        "pointer:non_ascii",
+        "pointer:astral",
+        "pointer:control",
+        "pointer:quote_or_backslash",
+        "pointer:utf16_order_differs",
+        "raw:u64_max",
+        "raw:i64_min",
+        "raw:i64_max",
+        "double:zero",
+        "double:integer",
+        "double:fraction",
+        "double:exponent_large",
+        "double:exponent_small",
+        "double:subnormal",
+        "double:negative_zero_given",
+        "string:empty",
+        "string:quote_or_backslash",
+        "string:short_escape",
+        "string:control",
+        "string:del",
+        "string:line_separator",
+        "string:non_ascii",
+        "string:astral",
+        "array:empty",
+    ];
+    let missing: Vec<&str> = required
+        .into_iter()
+        .filter(|feature| !found.contains(*feature))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "no JSON command layout reaches {missing:?}"
+    );
 }
 
 /// Why no packet matched a payload.

@@ -429,10 +429,58 @@ pub fn commands() -> BoxedStrategy<Commands> {
             )
         })
         .prop_map(|(little, metadata, layouts, requests, refused, garbled)| {
-            let mut case = assemble(little, metadata, &layouts, requests);
+            let mut case = assemble(Encoding::Binary, little, metadata, &layouts, requests);
             case.refused = refused.into_iter().flatten().collect();
             case.garbled = garbled.into_iter().flatten().collect();
             case
+        })
+        .boxed()
+}
+
+/// Any JSON command layout validation accepts, of the kinds `json.rs`
+/// builds, with one to three requests for each packet
+/// (`spec/encoding.md` §5, §7). Its requests are all valid, and its
+/// payloads undamaged.
+pub fn json_commands() -> BoxedStrategy<Commands> {
+    (
+        any::<bool>(),
+        vec(json::command_spec(), 1..=3),
+        json::place(),
+    )
+        .prop_flat_map(|(metadata, specs, key_place)| {
+            let count = specs.len();
+            let apids = vec(0_i64..3, count).prop_map(move |apids| {
+                apids
+                    .into_iter()
+                    .map(|apid| metadata.then_some(apid))
+                    .collect::<Vec<_>>()
+            });
+            (
+                Just(metadata),
+                Just(specs),
+                Just(key_place),
+                json::key(count),
+                apids,
+            )
+        })
+        .prop_flat_map(|(metadata, specs, key_place, (key, values), apids)| {
+            let layouts: Vec<Layout> = specs
+                .into_iter()
+                .zip(values)
+                .zip(apids)
+                .enumerate()
+                .map(|(index, ((spec, value), apid))| {
+                    json::lay_out(index, spec, (key.clone(), value), &key_place, apid)
+                })
+                .collect();
+            let requests: Vec<BoxedStrategy<Vec<Request>>> = layouts
+                .iter()
+                .map(|layout| vec(request(layout.clone()), 1..=3).boxed())
+                .collect();
+            (Just(metadata), Just(layouts), requests)
+        })
+        .prop_map(|(metadata, layouts, requests)| {
+            assemble(Encoding::Json, false, metadata, &layouts, requests)
         })
         .boxed()
 }
@@ -748,6 +796,9 @@ enum Placed {
         /// Whether its byte order is spelled.
         explicit: bool,
         source: Source,
+        /// In a JSON packet, its pointer's tokens, relative to its object
+        /// (RFC 6901 escapes undone); none in a binary one.
+        pointer: Vec<String>,
     },
     Padding(u64),
     Checksum {
@@ -759,6 +810,8 @@ enum Placed {
         name: String,
         count: Counted,
         elements: Elements,
+        /// As a field's.
+        pointer: Vec<String>,
     },
 }
 
@@ -766,6 +819,7 @@ enum Placed {
 struct Layout {
     name: String,
     command: String,
+    encoding: Encoding,
     little: bool,
     apid: Option<i64>,
     arguments: Vec<(Encoder, bool)>,
@@ -790,8 +844,10 @@ impl Layout {
 }
 
 mod bundle;
+mod canonical;
 mod encoders;
 mod faults;
+mod json;
 mod packets;
 mod requests;
 mod values;
