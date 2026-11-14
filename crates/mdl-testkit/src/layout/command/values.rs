@@ -85,12 +85,61 @@ fn f64_values(encoder: &Encoder) -> BoxedStrategy<Arg> {
     if low <= 0.0 && 0.0 <= high {
         choices.push(Just(-0.0).boxed());
     }
+    // An argument with no range written as it is into a binary64 field
+    // takes any finite double.
+    let unconverted = encoder.through == Through::Plain
+        && encoder
+            .units
+            .is_none_or(|(argument, field)| argument == field);
+    if unconverted
+        && encoder.min.is_none()
+        && encoder.max.is_none()
+        && encoder.shape == Shape::Float(64)
+    {
+        choices.push(wide_doubles());
+    }
     if let (Some(min), Some(max)) = (encoder.min, encoder.max)
         && let Some(ties) = ties(encoder, min, max)
     {
         choices.push(ties);
     }
     Union::new(choices).prop_map(Arg::F64).boxed()
+}
+
+/// Doubles of every magnitude, either sign: any finite double; a few digits
+/// times a power of ten, mostly a small one, so every form ECMAScript
+/// writes a double in (`spec/encoding.md` §5), whole numbers among them;
+/// and the edges of those forms, the largest double and subnormals.
+fn wide_doubles() -> BoxedStrategy<f64> {
+    let powers = prop_oneof![3 => -30_i32..=30, 1 => -330_i32..=310];
+    let digits = (1_u32..=999_999, powers).prop_filter_map(
+        "a finite double, not 0",
+        |(digits, exponent)| {
+            let x: f64 = format!("{digits}e{exponent}").parse().ok()?;
+            (x.is_finite() && x != 0.0).then_some(x)
+        },
+    );
+    let edges = select(
+        &[
+            1e21,
+            9.999_999_999_999_999e20,
+            1e-6,
+            1e-7,
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            2.225_073_858_507_201e-308,
+            1e-310,
+            5e-324,
+        ][..],
+    );
+    let magnitude = prop_oneof![
+        2 => any::<f64>().prop_filter("a finite double", |x| x.is_finite()),
+        2 => digits,
+        2 => edges,
+    ];
+    (magnitude, any::<bool>())
+        .prop_map(|(x, negative)| if negative { -x } else { x })
+        .boxed()
 }
 
 /// Values in `min..=max` whose raw value is near halfway between two the
@@ -149,13 +198,39 @@ pub(super) fn text_for(text: Text, len: &Len) -> BoxedStrategy<String> {
         .boxed()
 }
 
+/// Characters a writer of text has to get right: what JSON escapes (`"`,
+/// `\`, the controls, some with short escapes), what it doesn't (`/`,
+/// DEL, U+2028), `é` composed and the accent alone, and characters either
+/// side of the surrogates, a BMP noncharacter among them.
+const AWKWARD: [char; 18] = [
+    '"',
+    '\\',
+    '/',
+    '\n',
+    '\t',
+    '\r',
+    '\u{8}',
+    '\u{c}',
+    '\u{0}',
+    '\u{1}',
+    '\u{1f}',
+    '\u{7f}',
+    '\u{e9}',
+    '\u{301}',
+    '\u{2028}',
+    '\u{ff5e}',
+    '\u{ffff}',
+    '\u{1f600}',
+];
+
 /// Text of exactly `bytes` bytes in `text`, without the byte `avoid`:
-/// characters the encoding holds, then letters.
+/// characters the encoding holds, UTF-8 leaning toward [`AWKWARD`] ones,
+/// then letters.
 fn text_of(bytes: usize, text: Text, avoid: Option<u8>) -> BoxedStrategy<String> {
     let chars = match text {
         Text::Ascii => proptest::char::range('\u{0}', '\u{7f}').boxed(),
         Text::Latin1 => proptest::char::range('\u{0}', '\u{ff}').boxed(),
-        Text::Utf8 => any::<char>().boxed(),
+        Text::Utf8 => prop_oneof![3 => any::<char>(), 2 => select(&AWKWARD[..])].boxed(),
     };
     vec(chars, 0..=bytes)
         .prop_map(move |chars| {
