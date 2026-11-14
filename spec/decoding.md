@@ -286,17 +286,27 @@ struct).
 ### 5.3 JSON entries
 
 Entries have pointers relative to their container (the document, a
-struct's object, or an array element). The document MUST be an object,
-whatever the packet's entries and however the packet was chosen
-[`wrong_type`, with an empty path]. A pointer finds nothing in a string, a
-number, a boolean or `null`, and in an array only an index token (`/0`)
-finds anything, so this mostly shows for a packet chosen without reading
-the document: a catch-all, or one keyed only by metadata.
+struct's object, or an array element). A pointer is a JSON Pointer (RFC
+6901): each token, unescaped (`~1` is `/`, then `~0` is `~`), names a
+member of an object, or in an array the element at that index if the
+token is one (`0`, or ASCII digits with no leading zero). An index at or
+past the array's end finds nothing, however many digits it has, and `-`
+and every other token find nothing in an array. So `/a/1` finds 9 in
+both `{"a": [7, 9]}` and `{"a": {"1": 9}}`, and `/a/01` finds only a
+member `"01"`.
+
+The document MUST be an object, whatever the packet's entries and however
+the packet was chosen [`wrong_type`, with an empty path]. A pointer finds
+nothing in a string, a number, a boolean or `null`, and in an array only
+an index token (`/0`) finds anything, so this mostly shows for a packet
+chosen without reading the document: a catch-all, or one keyed only by
+metadata.
 
 The empty pointer is its container's whole object, so validation refuses
 it for a field or an array, as it does for a `path` locator (§3.1), a
-pointer identify key (§4) and an `iso8601` time (§8) [`invalid_pointer`]. A struct may be at it: the
-struct reads that object's members itself.
+pointer identify key (§4) and an `iso8601` time (§8)
+[`invalid_pointer`]. A struct may be at it: the struct reads that
+object's members itself.
 
 - A field reads the value at its pointer, which MUST be of its JSON type:
   a number for a `uint`, `int` or `float` field, a boolean for a `bool`
@@ -514,7 +524,10 @@ lists them, by canonical name. A sample is
   | `invalid` | a sentinel (§7.2) |
 
   The first that applies, from the bottom up, is the quality. Any quality
-  added later takes its place in this order.
+  added later takes its place in this order. A string field's text is one
+  of its param's states only when it equals the state's name code point
+  by code point, with no normalization, as §2.3 compares member names:
+  `e` followed by U+0301 isn't the state `é`.
 - `value` is the param's value when the quality is `good`, and the raw
   value otherwise. By param type: `f64`, the number through its
   conversion, then from the field's unit into the param's (`units.md`
