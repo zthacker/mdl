@@ -6,18 +6,30 @@
 
 use std::cmp::Ordering;
 
-/// A JSON value, as a command payload holds it.
+/// A JSON value, as a command payload holds it, or as a fault planted in
+/// one makes it.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum Canon {
+    Null,
     /// An integer field's value.
     Int(i128),
     /// A float field's value, finite.
     Float(f64),
     Bool(bool),
     Str(String),
+    /// Text written exactly so: a number no field's value is written as
+    /// (`1e20`), or what isn't JSON at all.
+    Literal(String),
     Array(Vec<Canon>),
     /// Members as they were put; written in UTF-16 order.
     Object(Vec<(String, Canon)>),
+}
+
+/// A step into a document: an object's member, or an array's element.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) enum Hop {
+    Member(String),
+    Index(usize),
 }
 
 impl Canon {
@@ -41,6 +53,53 @@ impl Canon {
         };
         members[at].1.put(rest, value);
     }
+
+    /// The value at `hops`, if there's one.
+    pub(super) fn at(&self, hops: &[Hop]) -> Option<&Canon> {
+        let Some((hop, rest)) = hops.split_first() else {
+            return Some(self);
+        };
+        let next = match (hop, self) {
+            (Hop::Member(name), Canon::Object(members)) => members
+                .iter()
+                .find(|(member, _)| member == name)
+                .map(|(_, value)| value)?,
+            (Hop::Index(index), Canon::Array(items)) => items.get(*index)?,
+            _ => return None,
+        };
+        next.at(rest)
+    }
+
+    /// The value at `hops`, if there's one, to change.
+    pub(super) fn at_mut(&mut self, hops: &[Hop]) -> Option<&mut Canon> {
+        let Some((hop, rest)) = hops.split_first() else {
+            return Some(self);
+        };
+        let next = match (hop, self) {
+            (Hop::Member(name), Canon::Object(members)) => members
+                .iter_mut()
+                .find(|(member, _)| member == name)
+                .map(|(_, value)| value)?,
+            (Hop::Index(index), Canon::Array(items)) => items.get_mut(*index)?,
+            _ => return None,
+        };
+        next.at_mut(rest)
+    }
+
+    /// Takes the member at `hops` out of its object; whether it was there.
+    pub(super) fn remove(&mut self, hops: &[Hop]) -> bool {
+        let Some((Hop::Member(name), parent)) = hops.split_last() else {
+            return false;
+        };
+        match self.at_mut(parent) {
+            Some(Canon::Object(members)) => {
+                let before = members.len();
+                members.retain(|(member, _)| member != name);
+                members.len() < before
+            }
+            _ => false,
+        }
+    }
 }
 
 /// The value as JSON text.
@@ -52,6 +111,8 @@ pub(super) fn write(value: &Canon) -> String {
 
 fn write_into(out: &mut String, value: &Canon) {
     match value {
+        Canon::Null => out.push_str("null"),
+        Canon::Literal(text) => out.push_str(text),
         Canon::Int(n) => out.push_str(&n.to_string()),
         Canon::Float(x) => out.push_str(&ecmascript(*x)),
         Canon::Bool(b) => out.push_str(if *b { "true" } else { "false" }),

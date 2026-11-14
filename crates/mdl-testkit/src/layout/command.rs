@@ -35,7 +35,7 @@ use crate::checksum::Algorithm;
 use crate::layout::{Numeric, Raw, Text};
 
 use bundle::assemble;
-use faults::{garbling, refusal};
+use faults::{garbling, json_garbling, refusal};
 use packets::{command_spec, key, lay_out};
 use requests::request;
 
@@ -227,48 +227,97 @@ pub enum GarbledKind {
     Cut,
     /// The payload cut inside an array with a known count.
     CutInsideArray,
+    /// A JSON payload whose document isn't an object.
+    Document,
     /// An element holding a raw value decoding refuses.
     Element,
     /// A JSON payload for a binary family.
     Encoding,
     /// Lists past their bounds, through a payload packed with them.
     ListLength,
+    /// A JSON payload's member gone, or `null`, where an entry reads a
+    /// value.
+    Missing,
     /// Part of one more element after an array that runs to the end.
     MoreBytes,
     /// A payload no packet matches.
     NoPacket,
+    /// A JSON payload that isn't JSON MDL reads.
+    NotJson,
+    /// A `null` element of a JSON array that holds a list, which is no
+    /// value.
+    Null,
     /// An argument's field holding a raw value decoding refuses.
     Raw,
     /// A record's constant holding another value.
     RecordConstant,
     /// A set the family doesn't have.
     Set,
+    /// A JSON number an integer field can't take.
+    Unfit,
+    /// A JSON value of another type than its entry or element takes.
+    WrongType,
 }
 
 impl GarbledKind {
-    pub const ALL: [GarbledKind; 13] = [
+    pub const ALL: [GarbledKind; 19] = [
         GarbledKind::Checksum,
         GarbledKind::Constant,
         GarbledKind::Count,
         GarbledKind::Cut,
         GarbledKind::CutInsideArray,
+        GarbledKind::Document,
         GarbledKind::Element,
         GarbledKind::Encoding,
         GarbledKind::ListLength,
+        GarbledKind::Missing,
         GarbledKind::MoreBytes,
         GarbledKind::NoPacket,
+        GarbledKind::NotJson,
+        GarbledKind::Null,
         GarbledKind::Raw,
         GarbledKind::RecordConstant,
         GarbledKind::Set,
+        GarbledKind::Unfit,
+        GarbledKind::WrongType,
     ];
+
+    /// Whether payloads in `encoding` are given faults of this kind.
+    pub fn planted_in(self, encoding: Encoding) -> bool {
+        let binary = matches!(
+            self,
+            GarbledKind::Checksum
+                | GarbledKind::Count
+                | GarbledKind::Cut
+                | GarbledKind::CutInsideArray
+                | GarbledKind::MoreBytes
+        );
+        let json = matches!(
+            self,
+            GarbledKind::Document
+                | GarbledKind::Missing
+                | GarbledKind::NotJson
+                | GarbledKind::Null
+                | GarbledKind::Unfit
+                | GarbledKind::WrongType
+        );
+        match encoding {
+            Encoding::Binary => !json,
+            Encoding::Json => !binary,
+        }
+    }
 
     /// How likely the kind is to be picked, against the others: those
     /// any payload can be given (an unknown set, the wrong encoding, no
-    /// packet) a quarter as likely as those that need what the layout
-    /// has.
+    /// packet, text that isn't JSON, a document that isn't an object) a
+    /// quarter as likely as those that need what the layout has.
     fn weight(self) -> usize {
         match self {
-            GarbledKind::Encoding | GarbledKind::NoPacket | GarbledKind::Set => 1,
+            GarbledKind::Document
+            | GarbledKind::Encoding
+            | GarbledKind::NoPacket
+            | GarbledKind::NotJson
+            | GarbledKind::Set => 1,
             GarbledKind::Checksum
             | GarbledKind::Constant
             | GarbledKind::Count
@@ -276,9 +325,13 @@ impl GarbledKind {
             | GarbledKind::CutInsideArray
             | GarbledKind::Element
             | GarbledKind::ListLength
+            | GarbledKind::Missing
             | GarbledKind::MoreBytes
+            | GarbledKind::Null
             | GarbledKind::Raw
-            | GarbledKind::RecordConstant => 4,
+            | GarbledKind::RecordConstant
+            | GarbledKind::Unfit
+            | GarbledKind::WrongType => 4,
         }
     }
 }
@@ -311,6 +364,10 @@ pub struct Request {
     /// The payload the decoded arguments and target encode to: this one,
     /// when every converted field's inverse undoes its conversion (§7.4).
     pub again: Vec<u8>,
+    /// For a JSON packet, the payload written another way (`decoding.md`
+    /// §2.3), with members no field reads (§7.3), which decodes as the
+    /// payload does.
+    pub respelled: Option<Vec<u8>>,
 }
 
 /// A decoded command (`spec/encoding.md` §7.4).
@@ -438,49 +495,67 @@ pub fn commands() -> BoxedStrategy<Commands> {
 }
 
 /// Any JSON command layout validation accepts, of the kinds `json.rs`
-/// builds, with one to three requests for each packet
-/// (`spec/encoding.md` §5, §7). Its requests are all valid, and its
-/// payloads undamaged.
+/// builds, keyed by `op`, by it and metadata, or by metadata alone, with
+/// one to three requests for each packet, one to three refused requests,
+/// and one to three payloads with faults planted in them
+/// (`spec/encoding.md` §5, §7).
 pub fn json_commands() -> BoxedStrategy<Commands> {
     (
-        any::<bool>(),
+        json::keying(),
         vec(json::command_spec(), 1..=3),
         json::place(),
     )
-        .prop_flat_map(|(metadata, specs, key_place)| {
+        .prop_flat_map(|(keying, specs, key_place)| {
             let count = specs.len();
-            let apids = vec(0_i64..3, count).prop_map(move |apids| {
-                apids
-                    .into_iter()
-                    .map(|apid| metadata.then_some(apid))
-                    .collect::<Vec<_>>()
-            });
             (
-                Just(metadata),
+                Just(keying),
                 Just(specs),
                 Just(key_place),
                 json::key(count),
-                apids,
+                json::apids(keying, count),
             )
         })
-        .prop_flat_map(|(metadata, specs, key_place, (key, values), apids)| {
+        .prop_flat_map(|(keying, specs, key_place, (key, values), apids)| {
+            let keys = if keying.op() {
+                values.clone()
+            } else {
+                Vec::new()
+            };
             let layouts: Vec<Layout> = specs
                 .into_iter()
                 .zip(values)
                 .zip(apids)
                 .enumerate()
                 .map(|(index, ((spec, value), apid))| {
-                    json::lay_out(index, spec, (key.clone(), value), &key_place, apid)
+                    let key = keying.op().then(|| (key.clone(), value));
+                    json::lay_out(index, spec, key, &key_place, apid)
                 })
                 .collect();
             let requests: Vec<BoxedStrategy<Vec<Request>>> = layouts
                 .iter()
                 .map(|layout| vec(request(layout.clone()), 1..=3).boxed())
                 .collect();
-            (Just(metadata), Just(layouts), requests)
+            let refused: Vec<BoxedStrategy<Vec<Refused>>> = layouts
+                .iter()
+                .map(|layout| vec(refusal(layout.clone()), 1..=3).boxed())
+                .collect();
+            let garbled: Vec<BoxedStrategy<Vec<Garbled>>> = layouts
+                .iter()
+                .map(|layout| vec(json_garbling(layout.clone(), keys.clone()), 1..=3).boxed())
+                .collect();
+            (
+                Just(keying.metadata()),
+                Just(layouts),
+                requests,
+                refused,
+                garbled,
+            )
         })
-        .prop_map(|(metadata, layouts, requests)| {
-            assemble(Encoding::Json, false, metadata, &layouts, requests)
+        .prop_map(|(metadata, layouts, requests, refused, garbled)| {
+            let mut case = assemble(Encoding::Json, false, metadata, &layouts, requests);
+            case.refused = refused.into_iter().flatten().collect();
+            case.garbled = garbled.into_iter().flatten().collect();
+            case
         })
         .boxed()
 }

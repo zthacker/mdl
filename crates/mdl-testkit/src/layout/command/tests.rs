@@ -12,8 +12,8 @@ use super::encoders::f64_encoder;
 use super::requests::{buffer, decoded_value, native, raw_of};
 use super::values::{unrounded, value};
 use super::{
-    Arg, ArgType, Commands, GarbledKind, Given, Len, RefusedKind, Shape, Stage, Target, Through,
-    commands, encoder_of, json_commands,
+    Arg, ArgType, Commands, Encoding, Garbled, GarbledKind, Given, Len, Refused, RefusedKind,
+    Shape, Stage, Target, Through, commands, encoder_of, json_commands,
 };
 use crate::coverage::features;
 use crate::layout::{Numeric, Raw};
@@ -276,10 +276,16 @@ fn labels(case: &Commands) -> BTreeSet<String> {
                 note("list:default/partial".into());
             }
         }
-        let key = &entries[0];
-        note(format!("key:{}", key["type"].as_str().unwrap_or("")));
-        if key["length"]["terminator"].is_number() {
-            note("key:string/terminated".into());
+        // The key `op`, first in every packet that has it; a JSON packet
+        // keyed by metadata alone has none.
+        match entries.first().filter(|entry| entry["name"] == "op") {
+            Some(key) => {
+                note(format!("key:{}", key["type"].as_str().unwrap_or("")));
+                if key["length"]["terminator"].is_number() {
+                    note("key:string/terminated".into());
+                }
+            }
+            None => note("key:metadata_alone".into()),
         }
         let sums: Vec<&Value> = entries
             .iter()
@@ -613,6 +619,8 @@ enum Reached {
     KindCode(GarbledKind, &'static str),
     /// Why no packet matched a payload.
     Unmatched(Unmatched),
+    /// A way a JSON payload's fault is planted, or what its error names.
+    Json(&'static str),
 }
 
 /// A route a refusal takes: where its code is caught, or an order §3.5
@@ -625,6 +633,10 @@ enum RefusedRoute {
     /// `raw_range` for an argument's field, or the target's.
     RawRangeArgument,
     RawRangeTarget,
+    /// `raw_range` for an f64 whose raw value isn't finite: one without a
+    /// range, or past the absent end of a range with one end.
+    NotFiniteUnranged,
+    NotFinitePastOpenEnd,
     /// A code for a list's value, or for an element.
     ListValue(&'static str),
     Element(&'static str),
@@ -647,11 +659,13 @@ enum RefusedRoute {
 }
 
 impl RefusedRoute {
-    const ALL: [RefusedRoute; 21] = [
+    const ALL: [RefusedRoute; 23] = [
         RefusedRoute::TwoFaults,
         RefusedRoute::LengthField,
         RefusedRoute::RawRangeArgument,
         RefusedRoute::RawRangeTarget,
+        RefusedRoute::NotFiniteUnranged,
+        RefusedRoute::NotFinitePastOpenEnd,
         RefusedRoute::ListValue("wrong_type"),
         RefusedRoute::ListValue("non_finite"),
         RefusedRoute::ListValue("unknown_state"),
@@ -811,9 +825,52 @@ fn json_labels(case: &Commands) -> BTreeSet<String> {
             _ => {}
         }
     }
+    // The pointer of `op`, which every packet that has it shares.
+    let first = &set["commands"][0]["entries"][0];
+    let key_pointer =
+        (first["name"] == "op").then(|| first["pointer"].as_str().unwrap_or("").to_string());
     for request in &case.requests {
         for (_, raw) in &request.record {
             raw_labels(raw, &mut found);
+        }
+        // The payload written another way: its key an integer written as
+        // a double (`42.0`), members no field reads, escapes, whitespace.
+        if let Some(respelled) = &request.respelled {
+            let text = String::from_utf8_lossy(respelled);
+            let mut note = |label: &str| {
+                found.insert(format!("respelled:{label}"));
+            };
+            if let Ok(document) = serde_json::from_str::<Value>(&text) {
+                if let Some(pointer) = &key_pointer
+                    && document.pointer(pointer).is_some_and(Value::is_f64)
+                {
+                    note("key_as_double");
+                }
+                fn extra(value: &Value) -> bool {
+                    match value {
+                        Value::Object(members) => {
+                            members.contains_key("x0") || members.values().any(extra)
+                        }
+                        Value::Array(items) => items.iter().any(extra),
+                        _ => false,
+                    }
+                }
+                if extra(&document) {
+                    note("member_no_field_reads");
+                }
+            }
+            if text.contains("\\u") {
+                note("unicode_escape");
+            }
+            if text.contains("\\/") {
+                note("escaped_solidus");
+            }
+            if text.contains(['\n', '\t']) {
+                note("whitespace");
+            }
+            if text.contains("e-400") {
+                note("zero_too_small_for_a_double");
+            }
         }
         // −0.0 given to a float field that writes it as it is: `0`, which
         // decodes as 0.0.
@@ -935,6 +992,7 @@ fn json_commands_reach_every_feature() {
         "key:uint",
         "key:int",
         "key:string",
+        "key:metadata_alone",
         "given:Int-for-f64",
         "given:Uint-for-i64",
         "given:Float-for-u64",
@@ -983,6 +1041,13 @@ fn json_commands_reach_every_feature() {
         "string:non_ascii",
         "string:astral",
         "array:empty",
+        // Payloads written another way decode alike (§7.3).
+        "respelled:key_as_double",
+        "respelled:member_no_field_reads",
+        "respelled:unicode_escape",
+        "respelled:escaped_solidus",
+        "respelled:whitespace",
+        "respelled:zero_too_small_for_a_double",
     ];
     let missing: Vec<&str> = required
         .into_iter()
@@ -992,6 +1057,320 @@ fn json_commands_reach_every_feature() {
         missing.is_empty(),
         "no JSON command layout reaches {missing:?}"
     );
+}
+
+/// What a refused request reaches: its code, its faults' kinds, and the
+/// routes its first fault takes.
+fn note_refusal(case: &Commands, refused: &Refused, note: &mut dyn FnMut(Reached)) {
+    let route = Reached::Route;
+    note(Reached::Refused(refused.code));
+    for fault in &refused.faults {
+        note(Reached::RefusedKind(fault.kind));
+    }
+    if refused.faults.len() >= 2 {
+        note(route(RefusedRoute::TwoFaults));
+    }
+    let Some(first) = refused.faults.iter().min_by_key(|fault| fault.stage) else {
+        return;
+    };
+    if let (Stage::Length(_), "bad_length") = (first.stage, first.code) {
+        note(route(RefusedRoute::LengthField));
+    }
+    // An element's `raw_range` counts with the elements, below.
+    if first.code == "raw_range" {
+        match (first.stage, first.argument) {
+            (
+                Stage::Field {
+                    element: Some(_), ..
+                },
+                _,
+            ) => {}
+            (_, Some(_)) => note(route(RefusedRoute::RawRangeArgument)),
+            (_, None) => note(route(RefusedRoute::RawRangeTarget)),
+        }
+    }
+    // An f64 given far past what any field's raw value can be finite at.
+    if first.code == "raw_range"
+        && let Some(argument) = first.argument
+        && let Some((_, Given::Float(x))) = refused
+            .arguments
+            .iter()
+            .find(|(name, _)| *name == format!("a{argument}"))
+        && x.abs() >= 1e300
+    {
+        let range = &case.bundle["catalog"]["commands"][refused.command.as_str()]["arguments"]
+            [argument]["range"];
+        note(route(if range.is_object() {
+            RefusedRoute::NotFinitePastOpenEnd
+        } else {
+            RefusedRoute::NotFiniteUnranged
+        }));
+    }
+    // §3.5: a length field's fault is caught after a later entry's.
+    let length_after_later = refused
+        .faults
+        .iter()
+        .any(|fault| match (fault.stage, first.stage) {
+            (Stage::Length(measured), Stage::Field { entry: later, .. }) => later > measured,
+            _ => false,
+        });
+    if length_after_later {
+        note(route(RefusedRoute::LengthFieldAfterLaterEntry));
+    }
+    // §3.6: a count's fault is caught after a later entry's, and
+    // after a later length field's; records' lengths are compared
+    // before their fields are worked out.
+    for fault in &refused.faults {
+        match (fault.stage, first.stage) {
+            (
+                Stage::Field {
+                    entry: array,
+                    element: Some(_),
+                },
+                Stage::Field {
+                    entry: records,
+                    element: None,
+                },
+            ) if array == records && first.code == "bad_count" => {
+                note(route(RefusedRoute::RecordsBeforeElement));
+            }
+            (Stage::Count(array), Stage::Field { entry: later, .. }) if later > array => {
+                note(route(RefusedRoute::CountAfterLaterEntry));
+            }
+            (Stage::Count(array), Stage::Length(later)) if later > array => {
+                note(route(RefusedRoute::CountAfterLengthField));
+            }
+            _ => {}
+        }
+    }
+    // Lists: a list's value, an element, records, a count.
+    let at = first.at.clone().unwrap_or_default();
+    match first.stage {
+        Stage::Argument(_) if at.contains('[') => {
+            note(route(RefusedRoute::ListValue(first.code)));
+        }
+        Stage::Field {
+            element: Some(_), ..
+        } => {
+            note(route(RefusedRoute::Element(first.code)));
+        }
+        Stage::Field { element: None, .. } if first.code == "bad_count" => {
+            note(route(RefusedRoute::BadCountRecords));
+        }
+        Stage::Count(_) => {
+            note(route(RefusedRoute::BadCountCount));
+        }
+        _ => {}
+    }
+    let takes_list = case.bundle["catalog"]["commands"][&refused.command]["arguments"]
+        .as_array()
+        .and_then(|arguments| arguments.iter().find(|argument| argument["name"] == at))
+        .is_some_and(|argument| argument.get("list").is_some());
+    let given_list = refused
+        .arguments
+        .iter()
+        .rev()
+        .find(|(name, _)| *name == at)
+        .is_some_and(|(_, given)| matches!(given, Given::List(_)));
+    match (first.code, takes_list, given_list) {
+        ("wrong_type", true, false) => note(route(RefusedRoute::OneValueForList)),
+        ("wrong_type", false, true) => note(route(RefusedRoute::ListForOneValue)),
+        ("not_default", true, _) => note(route(RefusedRoute::NotDefaultList)),
+        _ => {}
+    }
+}
+
+/// How a JSON payload's fault was planted, from what its report says, and
+/// what its error names, by the path's form (`decoding.md` §9).
+fn json_routes(garbled: &Garbled) -> Vec<&'static str> {
+    let planted = garbled.planted.as_str();
+    let mut routes = Vec::new();
+    let way = match garbled.kind {
+        GarbledKind::NoPacket if planted.contains("which a key is in") => Some("no_packet:object"),
+        GarbledKind::NoPacket if planted == "no metadata" => Some("no_packet:metadata"),
+        GarbledKind::NoPacket if planted.ends_with("removed") => Some("no_packet:key_removed"),
+        GarbledKind::NoPacket if planted.ends_with("null") => Some("no_packet:key_null"),
+        GarbledKind::NoPacket
+            if planted.ends_with("as text") || planted.ends_with("as a number") =>
+        {
+            Some("no_packet:key_type")
+        }
+        GarbledKind::NoPacket => Some("no_packet:key_value"),
+        GarbledKind::NotJson => Some(match planted {
+            "cut before its closing brace" => "invalid_json:cut",
+            "a token after the document" => "invalid_json:trailing",
+            "a byte order mark before it" => "invalid_json:byte_order_mark",
+            "a byte that isn't UTF-8" => "invalid_json:utf8",
+            "a member twice" => "invalid_json:twice",
+            "a number past binary64's largest" => "invalid_json:huge",
+            _ => "invalid_json:surrogate",
+        }),
+        GarbledKind::Missing if planted.contains("object at") => Some("missing:object"),
+        GarbledKind::Missing if planted.ends_with("null") => Some("missing:null"),
+        GarbledKind::Missing => Some("missing:removed"),
+        _ => None,
+    };
+    routes.extend(way);
+    let argument = garbled
+        .at
+        .as_deref()
+        .is_some_and(|at| at.starts_with('a') && !at.contains('.'));
+    let place = match garbled.at.as_deref() {
+        None => None,
+        Some("") => Some("at:document"),
+        Some(at) if argument && at.ends_with(']') => Some("at:argument_element"),
+        Some(_) if argument => Some("at:argument"),
+        Some(at) if at.contains("].") => Some("at:record_field"),
+        Some(at) if at.ends_with(']') => Some("at:element"),
+        Some(_) => Some("at:field"),
+    };
+    routes.extend(place);
+    routes
+}
+
+/// Faults planted in JSON requests and payloads reach every refusal code
+/// a JSON layout can give, every kind of payload fault and each way it's
+/// planted, and each place an error names, at least 5 times each.
+#[test]
+fn json_faults_reach_every_code() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = json_commands();
+    let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
+    let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
+    for _ in 0..1000 {
+        let case = strategy.new_tree(&mut runner).unwrap().current();
+        for refused in &case.refused {
+            note_refusal(&case, refused, &mut note);
+        }
+        for garbled in &case.garbled {
+            note(Reached::Garbled(garbled.code));
+            note(Reached::GarbledKind(garbled.kind));
+            note(Reached::KindCode(garbled.kind, garbled.code));
+            for route in json_routes(garbled) {
+                note(Reached::Json(route));
+            }
+        }
+    }
+    let mut required: Vec<Reached> = [
+        "unknown_set",
+        "unknown_command",
+        "unknown_argument",
+        "duplicate_argument",
+        "missing_argument",
+        "wrong_type",
+        "non_finite",
+        "unknown_state",
+        "out_of_range",
+        "not_default",
+        "raw_range",
+        "missing_target",
+        "target_type",
+        "list_length",
+        "bad_count",
+    ]
+    .map(Reached::Refused)
+    .to_vec();
+    required.extend(
+        [
+            RefusedKind::Request,
+            RefusedKind::Name,
+            RefusedKind::Missing,
+            RefusedKind::ListValue,
+            RefusedKind::Value,
+            RefusedKind::Field,
+            RefusedKind::Records,
+            RefusedKind::Target,
+        ]
+        .map(Reached::RefusedKind),
+    );
+    required.extend(
+        [
+            RefusedRoute::TwoFaults,
+            RefusedRoute::RawRangeArgument,
+            RefusedRoute::RawRangeTarget,
+            RefusedRoute::NotFiniteUnranged,
+            RefusedRoute::NotFinitePastOpenEnd,
+            RefusedRoute::ListValue("wrong_type"),
+            RefusedRoute::ListValue("non_finite"),
+            RefusedRoute::ListValue("unknown_state"),
+            RefusedRoute::ListValue("out_of_range"),
+            RefusedRoute::BadCountRecords,
+            RefusedRoute::OneValueForList,
+            RefusedRoute::ListForOneValue,
+            RefusedRoute::NotDefaultList,
+        ]
+        .map(Reached::Route),
+    );
+    required.extend(
+        [
+            "unknown_set",
+            "wrong_encoding",
+            "invalid_json",
+            "no_packet",
+            "missing_value",
+            "wrong_type",
+            "out_of_range",
+            "wrong_constant",
+            "unknown_state",
+            "list_length",
+        ]
+        .map(Reached::Garbled),
+    );
+    required.extend(
+        GarbledKind::ALL
+            .into_iter()
+            .filter(|kind| kind.planted_in(Encoding::Json))
+            .map(Reached::GarbledKind),
+    );
+    required.extend(
+        [
+            (GarbledKind::Raw, "unknown_state"),
+            (GarbledKind::Raw, "out_of_range"),
+            (GarbledKind::Element, "unknown_state"),
+            (GarbledKind::Element, "out_of_range"),
+            (GarbledKind::Null, "wrong_type"),
+            (GarbledKind::Constant, "wrong_constant"),
+            (GarbledKind::RecordConstant, "wrong_constant"),
+            // A key at a pointer can't be read in it, or keyed by metadata
+            // alone, the packet's document is `wrong_type`.
+            (GarbledKind::Document, "no_packet"),
+            (GarbledKind::Document, "wrong_type"),
+        ]
+        .map(|(kind, code)| Reached::KindCode(kind, code)),
+    );
+    required.extend(
+        [
+            "no_packet:object",
+            "no_packet:metadata",
+            "no_packet:key_removed",
+            "no_packet:key_null",
+            "no_packet:key_type",
+            "no_packet:key_value",
+            "invalid_json:cut",
+            "invalid_json:trailing",
+            "invalid_json:byte_order_mark",
+            "invalid_json:utf8",
+            "invalid_json:twice",
+            "invalid_json:huge",
+            "invalid_json:surrogate",
+            "missing:object",
+            "missing:null",
+            "missing:removed",
+            "at:document",
+            "at:field",
+            "at:element",
+            "at:record_field",
+            "at:argument",
+            "at:argument_element",
+        ]
+        .map(Reached::Json),
+    );
+    let rare: Vec<(Reached, usize)> = required
+        .into_iter()
+        .map(|reached| (reached, found.get(&reached).copied().unwrap_or(0)))
+        .filter(|(_, times)| *times < 5)
+        .collect();
+    assert!(rare.is_empty(), "planted fewer than 5 times: {rare:?}");
 }
 
 /// Why no packet matched a payload.
@@ -1023,112 +1402,11 @@ fn faults_reach_every_code() {
     let strategy = commands();
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
-    let route = Reached::Route;
     for _ in 0..1000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         let framed = case.bundle["families"][0].get("metadata").is_some();
         for refused in &case.refused {
-            note(Reached::Refused(refused.code));
-            for fault in &refused.faults {
-                note(Reached::RefusedKind(fault.kind));
-            }
-            if refused.faults.len() >= 2 {
-                note(route(RefusedRoute::TwoFaults));
-            }
-            let Some(first) = refused.faults.iter().min_by_key(|fault| fault.stage) else {
-                continue;
-            };
-            if let (Stage::Length(_), "bad_length") = (first.stage, first.code) {
-                note(route(RefusedRoute::LengthField));
-            }
-            // An element's `raw_range` counts with the elements, below.
-            if first.code == "raw_range" {
-                match (first.stage, first.argument) {
-                    (
-                        Stage::Field {
-                            element: Some(_), ..
-                        },
-                        _,
-                    ) => {}
-                    (_, Some(_)) => note(route(RefusedRoute::RawRangeArgument)),
-                    (_, None) => note(route(RefusedRoute::RawRangeTarget)),
-                }
-            }
-            // §3.5: a length field's fault is caught after a later entry's.
-            let length_after_later =
-                refused
-                    .faults
-                    .iter()
-                    .any(|fault| match (fault.stage, first.stage) {
-                        (Stage::Length(measured), Stage::Field { entry: later, .. }) => {
-                            later > measured
-                        }
-                        _ => false,
-                    });
-            if length_after_later {
-                note(route(RefusedRoute::LengthFieldAfterLaterEntry));
-            }
-            // §3.6: a count's fault is caught after a later entry's, and
-            // after a later length field's; records' lengths are compared
-            // before their fields are worked out.
-            for fault in &refused.faults {
-                match (fault.stage, first.stage) {
-                    (
-                        Stage::Field {
-                            entry: array,
-                            element: Some(_),
-                        },
-                        Stage::Field {
-                            entry: records,
-                            element: None,
-                        },
-                    ) if array == records && first.code == "bad_count" => {
-                        note(route(RefusedRoute::RecordsBeforeElement));
-                    }
-                    (Stage::Count(array), Stage::Field { entry: later, .. }) if later > array => {
-                        note(route(RefusedRoute::CountAfterLaterEntry));
-                    }
-                    (Stage::Count(array), Stage::Length(later)) if later > array => {
-                        note(route(RefusedRoute::CountAfterLengthField));
-                    }
-                    _ => {}
-                }
-            }
-            // Lists: a list's value, an element, records, a count.
-            let at = first.at.clone().unwrap_or_default();
-            match first.stage {
-                Stage::Argument(_) if at.contains('[') => {
-                    note(route(RefusedRoute::ListValue(first.code)));
-                }
-                Stage::Field {
-                    element: Some(_), ..
-                } => {
-                    note(route(RefusedRoute::Element(first.code)));
-                }
-                Stage::Field { element: None, .. } if first.code == "bad_count" => {
-                    note(route(RefusedRoute::BadCountRecords));
-                }
-                Stage::Count(_) => {
-                    note(route(RefusedRoute::BadCountCount));
-                }
-                _ => {}
-            }
-            let takes_list = case.bundle["catalog"]["commands"][&refused.command]["arguments"]
-                .as_array()
-                .and_then(|arguments| arguments.iter().find(|argument| argument["name"] == at))
-                .is_some_and(|argument| argument.get("list").is_some());
-            let given_list = refused
-                .arguments
-                .iter()
-                .rev()
-                .find(|(name, _)| *name == at)
-                .is_some_and(|(_, given)| matches!(given, Given::List(_)));
-            match (first.code, takes_list, given_list) {
-                ("wrong_type", true, false) => note(route(RefusedRoute::OneValueForList)),
-                ("wrong_type", false, true) => note(route(RefusedRoute::ListForOneValue)),
-                ("not_default", true, _) => note(route(RefusedRoute::NotDefaultList)),
-                _ => {}
-            }
+            note_refusal(&case, refused, &mut note);
         }
         for garbled in &case.garbled {
             note(Reached::Garbled(garbled.code));
@@ -1187,7 +1465,12 @@ fn faults_reach_every_code() {
         ]
         .map(Reached::Garbled),
     );
-    required.extend(GarbledKind::ALL.map(Reached::GarbledKind));
+    required.extend(
+        GarbledKind::ALL
+            .into_iter()
+            .filter(|kind| kind.planted_in(Encoding::Binary))
+            .map(Reached::GarbledKind),
+    );
     required.extend(
         [
             (GarbledKind::Element, "unknown_state"),

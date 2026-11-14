@@ -39,7 +39,7 @@ pub(in crate::layout) use doc::Doc;
 use doc::Spell;
 
 mod composite;
-mod doc;
+pub(super) mod doc;
 pub(super) mod faults;
 #[cfg(test)]
 mod tests;

@@ -27,6 +27,7 @@ use super::{
     Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Encoding, Group, Layout, Len, Placed,
     Scale, Shape, Source, Target, encoder_of,
 };
+use crate::layout::json::doc::{self, Doc, Spell};
 use crate::layout::{Raw, Text};
 
 /// One entry of a packet after its key, before it's laid out.
@@ -236,6 +237,52 @@ pub(super) fn key(count: usize) -> BoxedStrategy<(Shape, Vec<Const>)> {
     prop_oneof![integer, text].boxed()
 }
 
+/// How a set's packets are told apart (§7.2): by the key `op` alone; by it
+/// and the `apid` metadata, which packets may share; or by the metadata
+/// alone, each packet its own, as a transport's subject would carry a
+/// command's name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Keying {
+    Op,
+    OpAndMetadata,
+    Metadata,
+}
+
+impl Keying {
+    /// Whether the family has metadata.
+    pub(super) fn metadata(self) -> bool {
+        self != Keying::Op
+    }
+
+    /// Whether every packet has the key `op`.
+    pub(super) fn op(self) -> bool {
+        self != Keying::Metadata
+    }
+}
+
+pub(super) fn keying() -> BoxedStrategy<Keying> {
+    prop_oneof![
+        2 => Just(Keying::Op),
+        1 => Just(Keying::OpAndMetadata),
+        1 => Just(Keying::Metadata),
+    ]
+    .boxed()
+}
+
+/// Each of `count` packets' `apid`, as `keying` keys them.
+pub(super) fn apids(keying: Keying, count: usize) -> BoxedStrategy<Vec<Option<i64>>> {
+    match keying {
+        Keying::Op => Just(vec![None; count]).boxed(),
+        Keying::OpAndMetadata => vec(0_i64..3, count)
+            .prop_map(|apids| apids.into_iter().map(Some).collect())
+            .boxed(),
+        Keying::Metadata => btree_set(0_i64..8, count)
+            .prop_map(|apids| apids.into_iter().map(Some).collect::<Vec<_>>())
+            .prop_shuffle()
+            .boxed(),
+    }
+}
+
 fn target_shape() -> BoxedStrategy<Shape> {
     select(vec![Shape::Uint(64), Shape::Int(64), string_shape()]).boxed()
 }
@@ -397,13 +444,13 @@ fn place_arrays(
     (arrays, groups)
 }
 
-/// Lays a packet out: its key, `op` at `key_place` holding `key`'s value,
-/// then its items as fields and arrays named `f0`, `f1` and on, and a
-/// record's fields `r0`, `r1` and on, each at its place.
+/// Lays a packet out: its key `op` at `key_place` holding `key`'s value,
+/// if it has one, then its items as fields and arrays named `f0`, `f1` and
+/// on, and a record's fields `r0`, `r1` and on, each at its place.
 pub(super) fn lay_out(
     index: usize,
     spec: CommandSpec,
-    key: (Shape, Const),
+    key: Option<(Shape, Const)>,
     key_place: &Place,
     apid: Option<i64>,
 ) -> Layout {
@@ -416,12 +463,10 @@ pub(super) fn lay_out(
         source,
     };
     let argument_shape = |argument: usize| spec.arguments[argument].0.shape.clone();
-    let mut entries = vec![field(
-        "op".into(),
-        key.0,
-        Source::Constant(key.1),
-        key_place,
-    )];
+    let mut entries: Vec<Placed> = key
+        .into_iter()
+        .map(|(shape, value)| field("op".into(), shape, Source::Constant(value), key_place))
+        .collect();
     for (position, item) in spec.items.iter().enumerate() {
         let name = format!("f{position}");
         let place = &spec.places[position % spec.places.len()];
@@ -498,21 +543,8 @@ pub(super) fn lay_out(
 /// and what decoding the payload gives back, where −0.0, written `0`, is
 /// 0.0.
 pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Target>) -> Packed {
-    let raws: Vec<Option<Raw>> = raws(layout, values, target)
-        .into_iter()
-        .map(|raw| raw.map(positive_zero))
-        .collect();
-    let mut document = Canon::Object(Vec::new());
-    for (entry, raw) in layout.entries.iter().zip(&raws) {
-        let Some(raw) = raw else { continue };
-        match entry {
-            Placed::Field { pointer, .. } => document.put(pointer, scalar(raw)),
-            Placed::Array {
-                pointer, elements, ..
-            } => document.put(pointer, array(elements, raw)),
-            Placed::Padding(_) | Placed::Checksum { .. } => {}
-        }
-    }
+    let raws = read_back(raws(layout, values, target));
+    let document = document(layout, &raws);
     let gathered = gathered(layout, raws);
     Packed {
         payload: write(&document).into_bytes(),
@@ -522,6 +554,29 @@ pub(super) fn pack(layout: &Layout, values: &[Option<Arg>], target: Option<&Targ
         places: Vec::new(),
         elements: Vec::new(),
     }
+}
+
+/// Each entry's raw value as decoding the payload reads it back: −0.0 is
+/// written `0`, which reads as 0.0.
+pub(super) fn read_back(raws: Vec<Option<Raw>>) -> Vec<Option<Raw>> {
+    raws.into_iter().map(|raw| raw.map(positive_zero)).collect()
+}
+
+/// The payload's document: each field's raw value at its pointer and each
+/// array's elements at its.
+pub(super) fn document(layout: &Layout, raws: &[Option<Raw>]) -> Canon {
+    let mut document = Canon::Object(Vec::new());
+    for (entry, raw) in layout.entries.iter().zip(raws) {
+        let Some(raw) = raw else { continue };
+        match entry {
+            Placed::Field { pointer, .. } => document.put(pointer, scalar(raw)),
+            Placed::Array {
+                pointer, elements, ..
+            } => document.put(pointer, array(elements, raw)),
+            Placed::Padding(_) | Placed::Checksum { .. } => {}
+        }
+    }
+    document
 }
 
 /// A raw value as decoding a JSON payload reads it back: −0.0 is written
@@ -541,7 +596,7 @@ fn positive_zero(raw: Raw) -> Raw {
 }
 
 /// A field's raw value as JSON.
-fn scalar(raw: &Raw) -> Canon {
+pub(super) fn scalar(raw: &Raw) -> Canon {
     match raw {
         Raw::Uint(n) => Canon::Int(i128::from(*n)),
         Raw::Int(n) => Canon::Int(i128::from(*n)),
@@ -582,4 +637,54 @@ pub(super) fn pointer_text(tokens: &[String]) -> String {
         .iter()
         .map(|token| format!("/{}", token.replace('~', "~0").replace('/', "~1")))
         .collect()
+}
+
+/// The payload written another way (`spec/decoding.md` §2.3): members in
+/// any order, any whitespace, characters escaped or not, integers spelled
+/// any way that keeps them integers (`42.0`, `4.2e1`), doubles any way that
+/// reads back as them; and now and then members no field reads, which
+/// decoding ignores (`spec/encoding.md` §7.3). It decodes as the payload
+/// does.
+pub(super) fn respelled(
+    layout: &Layout,
+    values: &[Option<Arg>],
+    target: Option<&Target>,
+    seed: u64,
+) -> Vec<u8> {
+    let document = document(layout, &read_back(raws(layout, values, target)));
+    let mut spell = Spell::new(seed);
+    let written = respell(&document, &mut spell);
+    doc::write(&written, &mut spell).into_bytes()
+}
+
+fn respell(value: &Canon, spell: &mut Spell) -> Doc {
+    match value {
+        Canon::Null => Doc::Null,
+        Canon::Int(n) => Doc::Int(*n),
+        Canon::Float(x) => Doc::Float(*x),
+        Canon::Bool(b) => Doc::Bool(*b),
+        Canon::Str(text) => Doc::Str(text.clone()),
+        Canon::Literal(text) => Doc::Literal(text.clone()),
+        Canon::Array(items) => Doc::Array(items.iter().map(|item| respell(item, spell)).collect()),
+        Canon::Object(members) => {
+            let mut members: Vec<(String, Doc)> = members
+                .iter()
+                .map(|(name, member)| (name.clone(), respell(member, spell)))
+                .collect();
+            // Now and then a member or two no field reads, named so no
+            // pointer goes there.
+            for k in 0..spell.pick(4).saturating_sub(1) {
+                let extra = match spell.pick(5) {
+                    0 => Doc::Null,
+                    1 => Doc::Bool(true),
+                    2 => Doc::Int(spell.pick(100) as i128),
+                    3 => Doc::Str("extra".into()),
+                    _ => Doc::Array(vec![Doc::Object(Vec::new())]),
+                };
+                members.push((format!("x{k}"), extra));
+            }
+            spell.shuffle(&mut members);
+            Doc::Object(members)
+        }
+    }
 }

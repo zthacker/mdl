@@ -6,7 +6,7 @@ use proptest::sample::Index;
 
 use super::{argument_name, entry_name, list_place};
 use crate::layout::command::requests::{
-    ElementPlace, Packed, buffer, pack, parts, values, write_checksums,
+    ElementPlace, Packed, buffer, pack, packed, parts, values, write_checksums,
 };
 use crate::layout::command::values::{list_value, unrounded};
 use crate::layout::command::{
@@ -32,32 +32,43 @@ pub(in super::super) fn garbling(layout: Layout, keys: Vec<Const>) -> BoxedStrat
             let packed = pack(&layout, &values, target);
             let mut faults = garbled(&layout, &keys, &packed, &detail);
             faults.extend(beyond_payloads(&layout, &values, target, &beyond));
-            // A kind of fault first, by its weight, then one of that kind.
-            let mut kinds: Vec<GarbledKind> = faults.iter().map(|fault| fault.kind).collect();
-            kinds.sort_unstable();
-            kinds.dedup();
-            let weighted: Vec<GarbledKind> = kinds
-                .iter()
-                .flat_map(|kind| std::iter::repeat_n(*kind, kind.weight()))
-                .collect();
-            let kind = weighted.get(kind.index(weighted.len().max(1))).copied();
-            let faults: Vec<Garbled> = faults
-                .into_iter()
-                .filter(|fault| Some(fault.kind) == kind)
-                .collect();
-            let pick = which.index(faults.len().max(1));
-            faults.into_iter().nth(pick).unwrap_or_else(|| Garbled {
-                set: "fam_v9".into(),
-                payload: packed.payload.clone(),
-                encoding: Encoding::Binary,
-                metadata: Vec::new(),
-                code: "unknown_set",
-                at: None,
-                kind: GarbledKind::Set,
-                planted: "an unknown set".into(),
-            })
+            pick(faults, &kind, &which, &layout, packed.payload)
         })
         .boxed()
+}
+
+/// One of `faults`: a kind first, by its weight, then one of that kind; an
+/// unknown set, with `payload`, if there are none.
+pub(super) fn pick(
+    faults: Vec<Garbled>,
+    kind: &Index,
+    which: &Index,
+    layout: &Layout,
+    payload: Vec<u8>,
+) -> Garbled {
+    let mut kinds: Vec<GarbledKind> = faults.iter().map(|fault| fault.kind).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let weighted: Vec<GarbledKind> = kinds
+        .iter()
+        .flat_map(|kind| std::iter::repeat_n(*kind, kind.weight()))
+        .collect();
+    let kind = weighted.get(kind.index(weighted.len().max(1))).copied();
+    let faults: Vec<Garbled> = faults
+        .into_iter()
+        .filter(|fault| Some(fault.kind) == kind)
+        .collect();
+    let pick = which.index(faults.len().max(1));
+    faults.into_iter().nth(pick).unwrap_or_else(|| Garbled {
+        set: "fam_v9".into(),
+        payload,
+        encoding: layout.encoding,
+        metadata: Vec::new(),
+        code: "unknown_set",
+        at: None,
+        kind: GarbledKind::Set,
+        planted: "an unknown set".into(),
+    })
 }
 
 /// Every fault the payload can be given, each with its kind, the code it
@@ -264,7 +275,7 @@ fn garbled(layout: &Layout, keys: &[Const], packed: &Packed, detail: &Index) -> 
 }
 
 /// The metadata the link frames the layout's payloads with.
-fn metadata(layout: &Layout) -> Vec<(String, i64)> {
+pub(super) fn metadata(layout: &Layout) -> Vec<(String, i64)> {
     layout
         .apid
         .map(|apid| vec![("apid".to_string(), apid)])
@@ -633,7 +644,7 @@ fn record_places(elements: &Elements) -> Vec<(u64, u64)> {
 /// don't allow, lists of such lengths: through a count its count field
 /// holds past the group's, or for an array that runs to the end, one past
 /// `max` (or one short of `min`).
-fn beyond_bounds(layout: &Layout) -> BoxedStrategy<Vec<Vec<(usize, Arg)>>> {
+pub(super) fn beyond_bounds(layout: &Layout) -> BoxedStrategy<Vec<Vec<(usize, Arg)>>> {
     let groups: Vec<BoxedStrategy<Vec<(usize, Arg)>>> = layout
         .groups
         .iter()
@@ -692,7 +703,7 @@ fn beyond_count(layout: &Layout, group: &Group) -> Option<i64> {
 /// Payloads whose lists are as long as `beyond` makes them: decoding reads
 /// them whole, then refuses the first list, in catalog order, whose length
 /// its bounds don't allow (§7.4).
-fn beyond_payloads(
+pub(super) fn beyond_payloads(
     layout: &Layout,
     values: &[Option<Arg>],
     target: Option<&Target>,
@@ -720,11 +731,11 @@ fn beyond_payloads(
             for (member, list) in lists {
                 values[*member] = Some(list.clone());
             }
-            let packed = pack(layout, &values, target);
+            let packed = packed(layout, &values, target);
             Some(Garbled {
                 set: "fam_v1".into(),
                 payload: packed.payload,
-                encoding: Encoding::Binary,
+                encoding: layout.encoding,
                 metadata: metadata(layout),
                 code: "list_length",
                 at: Some(argument_name(refused)),

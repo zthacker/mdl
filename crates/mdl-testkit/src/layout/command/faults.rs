@@ -9,9 +9,11 @@
 //! with it, unless the fault is a checksum's.
 
 mod garbled;
+mod json;
 mod refused;
 
 pub(super) use garbled::garbling;
+pub(super) use json::json_garbling;
 pub(super) use refused::refusal;
 
 use super::{Elements, Layout, Placed, Source};

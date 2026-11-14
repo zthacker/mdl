@@ -23,10 +23,17 @@ pub(super) struct Parts {
 }
 
 /// A request for a packet's command, with the payload it encodes to and
-/// what decoding that payload gives back.
+/// what decoding that payload gives back; for a JSON packet, the seed its
+/// payload is written another way with.
 pub(super) fn request(layout: Layout) -> BoxedStrategy<Request> {
-    (Just(layout.clone()), parts(&layout))
-        .prop_map(|(layout, parts)| outcome(&layout, &parts.given, parts.target, parts.named))
+    let seed = match layout.encoding {
+        Encoding::Binary => Just(None).boxed(),
+        Encoding::Json => any::<u64>().prop_map(Some).boxed(),
+    };
+    (Just(layout.clone()), parts(&layout), seed)
+        .prop_map(|(layout, parts, seed)| {
+            outcome(&layout, &parts.given, parts.target, parts.named, seed)
+        })
         .boxed()
 }
 
@@ -212,8 +219,10 @@ fn outcome(
     given: &[Option<Given>],
     target: Option<Target>,
     named: Vec<(String, Given)>,
+    seed: Option<u64>,
 ) -> Request {
     let values = values(layout, given);
+    let respelled = seed.map(|seed| json::respelled(layout, &values, target.as_ref(), seed));
     let written = packed(layout, &values, target.as_ref());
     let decoded_values: Vec<Option<Arg>> = layout
         .arguments
@@ -268,6 +277,7 @@ fn outcome(
             target: decoded_target,
         },
         again,
+        respelled,
     }
 }
 

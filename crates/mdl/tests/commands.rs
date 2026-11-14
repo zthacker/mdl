@@ -4,21 +4,25 @@
 //! its own; the payload decodes back to the command, every argument in
 //! catalog order and the target, as §7.4 says; and the decoded request
 //! encodes to the payload the testkit expects of it, the same one wherever
-//! each inverse undoes its conversion. A request with faults planted in it
-//! is refused with the code, and naming the argument or field, of the
-//! first problem the spec reaches; a payload with a fault planted in it
-//! fails to decode with the code the fault gives.
+//! each inverse undoes its conversion. A JSON payload written another way
+//! (members in any order, other spellings, members no field reads) decodes
+//! the same. A request with faults planted in it is refused with the code,
+//! and naming the argument or field, of the first problem the spec
+//! reaches; a payload with a fault planted in it fails to decode with the
+//! code the fault gives, naming what it says.
 
 #[path = "common/artifacts.rs"]
 mod artifacts;
 
+use std::fmt::Debug;
+
 use mdl::bindings::NativeId;
-use mdl::decode::{CommandDecodeError, DecodeError};
+use mdl::decode::{CommandDecodeError, DecodeError, DecodedCommand};
 use mdl::encode::{ArgumentProblem, ArgumentValue, CommandRequest, EncodeError, FieldProblem};
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::time::Timestamp;
 use mdl_testkit::layout::command::{
-    Arg, Commands, Encoding, Given, Target, commands, json_commands,
+    Arg, Commands, Encoding, Given, Request, Target, commands, json_commands,
 };
 use proptest::prelude::*;
 
@@ -36,9 +40,51 @@ proptest! {
     }
 }
 
+/// What decoding gave is what the testkit worked out for the request: the
+/// command, its arguments in catalog order and those defaulted, the target
+/// and the record. `context` is shown if it isn't.
+fn decodes_as(
+    decoded: &DecodedCommand<'_>,
+    request: &Request,
+    context: &dyn Debug,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(
+        decoded.command(),
+        request.command.as_str(),
+        "{:#?}",
+        context
+    );
+    let arguments: Vec<(String, Arg)> = decoded
+        .arguments
+        .iter()
+        .map(|(name, value)| (name.to_string(), arg(value)))
+        .collect();
+    prop_assert_eq!(&arguments, &request.decoded.arguments, "{:#?}", context);
+    prop_assert_eq!(
+        &names(&decoded.defaulted),
+        &request.decoded.defaulted,
+        "{:#?}",
+        context
+    );
+    prop_assert_eq!(
+        &decoded.target.as_ref().map(target),
+        &request.decoded.target,
+        "{:#?}",
+        context
+    );
+    prop_assert_eq!(
+        &artifacts::record(&decoded.record),
+        &request.record,
+        "{:#?}",
+        context
+    );
+    Ok(())
+}
+
 /// Every request of the case encodes, decodes and encodes again as the
-/// testkit worked out; every refused request and damaged payload fails as
-/// it says.
+/// testkit worked out, and a JSON one's payload written another way
+/// decodes the same; every refused request and damaged payload fails as it
+/// says.
 fn encodes_and_decodes(case: &Commands) -> Result<(), TestCaseError> {
     let json = case.bundle["families"][0]["encoding"] == "json";
     let sets = artifacts::load(&case.bundle, &case.family, &[])?;
@@ -66,24 +112,23 @@ fn encodes_and_decodes(case: &Commands) -> Result<(), TestCaseError> {
         let decoded = sets
             .decode_command(&case.set, &message)
             .map_err(|error| TestCaseError::fail(format!("{error}: {request:#?}")))?;
-        prop_assert_eq!(decoded.command(), request.command.as_str());
-        let arguments: Vec<(String, Arg)> = decoded
-            .arguments
-            .iter()
-            .map(|(name, value)| (name.to_string(), arg(value)))
-            .collect();
-        prop_assert_eq!(&arguments, &request.decoded.arguments, "{:#?}", request);
-        prop_assert_eq!(&names(&decoded.defaulted), &request.decoded.defaulted);
-        prop_assert_eq!(
-            &decoded.target.as_ref().map(target),
-            &request.decoded.target
-        );
-        prop_assert_eq!(&artifacts::record(&decoded.record), &request.record);
+        decodes_as(&decoded, request, request)?;
 
         let again = sets
             .encode(&decoded.request())
             .map_err(|error| TestCaseError::fail(format!("again: {error}: {request:#?}")))?;
         prop_assert_eq!(&again.payload, &request.again, "{:#?}", request);
+
+        // The payload written another way decodes as it does.
+        if let Some(respelled) = &request.respelled {
+            let text = String::from_utf8_lossy(respelled);
+            let message = Message::new(Payload::Json(respelled), Timestamp::from_unix_nanos(0))
+                .with_metadata(&metadata);
+            let decoded = sets
+                .decode_command(&case.set, &message)
+                .map_err(|error| TestCaseError::fail(format!("respelled: {error}: {text}")))?;
+            decodes_as(&decoded, request, &text)?;
+        }
     }
     for refused in &case.refused {
         let request = sent(
