@@ -1,10 +1,12 @@
-//! Random fleets (`mdl_testkit::layout::fleet`): families of several sets
-//! and assets, each message routed by its alias and its version or its
-//! asset's binding at its ground time (bindings change set, retire and
-//! reuse native ids), identified by one key or two (the more specific
-//! packet winning), or routed to the error its fault calls for, with boot
-//! time tied to instants by a correlator, keyed by family and asset, that
-//! is saved and restored halfway, as a restarting consumer would.
+//! Random fleets (`mdl_testkit::layout::fleet`), binary or JSON: families
+//! of several sets and assets, each message routed by its alias and its
+//! version or its asset's binding at its ground time (bindings change set,
+//! retire and reuse native ids), identified by one key or two (the more
+//! specific packet winning), or routed to the error its fault calls for, a
+//! JSON payload that isn't JSON MDL reads failing where it's first parsed,
+//! with boot time tied to instants by a correlator, keyed by family and
+//! asset, that is saved and restored halfway, as a restarting consumer
+//! would.
 
 mod common;
 
@@ -15,7 +17,7 @@ use mdl::decode::Correlator;
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::route::FamilySets;
 use mdl::time::Timestamp;
-use mdl_testkit::layout::{Meta, fleet};
+use mdl_testkit::layout::{Encoding, Meta, fleet};
 use proptest::prelude::*;
 
 proptest! {
@@ -57,8 +59,11 @@ proptest! {
                 })
                 .collect();
             let received = Timestamp::from_unix_nanos(i64::try_from(message.received).unwrap());
-            let input =
-                Message::new(Payload::Binary(&message.payload), received).with_metadata(&metadata);
+            let payload = match message.encoding {
+                Encoding::Json => Payload::Json(&message.payload),
+                Encoding::Binary => Payload::Binary(&message.payload),
+            };
+            let input = Message::new(payload, received).with_metadata(&metadata);
             let result = families[sent.family.as_str()].decode(&input, &bindings);
             if let Some(code) = sent.error {
                 prop_assert_eq!(result.err().map(|error| error.code()), Some(code), "{:?}", sent);
