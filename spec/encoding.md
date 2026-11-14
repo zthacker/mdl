@@ -298,14 +298,19 @@ pointer inside it. Validation guarantees that no pointer of a command
 field, array or record field is empty (the whole object) and that, among
 the entries of one object, no pointer equals another or leads into it.
 
-The text is written as the JSON Canonicalization Scheme (RFC 8785)
-writes JSON: no whitespace, object members in order of their keys' UTF-16
-code units, strings escaped as it requires, and doubles as ECMAScript
-writes them (`1.5`, `0` for 0.0, `1e+21`). The one difference is
-integers: an integer field's value is written in exact decimal digits
-whatever its size, where RFC 8785 would write the nearest double. So a
-payload whose integers are all within ±(2^53 − 1) is RFC 8785 canonical
-JSON.
+The text is written as the JSON Canonicalization Scheme (RFC 8785) writes
+JSON: no whitespace, object members in order of their keys' UTF-16 code
+units, strings escaped as it requires, and doubles as ECMAScript's
+`Number.prototype.toString` writes them with ECMA-262's Note 2, as RFC
+8785 requires: the fewest digits that read back as the double; of those,
+the one nearest it; and of two equally near, the even one (`1.5`, `0` for
+0.0 and −0.0, `1e+21`; `5e-324` for the least subnormal, which `3e-324` to
+`7e-324` all read back as; and `1214.1973266601562` for
+1214.19732666015625, not the equally near `1214.1973266601563`). The one
+difference is integers: an integer field's value is written in exact
+decimal digits whatever its size, where RFC 8785 would write the nearest
+double. So a payload whose integers are all within ±(2^53 − 1) is RFC 8785
+canonical JSON.
 
 ## 6. The result
 

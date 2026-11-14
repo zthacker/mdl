@@ -65,7 +65,9 @@ RFC 8785, applied to the parsed document:
   code units;
 - strings serialized as ECMAScript's `JSON.stringify` serializes them;
 - numbers serialized as ECMAScript's `Number.prototype.toString`
-  serializes the double.
+  serializes the double, with ECMA-262's Note 2, as RFC 8785 requires:
+  the fewest digits that read back as the double; of those, the one
+  nearest it; and of two equally near, the even one.
 
 ## 3. Identity
 
