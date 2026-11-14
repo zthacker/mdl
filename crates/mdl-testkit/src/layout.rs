@@ -34,8 +34,8 @@ use proptest::sample::select;
 use serde_json::{Map, Value, json};
 pub use time::EventTime;
 use time::{
-    Count, SECOND, TimeFields, TimeSource, count_value, epoch, event_time, near_leap, no_reading,
-    received, time_fields, time_json, time_scale, time_source, to_utc, unit, week_value,
+    Count, SECOND, TimeFields, TimeSource, Unit, boot_source, count_value, event_time, near_leap,
+    no_reading, received, time_fields, time_json, time_source, to_utc, week_value,
 };
 pub(crate) use time::{instant_text, label};
 
@@ -960,15 +960,65 @@ impl PacketShape {
     }
 }
 
-/// A boot set's correlation fields (§8.2): the absolute clock, in whole
-/// bytes, and the boot clock (32 bits), with any sentinels.
+/// A boot set's correlation fields (§8.2): the absolute clock and the
+/// boot clock, each of whole bytes in a binary packet (in a JSON one, as
+/// wide as the values drawn for it), with any sentinels.
 #[derive(Debug, Clone, PartialEq)]
 struct Correlation {
     clock_bits: u32,
+    boot_bits: u32,
     clock_invalid: Vec<u64>,
     boot_invalid: Vec<u64>,
     /// Whether the clocks restate the units they count in.
     units: bool,
+}
+
+/// A correlation's fields: the clock no wider than keeps its instant
+/// within year 9999 from any epoch, the boot clock 32 bits, and now and
+/// then either 64 bits, whose counts can put the boot instant outside
+/// years 0001 to 9999 (§8.2); up to one sentinel each.
+fn correlation_spec(clock_unit: Unit) -> BoxedStrategy<Correlation> {
+    let widths: Vec<u32> = (8..=clock_unit.count_bits()).step_by(8).collect();
+    (
+        prop_oneof![4 => select(widths), 1 => Just(64_u32)],
+        prop_oneof![4 => Just(32_u32), 1 => Just(64_u32)],
+        btree_set(any::<u8>(), 0..=1),
+        btree_set(any::<u8>(), 0..=1),
+        any::<bool>(),
+    )
+        .prop_map(|(clock_bits, boot_bits, clock, boot, units)| Correlation {
+            clock_bits,
+            boot_bits,
+            clock_invalid: clock.into_iter().map(u64::from).collect(),
+            boot_invalid: boot.into_iter().map(u64::from).collect(),
+            units,
+        })
+        .boxed()
+}
+
+/// A correlation packet's clock and boot fields as IR JSON, but for where
+/// each is: their sentinels, and the units they count in where they
+/// restate them (§8).
+fn clock_fields(correlation: &Correlation, time: &TimeSource) -> [Value; 2] {
+    let mut clock = json!({ "kind": "field", "name": "clock", "type": "uint" });
+    let mut boot = json!({ "kind": "field", "name": "boot", "type": "uint" });
+    if !correlation.clock_invalid.is_empty() {
+        clock["invalid"] = json!(correlation.clock_invalid);
+    }
+    if !correlation.boot_invalid.is_empty() {
+        boot["invalid"] = json!(correlation.boot_invalid);
+    }
+    if let (
+        true,
+        TimeSource::Boot {
+            unit, clock_unit, ..
+        },
+    ) = (correlation.units, time)
+    {
+        clock["unit"] = json!(clock_unit.name());
+        boot["unit"] = json!(unit.name());
+    }
+    [clock, boot]
 }
 
 /// The bit at which a packet's time fields start: after the id and its
@@ -1009,28 +1059,12 @@ fn lay_out(
     }
     let mut offset = time_start(&shape.header);
     if let Some(correlation) = &correlation {
-        let mut clock = json!({ "kind": "field", "name": "clock", "type": "uint",
-                                "size_bits": correlation.clock_bits });
-        if !correlation.clock_invalid.is_empty() {
-            clock["invalid"] = json!(correlation.clock_invalid);
-        }
-        let mut boot = json!({ "kind": "field", "name": "boot", "type": "uint", "size_bits": 32 });
-        if !correlation.boot_invalid.is_empty() {
-            boot["invalid"] = json!(correlation.boot_invalid);
-        }
-        if let (
-            true,
-            TimeSource::Boot {
-                unit, clock_unit, ..
-            },
-        ) = (correlation.units, time)
-        {
-            clock["unit"] = json!(clock_unit.name());
-            boot["unit"] = json!(unit.name());
-        }
+        let [mut clock, mut boot] = clock_fields(correlation, time);
+        clock["size_bits"] = json!(correlation.clock_bits);
+        boot["size_bits"] = json!(correlation.boot_bits);
         entries.push(clock);
         entries.push(boot);
-        offset += u64::from(correlation.clock_bits) + 32;
+        offset += u64::from(correlation.clock_bits + correlation.boot_bits);
     }
     // The CUC time code sits right after the header, in every packet.
     if let TimeSource::Cuc { coarse, fine, .. } = time {
@@ -1389,10 +1423,7 @@ fn draft(
         _ => Just(None).boxed(),
     };
     let correlation = match &packet.correlation {
-        Some(correlation) => (
-            clock_value(correlation.clock_bits, &correlation.clock_invalid),
-            clock_value(32, &correlation.boot_invalid),
-        )
+        Some(correlation) => correlation_values(&time, correlation)
             .prop_map(Some)
             .boxed(),
         None => Just(None).boxed(),
@@ -1434,6 +1465,50 @@ fn clock_value(bits: u32, invalid: &[u64]) -> BoxedStrategy<u64> {
         return any_value;
     }
     prop_oneof![4 => any_value, 1 => select(invalid.to_vec())].boxed()
+}
+
+/// A correlation packet's clock and boot values (§8.2): any their fields
+/// hold, one of their sentinels now and then. Where both are 64 bits and
+/// neither counts nanoseconds, also now and then a clock whose instant is
+/// past year 9999 with a boot clock that brings the boot instant back to
+/// between 1958 and 2100: the counts are taken exactly, and only the boot
+/// instant need be within years 0001 to 9999.
+fn correlation_values(time: &TimeSource, correlation: &Correlation) -> BoxedStrategy<(u64, u64)> {
+    let each = (
+        clock_value(correlation.clock_bits, &correlation.clock_invalid),
+        clock_value(correlation.boot_bits, &correlation.boot_invalid),
+    );
+    let TimeSource::Boot {
+        unit,
+        clock_unit,
+        epoch,
+        scale,
+    } = time
+    else {
+        return each.boxed();
+    };
+    let wide = correlation.clock_bits == 64 && correlation.boot_bits == 64;
+    if !wide || *unit == Unit::Ns || *clock_unit == Unit::Ns {
+        return each.boxed();
+    }
+    let (unit, clock_unit, start, scale) = (*unit, *clock_unit, epoch.label, *scale);
+    let last = label((9999, 12, 31), (23, 59, 59), SECOND - 1);
+    let year = 31_556_952 * SECOND;
+    let booted = label((1958, 1, 1), (0, 0, 0), 0)..label((2100, 1, 1), (0, 0, 0), 0);
+    // A day to a thousand years past year 9999, more than any scale's
+    // offset from UTC. Both counts fit 64 bits for these units and epochs
+    // (under 3 × 10^17, in microseconds from 1958), so nothing is filtered
+    // out; nanoseconds, or much earlier epochs, could reject every draw.
+    let far = (86_400 * SECOND..1000 * year, booted).prop_filter_map(
+        "counts a 64-bit field holds",
+        move |(past, booted)| {
+            let clock = (last + past - start).div_euclid(clock_unit.nanos());
+            let instant = to_utc(start + clock * clock_unit.nanos(), scale);
+            let boot = (instant - booted).div_euclid(unit.nanos());
+            Some((u64::try_from(clock).ok()?, u64::try_from(boot).ok()?))
+        },
+    );
+    prop_oneof![4 => each, 1 => far].boxed()
 }
 
 /// What a message holds besides its fields' values.
@@ -1801,12 +1876,13 @@ fn write_message(
     let start = time_start(&packet.header);
     if let (Some(fields), Some((clock, boot))) = (&packet.correlation, timing.correlation) {
         let boot_at = start + u64::from(fields.clock_bits);
+        let end = boot_at + u64::from(fields.boot_bits);
         put_bits(payload, start, fields.clock_bits, clock, packet.little);
-        put_bits(payload, boot_at, 32, boot, packet.little);
+        put_bits(payload, boot_at, fields.boot_bits, boot, packet.little);
         record.push(("clock".to_string(), Raw::Uint(clock)));
         record.push(("boot".to_string(), Raw::Uint(boot)));
         steps.push(header_step("clock", boot_at));
-        steps.push(header_step("boot", boot_at + 32));
+        steps.push(header_step("boot", end));
     }
     // The CUC code is padding to decoding, at the packet's top level.
     let mut inert = Vec::new();

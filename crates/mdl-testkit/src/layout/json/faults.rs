@@ -362,7 +362,8 @@ fn conflict(a: FaultKind, b: FaultKind) -> bool {
 /// Every fault the message can be given: those met before any entry, in
 /// §3.3's order, then for each entry and element in the order decoding
 /// reads them: its time fields, `kind` (a key, damaged only before any
-/// entry, as one no packet matches), then its entries.
+/// entry, as one no packet matches), a correlation packet's clocks, then
+/// its entries.
 fn plants(set: &JsonSet, index: usize, draft: &JsonDraft, detail: &Index) -> Vec<Plant> {
     let packet = &set.packets[index];
     let mut plants = whole_message(set, packet, detail);
@@ -384,6 +385,10 @@ fn plants(set: &JsonSet, index: usize, draft: &JsonDraft, detail: &Index) -> Vec
     }
     if packet.kind_field {
         walk.next();
+    }
+    if packet.correlation.is_some() {
+        walk.field("clock", Wanted::Uint);
+        walk.field("boot", Wanted::Uint);
     }
     walk.entries(&packet.entries, &draft.fills, &[], "");
     plants.append(&mut walk.plants);

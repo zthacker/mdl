@@ -8,14 +8,16 @@ use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use proptest::test_runner::TestRunner;
-use serde_json::{Number, Value};
+use serde_json::{Map, Number, Value};
 
 use super::doc::{self, Doc, Spell};
-use super::{BOTCHED, json_damaged, json_telemetry};
+use super::{
+    Alias, BOTCHED, JsonTime, TimeFields, json_damaged, json_telemetry, lay_out, packet_spec,
+};
 use crate::coverage::features;
 use crate::layout::{
     EventTime, Expected, Family, FaultKind, Gone, JsonKind, Malformed, Meta, Problem, Raw, Route,
-    Unfit, Unmet, Unusable, Wanted,
+    Telemetry, Unfit, Unmet, Unusable, Wanted,
 };
 
 /// Any document: scalars of every kind, nested a few levels.
@@ -149,11 +151,12 @@ fn escapes(lexeme: &str) -> Vec<String> {
 /// What a JSON case shows of the generator's reach: its bundle's features,
 /// its pointers and keys, and each message's spellings, absent entries,
 /// `null` elements and event time.
-fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
+fn labels(case: &Telemetry) -> BTreeSet<String> {
     let mut found = features(&case.bundle);
     let set = &case.bundle["sets"][0];
     let packets = set["packets"].as_array().cloned().unwrap_or_default();
     let iso8601 = set["time"]["kind"] == "iso8601";
+    let boot = set["time"]["kind"] == "boot";
     let mut pointers = Vec::new();
     for packet in &packets {
         match packet["identify"].as_object() {
@@ -413,7 +416,12 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
             let label = match kinds.as_slice() {
                 [] => "metadata:none",
                 [_, _, ..] => "metadata:twice",
-                [Meta::Text(text)] if keys == 0 && text.starts_with('0') => "metadata:leading_zero",
+                // A numbered kind's text with a leading zero, after any sign.
+                [Meta::Text(text)]
+                    if keys == 0 && text.trim_start_matches('-').starts_with('0') =>
+                {
+                    "metadata:leading_zero"
+                }
                 [Meta::Text(text)] if text.parse::<i64>().is_ok() => "metadata:integer_as_text",
                 [Meta::Text(_)] => "metadata:text",
                 [_] => "metadata:integer",
@@ -540,6 +548,9 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
             }
             .to_string(),
         );
+        if boot {
+            boot_labels(packet, message, &mut found);
+        }
         if !iso8601 {
             continue;
         }
@@ -598,7 +609,239 @@ fn labels(case: &crate::layout::Telemetry) -> BTreeSet<String> {
             }
         }
     }
+    composite_labels(case, &mut found);
     found
+}
+
+/// What a message of a boot set shows (§8, §8.2): a count since boot past
+/// 32 bits, or a sentinel there, which gives ground time; a correlation
+/// packet's clocks past 32 bits, or holding a sentinel.
+fn boot_labels(packet: &Value, message: &crate::layout::Message, found: &mut BTreeSet<String>) {
+    let reading = |name: &str| {
+        message.record.iter().find_map(|(field, raw)| match raw {
+            Raw::Uint(n) if field == name => Some(*n),
+            _ => None,
+        })
+    };
+    let wide = |n: u64| n > u64::from(u32::MAX);
+    if let Some(t) = reading("t") {
+        if wide(t) {
+            found.insert("boot:wide_count".to_string());
+        }
+        if message.event_time == EventTime::Ground {
+            found.insert("boot:count_sentinel".to_string());
+        }
+    }
+    if packet["time_field"].is_null() && message.packet == "CORR" {
+        found.insert("boot:correlation".to_string());
+        for name in ["clock", "boot"] {
+            let invalid: Vec<u64> = packet["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|entry| entry["name"] == name)
+                .flat_map(|entry| entry["invalid"].as_array().cloned().unwrap_or_default())
+                .filter_map(|sentinel| sentinel.as_u64())
+                .collect();
+            if let Some(n) = reading(name) {
+                if wide(n) {
+                    found.insert(format!("boot:wide_{name}"));
+                }
+                if invalid.contains(&n) {
+                    found.insert(format!("boot:{name}_sentinel"));
+                }
+            }
+        }
+    }
+}
+
+/// What a case's composites show (§7.4): what holds their members, and for
+/// each message, a sample, one that isn't good, or why there's none;
+/// `composite:unexplained` where a sample disagrees with its members'
+/// presence, or [`absence`] can't follow a member.
+fn composite_labels(case: &Telemetry, found: &mut BTreeSet<String>) {
+    let set = &case.bundle["sets"][0];
+    let empty = Map::new();
+    let types = set["types"].as_object().unwrap_or(&empty);
+    for packet in set["packets"].as_array().into_iter().flatten() {
+        let entries = packet["entries"].as_array().map_or(&[][..], Vec::as_slice);
+        let composites = packet["composites"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        let members_of = |composite: &Value| -> Vec<String> {
+            composite["members"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|member| member.as_str().map(str::to_string))
+                .collect()
+        };
+        for composite in composites {
+            let holder = match members_of(composite).first() {
+                Some(path) if path.contains("].") => "records",
+                Some(path) if path.contains('[') => "array",
+                Some(path) if path.contains('.') => "struct",
+                _ => "fields",
+            };
+            found.insert(format!("composite:{holder}"));
+        }
+        let messages = case
+            .messages
+            .iter()
+            .filter(|message| packet["name"] == message.packet.as_str());
+        for message in messages {
+            for composite in composites {
+                let canonical = composite["canonical"].as_str().unwrap_or("");
+                let sample = message
+                    .samples
+                    .iter()
+                    .find(|sample| sample.param == canonical);
+                let absent: Result<Vec<&str>, String> = members_of(composite)
+                    .iter()
+                    .filter_map(|member| {
+                        absence(&message.record, member, entries, types).transpose()
+                    })
+                    .collect();
+                match (sample, absent) {
+                    (_, Err(lost)) => {
+                        found.insert(format!("composite:unexplained: {lost}"));
+                    }
+                    (Some(sample), Ok(absent)) if absent.is_empty() => {
+                        let label = if sample.quality == "good" {
+                            "composite:sample"
+                        } else {
+                            "composite:not_good"
+                        };
+                        found.insert(label.to_string());
+                    }
+                    (Some(_), Ok(_)) => {
+                        found.insert(format!(
+                            "composite:unexplained: {canonical} has a sample, a member absent"
+                        ));
+                    }
+                    (None, Ok(absent)) if absent.is_empty() => {
+                        found.insert(format!(
+                            "composite:unexplained: {canonical} has no sample, every member there"
+                        ));
+                    }
+                    (None, Ok(absent)) => {
+                        found.extend(
+                            absent
+                                .into_iter()
+                                .map(|why| format!("composite:absent_{why}")),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Whether the member at record path `path` is in `record` (§7.4):
+/// `Ok(None)` if it is; if it isn't, why: its own entry or one holding it
+/// absent (optional, or skipped by its condition), its index past its
+/// array's end, or it or its record a `null` element (§5.3). `Err` names
+/// what the walk couldn't follow. `entries` are the packet's, `types` its
+/// set's struct types.
+fn absence(
+    record: &[(String, Raw)],
+    path: &str,
+    entries: &[Value],
+    types: &Map<String, Value>,
+) -> Result<Option<&'static str>, String> {
+    let lost =
+        |what: &str| -> Result<Option<&'static str>, String> { Err(format!("{path}: {what}")) };
+    let scalar = |raw: &Raw| !matches!(raw, Raw::Array(_) | Raw::Record(_) | Raw::Null);
+    let parts: Vec<&str> = path.split('.').collect();
+    let mut container = record;
+    let mut entries = entries;
+    for (k, part) in parts.iter().enumerate() {
+        let last = k + 1 == parts.len();
+        let (name, index) = match part.split_once('[') {
+            Some((name, rest)) => {
+                match rest.strip_suffix(']').and_then(|i| i.parse::<usize>().ok()) {
+                    Some(index) => (name, Some(index)),
+                    None => return lost("an index that isn't one"),
+                }
+            }
+            None => (*part, None),
+        };
+        let Some(entry) = entries.iter().find(|entry| entry["name"] == name) else {
+            return lost("an entry the IR doesn't have");
+        };
+        let Some((_, raw)) = container.iter().find(|(field, _)| field == name) else {
+            let holder = !last || index.is_some();
+            return match (
+                entry["optional"] == true,
+                entry.get("when").is_some(),
+                holder,
+            ) {
+                (true, _, false) => Ok(Some("member_optional")),
+                (true, _, true) => Ok(Some("holder_optional")),
+                (false, true, false) => Ok(Some("member_skipped")),
+                (false, true, true) => Ok(Some("holder_skipped")),
+                (false, false, _) => lost("a required entry absent"),
+            };
+        };
+        let inner = match (index, raw) {
+            (Some(i), Raw::Array(items)) => match items.get(i) {
+                None => return Ok(Some("past_end")),
+                Some(Raw::Null) if last => return Ok(Some("null_element")),
+                Some(Raw::Null) => return Ok(Some("null_record")),
+                Some(item) if last && scalar(item) => return Ok(None),
+                Some(Raw::Record(fields)) if !last => {
+                    container = fields;
+                    entry["element"]["name"].as_str()
+                }
+                Some(_) => return lost("an element of the wrong shape"),
+            },
+            (None, raw) if last && scalar(raw) => return Ok(None),
+            (None, Raw::Record(fields)) if !last => {
+                container = fields;
+                entry["struct"].as_str()
+            }
+            _ => return lost("a value of the wrong shape"),
+        };
+        let Some(inner) = inner
+            .and_then(|name| types.get(name))
+            .and_then(|ty| ty["entries"].as_array())
+        else {
+            return lost("a struct type the IR doesn't have");
+        };
+        entries = inner;
+    }
+    lost("a path that ends at a struct")
+}
+
+/// Every composite a packet plans finds its members once its set is laid
+/// out, so none drops out of the bundle unnoticed, as `body/tests.rs`
+/// checks for binary bodies.
+#[test]
+fn every_composite_finds_its_members() {
+    let mut runner = TestRunner::deterministic();
+    let strategy = vec(packet_spec(Just(TimeFields::default()).boxed()), 1..=3);
+    let mut composites = 0;
+    for _ in 0..400 {
+        let specs = strategy.new_tree(&mut runner).unwrap().current();
+        let wanted: Vec<usize> = specs.iter().map(|spec| spec.composites.len()).collect();
+        let set = lay_out(
+            "",
+            Alias::Fixed,
+            JsonTime::Iso8601,
+            None,
+            false,
+            specs,
+            None,
+        );
+        let resolved: Vec<usize> = set
+            .packets
+            .iter()
+            .map(|packet| packet.composites.len())
+            .collect();
+        assert_eq!(resolved, wanted, "a composite didn't resolve");
+        composites += wanted.iter().sum::<usize>();
+    }
+    assert!(composites > 100, "only {composites} composites generated");
 }
 
 /// How deep a value's arrays and objects nest, a scalar being 0.
@@ -619,7 +862,7 @@ fn json_layouts_reach_every_feature() {
     let mut runner = TestRunner::deterministic();
     let strategy = json_telemetry();
     let mut found = BTreeSet::new();
-    for _ in 0..500 {
+    for _ in 0..1000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         found.extend(labels(&case));
     }
@@ -747,9 +990,44 @@ fn json_layouts_reach_every_feature() {
         "iso8601:no_fraction",
         "iso8601:fraction",
         "iso8601:fraction_past_nanoseconds",
+        // Composites (§7.4): each holder, each frame pairing's odd one out,
+        // a sample good or not, and each way a member is absent.
+        "key:packet.composites",
+        "param_type:vec3",
+        "param_type:quat",
+        "frame:GEODETIC",
+        "composite:fields",
+        "composite:struct",
+        "composite:array",
+        "composite:records",
+        "composite:sample",
+        "composite:not_good",
+        "composite:absent_member_optional",
+        "composite:absent_member_skipped",
+        "composite:absent_holder_optional",
+        "composite:absent_holder_skipped",
+        "composite:absent_past_end",
+        "composite:absent_null_element",
+        "composite:absent_null_record",
+        // Boot time and correlation (§8, §8.2).
+        "time:boot",
+        "time:boot/correlate",
+        "time:since_boot",
+        "boot:wide_count",
+        "boot:count_sentinel",
+        "boot:correlation",
+        "boot:wide_clock",
+        "boot:wide_boot",
+        "boot:clock_sentinel",
+        "boot:boot_sentinel",
     ] {
         assert!(found.contains(feature), "no JSON layout reaches {feature}");
     }
+    let unexplained: Vec<&String> = found
+        .iter()
+        .filter(|label| label.starts_with("composite:unexplained"))
+        .collect();
+    assert!(unexplained.is_empty(), "{unexplained:?}");
 }
 
 /// What the JSON damaged-message reach test counts.
@@ -772,6 +1050,8 @@ enum Reached {
     /// With a fixed alias, of two faults the error is `invalid_json`, the
     /// other met later.
     ParsedFirst,
+    /// An error at a correlation packet's clock or boot field.
+    Clock,
 }
 
 /// Where the entry an error names is.
@@ -846,6 +1126,9 @@ fn json_damaged_messages_reach_every_route() {
                 }
             }
             let path = failure.path.as_str();
+            if matches!(path, "clock" | "boot") {
+                note(Reached::Clock);
+            }
             note(Reached::Named(if path.is_empty() {
                 Named::Whole
             } else if path.contains("].") {
@@ -909,7 +1192,12 @@ fn json_damaged_messages_reach_every_route() {
         ]
         .map(Reached::Named),
     );
-    required.extend([Reached::Pair, Reached::SecondFirst, Reached::ParsedFirst]);
+    required.extend([
+        Reached::Pair,
+        Reached::SecondFirst,
+        Reached::ParsedFirst,
+        Reached::Clock,
+    ]);
     // §3.3's order, then identification before entries.
     required.extend(
         [

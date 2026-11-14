@@ -268,6 +268,17 @@ impl CompositeNode {
         json!({ "canonical": self.param, "frame": self.head.frame, "members": members })
     }
 
+    /// For each array holding members, by the name of its entry: how many
+    /// elements it needs to hold them all.
+    pub(super) fn reads(&self) -> impl Iterator<Item = (&str, usize)> {
+        self.members
+            .iter()
+            .filter_map(|member| match member.steps.as_slice() {
+                [Step::Name(name), Step::Index(index), ..] => Some((name.as_str(), index + 1)),
+                _ => None,
+            })
+    }
+
     /// Its sample (§7.4): its members through their conversions and into
     /// the param's unit when every one is good; else each raw, with the
     /// least trustworthy member's quality. None when a member is absent.

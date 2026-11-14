@@ -18,10 +18,11 @@ use proptest::sample::select;
 use serde_json::{Map, Value, json};
 
 use super::json::{self, Doc, JsonSet};
+use super::time::{CORRELATION_PACKET, within_years};
 use super::{
     BodySpec, Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND,
-    TimeFields, TimeSource, Unusable, epoch, field_spec, instant_text, label, lay_out, message_at,
-    time_fields, time_json, time_scale, to_utc, unit,
+    TimeFields, TimeSource, Unusable, boot_source, correlation_spec, field_spec, instant_text,
+    label, lay_out, message_at, time_fields, time_json, to_utc,
 };
 
 /// Families, their sets and bindings, and messages for them.
@@ -390,7 +391,7 @@ pub fn fleet() -> BoxedStrategy<Fleet> {
                 };
                 let json_sets: Vec<BoxedStrategy<JsonSet>> = if json {
                     (0..sets)
-                        .map(|set| json::fleet_set(format!("s{set}")))
+                        .map(|set| json::fleet_set(format!("s{set}"), boot))
                         .collect()
                 } else {
                     Vec::new()
@@ -576,14 +577,7 @@ fn fault(alias: Alias, version: Version, faults: bool) -> BoxedStrategy<Option<F
 /// specific one, and with boot time a correlation packet.
 fn set_plan(boot: bool) -> BoxedStrategy<SetPlan> {
     let time = if boot {
-        (unit(), unit(), epoch(), time_scale())
-            .prop_map(|(unit, clock_unit, epoch, scale)| TimeSource::Boot {
-                unit,
-                clock_unit,
-                epoch,
-                scale,
-            })
-            .boxed()
+        boot_source()
     } else {
         Just(TimeSource::None).boxed()
     };
@@ -591,22 +585,7 @@ fn set_plan(boot: bool) -> BoxedStrategy<SetPlan> {
         let packets = vec((vec(field_spec(), 1..=4), time_fields(&time)), 1..=3);
         let correlation = match &time {
             TimeSource::Boot { clock_unit, .. } => {
-                let widths: Vec<u32> = (8..=clock_unit.count_bits()).step_by(8).collect();
-                (
-                    select(widths),
-                    btree_set(any::<u8>(), 0..=1),
-                    btree_set(any::<u8>(), 0..=1),
-                    any::<bool>(),
-                )
-                    .prop_map(|(clock_bits, clock, boot, units)| {
-                        Some(Correlation {
-                            clock_bits,
-                            clock_invalid: clock.into_iter().map(u64::from).collect(),
-                            boot_invalid: boot.into_iter().map(u64::from).collect(),
-                            units,
-                        })
-                    })
-                    .boxed()
+                correlation_spec(*clock_unit).prop_map(Some).boxed()
             }
             _ => Just(None).boxed(),
         };
@@ -680,7 +659,7 @@ fn layouts(plan: &Plan) -> Vec<Vec<PacketLayout>> {
             }
             if let Some(correlation) = &planned.correlation {
                 let shape = PacketShape {
-                    name: "CORR".into(),
+                    name: CORRELATION_PACKET.into(),
                     params: format!("s{set}c"),
                     id: CORRELATION_ID,
                     identify: json!({ "id": CORRELATION_ID }),
@@ -1117,14 +1096,14 @@ fn assemble(
         let absolute = match (&error, &message.event_time) {
             (Some(_), _) => None,
             (None, EventTime::At(at)) => Some(*at),
-            (None, EventTime::SinceBoot { value, .. }) => {
-                match plan.sets.get(routed.set).map(|set| &set.time) {
-                    Some(TimeSource::Boot { unit, .. }) => booted
-                        .get(&(routed.family, routed.asset))
-                        .map(|boot| boot + i128::from(*value) * unit.nanos()),
-                    _ => None,
-                }
-            }
+            // No instant outside years 0001 to 9999 (§8.2).
+            (None, EventTime::SinceBoot { value, .. }) => match boot_of(plan, routed.set) {
+                Some((TimeSource::Boot { unit, .. }, _)) => booted
+                    .get(&(routed.family, routed.asset))
+                    .map(|boot| boot + i128::from(*value) * unit.nanos())
+                    .filter(|at| within_years(*at)),
+                _ => None,
+            },
             _ => None,
         };
         sent.push(Sent {
@@ -1196,33 +1175,39 @@ fn family_json(plan: &Plan, family: usize) -> Value {
     json
 }
 
+/// A set's boot time source and correlation fields, if it has boot time.
+fn boot_of(plan: &Plan, set: usize) -> Option<(&TimeSource, &Correlation)> {
+    if plan.json {
+        plan.json_sets.get(set)?.boot()
+    } else {
+        let set = plan.sets.get(set)?;
+        Some((&set.time, set.correlation.as_ref()?))
+    }
+}
+
 /// Whether a correlator learns from the message (§8.2): a boot set's
 /// correlation packet whose clocks both read good, giving the asset's boot
 /// instant in its family as the absolute clock's instant less the boot
-/// clock.
+/// clock, counted exactly, when that's within years 0001 to 9999.
 fn correlate(
     plan: &Plan,
     routed: &Routed,
     message: &Message,
     booted: &mut BTreeMap<(usize, usize), i128>,
 ) -> bool {
-    // JSON sets have no boot time here.
-    let Some(set) = plan.sets.get(routed.set).filter(|_| !plan.json) else {
-        return false;
-    };
-    let TimeSource::Boot {
-        unit,
-        clock_unit,
-        epoch,
-        scale,
-    } = &set.time
+    let Some((
+        TimeSource::Boot {
+            unit,
+            clock_unit,
+            epoch,
+            scale,
+        },
+        correlation,
+    )) = boot_of(plan, routed.set)
     else {
         return false;
     };
-    let Some(correlation) = &set.correlation else {
-        return false;
-    };
-    if message.packet != "CORR" {
+    if message.packet != CORRELATION_PACKET {
         return false;
     }
     let value = |name: &str| {
@@ -1238,10 +1223,11 @@ fn correlate(
         return false;
     }
     let instant = to_utc(epoch.label + i128::from(clock) * clock_unit.nanos(), *scale);
-    booted.insert(
-        (routed.family, routed.asset),
-        instant - i128::from(boot) * unit.nanos(),
-    );
+    let at = instant - i128::from(boot) * unit.nanos();
+    if !within_years(at) {
+        return false;
+    }
+    booted.insert((routed.family, routed.asset), at);
     true
 }
 
@@ -1338,12 +1324,45 @@ mod tests {
         }
     }
 
+    /// A set's correlation as its bundle has it: the clock's unit in
+    /// nanoseconds, and the clock's and the boot clock's sentinels.
+    fn correlation_of(bundle: &Value, set: &str) -> Option<(i128, Vec<u64>, Vec<u64>)> {
+        let set = bundle["sets"]
+            .as_array()?
+            .iter()
+            .find(|candidate| candidate["name"] == set)?;
+        let unit = match set["time"]["correlate"]["clock_unit"].as_str()? {
+            "s" => 1_000_000_000,
+            "ms" => 1_000_000,
+            "us" => 1_000,
+            _ => 1,
+        };
+        let packet = set["packets"]
+            .as_array()?
+            .iter()
+            .find(|packet| packet["name"] == "CORR")?;
+        let invalid = |name: &str| -> Vec<u64> {
+            packet["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|entry| entry["name"] == name)
+                .flat_map(|entry| entry["invalid"].as_array().cloned().unwrap_or_default())
+                .filter_map(|sentinel| sentinel.as_u64())
+                .collect()
+        };
+        Some((unit, invalid("clock"), invalid("boot")))
+    }
+
     /// Generated fleets reach every routing and correlation case.
     #[test]
     fn fleets_reach_every_case() {
         let mut runner = TestRunner::deterministic();
         let strategy = fleet();
         let mut seen = BTreeSet::new();
+        // A count of a clock's units this long puts its instant past year
+        // 9999 from any epoch generated, the earliest being 1958.
+        let past_9999 = label((10_000, 1, 1), (0, 0, 0), 0) - label((1958, 1, 1), (0, 0, 0), 0);
         for _ in 0..2500 {
             let case = strategy.new_tree(&mut runner).unwrap().current();
             let family = &case.bundle["families"][0];
@@ -1390,6 +1409,8 @@ mod tests {
                 seen.insert("fractional".to_string());
             }
             let mut previous = i128::MIN;
+            // The assets a correlation has taught, by family and name.
+            let mut known: BTreeSet<(&str, &str)> = BTreeSet::new();
             for sent in &case.messages {
                 // §3.3's order around the parse: which of a spoiled payload's
                 // `invalid_json` and the error it would give otherwise comes
@@ -1471,11 +1492,47 @@ mod tests {
                 if sent.message.packet == "GENERAL" {
                     seen.insert("general".to_string());
                 }
+                let encoding = if json { "json " } else { "" };
                 if sent.message.packet == "CORR" {
                     seen.insert(format!("teaches:{}", sent.teaches));
+                    seen.insert(format!("{encoding}teaches:{}", sent.teaches));
+                    let reading = |name: &str| {
+                        sent.message
+                            .record
+                            .iter()
+                            .find_map(|(field, raw)| match raw {
+                                super::super::Raw::Uint(n) if field == name => Some(*n),
+                                _ => None,
+                            })
+                    };
+                    if let (Some(clock), Some(boot), Some((unit, clock_invalid, boot_invalid))) = (
+                        reading("clock"),
+                        reading("boot"),
+                        correlation_of(&case.bundle, &sent.set),
+                    ) {
+                        // Both read good, yet the boot instant is outside
+                        // years 0001 to 9999; or the clock's own instant is
+                        // past 9999, and the boot instant isn't (§8.2).
+                        let good = !clock_invalid.contains(&clock) && !boot_invalid.contains(&boot);
+                        if good && !sent.teaches {
+                            seen.insert("teaches:false:out of range".to_string());
+                        }
+                        if sent.teaches && i128::from(clock) * unit >= past_9999 {
+                            seen.insert("teaches:true:clock past year 9999".to_string());
+                        }
+                    }
+                    if sent.teaches {
+                        known.insert((&sent.family, &sent.asset));
+                    }
                 }
                 if let EventTime::SinceBoot { .. } = sent.message.event_time {
                     seen.insert(format!("correlated:{}", sent.absolute.is_some()));
+                    seen.insert(format!("{encoding}correlated:{}", sent.absolute.is_some()));
+                    // A boot instant known, but this boot time's instant
+                    // past year 9999.
+                    if sent.absolute.is_none() && known.contains(&(&sent.family, &sent.asset)) {
+                        seen.insert("correlated:false:out of range".to_string());
+                    }
                 }
                 for (name, value) in &sent.metadata {
                     match value {
@@ -1507,6 +1564,13 @@ mod tests {
             "teaches:false",
             "correlated:true",
             "correlated:false",
+            "json teaches:true",
+            "json teaches:false",
+            "json correlated:true",
+            "json correlated:false",
+            "teaches:false:out of range",
+            "teaches:true:clock past year 9999",
+            "correlated:false:out of range",
             "text:node",
             "text:ver",
             "integer text:node",

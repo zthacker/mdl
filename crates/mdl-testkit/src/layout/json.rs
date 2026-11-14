@@ -1,9 +1,11 @@
-//! JSON families (`spec/decoding.md` §2.3, §3.1, §4, §5.3, §8): telemetry
-//! whose payloads are JSON documents, each entry read at a JSON Pointer
-//! relative to its container (the document, a struct's object, or a
-//! record element). The alias is fixed or read at a pointer; packets are
-//! told apart by pointer keys, the most specific match winning; the event
-//! time is an RFC 3339 string, or a count in a time field.
+//! JSON families (`spec/decoding.md` §2.3, §3.1, §4, §5.3, §7.4, §8):
+//! telemetry whose payloads are JSON documents, each entry read at a JSON
+//! Pointer relative to its container (the document, a struct's object, or
+//! a record element). The alias is fixed or read at a pointer; packets are
+//! told apart by pointer keys, the most specific match winning; composites
+//! gather numbers into vectors (`json/composite.rs`); the event time is an
+//! RFC 3339 string, or a count in a time field, a count since boot among
+//! them, which a correlation packet's clocks tie to instants (§8.2).
 //!
 //! Values are drawn as the binary oracle draws them, with the meanings
 //! they have there, and the record and samples are worked out the same
@@ -18,21 +20,25 @@ use proptest::sample::select;
 use proptest::strategy::Union;
 use serde_json::{Map, Value, json};
 
-use super::condition::{Condition, Op, Operand, Selector, condition_json, leaning, when_spec};
+use super::composite::{CompositeNode, CompositeSpec, mix};
+use super::condition::{
+    Condition, Op, Operand, Selector, WhenSpec, condition_json, leaning, when_spec,
+};
 use super::meaning::sample;
 use super::time::{
-    Count, EventTime, SECOND, Scale, TimeFields, TimeSource, count_value, epoch, event_time,
-    instant, label, no_reading, received, rfc3339, rfc3339_form, time_fields, time_json,
-    time_scale, unit, week_value,
+    CORRELATION_PACKET, Count, EventTime, Rfc3339, SECOND, Scale, TimeFields, TimeSource,
+    boot_source, count_value, epoch, event_time, instant, label, no_reading, received, rfc3339,
+    rfc3339_form, time_fields, time_json, time_scale, unit, week_value,
 };
 use super::{
-    Encoding, FieldSpec, Kind, Length, Meaning, Message, Meta, Placed, Raw, Sample, Sentinel,
-    Telemetry, Text, Unusable, interval, meaning, meaning_json, offset_ns, param_json, raw_value,
-    sentinels, type_name,
+    Correlation, Encoding, FieldSpec, Kind, Length, Meaning, Message, Meta, Placed, Raw, Sample,
+    Sentinel, Telemetry, Text, Unusable, clock_fields, correlation_spec, correlation_values,
+    interval, meaning, meaning_json, offset_ns, param_json, raw_value, sentinels, type_name,
 };
 pub(in crate::layout) use doc::Doc;
 use doc::Spell;
 
+mod composite;
 mod doc;
 pub(super) mod faults;
 #[cfg(test)]
@@ -106,7 +112,8 @@ enum Alias {
 /// A JSON set's time source (§8).
 #[derive(Debug, Clone)]
 enum JsonTime {
-    /// None, `elapsed` or `gps`: counts in each packet's time fields.
+    /// None, `elapsed`, `gps` or `boot`: counts in each packet's time
+    /// fields.
     Fields(TimeSource),
     /// `iso8601`: an RFC 3339 instant at `/t`.
     Iso8601,
@@ -127,6 +134,14 @@ struct JsonPacket {
     entries: Vec<JsonEntry>,
     /// Its time fields, `t` and a GPS `week`, where its source counts.
     timing: TimeFields,
+    /// Its composites (§7.4).
+    composites: Vec<CompositeNode>,
+    /// The order it lists its composites in, which needn't be their
+    /// names' (samples follow the names').
+    listed: Vec<usize>,
+    /// For a boot set's correlation packet: its clock and boot fields,
+    /// `/clock` and `/boot`, right after its time fields and `kind`.
+    correlation: Option<Correlation>,
 }
 
 /// An identify key's value (§4): a string, or an integer in any of its
@@ -183,7 +198,26 @@ struct JsonType {
 struct EntrySpec {
     shape: ShapeSpec,
     optional: bool,
-    when: Option<super::condition::WhenSpec>,
+    when: Option<WhenSpec>,
+    path: PathSpec,
+}
+
+impl EntrySpec {
+    fn new(shape: ShapeSpec, placing: Placing) -> EntrySpec {
+        EntrySpec {
+            shape,
+            optional: placing.optional,
+            when: placing.when,
+            path: placing.path,
+        }
+    }
+}
+
+/// Where an entry is read and when, before it's named.
+#[derive(Debug, Clone)]
+struct Placing {
+    optional: bool,
+    when: Option<WhenSpec>,
     path: PathSpec,
 }
 
@@ -260,34 +294,56 @@ fn index_of(token: &str) -> Option<usize> {
 /// that are text beyond ASCII.
 const ODD: [&str; 6] = ["/x", "~x", "~1", "a b", "é", "\u{1F600}"];
 
-/// A packet, before it's laid out: its entries, time fields, whether a
-/// field reads its kind, and whether it shares the packet before's kind
-/// and adds a `sub` key.
-type PacketSpec = (Vec<EntrySpec>, TimeFields, bool, bool);
+/// A packet, before it's laid out.
+#[derive(Debug, Clone)]
+struct PacketSpec {
+    entries: Vec<EntrySpec>,
+    timing: TimeFields,
+    /// Whether a field reads its kind.
+    kind_field: bool,
+    /// Whether it shares the packet before's kind and adds a `sub` key.
+    nests: bool,
+    /// Its composites, the entries holding their members among its own.
+    composites: Vec<CompositeSpec>,
+    listed: Vec<usize>,
+}
 
 fn set() -> BoxedStrategy<JsonSet> {
     set_of(
         alias(),
         String::new(),
         proptest::bool::weighted(0.3).boxed(),
+        json_time(),
     )
 }
 
 /// A set of a fleet's (`fleet.rs`): the fleet writes its alias and version
 /// members, so its own alias is fixed; its params are named
-/// `{prefix}j<i>.<entry>`, so sets of one catalog don't share them.
-pub(in crate::layout) fn fleet_set(prefix: String) -> BoxedStrategy<JsonSet> {
-    set_of(Just(Alias::Fixed).boxed(), prefix, Just(false).boxed())
+/// `{prefix}j<i>.<entry>`, so sets of one catalog don't share them. With
+/// `boot`, its time source is boot time.
+pub(in crate::layout) fn fleet_set(prefix: String, boot: bool) -> BoxedStrategy<JsonSet> {
+    let time = if boot {
+        boot_source().prop_map(JsonTime::Fields).boxed()
+    } else {
+        json_time()
+    };
+    set_of(
+        Just(Alias::Fixed).boxed(),
+        prefix,
+        Just(false).boxed(),
+        time,
+    )
 }
 
 fn set_of(
     alias: BoxedStrategy<Alias>,
     prefix: String,
     by_metadata: BoxedStrategy<bool>,
+    time: BoxedStrategy<JsonTime>,
 ) -> BoxedStrategy<JsonSet> {
     (
         (alias, by_metadata),
-        json_time(),
+        time,
         proptest::option::of(select(&[10_i64, -1_000, 1 << 52][..])),
         proptest::bool::weighted(0.25),
     )
@@ -296,29 +352,75 @@ fn set_of(
                 JsonTime::Fields(source) => time_fields(source),
                 JsonTime::Iso8601 => Just(TimeFields::default()).boxed(),
             };
-            let packet = (
-                vec(entry_spec(2), 1..=4),
-                fields,
-                any::<bool>(),
-                proptest::bool::weighted(0.4),
-            );
+            let correlation = match &time {
+                JsonTime::Fields(TimeSource::Boot { clock_unit, .. }) => {
+                    correlation_spec(*clock_unit).prop_map(Some).boxed()
+                }
+                _ => Just(None).boxed(),
+            };
             (
                 Just((alias, by_metadata)),
                 Just(time),
                 Just(numbered),
                 Just(catch_all),
-                vec(packet, 1..=3),
+                vec(packet_spec(fields), 1..=3),
+                correlation,
             )
         })
         .prop_map(
-            move |((alias, by_metadata), time, numbered, catch_all, packets)| {
-                let mut set = lay_out(&prefix, alias, time, numbered, catch_all, packets);
+            move |((alias, by_metadata), time, numbered, catch_all, packets, correlation)| {
+                let mut set = lay_out(
+                    &prefix,
+                    alias,
+                    time,
+                    numbered,
+                    catch_all,
+                    packets,
+                    correlation,
+                );
                 set.by_metadata = by_metadata;
                 for packet in &mut set.packets {
                     // `/kind` holds nothing a field could read.
                     packet.kind_field &= !by_metadata;
                 }
                 set
+            },
+        )
+        .boxed()
+}
+
+/// A packet: one to four entries, its time fields, and up to two
+/// composites, whose members' entries mix with the rest.
+fn packet_spec(fields: BoxedStrategy<TimeFields>) -> BoxedStrategy<PacketSpec> {
+    (
+        vec(entry_spec(2), 1..=4),
+        fields,
+        any::<bool>(),
+        proptest::bool::weighted(0.4),
+        vec(composite::composite_source(), 0..=2),
+    )
+        .prop_flat_map(|(entries, timing, kind_field, nests, sources)| {
+            let total = entries.len() + sources.iter().map(|s| s.items.len()).sum::<usize>();
+            let order = Just((0..total).collect::<Vec<usize>>()).prop_shuffle();
+            let listed = Just((0..sources.len()).collect::<Vec<usize>>()).prop_shuffle();
+            (
+                Just((entries, timing, kind_field, nests)),
+                Just(sources),
+                order,
+                listed,
+            )
+        })
+        .prop_map(
+            |((entries, timing, kind_field, nests), sources, order, listed)| {
+                let (entries, composites) = mix(entries, sources, &order);
+                PacketSpec {
+                    entries,
+                    timing,
+                    kind_field,
+                    nests,
+                    composites,
+                    listed,
+                }
             },
         )
         .boxed()
@@ -341,6 +443,31 @@ impl JsonSet {
             .get(index)
             .is_some_and(|packet| !packet.keys.is_empty())
     }
+
+    /// Its boot time source and correlation fields, if it has boot time.
+    pub(in crate::layout) fn boot(&self) -> Option<(&TimeSource, &Correlation)> {
+        let JsonTime::Fields(source @ TimeSource::Boot { .. }) = &self.time else {
+            return None;
+        };
+        let correlation = self
+            .packets
+            .iter()
+            .find_map(|packet| packet.correlation.as_ref())?;
+        Some((source, correlation))
+    }
+}
+
+impl JsonPacket {
+    /// How many elements each array its composites read needs to hold
+    /// every member in it, by the array's name.
+    fn reads(&self) -> BTreeMap<String, usize> {
+        let mut reads: BTreeMap<String, usize> = BTreeMap::new();
+        for (name, least) in self.composites.iter().flat_map(CompositeNode::reads) {
+            let most = reads.entry(name.to_string()).or_default();
+            *most = (*most).max(least);
+        }
+        reads
+    }
 }
 
 fn alias() -> BoxedStrategy<Alias> {
@@ -356,13 +483,14 @@ fn json_time() -> BoxedStrategy<JsonTime> {
         }),
         1 => (unit(), proptest::option::of(select(&[10_u32, 13, 16][..])))
             .prop_map(|(unit, week_bits)| JsonTime::Fields(TimeSource::Gps { unit, week_bits })),
+        2 => boot_source().prop_map(JsonTime::Fields),
     ]
     .boxed()
 }
 
 /// An entry of a packet or struct type: a field mostly, an array, or a
 /// struct while `depth` allows another level; optional now and then, or
-/// under a condition (§5.4), and at a pointer of one or two tokens.
+/// under a condition (§5.4), at any pointer [`placing`] draws.
 fn entry_spec(depth: u32) -> BoxedStrategy<EntrySpec> {
     let field = json_field_spec().prop_map(ShapeSpec::Field).boxed();
     let array = (
@@ -378,6 +506,15 @@ fn entry_spec(depth: u32) -> BoxedStrategy<EntrySpec> {
             .boxed();
         shapes.push((2, record));
     }
+    (Union::new_weighted(shapes), placing(0.25, 0.2))
+        .prop_map(|(shape, placing)| EntrySpec::new(shape, placing))
+        .boxed()
+}
+
+/// Where an entry is and when: optional a share `optional` of the time,
+/// or under a condition (§5.4) a share `when`, never both, at a pointer of
+/// one or two tokens, or through a container of its own.
+fn placing(optional: f64, when: f64) -> BoxedStrategy<Placing> {
     let n = prop_oneof![3 => 0..3_usize, 1 => 10..13_usize].boxed();
     let token = prop_oneof![
         4 => n.clone().prop_map(ElementToken::Index),
@@ -394,13 +531,11 @@ fn entry_spec(depth: u32) -> BoxedStrategy<EntrySpec> {
         2 => (token, any::<bool>()).prop_map(|(token, inner)| PathSpec::Element { token, inner }),
     ];
     (
-        Union::new_weighted(shapes),
-        proptest::bool::weighted(0.25),
-        proptest::option::weighted(0.2, when_spec()),
+        proptest::bool::weighted(optional),
+        proptest::option::weighted(when, when_spec()),
         path,
     )
-        .prop_map(|(shape, optional, when, path)| EntrySpec {
-            shape,
+        .prop_map(|(optional, when, path)| Placing {
             optional: optional && when.is_none(),
             when,
             path,
@@ -513,7 +648,9 @@ struct Names {
 /// `numbered` with a base (10, −1000 or 2^52, so negative and wide kinds
 /// too); one that nests shares the packet before's kind (when that one has
 /// only it) and adds `sub`, the integer `i`, so it's the more specific of
-/// the two (§4). With `catch_all` the first packet has no keys.
+/// the two (§4). With `catch_all` the first packet has no keys. Composite
+/// `k` of packet `i` maps to `{prefix}j<i>.c<k>`. A boot set's correlation
+/// packet comes last, keyed by its own name.
 fn lay_out(
     prefix: &str,
     alias: Alias,
@@ -521,10 +658,19 @@ fn lay_out(
     numbered: Option<i64>,
     catch_all: bool,
     specs: Vec<PacketSpec>,
+    correlation: Option<Correlation>,
 ) -> JsonSet {
     let mut packets: Vec<JsonPacket> = Vec::new();
     let mut types = Vec::new();
-    for (index, (entries, timing, kind_field, nests)) in specs.into_iter().enumerate() {
+    for (index, spec) in specs.into_iter().enumerate() {
+        let PacketSpec {
+            entries,
+            timing,
+            kind_field,
+            nests,
+            composites,
+            listed,
+        } = spec;
         let name = format!("J{index}");
         let params = format!("{prefix}j{index}");
         let mut names = Names {
@@ -534,6 +680,11 @@ fn lay_out(
         };
         let entries = lay_out_entries(entries, &params, &mut names);
         types.append(&mut names.types);
+        let composites = composites
+            .into_iter()
+            .enumerate()
+            .filter_map(|(k, spec)| composite::resolve(spec, format!("{params}.c{k}"), &entries))
+            .collect();
         let previous = packets.last().filter(|packet| packet.keys.len() == 1);
         let keys = match previous {
             _ if catch_all && index == 0 => Vec::new(),
@@ -552,6 +703,24 @@ fn lay_out(
             keys,
             entries,
             timing,
+            composites,
+            listed,
+            correlation: None,
+        });
+    }
+    if let Some(correlation) = correlation {
+        packets.push(JsonPacket {
+            name: CORRELATION_PACKET.to_string(),
+            keys: vec![(
+                "kind".to_string(),
+                Key::Text(CORRELATION_PACKET.to_string()),
+            )],
+            kind_field: false,
+            entries: Vec::new(),
+            timing: TimeFields::default(),
+            composites: Vec::new(),
+            listed: Vec::new(),
+            correlation: Some(correlation),
         });
     }
     JsonSet {
@@ -717,11 +886,12 @@ fn assemble(set: &JsonSet, messages: Vec<Message>) -> Telemetry {
     }
 }
 
-/// The params `set`'s entries map to, for the catalog.
+/// The params `set`'s entries and composites map to, for the catalog.
 pub(in crate::layout) fn set_params(set: &JsonSet) -> Vec<(String, Value)> {
     let mut params = Vec::new();
     for packet in &set.packets {
         params_of(&packet.entries, &mut params);
+        params.extend(packet.composites.iter().map(CompositeNode::param_json));
     }
     params
 }
@@ -769,6 +939,13 @@ fn packet_json(set: &JsonSet, packet: &JsonPacket) -> Value {
         };
         entries.push(json!({ "kind": "field", "name": "kind", "type": ty, "pointer": "/kind" }));
     }
+    if let (Some(correlation), JsonTime::Fields(source)) = (&packet.correlation, &set.time) {
+        let fields = clock_fields(correlation, source);
+        for (mut field, pointer) in fields.into_iter().zip(["/clock", "/boot"]) {
+            field["pointer"] = json!(pointer);
+            entries.push(field);
+        }
+    }
     entries.extend(packet.entries.iter().map(entry_json));
     let mut json = json!({ "name": packet.name, "entries": entries });
     if !packet.keys.is_empty() {
@@ -793,6 +970,15 @@ fn packet_json(set: &JsonSet, packet: &JsonPacket) -> Value {
     if packet.timing.count.is_some() {
         json["time_field"] = json!("t");
     }
+    let composites: Vec<Value> = packet
+        .listed
+        .iter()
+        .filter_map(|&k| packet.composites.get(k))
+        .map(CompositeNode::json)
+        .collect();
+    if !composites.is_empty() {
+        json["composites"] = json!(composites);
+    }
     json
 }
 
@@ -801,7 +987,9 @@ fn packet_json(set: &JsonSet, packet: &JsonPacket) -> Value {
 fn time_entries(source: &TimeSource, count: Count, timing: &TimeFields) -> Vec<Value> {
     let mut entries = Vec::new();
     let unit = match source {
-        TimeSource::Elapsed { unit, .. } | TimeSource::Gps { unit, .. } => unit.name(),
+        TimeSource::Elapsed { unit, .. }
+        | TimeSource::Gps { unit, .. }
+        | TimeSource::Boot { unit, .. } => unit.name(),
         _ => "s",
     };
     if matches!(source, TimeSource::Gps { .. }) {
@@ -952,6 +1140,8 @@ struct JsonDraft {
     /// For an `iso8601` source: what `/t` holds, and the event time it
     /// gives.
     stamp: Option<(Stamp, EventTime)>,
+    /// A correlation packet's clock and boot values.
+    clocks: Option<(u64, u64)>,
     /// Whether a message of a packet with one key carries a `sub` no
     /// packet has, or one that can't be read (§4).
     stray: bool,
@@ -984,12 +1174,14 @@ fn draft_at(set: &JsonSet, index: usize, ground: i128) -> BoxedStrategy<JsonDraf
 }
 
 /// What a draft is drawn as: its ground time, count, GPS week, stamp,
-/// fills, whether it carries a stray `sub`, and its spellings' seed.
+/// correlation clocks, fills, whether it carries a stray `sub`, and its
+/// spellings' seed.
 type DraftParts = (
     i128,
     Option<Raw>,
     u16,
     Option<(Stamp, EventTime)>,
+    Option<(u64, u64)>,
     Vec<Fill>,
     bool,
     u64,
@@ -1018,23 +1210,31 @@ fn draft_parts(set: &JsonSet, index: usize, ground: i128) -> BoxedStrategy<Draft
         JsonTime::Iso8601 => stamp(ground).prop_map(Some).boxed(),
         JsonTime::Fields(_) => Just(None).boxed(),
     };
+    let clocks = match (&set.time, &packet.correlation) {
+        (JsonTime::Fields(source), Some(correlation)) => correlation_values(source, correlation)
+            .prop_map(Some)
+            .boxed(),
+        _ => Just(None).boxed(),
+    };
     (
         Just(ground),
         count,
         week,
         stamp,
-        fills(&packet.entries),
+        clocks,
+        fills(&packet.entries, &packet.reads()),
         any::<bool>(),
         any::<u64>(),
     )
         .boxed()
 }
 
-fn into_draft((received, count, week, stamp, fills, stray, seed): DraftParts) -> JsonDraft {
+fn into_draft((received, count, week, stamp, clocks, fills, stray, seed): DraftParts) -> JsonDraft {
     JsonDraft {
         count,
         week,
         stamp,
+        clocks,
         stray,
         fills,
         received,
@@ -1077,7 +1277,8 @@ fn week_draw(source: &TimeSource, ground: i128, invalid: &[u64]) -> BoxedStrateg
 
 /// What `/t` holds for an `iso8601` source, and the event time it gives
 /// (§8): an RFC 3339 instant near the ground time or near the ends of
-/// years 0001 to 9999, written any way §8 allows; now and then text that
+/// years 0001 to 9999, written any way §8 allows, one early in year 0001
+/// written at −23:59 so its date is in year 0000; now and then text that
 /// isn't one, a number, or nothing.
 fn stamp(ground: i128) -> BoxedStrategy<(Stamp, EventTime)> {
     let day = 86_400 * SECOND;
@@ -1093,6 +1294,18 @@ fn stamp(ground: i128) -> BoxedStrategy<(Stamp, EventTime)> {
             rfc3339(unix, &form)
         })
         .prop_map(|(text, read)| (Stamp::Text(text), instant(Some(read), Scale::Utc)));
+    // The range check is on the instant, not the date written (§8).
+    let year_zero = (first..first + day / 2, rfc3339_form())
+        .prop_filter_map("a local year four digits write", |(unix, form)| {
+            rfc3339(
+                unix,
+                &Rfc3339 {
+                    offset: -1439,
+                    ..form
+                },
+            )
+        })
+        .prop_map(|(text, read)| (Stamp::Text(text), instant(Some(read), Scale::Utc)));
     let botched =
         select(&BOTCHED[..]).prop_map(|text| (Stamp::Text(text.to_string()), EventTime::Invalid));
     let other = prop_oneof![
@@ -1100,7 +1313,7 @@ fn stamp(ground: i128) -> BoxedStrategy<(Stamp, EventTime)> {
         any::<i32>().prop_map(|n| Stamp::Number(i64::from(n))),
     ]
     .prop_map(|stamp| (stamp, EventTime::Invalid));
-    prop_oneof![8 => written, 1 => botched, 1 => other].boxed()
+    prop_oneof![8 => written, 1 => year_zero, 1 => botched, 1 => other].boxed()
 }
 
 /// Text near an RFC 3339 instant that isn't one (§8).
@@ -1142,8 +1355,9 @@ struct Drawn {
 /// What a message holds for a container's entries: each one's value, an
 /// optional one absent now and then (nothing at its pointer, or `null`),
 /// and a conditional one skipped where its selector's value fails the
-/// condition, with what its pointer finds half the time.
-fn fills(entries: &[JsonEntry]) -> BoxedStrategy<Vec<Fill>> {
+/// condition, with what its pointer finds half the time. An array that
+/// composites read is long enough for them as `reads` says ([`fill`]).
+fn fills(entries: &[JsonEntry], reads: &BTreeMap<String, usize>) -> BoxedStrategy<Vec<Fill>> {
     let selected = selector_values(entries);
     let drawn: Vec<BoxedStrategy<Drawn>> = entries
         .iter()
@@ -1158,7 +1372,7 @@ fn fills(entries: &[JsonEntry]) -> BoxedStrategy<Vec<Fill>> {
             } else {
                 Just(None).boxed()
             };
-            (fill(entry, &selected), absent, junk)
+            (fill(entry, &selected, reads), absent, junk)
                 .prop_map(|(fill, absent, junk)| Drawn { fill, absent, junk })
                 .boxed()
         })
@@ -1187,7 +1401,14 @@ fn fills(entries: &[JsonEntry]) -> BoxedStrategy<Vec<Fill>> {
         .boxed()
 }
 
-fn fill(entry: &JsonEntry, selected: &BTreeMap<String, Vec<Raw>>) -> BoxedStrategy<Fill> {
+/// What a message holds for `entry`. An array composites read holds every
+/// element they read most of the time, by `reads`, and `null` among them
+/// less often than other arrays; now and then it ends before one (§7.4).
+fn fill(
+    entry: &JsonEntry,
+    selected: &BTreeMap<String, Vec<Raw>>,
+    reads: &BTreeMap<String, usize>,
+) -> BoxedStrategy<Fill> {
     match &entry.node {
         JsonNode::Field(field) => {
             let values = match selected.get(&field.name) {
@@ -1201,13 +1422,26 @@ fn fill(entry: &JsonEntry, selected: &BTreeMap<String, Vec<Raw>>) -> BoxedStrate
         JsonNode::Array { element, .. } => {
             let element = match element {
                 JsonElement::Scalar(element) => json_raw(element).prop_map(Element::Scalar).boxed(),
-                JsonElement::Record(ty) => fills(&ty.entries).prop_map(Element::Record).boxed(),
+                JsonElement::Record(ty) => fills(&ty.entries, &BTreeMap::new())
+                    .prop_map(Element::Record)
+                    .boxed(),
             };
-            vec(proptest::option::weighted(0.85, element), 0..=MOST_ELEMENTS)
-                .prop_map(Fill::Array)
-                .boxed()
+            let items = match reads.get(&entry.name) {
+                Some(&least) => {
+                    let element = proptest::option::weighted(0.95, element);
+                    prop_oneof![
+                        5 => vec(element.clone(), least..=least.max(MOST_ELEMENTS)),
+                        1 => vec(element, 0..least),
+                    ]
+                    .boxed()
+                }
+                None => vec(proptest::option::weighted(0.85, element), 0..=MOST_ELEMENTS).boxed(),
+            };
+            items.prop_map(Fill::Array).boxed()
         }
-        JsonNode::Struct(ty) => fills(&ty.entries).prop_map(Fill::Struct).boxed(),
+        JsonNode::Struct(ty) => fills(&ty.entries, &BTreeMap::new())
+            .prop_map(Fill::Struct)
+            .boxed(),
     }
 }
 
@@ -1319,9 +1553,9 @@ fn pack_routed(
     }
 }
 
-/// A message's document: the alias, the packet's keys, its time members,
-/// and its entries' values at their pointers, with members no entry reads,
-/// in any order.
+/// A message's document: the alias, the packet's keys, its time members
+/// and correlation clocks, and its entries' values at their pointers, with
+/// members no entry reads, in any order.
 fn document(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft, spell: &mut Spell) -> Doc {
     let mut members: Vec<(String, Doc)> = Vec::new();
     match set.alias {
@@ -1370,6 +1604,10 @@ fn document(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft, spell: &mut S
             members.push(("week".into(), Doc::Int(i128::from(draft.week))));
         }
         members.push(("t".into(), scalar_doc(count)));
+    }
+    if let Some((clock, boot)) = draft.clocks {
+        members.push(("clock".into(), Doc::Int(i128::from(clock))));
+        members.push(("boot".into(), Doc::Int(i128::from(boot))));
     }
     members.extend(members_of(&packet.entries, &draft.fills, spell));
     extras(&mut members, spell);
@@ -1441,10 +1679,9 @@ fn metadata_of(set: &JsonSet, packet: &JsonPacket, spell: &mut Spell) -> Vec<(St
             match spell.pick(4) {
                 0 => Vec::new(),
                 1 => vec![kind(Meta::Text("Z".into())), kind(Meta::Text("Z".into()))],
-                2 => numbered.map_or(vec![kind(Meta::Text("Z".into()))], |n| {
+                _ => numbered.map_or(vec![kind(Meta::Text("Z".into()))], |n| {
                     vec![kind(Meta::Text(leading_zero(n)))]
                 }),
-                _ => vec![kind(Meta::Text("Z".into()))],
             }
         }
     }
@@ -1655,8 +1892,9 @@ fn nested(levels: usize, objects: bool) -> Doc {
 }
 
 /// The record a message decodes to: its time fields, `kind` where a field
-/// reads it, then its entries' values, absent and skipped ones left out,
-/// a `null` element kept at its place (§5.3).
+/// reads it, a correlation packet's clocks, then its entries' values,
+/// absent and skipped ones left out, a `null` element kept at its place
+/// (§5.3).
 fn record(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft) -> Vec<(String, Raw)> {
     let mut record = Vec::new();
     if let Some(count) = &draft.count {
@@ -1671,6 +1909,10 @@ fn record(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft) -> Vec<(String,
             Key::Int(n) => Raw::Int(*n),
         };
         record.push(("kind".to_string(), raw));
+    }
+    if let Some((clock, boot)) = draft.clocks {
+        record.push(("clock".to_string(), Raw::Uint(clock)));
+        record.push(("boot".to_string(), Raw::Uint(boot)));
     }
     record.extend(values(&packet.entries, &draft.fills));
     record
@@ -1706,11 +1948,20 @@ fn values(entries: &[JsonEntry], fills: &[Fill]) -> Vec<(String, Raw)> {
 }
 
 /// The samples a message gives (§7.3): each mapped field and scalar
-/// element in record order; a `null` element gives none, though later
-/// elements keep their index (§5.3).
+/// element in record order, a `null` element giving none, though later
+/// elements keep their index (§5.3); then the composites by name, each
+/// with no sample where a member is absent (§7.4).
 fn samples(packet: &JsonPacket, draft: &JsonDraft) -> Vec<Sample> {
     let mut samples = Vec::new();
     samples_of(&packet.entries, &draft.fills, "", None, &mut samples);
+    let record = values(&packet.entries, &draft.fills);
+    let mut composites: Vec<&CompositeNode> = packet.composites.iter().collect();
+    composites.sort_by(|a, b| a.param().cmp(b.param()));
+    samples.extend(
+        composites
+            .into_iter()
+            .filter_map(|composite| composite.sample(&record)),
+    );
     samples
 }
 
