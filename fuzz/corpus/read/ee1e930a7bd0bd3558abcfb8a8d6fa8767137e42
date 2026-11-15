@@ -1,0 +1,42 @@
+{
+  "mdl_vert": "ascii",
+              "canonical": "imager.name"
+            }
+          ]
+      {
+  "mdl_ver[ion": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.r"type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+          },
+        {
+          "name": "TargetReport",
+          "identify": {
+"type":  {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },"unit"
+      "demosat.ccsds_packet_sequence."states": [
+          "Continuation",
+          "First",
+          "Last",
+          "Sta"tow"ne"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type":      },
+          "entries": [
+            {
+              "kind": "field"ttery temperature"
+    ,

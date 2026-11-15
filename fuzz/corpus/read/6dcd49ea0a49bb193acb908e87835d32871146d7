@@ -1,0 +1,20 @@
+[[[[[[[["demosat.ccsds_{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detectsr": ype"ХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХХ: "u64"
+ 0    },
+      "imager.name": {
+        "type": "str"
+ #    },
+      "image•r.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type"   "Detecto8"
+              }
+            },
+            {
+              "kind": "field",
+        "      "name:": "Mode",
+     

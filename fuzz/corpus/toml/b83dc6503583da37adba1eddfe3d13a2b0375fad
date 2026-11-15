@@ -1,0 +1,5 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+conversion = { kind = "states", states = SAFE",{ raw = 0, name =   

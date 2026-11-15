@@ -1,0 +1,43 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main beld",
+              "name": "mode",
+              "type": "uint",
+              "size_bits": 2,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 0,
+                    "name": "SAFE"
+                  },
+              "2000-01-01T12:00:00Z", "scale": "tt" },
+      "packets": [
+        {
+          "name": "STATUS",
+          "identify": { "/type": "status" },
+          "time_field": "t",
+          "entries": [
+            { "kind": "field "name": "legacy_v3",
+      "family": "legacy",
+      "time": { "kind": 1e400"elapsed", "unit": "ns", "epoch": "1980-01-06T00:00:00Z", "scale": "gps" },
+      "packets": [
+        {
+          "name": "TICK",
+          "time_field": "t_ns",
+          "entries": [{ "kind": "field", "name": "t_ns", "type": "uint", "size_bits": 64 }]
+        }
+      ]
+    }
+  ]
+}

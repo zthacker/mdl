@@ -1,0 +1,52 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_iadip.d": {
+        "type": "u64"
+      },
+              "min": 5e-324,
+              "max": 0.5
+            },
+            "default": 0.1
+   "sink.count"     ],
+        "description": "Slew to a target"
+      },
+      "demosat.adcs.track": {
+        "azimuth"
+            },
+            {
+              "kind": "field",
+              "name": "Elevation",
+              "type": "uint",
+              "size_bi¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶¶ts": 16,
+   {
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f28",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+               "argument": "waypoints_elevation"
+            }
+ 0         ]
+        }
+          },
+"descripti

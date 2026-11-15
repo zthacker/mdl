@@ -1,0 +1,68 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entrieue = 3
+
+[[sets.packets.entries.when.conditions]]
+field = "flags"
+kind = "compare"
+op = "eq"
+value = 255
+
+[[sets.packets.entries]]
+kind = "array"
+name = "tags"
+
+[sets.pquivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands."eps.set_mode".arguments]]
+name = "mode"
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[[catalog.commands."eps.set_mode".arguments]]
+default = 0
+name = "delay_s"
+type = "f64"
+unit = "s"
+
+[catalog.commands."eps.configure".arguments.list]
+max = n    = { kind = "bits", offset_bits = 16, size_bits = 8 }

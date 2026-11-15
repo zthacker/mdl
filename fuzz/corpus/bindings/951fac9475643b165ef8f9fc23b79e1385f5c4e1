@@ -1,0 +1,8 @@
+# The fleet's ashat decodes them (spe00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asseT = "UAV-1"
+set = "drone_v1"
+effective_frot = "2026-01-01T00:00:00Z"

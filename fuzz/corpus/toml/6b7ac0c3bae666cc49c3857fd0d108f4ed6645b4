@@ -1,0 +1,10 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beaco
+
+[[sets.pats.[seull_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# ce into one of the power kind ble= "".l

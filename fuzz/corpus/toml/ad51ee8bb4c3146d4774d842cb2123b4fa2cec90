@@ -1,0 +1,20 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written bykeys are in sorted order). tests/equivalence.rs
+# checks that both build identical aencoding.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "nd   A    = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = *linear", scale = 5.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+n"sink.configure".arguments]]
+defauame       =lt = true
+name  "batt_tem= "

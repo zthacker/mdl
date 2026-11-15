@@ -1,0 +1,35 @@
+{
+  "mdl_version": "2.0",
+  "catalog": { 					"identify"			:‰
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imag¡Ñ–‡š“s": {
+        "type": "u64"
+      },
+      "imager.tÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿrrent, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "de  script "canioonical

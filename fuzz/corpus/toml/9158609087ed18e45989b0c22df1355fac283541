@@ -1,0 +1,11 @@
+# A param added to the cat.alog: a compatible change, so a rebuild keeps
+# every set's identity.
+
+mdl_version = "2.0"
+
+[catalog.sion = "2.0"
+
+[catalorent"]
+typo the    = "f64"
+unit        = "A"
+description = "Solar array current"

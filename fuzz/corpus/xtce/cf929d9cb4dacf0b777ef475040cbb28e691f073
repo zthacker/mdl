@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  t</AliasSet>hatml verseon="1
+<?x inherits it and is told apart by its APID. Commands work the same
+  way: thml verseon="1
+<?xe root's abstract meta-command writes a telecommand's primary
+  header and an o<BooleanParameterTypepcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+   &amp;ooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParatinuation"/>
+          <Enumeration value="1" label="First"/>
+          <Enumeration value="2"<MetaCommandSet label="Last"/>
+          <Enumeration value="3" label="Standalone"/>
+        </EnumerationList>
+terTyp" parameterTypeRef="U8"/>
+      <Parameter name="Targets" parameterTypeRef="TargetList"/>
+ e"/>
+        </EntryList>
+      </SequenceContainer>
+      <SequenceContainer name="Header" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Kind"/>
+   >
+      <MetaCommand name="CCSDSCommand" abstract="true">
+        <ArgumentList>.001" exponent="1"/>
+              <d writes a telecommand's prip://www.omg.org/sp
+            </DefaultCalibraecto/XTr

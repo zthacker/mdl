@@ -1,0 +1,110 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible with its param's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+limits      = { red_low = -10.0, yellow_low = 0.0, yellow_high = 35.0, red_high = 45.0 }
+description = "Battery temperature"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states      = ["SAFE", "NOMINAL", "PAYLOAD"]
+description = "Power mode, as the asset reports it"
+
+[catalog.params."eps.batt_remaining"]
+type        = "f64"
+unit        = "%"
+limits      = { red_low = 15.0, yellow_low = 30.0 }
+description = "Battery charge remaining"
+
+# One command for every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, and
+# then the delay must be its default.
+[catalog.commands."eps.set_mod
+mdl_version = "2.0"
+
+[[families]]
+name  .....................     = "ccsds_sat"
+encoding   = "binary"
+byte_order = "big"
+alias   size_bitsnd = "bits", offset_bits = 48, size_jits = 16 }
+metadata   = ["apid"]
+
+[[sets]]
+name   = "ccsds_sdefaultat_v1"
+family = "ccsds_sat"
+# A TOML datetime works wherever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = 2000-01-01T00:00:00Z, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 ------------------------------------------
+
+[[sets.packets]]
+name     = "EPS_HK"
+identify = { apid = 0x064 }
+length   = { kind = "exact", bytes = 13 }
+
+# Millivolts on the wire, volts in the catalog: decodinnverts.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 64
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+invalid     = [0xFFFF]
+
+# A thermistor, calibrated by a table of counts to degrees Celsius.
+[[sets.packets.entries]]
+kind       = "fie
+
+mdl_version = "2.0"
+
+[[families]]
+name     = "json_sat"
+encoding = "json"
+alias    = { kind = "path", pointer = "/sat" }
+
+[[sets]]
+name   = "json_sat_v1"
+family = "json_sat"
+time   = { kind = "iso8601", pointer = "/t"struct }
+
+[[sets.packets]]
+name     = "PWR_BUS_V"
+identify = { "/ch" = "PWR.BUS.V" }
+
+[[sets.packets.entries]]
+kind      = "fi"parity"
+
+[sets.commands.entries.algorithm]
+kind = "xor"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "sum"
+
+[sets.commands.entries.algorithm]
+kind = "sum"
+width = 16
+
+[[sets.packets]]
+name = "TIME"
+time_field = "boot_ms"
+
+[[sets.packets.entries]]
+invalid = ["18446744073709551615"]
+kind = "field"
+name = "unix_us"
+size_bits = "[degF]"
+canonical = "eps.batt_temp"

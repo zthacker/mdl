@@ -1,0 +1,20 @@
+{
+  "mdl_version": "3.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cec"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+    é   "type": "u64"
+      },
+      "imager.mode": {
+        "type      },
+      den

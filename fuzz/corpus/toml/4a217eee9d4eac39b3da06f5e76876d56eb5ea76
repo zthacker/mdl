@@ -1,0 +1,21 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[setsl params ase the "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind*= "lil_version = "0.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = [catalog.params."sink.velocity"]{ kind = "bits", offset_bits = 0, size_bits =d16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }

@@ -1,0 +1,185 @@
+# cratesepochtests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.nter = "/flow"
+type = "float"
+
+[sets.packets.entries.conversion]
+kind = "spline"
+
+[[sets.packets.entries.conversion.points]]
+raw = 0
+value = 0
+
+[[sets.packets.entries.conversion.points]]
+raw = 1
+value = 1
+
+[[sets.packets.entries.conversion.pelement]
+byte_order = "big"
+kind = "scalar"
+size_bits = 16
+type = "uint"
+
+[sets.commands.entries.element.conversion]
+coefkind = "linear"
+offset = 0
+scale = 0.5
+
+[[sets.commands.entries]]
+kind = "field"
+name = "node"
+size_bits = 8
+target = true
+type = "uint"
+
+[[sets.commands.entries]]
+from_bits = 8
+kind = "checksum"
+name = "crc"
+
+[sets.commands.entries.algorithm]
+init = 65535
+kind = "crc"
+poly = 4129
+reflect_in = true
+reflect_out = true
+width = 16
+xor_out = 65535
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.commands]]
+canonical = "sink.mark"
+name = "MARK"
+
+[[sets.commands.ue = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.composites]]
+canonical = "sink.attitude"
+frame = "BODY"
+members = [
+    "q[0]",
+    "q[1]",
+    "q[2]",
+    "q[3]",
+]
+
+[[sets.packets.composites]]
+canonical = "sink.velocity"
+frame = "ENU"
+members = [
+    "ve",
+    "vn",
+    "vu",
+]
+
+[[sets.packets.composites]]
+canonical = "nav.pos_ecef"
+frame = "GEODETIC"
+members = [
+    "lat",
+    "lon",
+    "alt",
+]
+
+[[sets.packets.entries]]
+byte_order = "big"
+canonical = "sink.count"
+kind = "field"
+name = "count"
+offset_bits = 64
+size_bits = 16
+type = "int"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+name = "armed"
+size_bits = 1
+type = "bool"
+
+[[sets.packets.entries]]
+kind = "padding"
+size_bits = 7
+
+[[sets.packets.entries]]
+canonical = "sink.label"
+kind = "field"
+name = "label"
+text = "latin1"
+type = "string"
+
+[sets.packets.entries.length]
+bytes = 8
+kind = "fixed"
+terminator = 0
+
+[[sets.packets.entries]]
+kind = "field"
+name = "name_len"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "name"
+type = "string"
+
+[sets.packets.entrs]]
+kind = "field"
+name = "name"
+type = "string"
+
+[sets.packets.entries.length]
+add = 2
+field = "name_len"
+kind = "field"
+multiply = 2
+
+[[sets.packets.entries]]
+kind = "array"
+name = "q"
+
+[sets.packets.entries.count]
+count = 4
+kind = "fanonical = "sink.armed"
+kind = "e the sambyteo consumers see one stream of values.
+
+mdl_version = "2.0"beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entries]]
+kind        = "fiend = "field"
+name = "t_nsvalues.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beac

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its APID. Commands work the same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncodingtion value="2" label="Last"/>
+          <Enumeration value=  <Argument name="Opcode" argumentTypeRef="OpcodeType"/>
+        </ArgumentList>
+        <CommandContainer name="CCSDSCommand">
+          <EntryList>
+            <FixedValueEntry name="Version" binaryValue="0" sizeInBits="3"/>
+            <FixedValueEntry name="Type" binaryValue="1" sizeInBits="1"/>
+            <FixedValueEntry name="SecHdrFlag" binaryValue="0" sizeInBits="1"/>
+            <ArgumentRefEntry argumentRef="APID"/>
+            <FixedValueEntry name="Gr          <MemberList>
+            <Member name="Azimuth" typeRef="AngleType"/>
+            <Member name="Elevation" typeRef="AngleType"/>
+          </MemberList>
+        </AggregateArgumenerInstanceRef parameterRef="Pixels"/>
+                <LinearAdjustment intercept="-1"/>
+              </DynamicValue>
+            </EndingIndex>
+                </RestrictionCriteria>
+        </BaseContainer>
+      <</ArgumentList>ner>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

@@ -1,0 +1,44 @@
+# Firmwagt
+# compatible with its param's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+invalid     = [0xFFFF]
+
+# A thermistor, calibrated by a table of counts to degrees Celsius.
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp_counts"
+type       = "uint"
+size_bits  = 16conversion = { kind = "table", points = [
+    { raw = 0, value = -40.0 },
+    { raw = 1000, value = 0.0 },
+    { raw = 1500, value = 60.0 },
+] }
+unit       = "Cel"
+canonical  = "eps.batt_temp"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  = 8
+conversion = { kind = "states", states # The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compthe same, so consumers seeays whe"Cel"
+limits      = { red_low = -10.0, yellore those are. Each set says which: format it decodes,
+# so a message pickw_low = 0.0, yellow_high = 35.0, red one stream of values.
+
+md[[[[[[[[_high = 45.0 }
+description = "Battery temperature"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states   "
+size_bits  = 16
+conversion = { kind = "table", points = [
+    { raw =[[[[[[[[[[[[[[[[[ 0

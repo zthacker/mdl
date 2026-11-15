@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ <?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="TiommandSet>
+        <!-- Every power command goes to APID 100. -->
+        <MetaCommand name="EPSCommand" abstractameterType name="Uptime" signed="false">
+  egerDataEncoding  De

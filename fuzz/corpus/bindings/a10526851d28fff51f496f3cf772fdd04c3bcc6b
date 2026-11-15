@@ -1,0 +1,6 @@
+m= "2.0"
+
+[[binding]]
+family = "vendor_%x"
+nativek_id = 0x3
+asset = "SAT|||1:00Z"

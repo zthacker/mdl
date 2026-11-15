@@ -1,0 +1,55 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 24
+size_bits   scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+m of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_stringersion = { kind ble= "".l

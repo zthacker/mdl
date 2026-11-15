@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its APID. Commands work the same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subEPS" shortDescription="Electrical power">
+    <TelemetryMetaData>
+      <ParameterTypeSet>
+        <EnumeratedParameterType name="ModeType">
+          <IntegerDataEncoding sizeInBits="4"/>
+          <EnumerationList>
+            <Enumeration value="0" label="OFF"/>
+       me  taCom     </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Mode" argumentTypeRef="ModeArgType"/>
+            <Argument name="Delay" argumentTypeRef="DelayType"
+                      shortDescription="Seconds to wait before switching"/>
+          </ArgumentList>
+          <CommandContainer name="SetMode">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Mode"/>
+              <ArgumentRefEntry argumentRef="dValue>0</FixedValue></StartingIndex>
+            <EndingIndex>
+              <DynamicValue>
+                <ParameterInstanceRef parameterRef="Found"/>
+                <LinearAdjustment intercept="-1"/>
+              </DynamicValue>
+            </EndingIndex>
+          </Dimension>
+        </DimensionList>
+      </ArrayParameterType>
+      <FloatParameterType name="Temperature">
+        <UnitSet><Unit>degC</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="8" encoding="twosComplement"/>
+      </FloatParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Kind" parameterTypeRef="U8"/>
+      <Parameter name="HasTime" parameterTypeRef="U8"/>
+      <Parameter name="Time" parameterTypeRef="Seconds"/>
+      <Parameter name="Pixels" parameterTypeRef="U8"/>
+      <Parameter name="Pixel" parameterTypeRef="Row"/>
+      <Parameter name="Name" parameterTypeRef="Label"/>
+      <Parameter name="Found" parameterTypeRef="U8"/>
+      <Parameter name="Targets" parameterTypeRef="TargetList"/>
+      <Parameter name="Detector" parameterTypeRef="Temperature"/>
+      <Parameter name="Mode" parameterTypeRef="U8"/>
+    </ParameterSet>
+    <ContainerSet>
+      <!-- Embedded where the flag says so; not a packet of its own. -->
+      <SequenceContainer name="Timing" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Time"/>
+        </EntryList>
+      </SequenceContainer>
+      <SequenceContainer name="Header" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Kind"/>
+          <ParameterRefEntry parameterRef="HasTime"/>
+          <ContainerRefEntry containerRef="Timing">
+            <IncludeCondition>
+              <Comparison parameterRef="HasTime" value="1"/>
+            </IncludeCondition>
+          </ContainerRefEntry>
+        </EntryList>
+      </SequenceContainer>
+      <SequenceContainer name="Frame">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Pixels"/>
+          <ParameterRefEntry parameterRef="Pixel"/>
+          <ParameterRefEntry parameterRef="Name"/>
+        </EntryList>
+        <BaseContainer containerRef="Header">
+          <ReerRef="Detector">
+            <RepeatEntry>
+              <Count><FixedValue>3</FixedValue></Count>
+              <Offset><FixedValue>8</FixedValue></Offset>
+            </RepeatEntry>
+          </ParameterRefEntry>
+          <!-- After the third spare byte, as Yamcs reads an Offset. -->
+          <ParameterRefEntry parameterRef="Mode"/>
+        </EntryList>
+        <BaseContainer containerRef="Header">
+          <RestrictionCriteria>
+            <Comparison parameterRef="Kind" value="2"/>
+          </RestrictionCriteria>
+        </BaseContainer>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

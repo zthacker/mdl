@@ -1,0 +1,20 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = .0"
+
+[[families]]
+name       = "beacon# Firmware 0: bus voltage in them share a
+# link: a node id, then a format byte that says which laBEACON"
+length = { kind = hich is what lets thg"
+alias      _= { kind = "bits", offset_bits = 0, size_bits+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ = 16 em share a
+# link: a node id, then a format byte that says which laynut follows.
+#
+#   bits 0-15  node id    bits 016-23  format    bits 24-  the format's layout
+#
+# The family says where those are. Each set says which format it = "bits", off 8 }
+set_bits = 0s = , size_bits = 16 }
+version    = { kind = "bits",8 offset_bits = 16,  size_bi}
+ts = 8 }

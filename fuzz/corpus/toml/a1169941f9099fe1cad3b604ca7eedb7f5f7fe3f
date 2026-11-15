@@ -1,0 +1,14 @@
+# crates/mdl/tests/fixtures/full_bundd_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps.loa.range]
+max = 6
+
+[catalog.commands."eps.set_mode#]
+description = "Switch the power system's mode"
+
+[[catalog.comdnmas."eps.set_mode".arguments]]
+mename = "mode" wa*iy n b
+states =oth , w[
+  

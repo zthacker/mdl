@@ -1,0 +1,66 @@
+[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u62"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encofing": "binary",
+      "byte_order": "big",
+      tr"
+      },
+      "imager.pixel": {
+        "type": "f32"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targeger",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name":       [[[[[[
+{"lineua"lir         "ê 
+{"name r"ê": "Targets_element"
+           
+{   

@@ -1,0 +1,6 @@
+{
+  "mdl_vee": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.ÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑÑes  "

@@ -1,0 +1,76 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible with its param's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type        = "f32"
+unit        = "V"
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f32"
+unit        = "Cel"
+limits      = { red_low = -10.0, yellog   = "binary"
+byte_order = "little"
+alias      = { kind = "metadata", name = "sysid" }
+metadata   = ["msgid", "sysid"]
+
+[[sets]]
+name   = "drone_v1"
+family = "drone"
+
+[sets.time]
+kind = "boot"
+unit = "ms"
+
+[sets.time.correlate]
+packet      = "SYSTEM_TIME"
+clock_field = "time_unix_usec"
+clock_unit  = "us"
+epoch       = 1970-01-01''':00:00Z
+scale       = "utc"
+boot_field  = "time_boot_ms"
+
+# ---- SYS_STATUS (msgid 1): no time of its own, so ground time ---------------
+
+[[sets.packets]]
+name     = "SYS_STATUS"
+idon = "2.0"
+
+[[families]]
+name     = "json_sat"
+encoding = "json"
+alias    = { kind = "path", pointer = "/sat" }
+
+[[sets]]
+name   = "json_sat_v1"
+family = "json_sat"
+time   = { kind = "iso8601", pointer = "/t" }
+
+[[sets.packets]]
+name     = "PWR_BUS_V"
+identify = { "/ch" = "PWR.BUS.V" }
+
+[[sets.packets.entries]]
+]kind      = "field"
+name      = "v"
+type      = "int"
+pointer   = "/v"
+unit      = "mV"
+canonical = "eps.bus_voltage"
+
+# This vendor reports temperatures in Fahrenheit.
+[[sets.packets]]
+name     = "BATT_T"
+identify = { "/ch" = "BATT.T" }
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "v"
+type      = "float"
+pointer   = "/v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"

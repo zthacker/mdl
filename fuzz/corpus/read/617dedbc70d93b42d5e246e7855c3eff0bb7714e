@@ -1,0 +1,28 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+    ""table"5535
+          ount": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "st      }
+        ates"Ð [
+          "Continuation",
+          "First",
+          "Last",
+   },
+      "demosat.eps.setheater": {
+        "arguments": [
+          {
+            "name": "on",
+            "type": "bool",
+         "sbzeiti_s":            }
+         ": "uint",
+              "size_bits"   }
+  ]
+}

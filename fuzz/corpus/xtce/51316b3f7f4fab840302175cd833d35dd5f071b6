@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Imager: a payload whose packets have sizes tes with a spare byte after each, then a mode.
+-->
+<SpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaDataA
+    <ParameterTypeSet>
+      <IntegerParameterType name="U8" signed<?xml version="1.0" encoding="UerType name="Intensity">
+        <ncoding sizeInBitI

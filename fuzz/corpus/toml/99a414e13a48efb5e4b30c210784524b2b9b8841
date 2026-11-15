@@ -1,0 +1,11 @@
+# Fme    = "beacon_v1"
+family  = "beacon"
+version =t", bytes = 5 }
+
+[[sets.packets.entriesVVVVVVVV]]
+kind[       = "f[families.alias]r", scale = 0.01, offset = 0.0 }
+unit        = "V"
+catage"
+
+[[sets.paonversion =0{ kind = "linear", scale = 0.1, offset = 0.ts = 0, size_bits = 16 }
+versiolengthn    = { kind = "bits", minoffset_bits = 16, size_bits = 8 }

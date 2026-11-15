@@ -1,0 +1,11 @@
+{
+  "mdl_ver~sion": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+    ""table"5535
+       ,"u64"
+   "uint","size_bits:",8"conversion":{"kind":"states","states":[{"raw":0,"name":"SAFE"},{"raw":1,"name":"NOMINAL"},{"size_bits"   }
+  ]
+}

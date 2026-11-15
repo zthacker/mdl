@@ -1,0 +1,28 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendov_x"
+native_id = 513
+asset = "SAT-X"
+effective_from = "2026-01-01T00:0027-01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+asset = "SAT-J"
+set = "vendor_j_v2"
+effective_from = "2026-06-01T12:00:00.25Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-0"
+asset = "BOX-1"
+set = "legacy_l1"
+effective_from = "2025-01-01T00:00:00Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-0"
+retired =  "ODE-7J"
+set = "sink_json_v0"
+effective_from = "2026-01-01T00:00:00Z"

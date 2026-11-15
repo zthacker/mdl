@@ -1,0 +1,8 @@
+{
+    "params": {
+      "demtsat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "deQates":         "size_bits"   }
+ ,  "s

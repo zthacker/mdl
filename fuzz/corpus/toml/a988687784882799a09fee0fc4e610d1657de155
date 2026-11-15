@@ -1,0 +1,31 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kin# crates/mdl/tests/fixtures/full_bundle.json,  = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kin# crates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", bytes = 5 }
+
+[[s }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type   OML (writt     =en  

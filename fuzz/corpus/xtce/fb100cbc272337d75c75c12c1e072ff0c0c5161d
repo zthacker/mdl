@@ -1,0 +1,22 @@
+<?xml version="1.0 a frame carries a row of pixels counetd by 0the packet and a laebl in a
+  Pascal string; a target list carries records counted by the packet, aht dn
+ ree temperatures with a spare byte after each, then a mode.
+-->
+<SpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData> </SequenceContainer>
+      <SequenceContainer nang" abstract="true">
+        <EntryLerRefEntry parameterRef="Time"/>
+        </EntryList>
+      </SequenceContainer>
+      <SequenceContainer name="Header" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Kind"/>
+          <ParameterRefEntry p      </IntegerParameterType>
+)     <FloatParameterType name="Intensity">
+ ator>
+            <PolynomialCalibrator>
+        </BaseContainer>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

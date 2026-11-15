@@ -1,0 +1,38 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector":  [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "unit": "Cel",
+              "canonical": "imager.detector"
+            },
+           {
+              "kind": "padding",
+              "size_bits": 8
+            }
+          ]
+       ннннннннннннннннннннннннннннннннннннннннннннннннннннннннннннннннннype": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      }*
+      "       {
+              "kind": "array",
+              "name": "Detector",
+              "count": {
+                "kind": "fixed"Хх                "count": 3
+              },
+              "elemden

@@ -1,0 +1,7 @@
+mdl_verfective_from = "2026-01-01T12:00"
+effective_from = "2025-017-01-01T00:00:00Z"
+[catalog.params."eps.ba|t_temp"]
+[[binding]]
+family =0o
+asset = "NODE-7"
+set = "si`nk_v0:00:00Z"

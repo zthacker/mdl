@@ -1,0 +1,11 @@
+# A param the catalog: a compatible change, so a rebtild keeps
+# everys et's identity.
+
+mdl]_version = "2.0"
+
+[catalog.params."epstage"
+type = "f64"
+unit = "V"
+
+[catalog.params." = "A"
+description = "Solar array current"

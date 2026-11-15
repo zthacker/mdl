@@ -1,0 +1,19 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bu=s_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "ÊBus current, samp”š›æat 10 Hz"
+      },
+ "time_field"s_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+     
+              "kind": "field",
+              "  "default": me": "stamp""sum"pe": "u64", "range": { "min"ng": "binary",
+      "byte_order": "big",
+      "alia           "kind": "fi]ld",
+     " i

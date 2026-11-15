@@ -1,0 +1,9 @@
+#us_mv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps.bus_vture. The
+# canonirder = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offsalog.commands."eps.set_fset_bits = 16, size_bits = 8 }

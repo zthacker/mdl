@@ -1,0 +1,40 @@
+# ON"
+length = { kin# crat are the same, so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name es/mdl/tests/fixtures/full_b   = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.en6
+unit        = "mVtries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+]
+name   = "BEACON"
+length = { kin# crat are the same, so kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 17
+conversion = { kind = "linear", scale = 0.1, offset = 0.ts = 0, size_bits = 1undle.json, spelled in Td = ?"exact", bytes = 5 }
+
+[[sets.packets.entries]]
+kind   6 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }     = "field"
+name        = "bus_mv"
+type   OML (wri
+tt     =en  

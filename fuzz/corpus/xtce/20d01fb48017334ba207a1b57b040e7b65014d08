@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Imager: a payload whose packets have set, and
+  three temperatures with a spare byte after each, then a mode.
+-->
+<SpaceSystem naoe="Imager" xmlns="http://www.omg.org/spec/XTCE/2018020[[[[[[[[[[[[[[[[[[[[[[[[[4">
+  <TelemetryMetaData>
+    <ParameterTypeSet>ratedParameterType>">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParam1eterType>
+      <IntegerParameterType name="U  </EntryList>
+      </SequcccccccccenceCo</BaseContainer>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

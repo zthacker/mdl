@@ -1,0 +1,1 @@
+{"mdl_version":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"eps.batt_temp":{"type":"f64","unit":"Cel","limeps.mode":{"type":"enum","states":["SAFE","NOMINAL",AD"}]},"kanonical":"kind":"exact?","bytes":12},"time_field":"time_boot_ms","entries1","family"C"jstemp"}]}]}]}

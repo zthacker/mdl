@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its APID. Commands work the same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_ID_Type">
+        <MemberList>
+          <Member name="Version" typeRef="CCSDS_Version_Type"/>
+          <Member name="Type" typeRef="CCSDS_Type_Type"/>
+          <Member name="SecHdrFlag" typeRef="CCSDS_Sec_Hdr_Flag_Type"/>
+          <Member name="APID" typeRef="CCSDS_APID_Type"/>
+        </MemberList>
+      </AggregateParameterType>
+      <EnumeratedParameterType name="CCSDS_Group_Flags_Type">
+        <IntegerDataEncoding sizeInBits="2"/>
+        <EnumerationList>
+          <Enumeration value="0" label="Continuation"/>
+          <Enumeration value="1" label="First"/>
+          <Enumeration value="2" label="Last"/>
+          <Enumeration value="3" label="Standalone"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+      <IntegerParameterType name="CCSDS_Count_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="14"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_Sequence_Type">
+        <MemberList>
+          <Member name="GroupFlags" typeRef="CCSDS_Group_Flags_Type"/>
+          <Member name="Count" typeRef=ռCSDS_Coun   <MetaCommandSet>
+        <MetaCommand name="Point" shortDescription="Slew to a target">
+          <BaseMetaCommand metaCommandRef="../CCSDSst>
+              <ArgumentAssignment argumentName="APID" argumentValue="101"/>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="2"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="N" argumentTypeRef="CountType"/>
+            <Argument name="Waypoints" argumentTypeRef="WaypointsType"/>
+          </TypeSet>
+    <ParameterSet>
+      <Parame="Uptime" parameterTypeRef="Uptime"/>
+      <Parameter name="State" parameterTypeRef="Mode"/>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer namarameterVef="State"/>
+            </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+</SpamandMetaData>
+  </SpaceSystem>
+</SpaceSystem>

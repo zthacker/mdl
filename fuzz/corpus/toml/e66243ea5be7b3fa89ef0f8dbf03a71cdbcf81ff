@@ -1,0 +1,82 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_p.5
+description = "Amplifier gain"
+name = "gain"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.range]
+max = 4.0
+min = 0.5
+
+[[catalog.commands."sink.configure".arguments]]
+default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+ defavolttery temperature. The
+# canonical params ase the same, so consumers seeays where those are. Each set says which format it decodes,
+# so a message pick one stream of values.
+
+md[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[sets.packets.length][[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[l_version = "2.0"
+
+[[sets]]
+na 4
+min = 1
+
+[catalog.commands."sink.configure".arguments.range]
+max = 131070
+min = 0
+
+[catalog.mmocsnda."sink.mark"= "s"
+
+[catalog.commands."eps.set_mode".arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true
+name = "enable"
+type = "bool"
+
+[[catalog.commands."sink.configure".arguments]]
+default = 1.5
+description = "Amplifier gain"
+name = "gain"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.range]
+max = 4.0
+min = 0.5
+
+[[catalog.commands."sink.configure".arguments]]
+default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+ default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+    2,
+]
+name = "taps"
+type = "f64"
+
+[catalog.commands."sink.configu# crates/mdl/tests/fixtures/full_bundli.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tesre".arguments.list]
+m.rs
+# checks that botle i]]
+nnto one of the poame

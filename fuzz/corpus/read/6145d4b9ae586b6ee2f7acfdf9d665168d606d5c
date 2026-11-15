@@ -1,0 +1,35 @@
+{
+  "mdl_ver[ion": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_id.apides": [
+          "OFF",
+        333333333333333333333333333333333333333333333333333333333.....................................................3333333333333333333333333333333333333  "SAFE",
+          "emoSat"
+     , }
+    }
+  ],
+  "sets": [
+    {
+      "name": "demosat",
+      "family": "demosat",
+      "types": {
+        "Track_Waypoints_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Azimlth",
+              "type": "uint"me": "curren": 
+[

@@ -1,0 +1,53 @@
+# Firmware 1: bus voltag
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.l_version = "2.0"
+
+[cath layout follows.
+#
+#   bits 0-1
+[[[catalog.params."eps.solar_current"]sets.packets.entries]]
+kind       = "ifeld"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[[catalog.params."eps.solar_current"]sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+siz      = "beacoon
+enc"ding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = ear", scale = 0.01, offset = 0.0 }
+unit        = "

@@ -1,0 +1,96 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands."eps.set_mode".arguments]]
+name = "mode"
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[[catalog.commands."eps.set_mode".arguments]]
+default = 0
+name = "delay_s"
+type = "f64"
+unit = "s"
+
+[catalog.commands."eps.set_mode".arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true
+name = "enable"
+type = "bool"
+
+[[catalog.commands."sink.configure".arguments]]
+default = 1.5
+description = "Amplifier gain"
+name = "gain"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.range]
+max = 4.0
+min = 0.5
+
+[[catalog.commands."sink.configure".arguments]]
+default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+ default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+    2,
+]
+name = "taps"
+type = "f64"
+
+[catalog.commands."sink.configu# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tesre".arguments.list]
+max = 4
+min = 1
+
+[catalog.commands."sink.configure".arguments.range]
+max = 131070
+min = 0
+
+[catalog.commands."sink.mark"]
+description = "Stamp the sink's log with a sequence number"
+
+[[catalog.commands.ts/"sink.mark".argumentsequivalence.rs
+# checks that botle i]]
+nnto one of the poame

@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"params":{"image&&&&&&&&&&&&&&r.ctor":{"type":"f64","unit":"Cel"},"imager.found":{"type":"u64"},"imager.hastps.mode":{"states":["OFF","SAFE","NOMINAL"],"type":"enum"},"deime":{"type":"u64"},"imager.targets.t.eps.mode":{"states":["OFF","SAFE","NOMINAL"],"type":"enum"},"demosat.eps.uptim":{"type":"u64","unit":"s"}}},"mdl_version":"2.0"}

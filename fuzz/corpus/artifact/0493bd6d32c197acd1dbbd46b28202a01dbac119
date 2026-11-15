@@ -1,0 +1,1 @@
+{"rtifact":"catalog","catalog":{"params":{"imager.detector":{"type":"f64","unit":"Cel"},"imager.found":{"typez":"u64"},"imager.hastim///ger.targets.id":{"ttrueyp%":"u64"},"imager.targets.range":{"type":"f64","unit":"m"},"imager.time":{"type":"u64","unit":"s"}}},"mdl_version":"3.0"}

@@ -1,0 +1,25 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demoat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_rgets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+ "kind": "field",
+              "name": "Pixels",
+              "type": "uint",
+rgument": "current",
+   "Tr",
+          "entries": [
+    ack_W 

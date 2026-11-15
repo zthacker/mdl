@@ -1,0 +1,40 @@
+===[[setst decodes them (spec/bindings.md).
+
+mdl_version = "2.0"
+
+[[binding]]
+family = "ccsds_sat"
+natvie_id = 101
+asset = "SAT-1"
+ily = "drone"
+native_id = 1
+asset = "UAV-1"
+set = "drone_v1"
+effective_from = "2026-01-0ily = "demosat"
+native_id = "DemoSat"
+asset = "SAT-3"
+et = "SAT-3"
+set = "demosat"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+natiet =0ily = "demosat"
+native_id = "DemoSat"
+asset = "SAT-3"
+et = "SAT-3"
+set = "demosat"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-et = "drone_v1"
+effective_from = "2026-01-0ily = "de "drone_v1"
+effective_from = "2026-01-0ily = "demosat"
+native_id = 0x"DemoSat"
+asset = "SAT-3"
+et = "SAT-3"
+set = 1"
+set = "drone_v1"
+effective.packets.entries.conversion.states]]h

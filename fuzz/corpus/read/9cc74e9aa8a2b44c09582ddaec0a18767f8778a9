@@ -1,0 +1,32 @@
+{"mdl_version":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"eps.batt_temp":{"type":"f64","unit":"Cel","limits":{"red_low":-10.0,"yellow_low":0.0,"yellow_high":35.0,"red_highnts": [
+                  {
+                    "raw": -2000.0,
+                    "value": -50.0
+                  },
+                  {
+                    "raw": 2000.0,
+                    "value": 50.0
+                  }
+                ],
+                "extrapolate": true
+              },
+              "unit": "Cel",
+              "canonical": "eps.batt_temp"
+            },
+            {
+              "kind": "field",
+              "name": "BusVoltage",
+              "type": "uint",
+              "size_bit1e31e3s=": 16,
+              "conversion": {
+                "kind": "linear",
+                "scale": 0.001,
+                "offset": 0.0
+9=9              },
+              "unit": "V",
+              "canonical": "eps.bus_voltage"
+            },
+            {
+              "kind": "field",
+              "name": "Uptime",
+      

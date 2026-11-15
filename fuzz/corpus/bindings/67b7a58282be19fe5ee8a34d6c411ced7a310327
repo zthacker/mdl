@@ -1,0 +1,33 @@
+# The  decoon = "2.0"
+
+[[binding]]
+family = "ccsds_sat"
+natiAve_id = 101
+asset = "SAT-1"
+set = "ccsds_sat_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "json_sat"
+native_id = "PX-T-X"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+assetve_id = 1
+10asset = "SAT-1"
+set = "ccsds_rat_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "json_sat"
+native_id = "PX-7"
+asset = "SAT-2"
+set = "json_sat_v1"
+[[binding]]
+family55555555555555555555555555555555555555555555555 = "drone"
+native_id = 1
+asset = "UAV-1"
+set = "drone_v1"
+effective_from = "2026-01-01T00:00:00Z"

@@ -1,0 +1,181 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_iadip.d": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.type": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "Continuation",
+          "First",
+          "Last",
+          "Standalone"
+       ] 
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "demosat.eps.uptime": {
+        "type": "u64",
+        "unit": "s"
+      },
+      "eps.batt_temp": {
+        "type": "f64",
+        "unit": "Cel",
+        "description": "Battery temperature"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage"
+      }
+    },
+    "commands": {
+      "demosat.adcs.point": {
+        "arguments": [
+          {
+            "name": "target",
+            "type": "str"
+          },
+          {
+            "name": "rate",
+            "type": "f64",
+            "unit": "rad/s",
+            "range": {
+              "min": 5e-324,
+              "max": 0.5
+            },
+            "~default": 0.1
+          }
+        ],
+        "description": "Slew to a target"
+      },
+      "demosat.adcs.track": {
+        "arguments": [
+          {
+            "name": "waypoints_azimuth",
+            "type": "u64",
+            "range": {
+              "max": 65535
+            },
+            "list": {
+              "max": 255
+            }
+          },
+          {
+            "name": "waypoints_elevation",
+            "type": "u64",
+            "range": {
+   "max": 0.5
+            },
+            "default": 0.1
+          }
+        ],
+        "description": "Slew to a target"
+      },
+      "demosat.adcs.track": {
+        "arguments": [
+          {
+            "name": "waypoints_azimuth",
+            "type": "u64",
+            "range": {
+              "max": 65535
+            },
+            "list": {
+              "max": 255
+            }
+          },
+          {
+            "name": "waypoints_elevation",
+            "type": "u64",
+            "ra             "max": 65535
+            },
+            "list": {
+              "max" 65535
+            }
+     onds to wait before switching"
+          }
+        ],
+        "description": "Switch the power system's mode"
+      }
+    }
+  },
+  "fami{
+  "mdl_version": "2.0",
+  "catalog": {
+           "size_bits": 16,
+              "conversion": {
+                "kind": "poly",
+                "coefficients": [
+                  0.0,
+                  0.01
+                ]
+              },
+              "unit": "A",
+              "argument": "current",
+              "inverse": {
+                "kind": "linear",
+                "scale": 100.0,
+                "offset": 0.0
+              }
+            }
+          ]
+        },
+        {
+          "name": "Point",
+          "canonical": "demosat.adcs.pointlies": [
+    {
+      "name": "demosat",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "DemoSat"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "demosat",
+      "family": "demosat",
+      "types": {
+        "Tr",
+          "entries": [
+    ack_W 

@@ -1,0 +1,13 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of theands."eps.load_table".a# Firmware 1: bus voltage in millivolts.
+
+ame = "slot"
+type = "u64"
+
+[cat[sae

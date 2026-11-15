@@ -1,0 +1,37 @@
+ 					{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f28",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+     "identify"				X "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "eps.old_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "deprecateud"" :se ep    {
+          "name": "NAV",
+          "length": { "kind": "exact", "bytes": 6 },
+          "time_field": "tow",
+          "entries": [
+            { "kind": "field", "name": "week", "type": "uint", "size_bits": 16 },
+       
+        "offset_bits": 0,
+        "coarse_bytes": 4rsion": { "kind": "poly", "coefficients": [0, 0.1] },

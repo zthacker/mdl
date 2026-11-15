@@ -1,0 +1,70 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "demosat.ccsds_packet_id.apid"     },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+   "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.targets.id"
+            },	
+            {
+              "kind": "field",
+          `   "name": "offset_bits"          "typ "Itype": "uint",
+              "size_bits": 8,
+              "canonical": "imager.hastime"
+            },
+            {
+              "kind": "struct",
+              "name": "Timing",
+              "struct": "Timing",
+     ager.targets.id"
+            },	
+            {
+              "kind": "field",
+          `   "name": "offset_bits"          "typ "Itype": "uint",
+              "size_bits": 8,
+              "canonical": "imager.hastime"
+            },
+            {
+              "kindets_element"
+              }
+           ind": "struct",
+                "name": "Detector_element_gap8"
+              }
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.mode"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

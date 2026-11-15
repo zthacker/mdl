@@ -1,0 +1,21 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "d2222222222222222222222222222222222222222222222222222222222222(2222222222222222222222222222222222222222222escription": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": -100.0, "yellow_low": -50.0, "yellow_high": 50.0, "red_high": 100.0 }
+      },
+      "sink.label": { "type": "str } 
+"  ,   "sinav.pos_ecef": {
+        "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
+     Y) },: { "type": "bytes" },
+   
+      "sink.count": {
+           "sink.temps": { "type":"type": "i64",
+ "f64",        "unit": "Cel" }, "

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the C<Arrat, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_ID_Type">
+        <MemberList>
+          <Member name="Version" typeRef="CCSDS_Version_Type"/>
+          <Member name="Type" typeRef="CCSDS_Type_Type"/>
+          <Member name="SecHdrFlag" typeRef="CCSDS_Sec_Hdr_Flag_Type"/>
+          <Member name="APID" typeRef="CCSDS_APID_Type"/>
+        </MemberList>
+      </AggregateParameterType>
+      <EnumeratedParameterType name="CCSDS_Group_Flags_Type">
+        <IntegerDataEncoding sizeInBits="2"/>
+        <EnumerationList>
+          <Enumeration value="0" label="Continuat#on"/>
+          <Enumeration value="1" label="First"/>
+          <Enumeration value="2" label="Last"/>
+          <Enumeration value="3" label="Standalone"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+      <IntegerParameterType name="CCSDS_Count_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="14"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_Sequence_Type">
+        <MemberList>
+          <Member name="GroupFlags" typeRef="<FixedGroup_Flags_Type"/>
+          <Member name="Count" typeRef="CCSDS_Count        <EntryList>
+            <FixedValueEntry name="Version" binaryValue="0" sizeInBits="3"/>
+            <FixedValueEntry name="Type" binaryValue="1" sizeInBits="1"/>
+            <FixedValueEntry name="SecHdrFlag" binaryValue="0" sizeInBits="1"/>
+            <ArgumentRefEntry argumentRef="APID"/>
+       < Fi    xedValueEntry name="GroupFlags" binaryValue="3" sizeInBits="2"/>
+            <FixedValueEntry name="Count" binaryValue="0000 lasands inherit it, fit index isxing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http:/ /

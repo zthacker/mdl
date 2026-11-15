@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The uoot holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its AP<ArrayParameterTypehe same
+  way: the root's Abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1
+"/>      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_IDtaCommand name="CCSDSCommand" abstract="true">
+        <ArgumentList>
+          <Argument name="APID" argumentTypeRef="APIDType"/>
+          <Argument name="Opcode" argumentTypeRef="OpcodeType"/>
+  efEntry parameterRef="BusVoltage"/>
+            <ParameterRefEntry parameterRef="Uptime"/>
+            <!-- The heater reports only in NOMINAL mode. -->
+            <ParameterRefEntry polynomialCaangeSet>
+        </IntegerArgumentTyplibrator>
+                e><
+  T er   m coeffici

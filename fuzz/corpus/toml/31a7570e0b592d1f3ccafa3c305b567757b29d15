@@ -1,0 +1,9 @@
+# A param added to the catalog: a compatible change, so a rebuild k set's identity.
+
+mdl_version = "2.0"
+
+[catalog.ppointerarams."eprcoarse_bytesent"]
+type        = "f64"
+unit        = "A"
+d     = "A"
+description = "Solar array current"

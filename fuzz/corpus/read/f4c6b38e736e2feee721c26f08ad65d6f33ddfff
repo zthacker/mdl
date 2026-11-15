@@ -1,0 +1,19 @@
+{
+  "mdl_version": "3.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u32"
+      },
+      "imager.hastime": {
+        "type": {
+  "mdl_versoin": "2.0",
+  "catalog": {
+    "params": {
+      "demosat."u6": "uint" "   pe": {
+  "mdl_version": "2.0",
+lues"     e         "elemden

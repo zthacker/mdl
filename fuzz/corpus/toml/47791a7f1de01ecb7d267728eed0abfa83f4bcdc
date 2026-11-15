@@ -1,0 +1,6 @@
+# A param addeo th every set'sdl_version = "2.0"", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "s.solar_current"]        = "f64"
+unit        = "A"
+denit        = "A"
+descriptioj = t"

@@ -1,0 +1,108 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "demosat.ccsds_packet_id.apid"     },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imagpixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "unit": "Cel",
+              "canonical": "imager.detector"
+            },
+            {
+              "kind": "padding",
+              "size_bits": 8
+            }
+          ]
+        },
+        "Targets_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.targeÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿts.id"
+            },	
+            {
+              "kind": "field",
+             anonical":"eps.bus_voltage"},{"kind":"field","name":"batt_temp","type":"int","size_bits":16,"conversion":{"kind":"linear","scale":0.1,"offset":0.0},"unit":"Cel","canonical":"eps.batt_temp"}]}]}],"catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V"},"eps.batt_temp":{"type":"f64","unit":"  },
+            {
+              "kind": "field",
+              "name": "HasTime",
+              "Itype": "uint  " , 
+          "size_bits": 8,
+  ` ÿÿÿÿÿÿ/  "canonical": "imager.hastime"
+            },
+            {
+              "kind": "struct",
+              "name": "TimCel"}}},"familiing",
+              "struct": "Timing",
+              "when": {
+                "kind": "compare",
+      es":[{"name":"beacon","encoding":"binary","byte_order":"big","alias":{"kind":"bits","offset_bits":0,"size_bits":16},"version":{"kind":          "field": "HasTimT",
+                "op": "eq",
+                "value": 0
+              }
+            },
+            {
+              "kind": "f.fou            "name": "Mode",
+           "bits   "type": "uint",
+              "size_bits": 8,
+  ","o          ffset_b  "canonical": "imager.mode"
+ its":16,"size           }
+          ]
+        }
+_bits":8}}] }     ]
+    }
+  ]
+}

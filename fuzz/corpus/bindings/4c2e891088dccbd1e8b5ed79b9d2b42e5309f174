@@ -1,0 +1,6 @@
+mdl_version = "2.0"
+
+[[binding]]026-01513
+asset = "SAT-X"
+effective_from = "_json_v1"
+effective_from = "2026-01-01T00:00:00\u0000Z"

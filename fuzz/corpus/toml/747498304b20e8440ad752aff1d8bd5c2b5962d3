@@ -1,0 +1,14 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { knid = "ex[catalog.commands."sink.configure".arguments.list]act", bytes = 5 }
+
+[[sets.packee = 0.1, ind = "bits", offset_bits = ree, so cee, so c }

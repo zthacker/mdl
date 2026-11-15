@@ -1,0 +1,65 @@
+{
+  "mll_ver[ion": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_id.apid": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.c!sds_p\ud83d\ude00e": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_seq}ence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "Continuation",
+          "First",
+          "Last",
+          "Standalone"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+        3333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333333  "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "demosat.eps.uptime": {
+                    "scale": 100.0,
+               "name": "Track_Waypoints_element"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

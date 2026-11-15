@@ -1,0 +1,44 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.ha3time": {
+        "type": "u64"
+      },
+      "imager.kind": {
+      " t ype": "u64"
+      },
+      "imager.mode": {
+   "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u"s.range"
+            }
+          ]
+        },
+"name": "imager",
+      "family": "imager",
+      "types": {
+     "alt"   "DeteCtor_element_gap8": {
+        {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "un "field",
+              "name": "Kind",
+              "type"  }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+   nd": "field",
+              "name":  

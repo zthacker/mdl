@@ -1,0 +1,55 @@
+{
+  "mdl_version": "2.0",
+  "catalo`": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+      "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "eps.old_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "deprecated": "use eps.bus_voltage"
+      },
+      "nav.pos_ecef": {
+        "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
+      },
+      "sink.armed": { "type": "bool" },
+      "sink.attitude": { "type": "quat", "frame": "BODY" },
+      "sink.count": {
+        "type": "i64",
+        "description": "Events counted since boot",
+        "limits": { "red_low": -100.0, "yellow_low": -{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "descriptioé8„é8„é current, sampled at 10 Hz"
+      },
+      "           "kind": _"fixed",
+                "count": 3
+    temp"}          },
+0             "element": {
+                "kind": "struct",
+       "sink].raw":}] { "}typ]}

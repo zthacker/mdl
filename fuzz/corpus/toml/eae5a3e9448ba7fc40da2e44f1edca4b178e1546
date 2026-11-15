@@ -1,0 +1,19 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets are the same, so consumers byte_ordersee one stream of valgeo a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "2.0""""
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits" = 16 }
+version    = { kind = "bits", offset_bits = 15, size_bits = 8 }

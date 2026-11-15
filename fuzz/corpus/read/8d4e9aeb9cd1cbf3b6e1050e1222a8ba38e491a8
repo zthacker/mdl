@@ -1,0 +1,24 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_vo\u0000: {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 5.2,
+          "red_high": 8.5
+        }
+      },
+     Z"eps.mode": {
+        ,
+          "NO "int",
+              "size_bid.type": {
+        "typ: 16,
+        e

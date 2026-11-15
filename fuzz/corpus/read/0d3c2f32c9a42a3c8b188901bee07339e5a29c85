@@ -1,0 +1,13 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosatcd.as.rate.x": {
+        "type": "f64",
+                      "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "s~ize_bits"type": "f64",
+       "ok"i     "size_bits"   }
+  ]
+}

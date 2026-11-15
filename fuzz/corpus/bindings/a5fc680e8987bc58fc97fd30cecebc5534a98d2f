@@ -1,0 +1,13 @@
+# The fleet'ss sstae, byion = "2.0"
+
+[[binding]]
+family = [$$ts.commands.entries.inverse]version = "2.0"
+
+[[binding]]
+family = [[sets.packets.s]]
+asset =erse]version = "2.0"
+
+[[binding]]
+family = [[sets.time_fieldpackets.composites]]
+asset = "SAT-026-01-01T00:00:00Z"
+batt_temp"]"jso

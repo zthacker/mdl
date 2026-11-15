@@ -1,0 +1,1 @@
+{"pe":"f64","unit":"Cel","limits":{"red_low":-10.0e,o"wlly_low":0.0,"yellow_high":35.0,"red_high":45.0},"description":"Batteron_sat","encoding":"json","alias":{"kind":"path","pointer":"/sat"}}],"sets":[{"name":"ccsds_sat_v1","family":"ccsds_sat","time"º{"kind":"cuc","offset_bits":0,"coarse_bytes":4,"fine_bytes":2,""1844674407370955161]}]}

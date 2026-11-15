@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/40360408">
+ <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="Uptime" signed="false">
+        <Un<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and AhID/Unit

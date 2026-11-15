@@ -1,0 +1,121 @@
+# A param added to the# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are ims."sink.velocity"]
+frame = "NED"
+type = "vec3"
+unit = "m/s"
+
+[[families]]
+byte_order = "big"
+encoding = "binary"
+metadata = [
+    "apid",
+    "fmt",
+]
+name = "vendor_x"
+
+[families.alias]
+kind = "bbytesits"
+offset_bits = 48
+size_bits = 16
+
+[families.version]
+kind = "metadata"
+name = "fmt"
+
+[[families]]
+encoding = "json"
+name = "vendor_j"
+
+[families.alias]
+kind = "path"
+pointer = "/sat"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+name = "legacy"
+
+[families.alias]
+kind = "fixed"
+value = "box-1"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+metadata = [
+    "msg",
+    "node",
+]
+name = "sink"
+
+[afmilies.alias]
+kind = "metadata"
+name = "node"
+
+[[families]]
+encoding = "json"
+name = "sink_json"
+
+[families.alias]
+kind = "path"
+pointer = "/node"
+
+[[sets]]
+family = :"vendor_x"
+name = "vendor_x_v2"
+version = 2
+
+[[sets.commands]]
+canonical = "eps.load_table"
+name = "LOAD_TABLE"
+
+[[soct.esmmands.entries]]
+kind = "field"
+name = "opcode"
+size_bits == "poly"
+
+[sets.commands.entries.element.inverse]
+kind = "linear"
+offset = 0
+scale = 0.5
+
+[[sets.commands.entries]]
+kind = "field"
+name ="
+name = "op"
+size_bits = 8
+type = "uint"
+value = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.composites]]
+canonical = "sink.attitude"
+frame =kind = "field"
+name = "armed"
+size_bits = 1
+type = "bool"
+
+[[sets.packets.entries]]
+kind = "padding"
+size_bits = 7
+
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonical = ""
+
+[[families]]
+nsameink   .

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ <?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="Uptime" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding  De

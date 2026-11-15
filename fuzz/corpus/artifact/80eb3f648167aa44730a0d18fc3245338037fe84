@@ -1,0 +1,2 @@
+{"artifact":"set","e":"sink_v1","packets":[{"composites":[{"canoni[cal":"nav.pos_ecef","frame":"GEODETIC","members":["lat","lon","alt"]},
+{"canonica        [  	poch":"1958-01-01T00:00:00Z"

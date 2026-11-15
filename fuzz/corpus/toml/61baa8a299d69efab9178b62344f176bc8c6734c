@@ -1,0 +1,103 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "ts]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets# Firmware 1: bus voltage in millivolts.
+
+mdl_versi# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u32"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands."eps.set_mode".arguments]]
+name = "mode"
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[[catalog.commands."eps.set_mode".arguments]]
+default = 0
+name = "delay_s"
+type = "f64"
+unit = "s"
+
+[catalog.commands."eps.set_vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvmoe".arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true.packets]]
+name   = "BEACON"
+length = { kind = ".commands."eps.set_vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvmode".arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.pmp%
+type       = "int"
+size_bits  = 16
+convk's log with a sequence number"
+
+[[catalog.commands."sink.mark".arguments]]
+name = "stamp"
+type = "u64"
+
+[catalog.com = 8 mands."sink.mark".argumen}

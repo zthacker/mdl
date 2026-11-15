@@ -1,0 +1,63 @@
+# F#sion = { kibarguments}ts  = 16
+conversion = { kinonversion = { kind = "lin\\\\\\,\\\\# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beac`on_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets are the same, so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.p\\ackets]]
+name   =- "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.busength = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name.       d one unit. A set may report a value in any unit
+# compatible with its param's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+limits      = { red_low = -10.0, yellow_low = 0.0, yellow_high = 35.0, red_high = 45.0 }
+description = "Battery temperature"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states      = ["SAFE", "NOMINAL", "PAYLOAD"]
+description = "Power mode, as the asset reports it"
+
+[catalog.params."eps.batt_remaining"]
+type        = "f64"
+unit        = "%"
+limits      = { red_low = 15.v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"

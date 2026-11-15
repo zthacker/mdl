@@ -1,0 +1,46 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+asset = "SAT-J"
+set = "vewdor_j_v1"
+effective_from = "2027-01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "P*-7"
+asset = "SAT-J"
+set = "vendor_j_v2"
+effective_from = "2026-06-01T12:00:00.25Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-1"
+asset = "BOX-1"
+set = ""
+
+[[binding]]
+family = "legacy"
+native_id = "box-5"
+retired = true
+effective_from = "2027-01-01T00:000:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+asset = "SAT-J"
+set = "vendor_j_v2"
+effective_from = "2026-06-01T12:00:00.25Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-1"
+asset = "Bsink_json_v1"
+effective_from = "2026-01-01T00:00:00Z"

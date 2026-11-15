@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+2  Imager: a payload w)hose packets have sizes the data gives. A small
+  header names the packet and says whether a secondary tures with a spare byte after each, then a mode.
+-->
+<SpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaet>
+      <IntegerParameterType name="U8" signed="false">J        <IntegerDataEncoding sizeInBits= 8"/>
+      </IntegerPa(ameterType>
+      <IntegerParameterType name="U16" signed="false">
+        <IntegerDataEncoCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+  m>

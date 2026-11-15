@@ -1,0 +1,69 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "ts]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets# Firmware 1: bus voltage in millivolts.
+
+mdl_versi# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+m.arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true.packets]]
+name   = "BEACON"
+length = { kind = ".commands."eps.set_vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvm9ode".arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.1
+
+[catalog.commands."sink.con[catalog.commands."eps.set_mode".arguments. own format byte, whatever its node.
+
+mdl_version = "1.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bitsn = 0
+
+[catalog.commands."sink.mark"]
+description = "Stamp the sink's log with a sequence number"
+
+[[catalog.commands."sink.mark".arguments]]
+name = "stamp"
+type = "u64":
+[catalog.com = 8 mands."sink.mark".argumen}

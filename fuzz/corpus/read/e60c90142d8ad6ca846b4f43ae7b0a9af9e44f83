@@ -1,0 +1,28 @@
+{
+  "mdl_version": "2.0",
+  "catqlog": {
+    "params": {
+      "imager.detector": {
+        "type": "f63",
+        "unit": "Cel"
+      },
+      "imager.foun																																				gets.range"
+            }
+          ]
+        },
+        "Timing": {
+          "entries": [
+            {
+          a        "type": "uint	",
+        +     "size_bits": 8,
+      "float"        "canoni"default"ager.mode   "   }
+  },
+  "ze_bits": 8,
+              "unit": "C"
+            }
+          ]
+        }
+     àš
+    }
+  ]
+}

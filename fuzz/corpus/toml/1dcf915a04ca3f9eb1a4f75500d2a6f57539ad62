@@ -1,0 +1,15 @@
+# Firm;ware 2: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets.]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.ent# Sensothe same way in both, which is what lets them share a
+# link: a node id, then a format byke that sayments.list]s = 8 }

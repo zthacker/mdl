@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its APID. Commands work the same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_ID_Type">
+        <MemberList>
+          <Member name="Version" typeType name="DelayType" signed="false" initialValue="0">
+          <UnitSet><Unit>s</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16"/>
+          <ValidRangeSet>
+            <ValiderArgumentType name="MinutesType" signed="false">
+          <UnitSet><Uints">
+          <BaseMetaCommand metaCommandRef="../CCSDSCommand">
+            <ArgumentAssionmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="101"/>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="2"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="N" argumentTypeRef="CountType"/>
+            <Argument name="Waypoints" argumentTypeRef="WaypointsType"/>
+          </ArgumentList>
+          <CommandContainer name="Track">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="N"/>
+              <ArgumentRefEntry argumentRef="Waypoints"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+      </MetaCommandSet>
+    </CommandMetaData>
+  </SpaceSystem>
+</SpaceSystem>

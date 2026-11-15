@@ -1,0 +1,10 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "param3": {
+      "demosat.ad~cs.rate.x": {
+        "type": "f64",
+        "unit": "rÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿad/s"
+      },
+      "demosat.": {
+        emp":{"type":"f19"type":"f64","unit":"%","limits":{"red_low":15.0,"yellow_low":30.0},"description":"Batterÿÿÿÿy charge remaining"}},"com"

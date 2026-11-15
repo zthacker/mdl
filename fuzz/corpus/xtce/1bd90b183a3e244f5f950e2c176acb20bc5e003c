@@ -1,0 +1,32 @@
+<?x       <MemberList>
+          <Member name="Version" typeRef="CCSDS_Version_Type"/>
+          <Member name="Type" typeRef="CCSDS_Type_Type"/>
+          <Member name="Se000" sizeInBits="16"/>
+            <ArgumentRefEntry argumentRef="Opcode"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+
+  <SpaceSystem name="EPS" shortDescription="Electrical power">
+    <TelemetryMetaData>
+      <ParameterTypeSet>
+        <EnumeratedParameterType name="ModeType">
+          <IntegerDataEncoding sizeInBitsist>
+          <CommandContainer name="Point">
+            <EntryList>
+            <RepeatEntryefEntry argumentRef="Target"/>
+              <ArgumentRefEntry argumentRef="Rate"/>
+   binaryValue="            </BaseMetaCommand>
+          <ArgumentList>
+            <Argument naryList>
+              <ArgumentRefEntry argumentRef="N"/>
+              <ArgumentRefEntry argumentRef="Waypoints"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+      </MetaCommandSet>
+    </CommandMetaData>
+  </SpaceSystem>
+</SpaceSystem>

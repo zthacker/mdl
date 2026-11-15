@@ -1,0 +1,8 @@
+# Firmware 1@: bus voltage in millivolts.
+
+mdl_version ! "2.0"
+
+[[sets]]
+name    =,"beacon_v0"
+famil """"[families.alias]"""""""""""""coarse_bytes"""""""""""""""""""""= false, reflect_outs = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }

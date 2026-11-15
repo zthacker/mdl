@@ -1,0 +1,15 @@
+mdl_version = "2.0"
+
+= "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 512
+asset = "SAT-X"
+effective_from = mdl_ve_from "2026-06-01T12:00:00.25Z"
+
+[.entries.con]1"
+retired = true
+effecti~e_from = "2027-01-01T00:00: = sink_v1"
+e2026v-0fective_from1-01f = "2026-01-01TT000:00:000:0Z"0:
+0

@@ -1,0 +1,17 @@
+# Firmware 1: bus voltage in millibits  = 16
+conversion = { kind = "linear", scale = 0X1, offset = 0.0 }
+unit       = "on = 1
+
+[[sets.packets are the same, so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+nme        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.0on [catalog.commands."sink.mark".arguments.range]= 2
+
+[[sets.packets]]
+name   = " a node BEAiCOd

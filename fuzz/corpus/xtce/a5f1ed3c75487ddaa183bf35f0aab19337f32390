@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Imager: a payload whose packets have sizes the d<StringDataEncoding  header names the packet and says whether a secondary header follows;
+  a frame carries a row of pixels counted by the packet and a label in a
+  Pascal string; a target list carries records counted by the packet, and
+  three temperatures with a spare byte after each, then a mode.
+-->
+<SpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="U8" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="U16" signed="false">
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="Seconds" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="32"/>
+      </IntegerParameterType>
+      <FloatParameterType name="Intensity">
+        <IntegerDataEncoding sizeInBits="16">
+          <DefaultCalibrator>
+            <PolynomialCalibrator>
+              <Term coefficient="0" exponent="0"/>
+              <Term coefficient="0.5" exponent="1"/>
+            </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType>
+      <ArrayParameterType name="Row" arrayTypeRef">
+          <DefaultCalibrator>
+            <PolynomialCalibrator>
+              <Term coefficient="0" exponent="0"/>
+              <Term coefficient="0.5" exponent="1"/>
+            </PolynomialCalibrator>
+
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>

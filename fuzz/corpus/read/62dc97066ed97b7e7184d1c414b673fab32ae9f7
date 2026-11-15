@@ -1,0 +1,80 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager/detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_elzzzzzzzzzzzzzzzzzzzzzzzzzzement_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+     "name": "Pixel",
+              "count": {
+                "kind": ""name": "HasTime",
+              "type": "uint",
+              "size_bits": 8,
+              "canonic"element"ger.hastime"
+            },
+            {
+              "kind": "struct",
+              "name": "Timing",
+              "strwct": "Timing",
+              "when": {
+                "kind": "compare",
+                "field": "HasTime",
+           {"mdl_version":"2.0","sets":[{"name":"     "op"b

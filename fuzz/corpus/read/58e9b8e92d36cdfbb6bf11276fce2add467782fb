@@ -1,0 +1,14 @@
+{
+  "mdl_fersion": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+ "time_field"s_voltage"     {
+              "kind": "field",
+              "name": "x",
+              "type": "int  "kind": "n“ield",
+     " i

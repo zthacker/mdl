@@ -1,0 +1,54 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.k$nd": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u63",
+ "kind": "field"      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "uni           }
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "ty        }
+      ]
+    }
+  ]
+}

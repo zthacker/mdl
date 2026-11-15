@@ -1,0 +1,2 @@
+{"mdl_version":"2.0","sets":[{"name":"beacon_v1","family":"beacon","version":1,"packets":[{"name":"BEACON","length":{"kind":"exact","byteP":5},"entries":[{"k!nd":"field","namon_v2"": "uint",
+       ,"type":"uint","offset_bits":24,"size_bits":16,"conversion":{"ki,"version":{"kind":"bits","offset_bits":±6,"size_bits":8}}]}

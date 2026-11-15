@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <Parameterse">
+        Range minInclusive="1" mandMetaData>
+</SpaceSystem>

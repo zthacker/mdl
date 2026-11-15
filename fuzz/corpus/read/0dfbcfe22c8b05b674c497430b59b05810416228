@@ -1,0 +1,151 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "unit": "Cel",
+              "canonical": "imager.detector"
+            },
+            {
+              "kind": "padding",
+              "size_bits": 8
+            }
+          ]
+        },
+        "Targets_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.targets.id"
+            },
+            {
+              "kind": "field",
+              "name": "Range",
+at.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": u4"6
+"      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "tÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚype": "enum",
+        "states": [
+          "Continuation",
+          "Firs         "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 101
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+              "type": "uint",
+              "size_bits": 2,
+              "value": 3
+         "name": "Pixels",
+              "type": "uint",
+              "size_bi             "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+          ts": 8,
+              "canonical": "imager.pixels"
+            },
+            {
+              "kind": "array",
+       "value": 0
+            },
+                   "nam    {
+              "kind": "field",
+ e 

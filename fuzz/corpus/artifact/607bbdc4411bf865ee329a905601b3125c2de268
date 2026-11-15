@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"commands":{"demosat.adcs.point":{"arguments":[{"tion":"Seconds to wait before switching","name":"delay","r@nge":{"max":3599,"min":0},"type":"u64","unit":"s"}],"description":"Switchture","type":"f64","unit":"Cel"},"eps.bus_voltageA":{"d":"f64","unit":"V"}}},"mdl_version":"2.0"}

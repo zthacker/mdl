@@ -1,0 +1,14 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl"2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  .= "beacon"
+version =
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   =]
+kind =ema"t dOd

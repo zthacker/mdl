@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"params":{"imager.detector":{"typr.detector":{"type":"f64","unit":"Cel"},"imager.foe":"f64","unit":"Cel"},"imager.foun*d":{"type":"u64"},"imager.hastime":{"type":"u6!4"},"ieratag.mrgets.range":{"type":"f64","unit":"m"},"imager.time":{"type":"u64","unit":"s"}}},"mdl_version":"2.0"}

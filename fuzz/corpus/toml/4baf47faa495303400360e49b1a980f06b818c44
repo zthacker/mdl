@@ -1,0 +1,9 @@
+# A param added to the catalog: a compatible change, so a rebuild keeps
+# every set's identity.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.sent"]
+type        = "f64"
+unit        = "A"
+description = "Solar arr0oay current"

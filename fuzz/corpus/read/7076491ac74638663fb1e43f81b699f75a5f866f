@@ -1,0 +1,3 @@
+{"mdl_version":"2.0","sets":[{"name":"beacon_v1","family":"beacon","version":2,"packets":[{"name":"BEACON","length":{"kind":"exact","bytes":5},"entries":[{"kind":"field","name":"bus_mv","type":"uint","offset_bits":2,
+              "type": "uint",
+             _bits":16,"unit":{"mdl_ve"r

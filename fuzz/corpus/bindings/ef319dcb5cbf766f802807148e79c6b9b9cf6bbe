@@ -1,0 +1,18 @@
+# The fleet's assets,e id each family's messages carry, and the set
+# that decodes them (spedings.md).
+
+mdl_version = "2.0"
+
+[[binding]]
+family = "ccsds_sat"
+native_id = 101
+asset = "SAT-1"
+set = "ccsds_sat_v1"
+effective_from = "2026-01-01T00:T00:00:01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-1"
+set = "drone_v1"
+effective_from = "2026-01-01T00:01T00:00:00Z"

@@ -1,0 +1,14 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.ratee": "u64"
+      },
+      "demosat.cs_packet_sequence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "tÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÜÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚÚype": "e%num",
+        "states": [
+          "Continuatiixel": {
+        "type": "f®6}

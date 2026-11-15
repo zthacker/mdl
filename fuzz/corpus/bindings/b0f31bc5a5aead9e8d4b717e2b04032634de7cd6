@@ -1,0 +1,17 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+nativid = 513
+asset = "SA*-X"
+effective_from = "2026-|||||||||||||||||||||||||||||||Z"
+
+[[bikindg]]
+family = "vendor_j"
+native_id = "PX-7"
+set = "vendor_j_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[bindinginding]]
+family = "sink_json"
+native_id = "node0:00Z"

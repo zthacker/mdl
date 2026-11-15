@@ -1,0 +1,1 @@
+{"mdl_version":"2.0","sets":[{"name":"beac/n_v2","family":"beacon","vname":"BEACON","length":{"kin\ud83d\ude00bytes":7},"entname":"beacon","encoding":"binary","byte_order":"big","alias":{"kind":"bits","offset_bits":0,"size_bits":16},"version":{"kind":"bits","offset_bits":16,"size_bits":8}}]}

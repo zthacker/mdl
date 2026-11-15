@@ -1,0 +1,17 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets are the sam0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2e
+
+r)

@@ -1,0 +1,108 @@
+{
+  "mdl_ver[ion": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_id.apid": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.type": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "Continuation",
+          "First",
+          "Last",
+          "Standalone"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+        33333333333333333333333333333333333e": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "{
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+        333333333333333333\\33333333333333333e": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.type": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": "uket_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "Continuation",
+          "First",
+     "vendor_j_v2"          "Standalone"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+        33333333333333333333333333333333333e": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packe"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "demosat",
+      "encoding": "binary",
+      "byte_order": "bled at 10 Hz"
+  ig",
+       

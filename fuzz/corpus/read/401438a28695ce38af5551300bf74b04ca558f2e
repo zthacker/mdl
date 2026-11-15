@@ -1,0 +1,59 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imas_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.targets.id"
+            },
+            {
+              "kind": "field",
+              "name": "Range",
+              "type": "uint",
+              "size_bits": 17,
+              "unit": "m",
+              "canonical": "imager.targets.range"
+            }
+          ]
+        },
+        "Timing": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Time",
+              "type": "uint",
+              "size_bits": 32,
+              "unit": "s",
+              "canonical": "imager.time"
+            }
+          ]
+        }
+      },
+      "packets": [
+        {
+          "name": "Frame",
+          "identify": {
+            "Kind": 1
+          },
+          "entries": [
+ ,
+              "canonical": "imager.kind"
+            },
+            {
+              "kind": "field",
+                    "canonical": "imager.hastime"
+            },
+            {
+              "kind""elemden

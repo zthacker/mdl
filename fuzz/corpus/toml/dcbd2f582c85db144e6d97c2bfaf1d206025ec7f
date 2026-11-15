@@ -1,0 +1,9 @@
+# Firmware 1: bus argumentsvoltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beaconame    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset = 0.ts = 0, size_b

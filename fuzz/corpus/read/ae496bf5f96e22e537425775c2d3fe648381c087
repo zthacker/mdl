@@ -1,0 +1,10 @@
+{
+  "_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltageble into one of the power system's slots",
+        "arguments": [
+          { "name": "table", "type": "bytes" },
+          { "name": "ßßßßßßßßßßßßslot", "type": "u64", "range": { :"cuc","offset_bits":0,"coarse_bytes":4,"fine_bytes":2,"epoch":"2000-01-01T00:00:00Z","scale":"tai"},"packets":[{"name":"EPS_HK","identify":{"apid":099},"length":{"kin": 1, "name": "NOMINAL" }]
+              },
+   e

@@ -1,0 +1,88 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+      "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "eps.old_voltage": {
+           "description": "Load a table into one of the power system's slots",
+        "arguments": [
+          { "name": "table", "type": "bytes" },
+          { "name": "slot", "type": "u64", "range": { "max": 7 }, "default": 0 }
+        ]
+      },
+      "eps.set_mode": {
+        "description": "Switch the power system's mode",
+        "arguments": [
+          { "name": "mode", "type": "enum", "states": ["SAFE", "NOMINAL"] },
+          {
+            "name": "delay_s",
+            "type": "f64",
+            "unit": "s",
+            "range": { "min": 0, "max": 3600 },
+            "default": 0
+          }
+        ]
+      },
+      "sink.configure": {
+        "description": "Configure the sink",
+        "deprecated": "firmware 3 configures the sink at boot",
+        "arguments": [
+          { "name": "enable", "type": "bool", "default": true },
+          { "name": "gain", "type": "f64", "range": { "min": 0.5, "max": 4.0 }, "default": 1.5, "description": "Amplifier gain" },
+          { "name": "label", "type": "str", "default": {
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector":, {
+   `    "type": "f64",
+        "unit": "Cel"
+      },
+      ue",
+              "type": "int",
+       
+      },
+      "packets": [
+        {
+       "name": "Range",
+          ries": [
+            {
+           ®             "el"ON" },
+          {
+            "name": "taps",
+            "type": "f64",
+            "range": { "min": 0, "max": 131070 },
+            "list": { "min": 1, "max": 4 },
+            "default": [1, 2]
+          }
+        ]
+      },
+      "sink.mark": {
+        "description": "Stamp the sink's log with a sequence number",
+        "arguments": [
+     "time_field": "t_ns",
+          "entries": [{ "kind": "field", "name": "t_ns", "type": "uint", "size_bits": 64 }]
+        }
+      ]
+    }
+  ]
+}

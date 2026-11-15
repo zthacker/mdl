@@ -1,0 +1,11 @@
+# Theet']
+family = "ccsds_sat"
+native_id = 101
+asset =
+
+[[binding]]
+family = "drone"
+native_id = 0/
+asset = "UAV-1"
+set = ""
+effective_from =220 "6-011T00:00:00Z"

@@ -1,0 +1,38 @@
+ 					{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f32",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+     "identify"				X "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "eps.old_volt"week", "type": "uint", "size_bits": 16 },
+  Õ          { "kind": "field", "name": "tow", "type": "uint", "size_bits": 32 }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "sink_v1",
+      "family": "sink",
+      "time": {
+        "kind": "cuc",
+        "offset_bits": 0,
+        "coarse_bytes": 4rsion": { "kind": "poly", "coefficients": [0, 0.1] },

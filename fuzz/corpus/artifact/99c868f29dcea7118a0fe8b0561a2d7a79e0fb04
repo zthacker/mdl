@@ -1,0 +1,3 @@
+{"artifact":"set","catalog":"a5fc77f54d14decd6176197b9f4f6f918f117cd39f6a227e3de8bc99c9455afe","family":"977e60d76beb6e58ff032a38171dad2fdbc125b54a4431bc13bcdfb13e480424","mdl_version":"2.0","set":{"commands":[{"canonical":"sink.configure","entries":[{"kind":"field","name":"op","siame":"enable","size_bits":1,"type":"bool"},{"kind":"padding","size_bits":7},{"argument":"gain","kind":"field","name":"gain","size_bits":32,"type":"float"},{"argument":"label","kind":"field","length":{"bytes":2,"kind":"fixed"},"name":"labetitude","frame":"BODY","members":["q[0]","q[1]","q[2]","q[3]"]},
+
+{"2ar}t,"multiply":2},"name":me":"MIXED"}],"time":{"coarse_bytes":4,"epoch":"1958-01-01T00:00:00Z","fine_bytes":0,"kind":"cuc","offse\ud83d\ude00t_bits":0,"scale":"tai"}}}

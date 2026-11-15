@@ -1,0 +1,20 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel4",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    "it"    "name": "im   "canonical": "imager.mode"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

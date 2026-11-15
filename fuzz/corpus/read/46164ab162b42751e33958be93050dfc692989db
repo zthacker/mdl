@@ -1,0 +1,60 @@
+{"mdl_version":"4.0","sets":[{"name":"beacon_v1","family":"beacon","version":1,"packets":[{"name":"BEACON","length":{"kind":"exact","byteP":5},"entries":[{"kind":"field","name":"bus_mv","type":"uint","offset_bits":24,"size_bits":16,"unit":"mV","canonical":"eps.bus_voltage"}]}]},{"name":"beacon_v2","family":"beacon","version":2,"packe2s":[{"name":"BEACON","length":{"kind":"exact","bytes":7},"entries":[{"kind":"field","name":"bus_cv","type":"uint","offset_bits":24,"size_bits":16,"conmosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_iadip.d": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.type": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_length": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "Continuation",
+          "First",
+          "Last",
+          "Standalone"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "demosat.eps.uptime": {
+        "type": "u64",
+        "unit": "s"
+      },
+ pe": "f64",
+            "unit": "rad/s",
+            "range": {
+              "min": 5e-324,
+              "max": 0.5
+         us_voltage":{"type":"f28","unit":"V"},"eps.batt_temp":{"type":"f64","unit":"Cel"}}},"families":[{"name":"beacon","encoding":"binary","byte_order":"big","alias":{"kind":"bits","offseè_bits":0,"size_bits":16},"version":{"kind":"bits","offset_bits":16,"size¥_bits":8}}]}

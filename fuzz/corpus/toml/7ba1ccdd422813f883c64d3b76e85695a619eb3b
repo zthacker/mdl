@@ -1,0 +1,126 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[c[
+    "ve",
+    "vn",
+    "vu",
+]
+
+[[sets.packets.composites]]
+canonical = "nav.pos_ecef"
+frame = "GEODETIC"
+members = [
+    "lat",
+    "lon",
+    "alt",
+]
+
+[[sets.packets.entries]]
+byte_order = "big"
+canonical = "sink.count"
+kind = "field"
+name = "count"
+offset_bits = 32
+size_bits = 16
+type = "int"
+
+[[sets.packets.entries]]
+canonical = "sink.armed999999999999999999999999999999999999999999999"
+kind = "field"
+name = "armed"
+size_bits = 1
+type = "bool"
+
+[[sets.packets.entries]]
+kind = "paddingn]
+kind = "any"
+
+[[sets.packets.entries.when.conditions]]
+field = "flags"
+kind = "compare"
+op = "mask_all"
+value = 3
+
+[[sets.packets.entries.when.conditions]]
+field = "flags"
+kind = "compare"
+op = "eq"
+value = 255
+
+[[sets.packets.entries]]
+kind = "array"
+name = "tags"
+
+[sets.packets.entries.count]
+count = 2
+kind = "fixed"
+
+[sets.packets.entries.element]
+kind = "scalar"
+text = "ascii"
+type = "string"
+
+[sets.packets.entries.element.length]
+bytes = 3
+kind = "fixed"
+
+[[~ets.pay = "sink_json"
+name = "sink_json_v1"
+
+[[sets.packets]]
+name = "STATUS"
+time_field = "t"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t"
+pointer = "/t"
+type = "float"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+name = "armed"
+optional = true
+pointer = "/armed"
+type = "bool"
+
+[sets.packets.identify]
+"/type" = "status"
+
+[sets.time]
+epoch = "2000-01-01T12:00:00Z"
+kind = "elapsed"
+scale = "tt"
+unit = "s"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v3"
+
+[[sets.packets]]
+name = "TICK"
+time_field = "t_ns"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t_ns"
+size_bits = 32
+type = "uint"
+
+[sets.time]
+epoch = "1980-01-06T00:00:00Z"
+kind = "elapsed"
+scale = "gps"
+unit = "ns"

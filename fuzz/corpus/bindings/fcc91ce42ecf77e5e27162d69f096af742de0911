@@ -1,0 +1,17 @@
+# The fleet's assets, by the id eachgs.md).
+
+mdl_version = "2.0"
+
+[[binding]]
+family = "ccsds_sat"
+native_id = 101
+asset = "SAT-1"
+set = "ccsds_sat_vt"
+effective_from = "200x-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-1"
+set = "drone_v1"
+effective_from = "2026-01-01T that00:00:=00Z"

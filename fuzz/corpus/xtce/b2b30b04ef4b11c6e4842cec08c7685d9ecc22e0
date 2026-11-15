@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS sateland metaCommandRef="../CCSDSCommand">
+            <ArgumentAss~kgnmentLiww.omg.org/spec/XTCE/40360408">
+  <Tel have ith a spare byte$after each, then a mode.
+-->
+<SpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/40360408">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="U8" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParameterType>
+      <IntegerParameterType name="U16" signed=""flesa>
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerPara}eterType>
+      <IntegerParameterType name="Seconds" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="32"/>
+      </IntegerParameterType>
+      <FloatParameterType namy>
+          </ParameterRefEmetryMetaData>
+</SpaceSystem>

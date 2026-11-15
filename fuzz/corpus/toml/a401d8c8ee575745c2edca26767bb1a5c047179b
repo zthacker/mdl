@@ -1,0 +1,42 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    [sets.commands.enpackets are the same, so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.n = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kin# crates/md-l/tests/fixtuj/sfelul_bundle.json, spelled in Td = "exapackets]]
+name   = "BEACOrts the same wat byte, whatever its node.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binayr"
+&byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, sict", bytes = 5 }
+
+[[sets.packets.entries]]
+kinze_bd        = "fiits = 16 }
+vepsion    = { kind = "bits", offset_bits = 16, size_bits = 8 }eld"
+name        = "b[sets.packetbinayr"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, sict", bytes = 5 }
+
+[[sets.packets.entries]]
+kinze_bd        = "fiits = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }eld"
+name        = "b[sets.packets.entries.when.condition
+s.condition]us_mv"
+type   OML (writt     =en  

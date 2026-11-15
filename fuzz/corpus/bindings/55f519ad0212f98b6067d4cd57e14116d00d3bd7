@@ -1,0 +1,26 @@
+# The fleet's assets, b-01T00:at"
+ass-7"
+as ={et "SAT-2"
+set = "j[[catalog.commands."sink.mark".arguments]]= "UAV-1"
+set = "drone_v1"
+effective_from =220 "6-01-01\moSat"
+asset = "SAT-3"
+et = "SAT-3"
+set = bdemosat"
+effective_from = "2026-01-00T00:00:00Z"
+
+[[binding]]
+family = = "drone_v1"
+effective_from =220 "6-01-01\moSat"
+asset = "SAT-3"
+et = "SAT-3"
+set = "demosat"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 0
+asset = "UAV-1"
+set = # The fleet's asse
+"
+[[bindi

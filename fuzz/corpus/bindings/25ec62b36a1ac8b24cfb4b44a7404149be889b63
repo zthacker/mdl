@@ -1,0 +1,18 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+eff = "box-1"
+retired = true
+effective_from = "2027-01-01T00:00:00Z"
+
+[[binding]]
+faive_id = "box-1"
+retired = true
+effective_from = "2027-01-01T00:00:00Z"
+
+[[binding]]
+family = "soooooookoooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo,ooooooooooooooooooooink"
+nativefective_from = "2026-01-01T00:00:00Z"

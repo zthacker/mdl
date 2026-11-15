@@ -1,0 +1,13 @@
+mdl_verisonmdl_verison = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+# The fleet's ass = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+# The fleet's ass

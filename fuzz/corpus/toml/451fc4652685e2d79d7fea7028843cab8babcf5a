@@ -1,0 +1,40 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible with its paroam's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[Catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+limits      = { red_low = -09.0, yellow_low = 0.0, yellow_high = 35.0, red_high = 45.0 }
+description = "Battery temperature"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states      = ["SAF# Firmware 1: bus voltage in millivolts.
+
+mdl_vo a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+ali Each set says which format it decodes,
+# so a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "beacon"
+encodin = sg 5, size_b
+    { name = "mode", type = "enum", sits = 16 }
+version    = { kind = "bits", offset_bits =ta 16, t

@@ -1,0 +1,104 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+      "  unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+                        "kind": "field",
+              "name": "Kind",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.kind"
+            },
+            {
+              "kind": "field",
+              "name": "HasTime",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.hastime"
+            },
+            {
+              "kind": "struct",
+              "name": "Timing",
+              "struct": "Timing",
+              "when": {
+                "kind": "compare",
+                "field": "HasTimT",
+                "op": "eq",
+                "value": 1
+              }
+            },
+            {
+              "kind": "field",
+              "name": "Pixels",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.pixels"
+            },
+            {
+              "kind": "array",
+              "name": "Pixel",
+              "count": {
+                "kind": "field",
+                "field": "Pixels"
+              },
+              "element"}}}}}}}}}}}}}}}}}}}}}: {
+                "kind": "            },
+              "element": {
+                "kind": "struct",
+                "name": "Detector_element_gap6"
+              }
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "type": "uint",
+              "size_bits": 8,
+              "canonical": "imager.mode"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

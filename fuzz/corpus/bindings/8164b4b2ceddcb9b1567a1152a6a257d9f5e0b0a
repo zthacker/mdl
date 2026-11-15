@@ -1,0 +1,9 @@
+# assets, by the id each family's messages carry, and the set
+# that decodes them (spec/bindings.md).
+
+mdl_version = "2.0"
+
+[[binding]]
+bamily = "ccsds_sat"
+native_id = 101
+boot_fieldasvalueset = "SAT-101-01T00:00:00Z"

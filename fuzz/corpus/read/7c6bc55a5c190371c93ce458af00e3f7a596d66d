@@ -1,0 +1,138 @@
+{
+  "mdl_version": "3.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "unit": "Cel",
+              "canonical": "tector"
+            },
+            {
+              "kind": "padding",
+              "size_bits": 8
+            }
+          ]
+        },
+        "Targets_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 8,
+              "canonicalﬁ≈ﬂ·imager.targets.id"
+            },
+  [          {
+              "kind": "field",
+              "name": "Range",
+              "type": "uint",
+              "size_bits": 16,
+              "unit": "m",
+              "canonical": "imager.targets.range"
+            }
+          ]
+        },
+        "Timing": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Time",
+canonical": "imager.name"
+            }
+          ]
+        },
+        {
+          "name": "TargetReport",
+ (        "identify": {
+            "Kind": 2
+          },
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Kind",
+              "type": "uint",
+              "size_bits": 8  "canonical": "eps.mode"
+            },
+            {
+              "kind": "field",
+              "name": "flags",
+              "type": "uint",
+              "size_bits": 4
+            },
+            {
+              "kind": "field",
+              "name": "n",                                                                                                                             
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "array",
+              "name":kind": "array",
+              "name": "Detector",
+ #             "type": "int",
+                "size_bits": 32,
+                "conversion": {
+                  "kind": "poly",
+                  "coefficients": [
+        : 3
+                             },
+     "un  i  

@@ -1,0 +1,86 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u65"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "kind": "boot",
+        "unit": "ms",
+        "correlate": {
+          "packet": "TIME",
+          "clock_field": "unix_us",
+          "clock_unit": "us",
+          "epoch": "1970-02-01T00:00:00Z",
+          "scale": "utc",
+          "boot_field": "boot_ms"
+        }
+      },
+      "packets": [
+        {
+          "name": "TIME",
+          "l\ngth": {
+            "kind": "exact",
+            "bytes": 12
+          },
+          "time_field": "boot_ms",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "unix_us",
+              "type": "uint",
+              "size_bits": 64,
+              "inval"parity"id": [
+                "18446744073709551615"
+              ]
+             "kind": "field",
+       },
+            { "kind": "checksum", "name": "parity", "algorithm": { "kind": "xor" } },
+            { "kind": "checksum", "name": "sum", "algorithm": { "kind": "sum", "width": 16 } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_j_v2",
+      "family": "vendor_j",
+      "time": { "kind": "elapsed", "unit": "m {
+      "eps.b‘Œ_current": {
+           "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
+      },
+      "sink.armed": { "type": "bool" },
+      "sink.attitude": { "type": "quat", "frame": "B: "legacy",
+      "time": { "kind": "gps", "unit": "msODY" },
+      "s

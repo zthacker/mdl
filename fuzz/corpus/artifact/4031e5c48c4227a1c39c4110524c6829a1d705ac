@@ -1,0 +1,1 @@
+{"artifact":"set","catalog":"aAfc77f54d14decd617cc3e56cc953ffa0713f2","mdl_version":"2.0","se,":{"family":"legacy","name":"legacy_v6","keatcps":[{"entries":[{"kind":"field","name":"t_ns","size_bits":64,"type":"uint"}],"name":"TICK","time_field":"t_ns"}],"time":{"epoch":"1980-01-06T00:00:00Z"}}}

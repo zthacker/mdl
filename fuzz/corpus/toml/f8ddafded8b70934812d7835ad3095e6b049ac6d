@@ -1,0 +1,8 @@
+# A param added to the cats identity.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.solar_current"]
+type        = "f32"
+unit        = "A"
+descripti.on = "Solar array curren[[catalog.commands."eps.set_mode".arguments]]t"

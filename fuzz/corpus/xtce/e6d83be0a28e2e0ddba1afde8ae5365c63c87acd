@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each ads Yamcs's command
+        post-processors do, so they're written as zeros here.
+      -->
+      <MetaCommand name="CCSDSCommand" abstract="true">
+        <ArgumentList>
+          <Argument name="APID" argumentTypeRef="APIDType"/>
+          <Argument name="Opcode" argumentTypeRef="OpcodeType"/>
+        </ArgumentList>
+        <CommandContainer name="CCSDSCommand">
+          <EntryList>
+            <FixedValueEntry name="Version" binaryValue="0" sizeInBits="3"/>
+            <FixedValueEntry name="Type" binaryValue="2" sizeInBits="1"/>
+            <FixedValueEntry name="SecHdrFlag" binaryValue="0" sizeInBits="1"/>
+            <ArgumentRefEntry argumentRef="APID"/>
+            <FixedValueEntry name="GroupFlags" binaeterType>   <SplinePoint rawti=on"

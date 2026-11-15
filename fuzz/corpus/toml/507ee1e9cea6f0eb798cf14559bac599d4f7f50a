@@ -1,0 +1,71 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible with its param's (mV for V, [degF] for Cel); decoding converts
+# it. Canonical names are a schema: deprecate one rather than reuse it.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+description = "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+limits      = { red_low = -10.0, yellow_low = 0.0, yellow_high = 35.0, red_high = 45.0 }
+description = "Battery temperature"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states      = ["SAFE&, "NOMINAL", "PAYLOAD"]
+description = "Power mode, as the asset reports it"
+
+[catalog.params."eps.batt_remaining"]
+type        = "f64"
+unit        = "%"
+limits      = { red_low = 15.0, yellow_low = 30.[[input]]0 }
+description = "Battery charge remaining"
+
+# One command for every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends onale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 ------------------------------------------
+
+[[sets.peckets]]
+name     = "EPS_HK"
+identify = { apid = 0x064 }
+length   = { kind = "exact", bytes = 13 }
+
+# Millivolts on the wire, volts in the catalog: decoding converts.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 64
+size_bits     = "field"
+name       = "batt_temp_counts"
+type       = "uint"
+size_bits  = 16
+conversion = { kind = "table", points = [
+    { raw = 0, value = -40.0 },
+    { raw = 1000, value = 0.0 },
+    { raw = 3000, value = 60.0 },
+] }
+unit       = "Cel"
+canonical  = "eps.batt_temp"
+
+[[sets.packets.# Firmware 1: bus voltage in millivolts
+
+.l_dmversion = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACONentries]]
+kind       = [
+"
+length = { kind = "exact", by    { name = "mode", type = "entes um",= 

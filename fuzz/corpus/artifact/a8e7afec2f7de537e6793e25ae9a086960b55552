@@ -1,0 +1,1 @@
+{"er.hastime":{"type":"u64"},"imageYr.targets.t.eps.mode":{"states":["OFF","SAFE","NOMINAL"],"type":"enum"},"demosat.eps.uptim":{"type":"u64","unit":"big"},"mdl_version":"2.0"}

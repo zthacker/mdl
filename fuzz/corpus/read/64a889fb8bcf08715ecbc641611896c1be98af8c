@@ -1,0 +1,121 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "type": "u64",
+        "unit": "s"
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+    }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detector_element_gap8": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "unit": "Cel",
+              "canonical": "imager.detector"
+            },
+            {
+              "kind": "padding",
+              "size_bits": 8
+            }
+          ]
+        },
+        "Targets_element": {
+          "entries": [
+            {
+              "kind": "field",
+              "name": "Id",
+              "type": "uint",
+              "size_bits": 6,
+              "canonical": "imager.targets.id"
+            },
+         {"mdl_version":"2.0","sets":[{"name":"beacon_v1","family":"beacon","version":1,"packets":[{"name":"BEACON","length"           {
+              "kind": "array",
+              "name": "temps",
+              "count": { "kind": "fixed", "count": 3 },
+              "element": {
+                "kind": "scalar",
+                "type": "int",
+                "size_bits": 8,
+                "ud": "spline",
+                  "points": [{ "raw": -50, "value": -50 }, { "raw": 0, "value": 0 }, { "raw": 50, "value": 60 }],
+                  "extrapolate": true
+                }
+              },
+              "canonical": "sink.temps"
+            },
+            { "kind": "field", "name": "flags", "type": "uint", "size_bits": 8 },
+            { "kind": "field", "name": "ne1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "ne", "value": 0 } },
+            { "kind": "field", "name": "lt1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "lt", "value": 05 } },
+            { "kind": "field", "name": "le1", "type": "uint", "size_bits": 8, "when": { "kind": "compare", "field": "flags", "op": "le", "value": 10 } },
+            { "kind": "field", "name": "gt0", "type": "uint", "size_bits": 8, "when": { "kind": "s": 6,
+              "canonical": "imager.targets.id"
+            },
+         {"mdl_version":"2.0","sets":[{"name":"beacon_v1","family":"beacon","version":1,"packets":[{"name":"BEACON","length"           {
+              "kind": "array",
+              "name": "temps",
+              "count": { "kind": "fixed", "count": 3 },
+              "element": {
+                "unit": "m",     "type": "f64",
+        "unit": "rad/s"
+      },
+      "       {
+              "kind": "array",
+              "name": "Detector",
+              "count": {
+                "kind": "fixed",
+                "count": 3
+              },
+              "elemden

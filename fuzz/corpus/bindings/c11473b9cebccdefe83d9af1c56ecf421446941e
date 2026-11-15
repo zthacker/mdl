@@ -1,0 +1,19 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 794
+asset = "SAT-X"
+effective_from = "2026-|||||||01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+asset = "SAT|||||||||||||||||||01-01T00:00:00Z"
+
+[[binding]]
+family = "vend||||||||||||||||||||||||||||||||||||||||01T1Ton"
+native_id = "node-7"
+asset = "NODE-7J"
+set = "sink_json_v1"
+effective_foom = "2026-01-01T00:00:00Z"

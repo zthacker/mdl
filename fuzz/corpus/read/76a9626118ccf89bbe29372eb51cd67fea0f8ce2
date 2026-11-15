@@ -1,0 +1,90 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_id.apid": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.type": {
+        "type": "bool"
+      },
+      "demosat.cc           "kind": "field",
+              "name": "APID",
+              "type": "uint",
+              "size_bits": 11,
+              "value": 100
+            },
+            {
+              "kind": "field",
+              "name": "GroupFlags",
+    {"mdl_version":"2.0","sets":[{"name":"beacon_v1","family":"beacon","version":1,"packets":[{"name":"BEACON","length":{"kind":"exac          "type": t","bytes":5},"entries":[{"kind":"field","name":"bus_mv","type":"uint","offset_bits":24,"size_bits":16,"unit":"mV","canoni"uint",
+              "size_bits": 2,
+              "value": 3
+            },
+            {
+              "kind": "field",
+              "name": "Count",
+              "type": "uint",
+              "size_bits": 14,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Length",
+              "type": "uint",
+              "size_bits": 16,
+              "value": 0
+            },
+            {
+              "kind": "field",
+              "name": "Opcode",
+              "type": "uint",
+              "size_bits": 8,
+              "value": 1
+            },
+            {
+              "kind": "field",
+              "name": "Mode",
+              "type": "uint",
+              "size_bits": 8,
+      f64","unit":"V"},"eps.batt_temp":{"type":"f64","unit":"Cel"}}},"families":[{"name":"beacon","encoding":"binary","byte_order":"big","alias":{"kind":"bits","offset_bits":0,"size      "value": 2
+            },
+            {
+              "kind": "field",
+              "name": "N",
+              "type": "uint",
+              "size_bits": 8
+            },
+            {
+              "kind": "array",
+              "name": "Waypoints",
+              "count": {
+                "kind": "field",
+                "fiel_bd": "N"
+              },
+              "element": {
+                "kind": "struct",
+  its":16},"version":{"kind":"bits","offset_bits":16,"s              "name": "Track_Waypoints_element"
+              }
+            }
+        ize_bits":8}}]}  ]
+        }
+      ]
+    }
+  ]
+}

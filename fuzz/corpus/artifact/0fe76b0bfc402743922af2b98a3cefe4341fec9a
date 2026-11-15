@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"params":{"image&&&&&&&&&&&&&&r.ctor":{"type":"f64","unit":"Cel"},"imager.found":{"type":"u64"},"ihastps.mode":{"states":["INA\ud83d\ude00L"],"type":"enum"},"demosat.eps.uptim":{"type":"u64","unit":"s"}}},"mdl_version":"2.0"}

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/2&180204">
+  <TelemetryMetaData>
+    <ParameterTypeSetparameterRef="State </IntegerArgumeypeSet>taData>
+</SpaceSystem>

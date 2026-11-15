@@ -1,0 +1,36 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "1.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1[catalog.params."eps.solar_current"]
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.pon = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 6 poly}
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset = 0.ts = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = re the same, so c }

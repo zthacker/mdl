@@ -1,0 +1,9 @@
+# The fleet-'s assetc/bindings.md).
+
+mdl_version = "2m0"
+
+[[binding]]
+family = "ccsds_sat"
+native_id = 101
+asset = "SAT-1"
+set = "ccsds_sat_v6-01-01T15:00:00Z"

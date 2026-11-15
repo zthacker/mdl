@@ -1,0 +1,20 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+  , "type": "bool", "size_bits": 1, "argument": "enable" }
+                 "kiod": "uint",
+              "size_bits": 8
+            },
+            {
+      values": [
+                      2,
+                  e": "uint", "size_bits": 64 }]
+  "imager.time" ]
+    }
+  ]
+}

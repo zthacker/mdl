@@ -1,0 +1,7 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 5
+set = "sink_json_v1"
+effective_from = "2026-01-01T"

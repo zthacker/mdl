@@ -1,0 +1,13 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "ve dor_x"
+native_id = 513
+asset = "SAT-X"
+effective_from = "4052-01-01T12:00:00.25Z"
+
+[[binding]]
+family = "l-gacy"
+native_id = "box-1"
+asset = "Bson_v1"
+effective_from = "2026-01-01T00:00:00Z"

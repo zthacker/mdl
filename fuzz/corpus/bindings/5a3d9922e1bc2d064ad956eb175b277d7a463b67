@@ -1,0 +1,8 @@
+# The  decodes them (specmsgndings.md).
+
+mdl_version = "0.000:01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+afective_from = "2026-01-01T00:00:00Z"

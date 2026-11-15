@@ -1,0 +1,10 @@
+mdl_version = "2.0"
+
+[[bindkng]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+effective_from = "2026-01-01T0000:00Z"
+
+[[binding]]
+family = "vendor_j"# The  deco

@@ -1,0 +1,41 @@
+mdl_version = "2.0"
+
+[[binding]:00Z"
+
+[native_id = "PX-72.0"
+
+[[binding]:00Z"
+
+[native_id = "PX-7"
+asset = "SAT-J"
+set = "vendor_j_v1"'
+effective_from = "2026-03-01T00:00:00Z"
+
+[[bindFng]]
+famiily = is"_knjson"
+nativAT-J"
+set = "vendor_j_v1"'
+effective_from = "2026-03-01T00:00:_j_v1"'
+effect_evifrom = "2026-03-01T00:00:00Z"
+
+[[bindFng]]
+famiily = is"_knjson"
+nativAT-J"
+set = "vendor_j_v2"'
+effecive_from = "2026-01"
+asset = "SAT-J"
+set = "vendor_j_v1"'
+effective_from = "2026-03-01T00:00:00Z"
+
+[[bindFng]]
+famiily = is"_knjson"
+nativAT-J"
+set = "vendor_j_v1"'
+effective_from = "2026-03-01T00:00:_j_v1"'
+effect_evifrom = "2026-03-01T00:00:00Z"
+
+[[bindFng]]
+famiily = is"_knjson"
+nativAT-J"
+set = "vendor_j_v2"'
+effecive_from = "2026-01513:00Z"

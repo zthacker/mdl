@@ -1,0 +1,1 @@
+{"artts":[{"lirt":{"max":255},"name":"waypoints_azimuth","range":{"max":65535},"type":"u64"},{"ilst":{"max":255},		_bitsize_bits":"boot_field"2,"tyn":"2.a0"}}

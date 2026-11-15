@@ -1,0 +1,44 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+      "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "eps.old_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "deprecated": "use eps.bus_voltage"
+      },	      "nav.pos_ecef": {
+        "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
+      },
+      "sink.armed": { "type": "bool" },
+      "sink.attitude": { "type": "quat", "frame": "BODY" },
+      "sink.count": {
+        "type": "i64",
+        "description": "Events counted since boot",
+        "limit": "field",
+              "name": "value",
+              "type": "int",
+              "size_bits": 8,
+              "u{"mdl{"mdl_version":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"eps.batt_temp":{"type":"f64","unit":"Cel","limits":{"red_low":-10.0,"yellow_low":0.0,"yellow_high":35.0,"red_high":45.0},"description":"Battery temperature"},"eps.mode":{"type":"enum","states":["SAFE","NOMINAL","PAYLOAD"],"description":"Power mode, as the asset reports it"},"eps.batt_remaining":{"type":"f64","unit":"%","limits":{"red_low":15.0,"yellow_low":30.0},"description":"Battery charge remaining"}},"commands":{"eps.set_mode":{"description":"Switch the power mode","arguments":[{"name":"mode","type":"enum","states":["SAFE","NOMI_version":"2.NAL"]},{"na0","catalog":{"pmarams":{"eps.bus_voltagee

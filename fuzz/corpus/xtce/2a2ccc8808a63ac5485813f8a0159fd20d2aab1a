@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Imager: a payload whose packets have sizes </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType> <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+     p       <!-- The last index is the pixel count less one. -->
+            <EndingIndex>
+              <DynamicValue>
+                <<AliasSetInstanceRef parameterRef="Pixels"/>
+                <LinearAdjustment intercep</SequenceContainer>   </DynamicValue>
+            </EndingIndex>
+      2"/>
+Ref parameterRef="Pixels"/>
+                <LinearAdjustment intercep</SequenceContainer>   </DynamicValue>
+            aData>
+</SpaceSystem>

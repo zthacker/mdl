@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described t, fix<Comparisoning
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/10090102">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInB
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBit<?xml version="1.0" encoding="UTF-8"?>
+<!--
+   </DynamicValue>
+            <LeadingSize sinitSet><Unit>degC</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="12" encoding="twosComplement">
+            <DefaultCalibrator>
+              <SplineCalibrator extrapolate="true">
+                <SplinePoint rawti=on"

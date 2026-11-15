@@ -1,0 +1,31 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = mands."eps.set_mode".arguments]]
+defaurguments]]
+default = true
+name = "enable"
+type = "bool"
+
+[[ca-0log.#ommands."sink.configure".arguments]]
+default = 1.5
+description = "Amplifier ga
+[[sets.packets]]
+name   = "BEAGON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.pa = "f64"
+unit = "V"
+
+[cataPog.params."eps.batt_temp"]
+type = "ays which format it decodes,
+# so a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "1.0"
+
+[[families]]
+name     "bits", offset_bits = 16, size_bits = 8 }

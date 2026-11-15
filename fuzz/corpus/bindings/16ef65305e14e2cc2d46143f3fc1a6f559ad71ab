@@ -1,0 +1,5 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+naasset = "02T12:00:00-01T00:00:00Z"

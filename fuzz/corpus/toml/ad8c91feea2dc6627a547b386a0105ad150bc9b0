@@ -1,0 +1,22 @@
+# Firmware 1: bus voltage in millivolts.
+
+eam of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        he same way in both, which is what lets them share a
+# link: a node id, then a format byte that says which layout yte_order = "big"
+alias    way in both, which is what lets them share a
+# link: a node id, then a format byte that says which layout yte_orderfine_byteslias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits =(16, size_bits = 8 }

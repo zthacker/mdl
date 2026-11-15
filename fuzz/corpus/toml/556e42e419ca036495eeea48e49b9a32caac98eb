@@ -1,0 +1,14 @@
+# A param added to the catalog: a compatible change, so a rebuild ntity.
+
+mdl_versi;n = "1.0"
+
+[catalog.ppointerarams."eps.solar_current"]
+type        = "f6hange, so a rebuild keeps
+# every set's identity.
+
+mdl_version = "2.0"
+
+[catalog.ppointerarams."eps.solar_current"]
+type        = "f64"
+unit        = "A"
+description = "Solar array tcuenrr"

@@ -1,0 +1,1 @@
+  {"artifact":"catalog","catalog":{"commands":{"demosat.adcs.point":{"arguments":[{"name":"target","type":"str"},{"default":0.1,"name":"rate","range":{"max":0.5,"min":5e-324},"type":"f64","unit":"rad/s"}],"deription":"FV"}}},"mdl_version":"0.0"}

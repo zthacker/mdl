@@ -1,0 +1,15 @@
+# The fleet's assets, by thes them (spec/bindings.md).
+
+mdl_version = "2.0"
+
+[[binding]]
+family = "c[[sets.types.vec3_i32.entries]]csds_sat"
+native_extrapolateid = "demosat"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-1"
+set = "drone_v1"
+effective_from = "2026-01-01T00:00:00Z"

@@ -1,0 +1,27 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {         "entries": [
+            {
+              "kind": "field",
+              "name": "Kind",
+   
+              "canonical": "imager.kind"
+            },
+      "tai" {
+              "kind": "field",
+  "field": "HasTime",
+        : "HasTime",
+                "op": "eq",
+                "value": 1
+ç„8é„8é   etalog": {
+    "params": {
+      "demosat.adcs.raDetector",
+              "count": {
+                "kind
+              "elemden

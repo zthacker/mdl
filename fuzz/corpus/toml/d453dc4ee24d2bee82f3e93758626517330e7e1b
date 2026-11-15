@@ -1,0 +1,11 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    ts.commands.entries]]
+kind      = "checksum"
+name      = "crc"
+algorithm = { kind = "crc", width = 16, poly = 0x1021, init = 0xFFFF false, reflect_out = false, xor_     = "bus_mv"
+type   OML (writt     =en  

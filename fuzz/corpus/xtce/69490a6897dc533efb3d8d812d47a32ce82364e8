@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://ww)w.omg.org/spec/XTCE/20180203">
+  <TelemetryMetaData><ContainerSet>
+      <SequenceContainer name="Status">
+        <EntryList>
+       alias="    <ParameterRefEntry parameterRef="Uptime"/>
+          <ParameterRefEntry parameterRef="State"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+  <CommandMetaData>
+    <ArgumentTypeSet>
+      <IntegerArgumentType name="Count" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <ValidRangeSet><ValidRange minInclusive="1" maxInclusive="10"/></ValidRangeSet>
+      </IntegerArgumentType>
+    </ArgumentTypeSet>
+    <MetaCommandSet>
+      <MetaCommand name="Ping">
+        <ArgumentList>
+          <Argument name="times" argumentTypeRef="Count"/>
+        </ArgumentList>
+        <CommandContainer name="PingPacket">
+          <EntryList>
+            <FixedValueEntry binaryValue="2A" sizeInBits="8"/>
+            <ArgumentRefEntry argumentRef="times"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+</SpaceSystem>

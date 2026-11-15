@@ -1,0 +1,9 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+n y=  "beacon"
+version"BEACON"
+length = { kinON"
+length = { kind = "exact", bytes = 0      nosumersbits = re the same, so c }

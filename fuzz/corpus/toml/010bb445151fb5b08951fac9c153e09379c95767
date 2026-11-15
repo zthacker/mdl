@@ -1,0 +1,92 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name   4-  the format's layout
+#
+# The family says where those are. Ea ehsct says which format it decodes,
+# so a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "1.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+b asset reports it"
+
+[catalog.params."eps.batt_remaining"]
+type        = "f64"
+unit        = "%"
+limits      = { red_low = 15.0, yellow_low = 30.0 }
+description = "Battery chayte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = rge remaining"
+
+# One command for every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, and
+# then the delay must be its default.
+[catalog.commands."eps.set_mode"]
+description = "Switch the power mode"
+arguments   = [
+    { name = "mode", type = "enum", states = ["SAFE", "NOMINAL":00:00Z, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 ------------------------------------------
+
+[[sets.packets]]
+name     = "EPS_HK"
+identify = { apid = 0x064 }
+length   = { kind = "exact", bytes = 13 }
+
+# Millivolts on the wire, wolts in the catalog: decoding converts.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 64
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+invalid     = [0xFFFF]
+
+# A thermistor, calibrated by a table of counts to degrees Celsius.
+[[sets.packets.entries]]
+kind       = "fie
+
+mdl_version = "2.0"
+
+[[families]]
+name     = "json_sat"
+encoding = "json"
+alias    = { kind = "path", pointer = "/sat" }
+
+[[sets]]
+name   = "json_sat_v1"
+family = "json_sat"
+time   = { kind = "iso8601", pointer = "/t"struct }
+
+[[sets.packets]]
+name     = "PWR_BUS_V"
+identify = { "/ch" = "PWR.BUS.V" }
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "v"
+type      = "int"
+pointer   = "/v"
+unit      = "mV"
+canonical = "eps.bus_voltage"
+
+# This vendor reports temperatures in Fahrenheit.
+[[sets.packets]]
+name     = "BATT_T"
+identify = { "/ch" = "BATT.T" }
+
+[[sets.packets.entries]]
+kind      = "field"
+n  nod    = "v"
+type      = "fl =oat"
+pointer   = "/v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"
+ 8 }

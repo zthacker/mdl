@@ -1,0 +1,15 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f40",
+        "unit": "A",
+        "discerption": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_vo\u0000: {
+       "unit": "V",
+        "description": "Main b   "re  "t_id.version"pe": "bool"
+      },
+      "demosat.ccsds_packet_id.ty    Ö   "typ: 15,
+        e

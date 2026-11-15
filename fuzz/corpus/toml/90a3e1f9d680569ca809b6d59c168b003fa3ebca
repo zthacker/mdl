@@ -1,0 +1,6 @@
+# A param added to th every set's identity.
+
+mdl_version = "2."0
+
+[catalog.ppointerara;s."eps.solar_current"]clock_fieldt        = "A"
+description = t"

@@ -1,0 +1,28 @@
+# The fleet's assetfamily's messages carry, and the set
+# that decodes they = "demosat"
+native_id = 2025-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-1t"
+native_id = 2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-2"
+set =e set
+# that decodes they = "demosat"
+native_id = 2025-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id =odes they = "demosat"
+native_id = 2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "U "drone_v1"
+effective_from = "2026-01-01T0max0:00:00Z"

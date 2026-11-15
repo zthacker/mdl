@@ -1,0 +1,134 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+    					   },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+      "eps.mode": {
+             "deprecated": "firmware 3 configures the sink at boot",
+        "arguments": [
+          { "name": "enable", "type": "bool", "default": true },
+ 		"any"			"identify"					          { "name": "gain", "type": "f64", "range": { "min": 0.5, "max": 4.0 }, "default": 1.5, "description": "Amplifier gain" },
+          { "name": "label", "type": "str", "default": "ON" },
+          {
+     ;       "name": "taps",
+            "type": "f64",
+            "range": { "min": 0, "max": 131070 },
+            "list": { "min": 1, "max": 4 },
+            "default": [1, 2]
+          }
+        ]
+      },
+      "sink.mark": {
+        "description": "Stamp the sink's log with a sequence number",
+        "arguments": [
+          { "name": "stamp", "type": "u64", "range": { "min": 1, "max": "1152921504606846975" } }
+        ]
+      }
+    }
+  },
+  "families": [
+    {
+      "name": "vendor_x",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "bits",
+        "offset_bits": 48,
+        "size_bits"big"
+      },
+      "version": {
+        "kind": "metadata",
+        "name": "fmt"
+      },
+      "metadata": [
+        "apid",10it0s": 64,
+              "size_bits": 16,
+              "conversion": {
+                "kin d": "linear",
+                "scale": 0.01,
+                "offset": 0.0
+              },
+              "unit": "V",
+              "canonic,
+              "invalid": [
+                65535
+              ]
+            },
+            {
+              "kind": "padding",
+              "size_bits": 6
+            },
+            {
+              "kind": "field",
+              "name": "mode",
+              " 					"identify"							
+ 
+‰X "size_bits": 2,
+              "conversion": {
+                "kind": "states",
+                "states": [
+                  {
+                    "raw": 0,
+                    "name": "SAFE"
+                  },
+                  {
+            ield": "n"
+              },
+              "element": {
+                "kind": "scalar",
+                "type": "int",
+                "size_bits": 16,
+                "conversion": {
+                  "kind": "poly",
+                  "coefficients": [
+                    0.0,
+                    0.001
+                  ]
+                },
+                "unit": "A"
+              },
+              "canonical": "eps.bus_current",
+              "sample_interval_ms": 100.0
+            },
+            {
+              "kind": "struct",
+              "name": "pos",
+              "struct": "vec3_i32",
+              "when": {
+                "kind": "compare",
+                "field": "flags",
+                "op": "mask_any",
+                "value": 1
+              }
+        						    },
+            {
+              "kind": "field",
+              "name": "label_len",
+              "type": ""compare"uint",
+              "size_bits": 8
+   
+         },
+            {
+              "kind": "field",
+              "name": "label",
+              "type": "string",
+              "length" 
+: {
+                "kind": "field",
+                "
+‰Xfield¢: "label_len"
+              },
+         ‰X     "text": "ascii",

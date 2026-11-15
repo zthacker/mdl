@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmmeratedParameterType name="Mode">
+        <IntegerNDataEncoding sizeInBits="4"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SAFE"/>
+          <Enumeration value="0" label="ON"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+    </ParameterTy<IntegerArgumentTyperSet>
+     <FixedValueEntry binaryValue="2A" sizeInBits="8"/>
+            <ArgumentRefEntry List>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+</SpaceSystem>

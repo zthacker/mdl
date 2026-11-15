@@ -1,0 +1,41 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.sumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_b[sets.packets.entries.when.conditions.condition] "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset = 0.ts = 0, size_bits = 16 }ts  = 16
+conversion = { kind = "linear", scale = 0.1,_bits = 8 }

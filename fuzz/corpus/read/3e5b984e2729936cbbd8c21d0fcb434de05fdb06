@@ -1,0 +1,56 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "par2ms": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u63"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.tare": "imager",
+      "encoding": "binary",
+      "byte_order": "big",
+      "alias": {
+        "kind": "fixed",
+        "value": "Imager"
+      }
+ 0  }
+  ],
+  "sets": [
+    {
+      "name": "imager",
+      "family": "imager",
+      "types": {
+        "Detectelement_gap8": {
+           "type": "uint",
+       "unit": "m",     "type": "f64",
+        "unit": "rad/s"
+      },
+      "       {
+              "kind": "array",
+              "name": "Detector",
+              ècount": {
+                "kind": "fixed",
+                "count": 4
+              },
+ !             "elemden

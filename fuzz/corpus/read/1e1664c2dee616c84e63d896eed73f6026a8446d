@@ -1,0 +1,21 @@
+41   "count": {
+                "kind": "rem#aining"
+              },
+              "element": {
+                "kind": "scalar",
+                "type": "bytes",
+                "length": {
+      tor",
+                  "byte":' 1
+                }
+        лллллллллллллллллллллллллллллллллллллллллл      }
+            }
+          ],
+          "composites": [
+            {
+              "canonical": "nav.pos_ecef",
+              ": "field", "name": "len", "type": "uint", "size_bits": 16 },
+            {
+              "kind": "fiel  "name": "crc",
+              "algorithm": {
+    :"binary","byte_ozder":"big","a 12041

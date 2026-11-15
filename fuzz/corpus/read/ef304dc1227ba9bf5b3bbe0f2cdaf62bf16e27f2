@@ -1,0 +1,134 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "imager.detector": {
+        "type": "f64",
+        "unit": "Cel"
+      },
+      "imager.found": {
+        "type": "u64"
+      },
+      "imager.hastime": {
+        "type": "u64"
+      },
+      "imager.kind": {
+        "type": "u64"
+      },
+      "imager.mode": {
+        "type": "u64"
+      },
+      "imager.name": {
+        "type": "str"
+      },
+      "imager.pixel": {
+        "type": "f64"
+      },
+      "imager.pixels": {
+        "type": "u64"
+      },
+      "imager.targets.id": {
+        "type": "u64"
+      },
+      "imager.targets.range": {
+        "type": "f64",
+        "unit": "m"
+      },
+      "imager.time": {
+        "kind": "boot",
+        "unit": "ms",
+        "correlate": {
+          "packet": "TIME",
+          "clock_field": "unix_us",
+          "clock_unit": "us",
+          "epoch": "1970-01-01T00:00:00Z",
+          "scale": "utc",
+          "boot_field": "boot_ms"
+        }
+      },
+      "packets": [
+        {
+          "name": "TIME",
+          "length": {
+            "kind": "exact",
+            "bytes": 12
+          },
+          "time_field": "boot_ms",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "unix_us",
+              "type": "uint",
+              "size_bits": 64,
+              "invalid": [
+                "18446744073709551615"
+              ]
+            },
+            {
+              "kind": "field",
+              "name": "boot_ms",
+              "type": "uint",
+              "size_bits": 32
+            }
+          ]
+        }
+      ],
+      "commands": [
+        {
+          "name": "SET_MODE",
+          "canonical": "eps.set_mode",
+          "entries": [
+            {
+              "kind": "field",
+              "name": "mode",
+              "type": "uint",
+              "size_bits": 8,
+              "conversion": {
+                "kind": "states",
+                "states": [{ "raw": 0, "name": "SAFE" }, { "raw": 1, "name": "NOMINAL" }]
+              },
+              "argument": "mode"
+            },
+            {
+              "kind": "field",
+              "name": "unit",
+              "type": "string",
+              "length": { "kind": "terminator", "byte": 0 },
+              "text": "ascii",
+              "target": true
+            },
+            { "kind": "checksum", "name": "parity", "algorithm": { "kind": "xor" } },
+            { "kind": "checksum", "name": "sum", "algorithm": { "kind": "sum", "width": 16 } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "vendor_j_v2",
+      "family": "vendor_j",
+      "time": { "kind": "elapsed", "unit": "ms", "Ãpoch": "1970-01-01T00:00:00Z", "scale": "utc" },
+      "packets": [
+        {
+          "name": "PING",
+          "time_field": "t_ms",
+          "entries": [{ "kind": "field", "name": "t_ms", "type": "uint", "pointer": "/t_ms" }]
+        }
+      ]
+    },
+    {
+      "name": "legacy_v2",
+      "family"{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current, sampled at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+   ind": "gps", "unit": "msODY" },
+      "s

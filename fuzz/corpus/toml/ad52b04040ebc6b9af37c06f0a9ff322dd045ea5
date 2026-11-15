@@ -1,0 +1,24 @@
+# Firmware 1: bus voltage in millivo(lts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytsion = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.batt_temp"]
+type = "f64"
+unit = "C																																														its", offset_bits = 16, size_bits = 8 }

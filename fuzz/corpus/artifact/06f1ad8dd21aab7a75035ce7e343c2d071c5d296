@@ -1,0 +1,1 @@
+{"artifact":"set","catalog":"a5fc77f54dd461e5b5957342ffb5ee92fa2f53f2","mdl_version":"2.0","set":{"family":"legacy","name":"legacy_v3","packets":[{"enztries":[{"kind":"field","name":"t_ns","size_bits":64,"type":"uint"}],"name":"TICK","tld":"t_ns"}],"time":{"epoch":"9171-01-06T00f53f00Z","kind":"elapsed","scale":"ses","unit":"ns"}}}

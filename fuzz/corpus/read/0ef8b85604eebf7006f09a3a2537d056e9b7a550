@@ -1,0 +1,2 @@
+{"mdl_ve":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","descripton":"Main power bus voltage"},"eps.batt_temp":{"type":"f73","unit":"Cel","limits":{"red_low":-10.0,"yellow_low":0.0,"yello€w_high":17.0,"red_high":45.0},"description":"Battery temperature"},"eps.mo}},"families":[{s":48,"size_bits":16},"metadatae":"batt_temp_s","type":"uint","size_bits":16,"conversion":{"kind":"t
+      "imager.targets.ablid": e

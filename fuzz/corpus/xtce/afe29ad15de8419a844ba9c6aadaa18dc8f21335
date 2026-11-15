@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://ww)w.omg.org/spec/XTCE/20180203">
+  <TelemetryMetaData>
+    <ParameterTypeSet>]]>    <IntegerParameterType name="Uptime" signed="false">
+        <UnitSet><Unit>InBits="16"/>
+      </IntegerParameterType>
+      <EnumeratedParameterType name="Mode">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SAFE"/>
+          <Enumeration value="2" label="ON"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Uptime" parameterTypeRef="Uptime"/>
+      <Parameter name="State" parameterTypeRef="Mode"/>
+    </ParameterSet>
+    <ContainerSeu>
+      <SequenceContainer name="Status">
+        <EntryList>
+       alias="    <ParameterRefEntry parameterRef=.Uptime"/>
+          <ParameterRefEntry parameterRef="State"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+  <CommandMetaData>
+    <ArgumentTypeSet>
+      <IntegerArgumentType name="Count" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <ValidRangeSet><ValidRange minInclusive="1" maxInclusive="10"/></ValidRangeSet>
+      </IntegerArgumentType>
+    </ArgumentTypeSet>
+    <MetaCommandSet>
+      <MetaCommand name="Ping">
+        <ArgumentList>
+          <Argument name="times" argumentTypeRef="Count"/>
+        </ArgumentList>
+        <CommandContainer name="PingPacket">
+          <EntryLis<IntegerArgumentTypet>
+            <FixedValueEntry binaryValue="2A" sizeInBits="8"/>
+            <ArgumentRefEntry argumentRef="times"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+</SpaceSystem>

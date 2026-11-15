@@ -1,0 +1,10 @@
+mdl_version = "2.0"
+
+[[bconversioninding]]
+family = "vendor_x"
+naasset = ":00.25Z"
+
+[[binding]]
+familyctive_from = "202box-1"
+retired = true
+efe_from = "2026-01-01T00:00:00Z"

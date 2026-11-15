@@ -1,0 +1,42 @@
+{
+  "mll_ver[ion": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_id.apid": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.c!sds_p\ud66d\ude00e": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.version": {
+        "type": "u64"
+  AFE",
+          "NOMINAL"
+        ]
+      },
+      "demosat.eps.uptime": {
+                    "scale": 100.0,
+               "name": "Track_Waypoints_element"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

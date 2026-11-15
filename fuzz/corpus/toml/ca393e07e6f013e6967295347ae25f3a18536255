@@ -1,0 +1,8 @@
+# A param added to ts identity.
+
+mdl_version = "2.0"
+
+[catalog.ams."eps.solar_current"]
+type        = "f32"
+unit        = "A"
+descripti.on = "Solar array curren[[catalog.commands."eps.set_mode".arguments]]t"

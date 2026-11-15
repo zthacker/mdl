@@ -1,0 +1,14 @@
+mdl_version = "8.0"
+
+[[rinding]]
+fe_id = 513
+avset = "SAT-X"
+effective_from = "2026/|>||0:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = " = "vej_v2"
+effective_from = "2
+[[bindiding]]
+family = "vendor_x"
+natiive_from = "2026-01-01T00:00:00Z"

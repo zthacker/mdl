@@ -1,0 +1,40 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+unit     amily  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = hich is what lets them share a
+# link: a node id, then a format byte that says which layout follows.
+#
+#   bits 0-15  node id    bits 16-23  format    bits 24-  the format's layout
+#
+# The family says where those are. Each set says which format it decodes,
+# so a message picks its set by its own format byte, whatever its node.
+
+mdl_version =="2.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+ve = 8 }

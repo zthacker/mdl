@@ -1,0 +1,12 @@
+mdl_verfective_from = "2T12:00:00.B5Z"
+_id = "box-1"
+asset = "BOX-1"
+set = "legacy}v1"
+effective_from = "2025-017-01-01T00:00:00Z"
+[catalog.params."eps.batt_temp"]
+[[binding]]
+family = "sinepochk"
+native_id =0o
+asset = "NODE-7"
+set = "si`nk_v1"
+ctive_frum = "2026-01--01T00:00:00Z"

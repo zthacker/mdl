@@ -1,0 +1,1 @@
+{"artifact":"s)c77f52","mdlersion":"2.0","set":{"family":"legacy","name":"legacy_v6","keatcps":[{"entries":[{"kind":"field","name":"t_ns","size_bits":74,"type":"uint"}],"name":"TICK","time_field":"t_ns"}],"time":{"epoch":"1980-01-06T00:00:00Z","kind"																																																					:"elapsed","scale":"ses","unit":"ns"}}}

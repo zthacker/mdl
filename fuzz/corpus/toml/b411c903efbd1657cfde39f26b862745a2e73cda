@@ -1,0 +1,80 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible wiThe link strips the 6-byte
+# primary header and hands over the APID as metadata, so offsets here are
+# bits from the start of the data field: a CUC time code (4 + 2 bytes),
+# then the spacecraft id, then the packet's own data.
+#
+#   bits 0-47  CUC time    bits 48-63  spacecraft id    bits 64-  data
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "ccsds_sat"
+encoding   = "bi:00Z, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 ------------------------------------------
+
+[[sets.packets]]
+name     = "EPS_HK"
+identify = { apid = 0x064 }
+length   = { kind = "exact", bytes = 13 }
+
+# Millivolts on the wire, volts in the catalog: decoding converts.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 64
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+invalid     = [0xFFFF]
+
+# A thermistor, calibrated by a table of counts to degrees Celsius.
+[[sets.packets.entries]]
+kind       = "\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\field"
+name       = "batt_temp_counts"
+type       = "uint"
+size_bits  = 16
+conversion = { kind = "table", points = [
+    { raw = 0, value = -40.0 },
+    { raw = 1000, value = 0.0 },
+    { raw = 3000, value = 60.0 },
+] }
+unit       = "Cel"
+canonical  = "eps.batt_temp"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, name = "PAYLOAD" },
+] }
+canonical  = "eps.mode"
+
+# ---- Commands, APID 0x0C8 --------------------------------------------------
+
+[[sets.commands]]
+name     ame      = "v"
+type      = "int"
+pointer   = "/v"
+unit      = "mV"
+canonical = "eps.bus_voltage"
+
+# This vendor reports temperatures in Fahrenheit.
+[[sets.packets]]
+name     = "BATT_T"
+identify = { "/ch" = "BATT.T" }
+
+[[sets.packets.entries]]
+kind      = "field"
+name      = "v"
+type      = "float"
+pointer   = "/v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"

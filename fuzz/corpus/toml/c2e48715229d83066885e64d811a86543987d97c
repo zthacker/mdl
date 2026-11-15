@@ -1,0 +1,22 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "be = "be  = "be = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+leo =h gt{ kin# crates/mdl/tests/fixtu[catalog.commands."epsts.range]s = 5 }
+
+[[sets.packets
+version = 2
+
+[[sets.p = "field"
+name        = "bus_mv"
+type ! OML (writt S   =en  

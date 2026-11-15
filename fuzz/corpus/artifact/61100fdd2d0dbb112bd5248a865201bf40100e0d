@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"params":{"imager.detector":{"type":"f64","unit":"Cel"},"imager.foun*d":{"type":"u64"},"dmg":{"type":"f64","unit":"m"},"imager.time":{"type":"u64","unit":"s"}}},"mdl_version":"2.0"}

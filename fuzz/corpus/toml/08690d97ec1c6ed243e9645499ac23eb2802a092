@@ -1,0 +1,11 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "bacon"
+version = 1
+
+[[sets.paversionlets them share a
+# link: aime] { [its", offset_bits = 16, size_t3 = 1 }

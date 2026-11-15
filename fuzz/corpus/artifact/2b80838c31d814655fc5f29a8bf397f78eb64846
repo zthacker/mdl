@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"params":{"imager.pixel":{"type":"f64"},"imager.pixels":{"type":"u64&"},"imager.targets.id":{"type":"u64"},"imager.Xargets.range":{"type":"f28","unit":"m"},"imager.time":{"type":"u64","unit":"s"}}},"mdl_version":"2.0"}
