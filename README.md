@@ -157,6 +157,18 @@ This example runs as a test of the TOML crate.
 `just check` runs what CI runs: formatting, clippy, every test (including
 the walkthrough and the README's example) and the docs. `just props` runs
 the property tests at 10,000 cases each, as CI does on pushes to main.
+
+`just fuzz <target> [seconds]` fuzzes one target of `fuzz/` (it needs
+nightly Rust and `cargo install cargo-fuzz`); CI runs each for 60 seconds
+on pushes to main. What each target checks is in `crates/mdl-fuzz`, so
+`just check` replays every committed input on stable: the hand-picked
+seeds in `fuzz/seeds/<target>`, the corpus grown from them in
+`fuzz/corpus/<target>`, and each crash found, kept in
+`fuzz/regressions/<target>` once fixed. Before committing a grown corpus,
+`just fuzz-cmin <target>` keeps the inputs that add coverage beyond the
+seeds, up to 4 KB each. After `Cargo.lock` changes, `just fuzz-lock`
+gives the harness the same versions.
+
 Issues and pull
 requests are welcome at <https://github.com/zthacker/mdl>.
 [`ROADMAP.md`](ROADMAP.md) says what's next, such as build files for
@@ -171,6 +183,8 @@ several imports.
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the command line: build, inspect, decode, encode |
 | `crates/mdl-testkit` | IR generators, the list of IR features, and oracles that work out from the spec what telemetry decodes to, what commands encode to, and the error a damaged message or a refused request gives, for the property tests (never published) |
+| `crates/mdl-fuzz` | what each fuzz target checks, and a test that replays every committed fuzz input (never published) |
+| `fuzz` | the cargo-fuzz harness, its seeds, corpus and dictionaries, and the crashes kept as regressions |
 | `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
 
