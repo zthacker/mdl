@@ -2,7 +2,7 @@
 # examples walkthrough and the README's example, and the docs), on every
 # push to main and every pull request, plus the tests on the oldest Rust
 # the workspace supports. On pushes to main, `just props` also runs the
-# property tests at 10,000 cases each.
+# property tests at 10,000 cases each, and each fuzz target runs for 60 s.
 
 name: check
 
@@ -26,7 +26,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # `just check` also lints the fuzz harness, which builds in its own
+      # target directory.
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> target
       - uses: taiki-e/install-action@v2
         with:
           tool: just
@@ -57,3 +63,50 @@ jobs:
           tool: just
       - run: cargo fetch --locked
       - run: just props
+
+  fuzz:
+    name: fuzz ${{ matrix.target }} for 60 s
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      # A nightly known to build the harness, bumped now and then, so a
+      # failure reproduces; the fuzz recipes read it.
+      MDL_FUZZ_TOOLCHAIN: nightly-2026-11-04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [artifact, bindings, canonical, read, timestamp, toml, units, xtce]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.MDL_FUZZ_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz -> target
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: just,cargo-fuzz
+      # What earlier runs grew beyond the seeds and the committed corpus,
+      # saved again after this run.
+      - uses: actions/cache@v4
+        with:
+          path: fuzz/cache/${{ matrix.target }}
+          key: fuzz-cache-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-cache-${{ matrix.target }}-
+      - run: just fuzz ${{ matrix.target }} 60 cache
+      # Only what adds coverage beyond the seeds and the corpus is kept, so
+      # replaying the cache can't come to fill the 60 s.
+      - run: >-
+          just fuzz-merge ${{ matrix.target }} cache/${{ matrix.target }} 0
+          seeds/${{ matrix.target }} corpus/${{ matrix.target }}
+      # The input that crashed, to reproduce with `cargo fuzz run`, shrink
+      # with `cargo fuzz tmin` and keep in fuzz/regressions. An input kept
+      # for time (timeout-*), memory (oom-*) or a leak (leak-*) needs a unit
+      # test too: the replay test has no memory limit or leak checker, and
+      # gives an input a minute.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
