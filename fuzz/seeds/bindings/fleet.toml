@@ -1,0 +1,32 @@
+# The fleet's assets, by the id each family's messages carry, and the set
+# that decodes them (spec/bindings.md).
+
+mdl_version = "2.0"
+
+[[binding]]
+family = "ccsds_sat"
+native_id = 101
+asset = "SAT-1"
+set = "ccsds_sat_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "json_sat"
+native_id = "PX-7"
+asset = "SAT-2"
+set = "json_sat_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "demosat"
+native_id = "DemoSat"
+asset = "SAT-3"
+set = "demosat"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 1
+asset = "UAV-1"
+set = "drone_v1"
+effective_from = "2026-01-01T00:00:00Z"

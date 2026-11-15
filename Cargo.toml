@@ -2,11 +2,14 @@
 resolver = "3"
 members = [
     "crates/mdl",
+    "crates/mdl-fuzz",
     "crates/mdl-testkit",
     "crates/mdl-toml",
     "crates/mdl-xtce",
     "crates/morphc",
 ]
+# The cargo-fuzz harness: nightly, with its own lockfile.
+exclude = ["fuzz"]
 
 [workspace.package]
 edition = "2024"

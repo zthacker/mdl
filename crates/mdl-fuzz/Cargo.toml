@@ -1,0 +1,20 @@
+[package]
+name = "mdl-fuzz"
+description = "What MDL's fuzz targets check, shared by the cargo-fuzz harness in fuzz/ and a replay test; never published"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "mdl_fuzz"
+
+[dependencies]
+mdl.workspace = true
+mdl-toml.workspace = true
+mdl-xtce.workspace = true
+
+[lints]
+workspace = true

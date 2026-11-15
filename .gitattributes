@@ -1,0 +1,6 @@
+# Fuzz inputs are bytes: their line endings are never converted, whatever
+# core.autocrlf says, so what's committed is what was fuzzed and what the
+# replay test runs. The corpus and the crashes kept have no useful diff.
+fuzz/seeds/** -text
+fuzz/corpus/** binary
+fuzz/regressions/** binary

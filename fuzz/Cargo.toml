@@ -1,0 +1,78 @@
+# The cargo-fuzz harness (nightly): one libFuzzer target for each target of
+# crates/mdl-fuzz, which holds what each checks. Outside the workspace, with
+# its own lockfile. `just fuzz <target>` runs one.
+[package]
+name = "mdl-fuzz-harness"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+mdl-fuzz = { path = "../crates/mdl-fuzz" }
+
+[workspace]
+members = ["."]
+
+# Symbols for the stack traces of crashes.
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "artifact"
+path = "fuzz_targets/artifact.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bindings"
+path = "fuzz_targets/bindings.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonical"
+path = "fuzz_targets/canonical.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "read"
+path = "fuzz_targets/read.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "timestamp"
+path = "fuzz_targets/timestamp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "toml"
+path = "fuzz_targets/toml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "units"
+path = "fuzz_targets/units.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xtce"
+path = "fuzz_targets/xtce.rs"
+test = false
+doc = false
+bench = false

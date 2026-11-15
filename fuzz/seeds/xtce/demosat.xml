@@ -1,0 +1,408 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS satellite described the way XTCE tools describe one.
+  The root holds the CCSDS primary header; EPS and ADCS each add a packet
+  that inherits it and is told apart by its APID. Commands work the same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterType name="CCSDS_APID_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_ID_Type">
+        <MemberList>
+          <Member name="Version" typeRef="CCSDS_Version_Type"/>
+          <Member name="Type" typeRef="CCSDS_Type_Type"/>
+          <Member name="SecHdrFlag" typeRef="CCSDS_Sec_Hdr_Flag_Type"/>
+          <Member name="APID" typeRef="CCSDS_APID_Type"/>
+        </MemberList>
+      </AggregateParameterType>
+      <EnumeratedParameterType name="CCSDS_Group_Flags_Type">
+        <IntegerDataEncoding sizeInBits="2"/>
+        <EnumerationList>
+          <Enumeration value="0" label="Continuation"/>
+          <Enumeration value="1" label="First"/>
+          <Enumeration value="2" label="Last"/>
+          <Enumeration value="3" label="Standalone"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+      <IntegerParameterType name="CCSDS_Count_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="14"/>
+      </IntegerParameterType>
+      <AggregateParameterType name="CCSDS_Packet_Sequence_Type">
+        <MemberList>
+          <Member name="GroupFlags" typeRef="CCSDS_Group_Flags_Type"/>
+          <Member name="Count" typeRef="CCSDS_Count_Type"/>
+        </MemberList>
+      </AggregateParameterType>
+      <IntegerParameterType name="CCSDS_Length_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="CCSDS_Packet_ID" parameterTypeRef="CCSDS_Packet_ID_Type"/>
+      <Parameter name="CCSDS_Packet_Sequence" parameterTypeRef="CCSDS_Packet_Sequence_Type"/>
+      <Parameter name="CCSDS_Packet_Length" parameterTypeRef="CCSDS_Length_Type"/>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer name="CCSDSPacket" abstract="true">
+        <EntryList>
+          <ParameterRefEntry parameterRef="CCSDS_Packet_ID"/>
+          <ParameterRefEntry parameterRef="CCSDS_Packet_Sequence"/>
+          <ParameterRefEntry parameterRef="CCSDS_Packet_Length"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+  <CommandMetaData>
+    <ArgumentTypeSet>
+      <IntegerArgumentType name="APIDType" signed="false">
+        <IntegerDataEncoding sizeInBits="11"/>
+      </IntegerArgumentType>
+      <IntegerArgumentType name="OpcodeType" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerArgumentType>
+    </ArgumentTypeSet>
+    <MetaCommandSet>
+      <!--
+        A telecommand's primary header, then its opcode. The link fills in
+        the sequence count and the length, as Yamcs's command
+        post-processors do, so they're written as zeros here.
+      -->
+      <MetaCommand name="CCSDSCommand" abstract="true">
+        <ArgumentList>
+          <Argument name="APID" argumentTypeRef="APIDType"/>
+          <Argument name="Opcode" argumentTypeRef="OpcodeType"/>
+        </ArgumentList>
+        <CommandContainer name="CCSDSCommand">
+          <EntryList>
+            <FixedValueEntry name="Version" binaryValue="0" sizeInBits="3"/>
+            <FixedValueEntry name="Type" binaryValue="1" sizeInBits="1"/>
+            <FixedValueEntry name="SecHdrFlag" binaryValue="0" sizeInBits="1"/>
+            <ArgumentRefEntry argumentRef="APID"/>
+            <FixedValueEntry name="GroupFlags" binaryValue="3" sizeInBits="2"/>
+            <FixedValueEntry name="Count" binaryValue="0000" sizeInBits="14"/>
+            <FixedValueEntry name="Length" binaryValue="0000" sizeInBits="16"/>
+            <ArgumentRefEntry argumentRef="Opcode"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+
+  <SpaceSystem name="EPS" shortDescription="Electrical power">
+    <TelemetryMetaData>
+      <ParameterTypeSet>
+        <EnumeratedParameterType name="ModeType">
+          <IntegerDataEncoding sizeInBits="4"/>
+          <EnumerationList>
+            <Enumeration value="0" label="OFF"/>
+            <Enumeration value="1" label="SAFE"/>
+            <Enumeration value="2" label="NOMINAL"/>
+          </EnumerationList>
+        </EnumeratedParameterType>
+        <FloatParameterType name="TemperatureType">
+          <UnitSet><Unit>degC</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="12" encoding="twosComplement">
+            <DefaultCalibrator>
+              <SplineCalibrator extrapolate="true">
+                <SplinePoint raw="-2000" calibrated="-50"/>
+                <SplinePoint raw="2000" calibrated="50"/>
+              </SplineCalibrator>
+            </DefaultCalibrator>
+          </IntegerDataEncoding>
+        </FloatParameterType>
+        <FloatParameterType name="VoltageType">
+          <UnitSet><Unit>V</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16">
+            <DefaultCalibrator>
+              <PolynomialCalibrator>
+                <Term coefficient="0" exponent="0"/>
+                <Term coefficient="0.001" exponent="1"/>
+              </PolynomialCalibrator>
+            </DefaultCalibrator>
+          </IntegerDataEncoding>
+        </FloatParameterType>
+        <!-- The flight computer writes its own counters little-endian. -->
+        <IntegerParameterType name="UptimeType" signed="false">
+          <UnitSet><Unit>s</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="32" byteOrder="leastSignificantByteFirst"/>
+        </IntegerParameterType>
+        <BooleanParameterType name="HeaterType">
+          <IntegerDataEncoding sizeInBits="8"/>
+        </BooleanParameterType>
+      </ParameterTypeSet>
+      <ParameterSet>
+        <Parameter name="Mode" parameterTypeRef="ModeType"/>
+        <Parameter name="BattTemp" parameterTypeRef="TemperatureType"
+                   shortDescription="Battery temperature">
+          <AliasSet><Alias nameSpace="MDL" alias="eps.batt_temp"/></AliasSet>
+        </Parameter>
+        <Parameter name="BusVoltage" parameterTypeRef="VoltageType"
+                   shortDescription="Main bus voltage">
+          <AliasSet><Alias nameSpace="MDL" alias="eps.bus_voltage"/></AliasSet>
+        </Parameter>
+        <Parameter name="Uptime" parameterTypeRef="UptimeType"/>
+        <Parameter name="Heater" parameterTypeRef="HeaterType"/>
+      </ParameterSet>
+      <ContainerSet>
+        <SequenceContainer name="EPS_HK">
+          <EntryList>
+            <ParameterRefEntry parameterRef="Mode"/>
+            <ParameterRefEntry parameterRef="BattTemp"/>
+            <ParameterRefEntry parameterRef="BusVoltage"/>
+            <ParameterRefEntry parameterRef="Uptime"/>
+            <!-- The heater reports only in NOMINAL mode. -->
+            <ParameterRefEntry parameterRef="Heater">
+              <IncludeCondition>
+                <Comparison parameterRef="Mode" value="NOMINAL"/>
+              </IncludeCondition>
+            </ParameterRefEntry>
+          </EntryList>
+          <BaseContainer containerRef="/DemoSat/CCSDSPacket">
+            <RestrictionCriteria>
+              <ComparisonList>
+                <Comparison parameterRef="CCSDS_Packet_ID.Type" value="false"/>
+                <Comparison parameterRef="CCSDS_Packet_ID/APID" value="100"/>
+              </ComparisonList>
+            </RestrictionCriteria>
+          </BaseContainer>
+        </SequenceContainer>
+      </ContainerSet>
+    </TelemetryMetaData>
+    <CommandMetaData>
+      <ArgumentTypeSet>
+        <EnumeratedArgumentType name="ModeArgType">
+          <IntegerDataEncoding sizeInBits="8"/>
+          <EnumerationList>
+            <Enumeration value="1" label="SAFE"/>
+            <Enumeration value="2" label="NOMINAL"/>
+          </EnumerationList>
+        </EnumeratedArgumentType>
+        <IntegerArgumentType name="DelayType" signed="false" initialValue="0">
+          <UnitSet><Unit>s</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16"/>
+          <ValidRangeSet>
+            <ValidRange minInclusive="0" maxInclusive="3600"/>
+          </ValidRangeSet>
+        </IntegerArgumentType>
+        <BooleanArgumentType name="SwitchType">
+          <IntegerDataEncoding sizeInBits="8"/>
+        </BooleanArgumentType>
+        <!--
+          A current written in centiamps. An argument's calibrator runs from
+          engineering to raw, as Yamcs applies it: raw = 100 A.
+        -->
+        <FloatArgumentType name="ChargeType">
+          <UnitSet><Unit>A</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16">
+            <DefaultCalibrator>
+              <PolynomialCalibrator>
+                <Term coefficient="0" exponent="0"/>
+                <Term coefficient="100" exponent="1"/>
+              </PolynomialCalibrator>
+            </DefaultCalibrator>
+          </IntegerDataEncoding>
+          <ValidRangeSet>
+            <ValidRange minInclusive="0" maxInclusive="5"/>
+          </ValidRangeSet>
+        </FloatArgumentType>
+        <!-- No valid range: what the 16 bits hold. -->
+        <IntegerArgumentType name="MinutesType" signed="false">
+          <UnitSet><Unit>min</Unit></UnitSet>
+          <IntegerDataEncoding sizeInBits="16"/>
+        </IntegerArgumentType>
+      </ArgumentTypeSet>
+      <MetaCommandSet>
+        <!-- Every power command goes to APID 100. -->
+        <MetaCommand name="EPSCommand" abstract="true">
+          <BaseMetaCommand metaCommandRef="/DemoSat/CCSDSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="100"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+        </MetaCommand>
+        <MetaCommand name="SetMode" shortDescription="Switch the power system's mode">
+          <AliasSet><Alias nameSpace="MDL" alias="eps.set_mode"/></AliasSet>
+          <BaseMetaCommand metaCommandRef="EPSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="1"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Mode" argumentTypeRef="ModeArgType"/>
+            <Argument name="Delay" argumentTypeRef="DelayType"
+                      shortDescription="Seconds to wait before switching"/>
+          </ArgumentList>
+          <CommandContainer name="SetMode">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Mode"/>
+              <ArgumentRefEntry argumentRef="Delay"/>
+            </EntryList>
+            <BaseContainer containerRef="/DemoSat/CCSDSCommand"/>
+          </CommandContainer>
+        </MetaCommand>
+        <MetaCommand name="SetHeater">
+          <BaseMetaCommand metaCommandRef="EPSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="2"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="On" argumentTypeRef="SwitchType" initialValue="True"/>
+            <Argument name="Minutes" argumentTypeRef="MinutesType"/>
+          </ArgumentList>
+          <CommandContainer name="SetHeater">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="On"/>
+              <ArgumentRefEntry argumentRef="Minutes"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+        <MetaCommand name="SetCharge" shortDescription="Set the battery charge current">
+          <BaseMetaCommand metaCommandRef="EPSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="3"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Current" argumentTypeRef="ChargeType"/>
+          </ArgumentList>
+          <CommandContainer name="SetCharge">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Current"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+      </MetaCommandSet>
+    </CommandMetaData>
+  </SpaceSystem>
+
+  <SpaceSystem name="ADCS" shortDescription="Attitude determination and control">
+    <TelemetryMetaData>
+      <ParameterTypeSet>
+        <FloatParameterType name="RateType">
+          <UnitSet><Unit>rad/s</Unit></UnitSet>
+          <FloatDataEncoding sizeInBits="32"/>
+        </FloatParameterType>
+        <AggregateParameterType name="Vector3Type">
+          <MemberList>
+            <Member name="x" typeRef="RateType"/>
+            <Member name="y" typeRef="RateType"/>
+            <Member name="z" typeRef="RateType"/>
+          </MemberList>
+        </AggregateParameterType>
+      </ParameterTypeSet>
+      <ParameterSet>
+        <Parameter name="Rate" parameterTypeRef="Vector3Type"/>
+      </ParameterSet>
+      <ContainerSet>
+        <SequenceContainer name="ADCS_HK">
+          <EntryList>
+            <ParameterRefEntry parameterRef="Rate"/>
+          </EntryList>
+          <BaseContainer containerRef="../CCSDSPacket">
+            <RestrictionCriteria>
+              <Comparison parameterRef="CCSDS_Packet_ID/APID" value="101"/>
+            </RestrictionCriteria>
+          </BaseContainer>
+        </SequenceContainer>
+      </ContainerSet>
+    </TelemetryMetaData>
+    <CommandMetaData>
+      <ArgumentTypeSet>
+        <!-- A star's name, NUL-padded to eight bytes. -->
+        <StringArgumentType name="TargetType">
+          <StringDataEncoding encoding="US-ASCII">
+            <SizeInBits><Fixed><FixedValue>64</FixedValue></Fixed></SizeInBits>
+          </StringDataEncoding>
+        </StringArgumentType>
+        <IntegerArgumentType name="CountType" signed="false">
+          <IntegerDataEncoding sizeInBits="8"/>
+        </IntegerArgumentType>
+        <IntegerArgumentType name="AngleType" signed="false">
+          <IntegerDataEncoding sizeInBits="16"/>
+        </IntegerArgumentType>
+        <AggregateArgumentType name="WaypointType">
+          <MemberList>
+            <Member name="Azimuth" typeRef="AngleType"/>
+            <Member name="Elevation" typeRef="AngleType"/>
+          </MemberList>
+        </AggregateArgumentType>
+        <!-- As many waypoints as the count says: the last index is N - 1. -->
+        <ArrayArgumentType name="WaypointsType" arrayTypeRef="WaypointType">
+          <DimensionList>
+            <Dimension>
+              <StartingIndex><FixedValue>0</FixedValue></StartingIndex>
+              <EndingIndex>
+                <DynamicValue>
+                  <ArgumentInstanceRef argumentRef="N"/>
+                  <LinearAdjustment intercept="-1"/>
+                </DynamicValue>
+              </EndingIndex>
+            </Dimension>
+          </DimensionList>
+        </ArrayArgumentType>
+        <FloatArgumentType name="SlewRateType">
+          <UnitSet><Unit>rad/s</Unit></UnitSet>
+          <FloatDataEncoding sizeInBits="32"/>
+          <ValidRangeSet>
+            <ValidRange minExclusive="0" maxInclusive="0.5"/>
+          </ValidRangeSet>
+        </FloatArgumentType>
+      </ArgumentTypeSet>
+      <MetaCommandSet>
+        <MetaCommand name="Point" shortDescription="Slew to a target">
+          <BaseMetaCommand metaCommandRef="../CCSDSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="101"/>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="1"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="Target" argumentTypeRef="TargetType"/>
+            <Argument name="Rate" argumentTypeRef="SlewRateType" initialValue="0.1"/>
+          </ArgumentList>
+          <CommandContainer name="Point">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="Target"/>
+              <ArgumentRefEntry argumentRef="Rate"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+        <!-- MDL works the count out from the list of waypoints. -->
+        <MetaCommand name="Track" shortDescription="Follow a list of waypoints">
+          <BaseMetaCommand metaCommandRef="../CCSDSCommand">
+            <ArgumentAssignmentList>
+              <ArgumentAssignment argumentName="APID" argumentValue="101"/>
+              <ArgumentAssignment argumentName="Opcode" argumentValue="2"/>
+            </ArgumentAssignmentList>
+          </BaseMetaCommand>
+          <ArgumentList>
+            <Argument name="N" argumentTypeRef="CountType"/>
+            <Argument name="Waypoints" argumentTypeRef="WaypointsType"/>
+          </ArgumentList>
+          <CommandContainer name="Track">
+            <EntryList>
+              <ArgumentRefEntry argumentRef="N"/>
+              <ArgumentRefEntry argumentRef="Waypoints"/>
+            </EntryList>
+          </CommandContainer>
+        </MetaCommand>
+      </MetaCommandSet>
+    </CommandMetaData>
+  </SpaceSystem>
+</SpaceSystem>
