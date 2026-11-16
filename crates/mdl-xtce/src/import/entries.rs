@@ -6,8 +6,8 @@ use mdl::validate::MAX_NESTING;
 use serde_json::{Value, json};
 
 use super::{
-    ArrayField, CONTAINER, Element, Entry, Field, Fields, Import, Known, ParamKey, StructField,
-    StructType, TypeId, id,
+    ArrayField, CONTAINER, Earlier, Element, Entry, Field, Fields, Import, Known, ParamKey,
+    StructField, StructType, TypeId, id,
 };
 use crate::Code;
 use crate::names::identifier;
@@ -93,13 +93,13 @@ enum Naming {
 }
 
 impl<'d> Import<'d, '_> {
-    /// An EntryList's entries and the fields they add, given the fields
+    /// An EntryList's entries and the fields they add, given what's
     /// already decoded in the same MDL container.
     pub(super) fn entries(
         &mut self,
         space: usize,
         list: El<'d>,
-        mut known: Fields<'d>,
+        mut known: Earlier<'d>,
     ) -> Option<(Vec<Entry<'d>>, Fields<'d>)> {
         list.check(
             &Expect {
@@ -137,7 +137,7 @@ impl<'d> Import<'d, '_> {
             match added {
                 Some((new_entries, new_fields)) => {
                     entries.extend(new_entries);
-                    known.extend(new_fields.iter().cloned());
+                    known.fields.extend(new_fields.iter().cloned());
                     fields.extend(new_fields);
                 }
                 None => complete = false,
@@ -152,7 +152,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         entry: El<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<(Vec<Entry<'d>>, Fields<'d>)> {
         let array_ref = entry.name() == "ArrayParameterRefEntry";
         let mut children = ENTRY.to_vec();
@@ -263,7 +263,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         entry: El<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<Vec<Entry<'d>>> {
         entry.check(
             &Expect {
@@ -401,7 +401,7 @@ impl<'d> Import<'d, '_> {
             );
             return None;
         };
-        let (entries, _) = self.entries(space, list, Vec::new())?;
+        let (entries, _) = self.entries(space, list, Earlier::default())?;
         self.check_absent_locations(&entries)?;
         self.check_entries(&entries, "embedded container")?;
         if entries.is_empty() {
@@ -421,7 +421,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         repeat: El<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<((Value, Span), u32)> {
         repeat.check(
             &Expect {
@@ -482,12 +482,7 @@ impl<'d> Import<'d, '_> {
     }
 
     /// An entry's location and condition.
-    fn place(
-        &mut self,
-        space: usize,
-        entry: El<'d>,
-        known: &[(ParamKey<'d>, Known)],
-    ) -> Option<Place> {
+    fn place(&mut self, space: usize, entry: El<'d>, known: &Earlier<'d>) -> Option<Place> {
         let when = match entry.child("IncludeCondition") {
             Some(condition) => Some(self.condition(space, condition, known)?),
             None => None,
@@ -512,7 +507,7 @@ impl<'d> Import<'d, '_> {
         shape: &Shape<'d>,
         description: Option<(String, Span)>,
         source: &Source<'_, 'd>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
         fields: &mut Fields<'d>,
     ) -> Option<Vec<Entry<'d>>> {
         let Source { el, place, naming } = *source;
@@ -523,8 +518,7 @@ impl<'d> Import<'d, '_> {
                 let name = self.name_of(key, el, naming);
                 let canonical = self.register(key, el, scalar, description)?;
                 let offset = place.offset().filter(|_| first(&out));
-                let mut seen: Vec<(ParamKey<'d>, Known)> = known.to_vec();
-                seen.extend(fields.iter().cloned());
+                let seen = known.with(fields);
                 let length = match &scalar.length {
                     None => None,
                     Some(Length::Written(value, span)) => Some((value.clone(), *span)),
@@ -575,8 +569,7 @@ impl<'d> Import<'d, '_> {
                 for member in members {
                     let mut member_key = key.clone();
                     member_key.2.push(member.name);
-                    let mut seen: Vec<(ParamKey<'d>, Known)> = known.to_vec();
-                    seen.extend(fields.iter().cloned());
+                    let seen = known.with(fields);
                     let mut added = Vec::new();
                     let built = self.build(
                         &member_key,
@@ -599,8 +592,7 @@ impl<'d> Import<'d, '_> {
                 }
             }
             Shape::Array(array) => {
-                let mut seen: Vec<(ParamKey<'d>, Known)> = known.to_vec();
-                seen.extend(fields.iter().cloned());
+                let seen = known.with(fields);
                 let count = self.array_count(array, key, &seen)?;
                 let element = self.element(key, el, &array.element, 0)?;
                 let mut entry = self.array_field(key, el, element, count, place)?;
@@ -688,7 +680,8 @@ impl<'d> Import<'d, '_> {
             place: &place,
             naming: Naming::Members(key.2.len()),
         };
-        let mut entries = self.build(key, shape, None, &source, &[], &mut fields)?;
+        let mut entries =
+            self.build(key, shape, None, &source, &Earlier::default(), &mut fields)?;
         if padding > 0 {
             entries.push(Entry::Padding {
                 bits: padding,
@@ -723,7 +716,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         array: &ArrayShape<'d>,
         key: &ParamKey<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<(Value, Span)> {
         match &array.count {
             Some(Count::Fixed(n, span)) => Some((json!({ "kind": "fixed", "count": n }), *span)),
@@ -751,7 +744,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         dynamic: &Dynamic<'d>,
         linear: Result<(u32, i64), String>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<(Value, Span)> {
         let (field, multiply, add) = self.size_field(dynamic, linear, known)?;
         Some((from_field(&field, multiply, add), dynamic.span))
@@ -764,7 +757,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         dynamic: &Dynamic<'d>,
         linear: Result<(u32, i64), String>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<(String, u32, i64)> {
         if dynamic.argument {
             self.report.error(
@@ -794,7 +787,10 @@ impl<'d> Import<'d, '_> {
         let name = found.el.item_name()?;
         self.seen.insert((found.space, name));
         let key = (found.space, name, found.members);
-        let Some((_, field)) = known.iter().find(|(k, _)| *k == key) else {
+        let Some(field) = known.field(&key) else {
+            if known.lost(&key) {
+                return None;
+            }
             self.report.error(
                 Code::Unsupported,
                 dynamic.span,

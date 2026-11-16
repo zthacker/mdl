@@ -10,7 +10,7 @@ use std::borrow::Cow;
 use mdl::source::Span;
 use mdl::validate::MAX_NESTING;
 
-use super::{Import, Known, ParamKey};
+use super::{Earlier, Import};
 use crate::Code;
 use crate::out::{List, Object};
 use crate::report::Report;
@@ -65,7 +65,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         base: El<'d>,
-        above: &[(ParamKey<'d>, Known)],
+        above: &Earlier<'d>,
     ) -> Option<Vec<(String, i64, Span)>> {
         base.check(
             &Expect {
@@ -273,7 +273,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         el: El<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
     ) -> Option<Object> {
         el.check(
             &Expect {
@@ -317,7 +317,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         el: El<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
         depth: usize,
     ) -> Option<Object> {
         if el.name() == "Condition" {
@@ -426,7 +426,7 @@ impl<'d> Import<'d, '_> {
         &mut self,
         space: usize,
         written: Written<'d>,
-        known: &[(ParamKey<'d>, Known)],
+        known: &Earlier<'d>,
         purpose: Use,
     ) -> Option<Comparison<'d>> {
         let el = written.el();
@@ -461,7 +461,10 @@ impl<'d> Import<'d, '_> {
         let name = found.el.item_name()?;
         self.seen.insert((found.space, name));
         let key = (found.space, name, found.members);
-        let Some((_, field)) = known.iter().find(|(k, _)| *k == key) else {
+        let Some(field) = known.field(&key) else {
+            if known.lost(&key) {
+                return None;
+            }
             let message = match purpose {
                 Use::Identify => format!(
                     "{reference} isn't a field of the containers this one inherits from, and MDL \
@@ -508,6 +511,7 @@ impl<'d> Import<'d, '_> {
 
 #[derive(Clone, Copy)]
 enum Use {
+    /// A restriction's comparison.
     Identify,
     Condition,
 }

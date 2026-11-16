@@ -24,7 +24,8 @@ without a DTD [`xtce.syntax`] whose root is a `SpaceSystem` in
 `http://www.omg.org/space/xtce` (XTCE 1.0 and 1.1) or
 `http://www.omg.org/spec/XTCE/20180204` (XTCE 1.2) [`xtce.document`]. Each
 root is a top-level SpaceSystem; two with one name are an error at the
-later one [`xtce.duplicate`]. References may cross documents.
+later one, which isn't imported [`xtce.duplicate`]. References may cross
+documents.
 
 Every element the importer reads is checked. An attribute or child it
 doesn't read is an error [`xtce.unsupported`], since it can't tell whether
@@ -44,9 +45,10 @@ importer.
 ## 2. Names and references
 
 Each SpaceSystem names its parameter types, parameters, containers,
-argument types, meta-commands and meta-commands' command containers, each
-kind on its own; a name used twice for one kind is an error at the
-second, with the first as its first location [`xtce.duplicate`].
+argument types, meta-commands, meta-commands' command containers and
+SpaceSystems, each kind on its own; a name used twice for one kind is an
+error at the second, with the first as its first location, and the second
+isn't imported [`xtce.duplicate`].
 
 References resolve as Yamcs resolves them, so a document written for it
 imports as it loads there:
@@ -642,7 +644,7 @@ is [`xtce.ignored`]:
 | `xtce.document` | A document that isn't XTCE, or no documents. |
 | `xtce.invalid` | Something XTCE doesn't allow: a missing attribute, a value that isn't a number, a container that inherits from itself, criteria that can't all hold. |
 | `xtce.reference` | A reference that names nothing. |
-| `xtce.duplicate` | Two items of one kind with one name in a SpaceSystem, or two root SpaceSystems with one name. |
+| `xtce.duplicate` | Two items of one kind with one name in a SpaceSystem (SpaceSystems among them), or two root SpaceSystems with one name. |
 | `xtce.name` | A name that can't become an MDL name, or two that become the same. |
 | `xtce.unsupported` | Something MDL can't represent whose absence would change a decoded or encoded value. |
 | `xtce.ignored` | A warning: something left out that doesn't change decoded or encoded values. |

@@ -173,6 +173,7 @@ impl<'d> Tree<'d> {
             order: Vec::new(),
         };
         for root in roots {
+            let items = tree.order.len();
             let Some(index) = tree.add(*root, None, 1, report) else {
                 continue;
             };
@@ -184,6 +185,7 @@ impl<'d> Tree<'d> {
                     tree.spaces[first].el.span(),
                     format!("two files have a root SpaceSystem named {name}"),
                 );
+                tree.leave_out(items);
             } else {
                 tree.roots.insert(name, index);
             }
@@ -231,17 +233,24 @@ impl<'d> Tree<'d> {
                     ),
                 ),
                 "SpaceSystem" => {
+                    let items = self.order.len();
                     let Some(sub) = self.add(child, Some(index), depth + 1, report) else {
                         continue;
                     };
                     let sub_name = self.spaces[sub].name;
                     match self.spaces[index].children.get(sub_name) {
-                        Some(&first) => report.duplicate(
-                            Code::Duplicate,
-                            child.span(),
-                            self.spaces[first].el.span(),
-                            format!("{} has two SpaceSystems named {sub_name}", self.path(index)),
-                        ),
+                        Some(&first) => {
+                            report.duplicate(
+                                Code::Duplicate,
+                                child.span(),
+                                self.spaces[first].el.span(),
+                                format!(
+                                    "{} has two SpaceSystems named {sub_name}",
+                                    self.path(index)
+                                ),
+                            );
+                            self.leave_out(items);
+                        }
                         None => {
                             self.spaces[index].children.insert(sub_name, sub);
                         }
@@ -358,6 +367,14 @@ impl<'d> Tree<'d> {
                 self.order.push((kind, space, el));
             }
         }
+    }
+
+    /// Leaves out the items of the SpaceSystem just added, a second one of
+    /// its name, as a second item of a name is: they're the items added
+    /// since there were `items`. Nothing can name the SpaceSystem, and
+    /// imported, its items would collide with the first one's.
+    fn leave_out(&mut self, items: usize) {
+        self.order.truncate(items);
     }
 
     /// Every item of a kind, in document order, with its SpaceSystem.

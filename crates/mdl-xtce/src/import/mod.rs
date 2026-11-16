@@ -46,6 +46,41 @@ type ElId = (SourceId, usize);
 /// A container's fields so far, by the parameter or member each reads.
 type Fields<'d> = Vec<(ParamKey<'d>, Known)>;
 
+/// Parameters by SpaceSystem and name.
+type Lost<'d> = BTreeSet<(usize, &'d str)>;
+
+/// What an entry, a condition or an identify key can refer to: the fields
+/// decoded before it in its MDL container, and the parameters the
+/// containers above would have added had they imported. That they didn't
+/// was reported, so a reference to one of those isn't reported again.
+#[derive(Clone, Default)]
+struct Earlier<'d> {
+    fields: Fields<'d>,
+    lost: Lost<'d>,
+}
+
+impl<'d> Earlier<'d> {
+    fn field(&self, key: &ParamKey<'d>) -> Option<&Known> {
+        self.fields
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, known)| known)
+    }
+
+    /// Whether `key` is a parameter, or a member of one, that a container
+    /// above would have added.
+    fn lost(&self, key: &ParamKey<'d>) -> bool {
+        self.lost.contains(&(key.0, key.1))
+    }
+
+    /// These, and `more` decoded since.
+    fn with(&self, more: &[(ParamKey<'d>, Known)]) -> Earlier<'d> {
+        let mut earlier = self.clone();
+        earlier.fields.extend(more.iter().cloned());
+        earlier
+    }
+}
+
 fn id(el: &El<'_>) -> ElId {
     (el.file.id(), el.node.range().start)
 }
@@ -383,12 +418,15 @@ impl<'d, 'r> Import<'d, 'r> {
     fn packet(&mut self, space: usize, el: El<'d>) -> Option<Packet<'d>> {
         let chain = self.chain(space, el)?;
         let mut entries = Vec::new();
-        let mut fields: Fields<'d> = Vec::new();
+        let mut above = Earlier::default();
         let mut identify: BTreeMap<String, (i64, Span)> = BTreeMap::new();
         let mut complete = true;
         for (container_space, container) in chain {
-            let Some(part) = self.part(container_space, container, &fields) else {
+            // After a failure, the rest are still converted for their own
+            // problems, knowing which fields above are missing.
+            let Some(part) = self.part(container_space, container, &above) else {
                 complete = false;
+                self.lose(container_space, container, &mut above.lost);
                 continue;
             };
             for (key, value, span) in part.identify {
@@ -410,7 +448,7 @@ impl<'d, 'r> Import<'d, 'r> {
                 }
             }
             entries.extend(part.entries);
-            fields.extend(part.fields);
+            above.fields.extend(part.fields);
         }
         if !complete {
             return None;
@@ -461,13 +499,10 @@ impl<'d, 'r> Import<'d, 'r> {
         Some(chain)
     }
 
-    /// What a container adds, given the fields of the containers above it.
-    fn part(
-        &mut self,
-        space: usize,
-        el: El<'d>,
-        above: &[(ParamKey<'d>, Known)],
-    ) -> Option<Part<'d>> {
+    /// What a container adds, given what the containers above it give.
+    /// That's the same wherever the container is inherited, so the part
+    /// is kept.
+    fn part(&mut self, space: usize, el: El<'d>, above: &Earlier<'d>) -> Option<Part<'d>> {
         if let Some(part) = self.parts.get(&id(&el)) {
             return part.clone();
         }
@@ -476,12 +511,25 @@ impl<'d, 'r> Import<'d, 'r> {
         part
     }
 
-    fn convert_part(
-        &mut self,
-        space: usize,
-        el: El<'d>,
-        above: &[(ParamKey<'d>, Known)],
-    ) -> Option<Part<'d>> {
+    /// The parameters a container that couldn't be imported names in its
+    /// own entries, which would have been fields. An embedded container's
+    /// parameters never are, so they aren't counted; an array parameter
+    /// isn't either, and is, a comparison on one failing anyway.
+    fn lose(&self, space: usize, el: El<'d>, lost: &mut Lost<'d>) {
+        let Some(list) = el.child("EntryList") else {
+            return;
+        };
+        for entry in list.all("ParameterRefEntry") {
+            if let Some(reference) = entry.attr("parameterRef")
+                && let Ok(found) = self.tree.resolve(space, reference.value, Kind::Parameter)
+                && let Some(name) = found.el.item_name()
+            {
+                lost.insert((found.space, name));
+            }
+        }
+    }
+
+    fn convert_part(&mut self, space: usize, el: El<'d>, above: &Earlier<'d>) -> Option<Part<'d>> {
         el.check(&CONTAINER, self.report);
         if let Some(size) = el.child("BinaryEncoding") {
             self.report.error(
@@ -503,7 +551,7 @@ impl<'d, 'r> Import<'d, 'r> {
             );
             return None;
         };
-        let (entries, fields) = self.entries(space, list, above.to_vec())?;
+        let (entries, fields) = self.entries(space, list, above.clone())?;
         Some(Part {
             entries,
             fields,

@@ -706,6 +706,135 @@ fn a_problem_in_a_shared_definition_is_reported_once() {
     assert_eq!(found[0].0, "xtce.reference");
 }
 
+/// A container built on one that couldn't be imported reports nothing
+/// about the missing container's fields: they're there in the XTCE, and
+/// the real problem was reported (Yamcs' PUS example: `pus-tm` restricted
+/// by `apid != 0`, its packets by its own `type`).
+#[test]
+fn a_restriction_on_a_failed_containers_field_isnt_blamed() {
+    let params = format!("{}{}", param("Kind", "U8"), param("Sub", "U8"));
+    let containers = format!(
+        "{}{}{}",
+        r#"<SequenceContainer name="Base" abstract="true"><EntryList><ParameterRefEntry parameterRef="Kind"/></EntryList></SequenceContainer>"#,
+        r#"<SequenceContainer name="A" abstract="true"><EntryList><ParameterRefEntry parameterRef="Sub"/></EntryList><BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="Kind" comparisonOperator="!=" value="0"/></RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+        r#"<SequenceContainer name="B"><EntryList/><BaseContainer containerRef="A"><RestrictionCriteria><Comparison parameterRef="Sub" value="2"/></RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+    );
+    assert_eq!(
+        one_problem(&doc(&telemetry(U8, &params, &containers))).1,
+        "MDL identifies packets by equal values; this comparison isn't one"
+    );
+}
+
+/// Only the parameters a failed container holds go unblamed, in
+/// restrictions, conditions and sizes alike; a reference to anything else
+/// that isn't a field is reported, and so is one after a conflict, which
+/// loses no fields.
+#[test]
+fn only_what_a_failed_container_holds_goes_unblamed() {
+    let messages = |containers: &str, types: &str| {
+        let params = ["Kind", "Sub", "Other", "X"]
+            .map(|name| param(name, "U8"))
+            .concat()
+            + &param("Arr", "Some");
+        let text = doc(&telemetry(types, &params, containers));
+        let (sources, result) = import_all(&[("sat.xml", &text)]);
+        let diagnostics = result.err().unwrap_or_default();
+        shown(&sources, &diagnostics)
+            .into_iter()
+            .map(|(.., message)| message)
+            .collect::<Vec<_>>()
+    };
+    let types = format!(
+        "{U8}{}",
+        array_type(
+            "Some",
+            "U8",
+            r#"<DynamicValue><ParameterInstanceRef parameterRef="Sub"/><LinearAdjustment intercept="-1"/></DynamicValue>"#
+        )
+    );
+    let base = r#"<SequenceContainer name="Base" abstract="true"><EntryList><ParameterRefEntry parameterRef="Kind"/></EntryList></SequenceContainer>"#;
+    let sub = |name: &str, on: &str, criteria: &str, entries: &str| {
+        let restriction = match criteria {
+            "" => format!(r#"<BaseContainer containerRef="{on}"/>"#),
+            criteria => format!(
+                r#"<BaseContainer containerRef="{on}"><RestrictionCriteria>{criteria}</RestrictionCriteria></BaseContainer>"#
+            ),
+        };
+        format!(
+            r#"<SequenceContainer name="{name}"><EntryList>{entries}</EntryList>{restriction}</SequenceContainer>"#
+        )
+    };
+    let is = |field: &str, op: &str, value: u8| {
+        format!(r#"<Comparison parameterRef="{field}" comparisonOperator="{op}" value="{value}"/>"#)
+    };
+    let fails = sub("A", "Base", &is("Kind", "!=", 0), &entry("Sub")).replace(
+        "<SequenceContainer ",
+        r#"<SequenceContainer abstract="true" "#,
+    );
+    let refused = "MDL identifies packets by equal values; this comparison isn't one";
+    let not_a_field = "Other isn't a field of the containers this one inherits from, and MDL \
+                       identifies a packet by its own fields";
+
+    // B1's key is A's field; B2's is in no container.
+    let leaves = format!(
+        "{base}{fails}{}{}",
+        sub("B1", "A", &is("Sub", "==", 1), ""),
+        sub("B2", "A", &is("Other", "==", 2), "")
+    );
+    assert_eq!(messages(&leaves, &types), [refused, not_a_field]);
+    // A condition and a size read from A's field.
+    let condition = r#"<ParameterRefEntry parameterRef="X"><IncludeCondition><Comparison parameterRef="Sub" value="1"/></IncludeCondition></ParameterRefEntry>"#;
+    let both = format!(
+        "{base}{fails}{}{}",
+        sub("C", "A", "", condition),
+        sub("D", "A", "", &entry("Arr"))
+    );
+    assert_eq!(messages(&both, &types), [refused]);
+    // A conflict loses nothing, so E's key in no container is reported.
+    let conflict = format!(
+        "{base}{}{}{}",
+        sub("A", "Base", &is("Kind", "==", 1), &entry("Sub")).replace(
+            "<SequenceContainer ",
+            r#"<SequenceContainer abstract="true" "#
+        ),
+        sub("B", "A", &is("Kind", "==", 2), "").replace(
+            "<SequenceContainer ",
+            r#"<SequenceContainer abstract="true" "#
+        ),
+        sub("E", "B", &is("Other", "==", 3), "")
+    );
+    assert_eq!(
+        messages(&conflict, &types),
+        [
+            "this requires Kind to be 2, but a container above requires 1, so no packet matches",
+            not_a_field
+        ]
+    );
+}
+
+/// A second SpaceSystem of a name, a root in another file or a sibling, is
+/// reported and left out, like a second parameter of a name: imported too,
+/// its contents would be reported colliding with the first's.
+#[test]
+fn a_second_spacesystem_of_a_name_is_left_out() {
+    let body = telemetry(U8, &param("A", "U8"), &container("P", &entry("A")));
+    let sat = doc(&body);
+    let (sources, result) = import_all(&[("one.xml", &sat), ("two.xml", &sat)]);
+    let found = shown(&sources, &result.unwrap_err());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].1, "xtce.duplicate");
+    assert_eq!(found[0].3, "two files have a root SpaceSystem named Sat");
+
+    let sub = format!(r#"<SpaceSystem name="Sub">{body}</SpaceSystem>"#);
+    assert_eq!(
+        one_problem(&doc(&format!("{sub}{sub}"))),
+        (
+            "xtce.duplicate".to_string(),
+            "/Sat has two SpaceSystems named Sub".to_string()
+        )
+    );
+}
+
 #[test]
 fn names_shared_across_spacesystems_are_qualified() {
     // EPS and ADCS each have an HK container and a Status parameter.
