@@ -1,0 +1,25 @@
+# Firm
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0_bits  = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion  ={ kind = "linear", scale = 0_bits = 8 }

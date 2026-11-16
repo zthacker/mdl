@@ -1,0 +1,20 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+asset = "SAT-J"
+set = "vendor_j_v1"
+effective_from = "2025-01-01T00:00:00Z"
+
+[[binding]]
+family = "legacy"
+native_id = "boDDDDDDDDDDDDDDDDDDDD-4"
+asset = "NODE-mdl_versionsink_json_v1"
+effective_from = "2026-01-01T00:00:00Z"

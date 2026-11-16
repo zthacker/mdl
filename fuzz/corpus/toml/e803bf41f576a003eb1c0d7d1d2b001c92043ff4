@@ -1,0 +1,28 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report a value in any unit
+# compatible with its param's (mV forlimits      = { red_low = 15.0, yellow_row = 30.0 }
+description = "Battery charge remaining"
+
+# One command for every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, and
+# then the delay must be its default.
+[catalog.commands."eps.set_mode"]
+description = "Switch the power mode"
+arguments   = [
+    { name = "mode", type = "enum", states = ["EA,"FS "NOMINAL"] },
+    { name = "delay", type = "u64", unit = "s", range = { min = 0, mtever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, and
+# then the delay must be its default.
+[catalog.commands."eps.set_mode"]
+description = "Switch the power mode"
+arguments   = [
+    { name = "mode", type = "enum", states = ["EA,"FS "NOMINAL"] },
+    { name = "delay", type = "u64", unit = "s", range = { min = 0, max = 3600 }, d   = "[degFor every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, and
+# then the delay must be its default.
+[catalog.commands."eps.set_mode"]
+description = "Switch the power mode"
+arguments   = [
+    { name = "mode", type = "enum", states = ["EA,"FS "NOMINAL"] },
+    { name = "delay", type = "u64", unit = "s", range = { min = 0, max = 3600 }, d   = "[degF]"
+canonical = "eps.batt_temp"

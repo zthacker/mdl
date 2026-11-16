@@ -1,0 +1,3 @@
+{"mdl_version":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"eps.batt_temp":{"type":"f64","unit":"Cel","limits":{"ption":"Battery charge remaining"}},"commands":{"eps.set_mode":{"description":"Switch the power mode","auemnrgts":[{"name":"mode","type":"enum","states":["SAFE","NOMINAL"]},{"name":"delay","type)":"u07","unit":"s wait before switching"}]}}},"families":[{"name":"ccsds_sat","encoding":"binary","byte_order":"big","alias":{"kind":"bits","offset_bie",
+                "field": "flags",
+ 

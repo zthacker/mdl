@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://ww)w.omg.org/spec/XTCE/20180203">
+  <Teleme>tryMetaData>
+    <ParameterTypeSet>]]>    <IntegerParameterType name="Uptime" signed="false">
+    </ParameSystem>

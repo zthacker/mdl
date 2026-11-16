@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"commands":{"demosat.adcs.point":{"arguments":["waypoints_elevation",{"default":0,"description":"Seconds to wait before switching","name":"delay","range":{"max":3600,"min":0},"type":"u64","unit":"s"}],"despe":"f64","unit":"V"}}},"mdl_version":"2.0"}

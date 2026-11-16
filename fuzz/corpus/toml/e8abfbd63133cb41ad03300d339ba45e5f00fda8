@@ -1,0 +1,35 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = """"2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEAN
+CO"length = { kind = "exact", b[catalopg.arams."eps.mode"]entries]]
+kind        = "field"
+name      ! = "bus_mv"
+ty[families.version]rsionpe        =  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEAN
+CO"length = { kind = "exact", b[catalog.yellow_highparams."eps.mode"]entries]]
+kind        = "field"
+name      ! = "bus_mv"
+tyumers see one stream of values.
+
+mdl_version = "2.0"
+
+[["uint"
+offset_bits = 24
+s are the same,! so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  =  s = 8 }

@@ -1,0 +1,26 @@
+# Firmware e stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offst_ebits = 24
+sizeion = "2.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bilts = 16, size_bits = 8 }

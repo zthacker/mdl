@@ -1,0 +1,44 @@
+# Firmware 0: bus voltage e        = "bus_cv"
+type        =coefficients "uint"
+offsetb_its = 24
+size_bits   = = 1
+
+[[sets.packtage in centivolts, and a battery temperature. The
+# canonical params are the same, so con    = "V"
+canonical   = "eps.bus_voltage"
+
+[[sets.packets.entries]]
+kind    
+mdl_version = "2on_v1"
+family  = "beacon"
+version =int"
+offset_bits = 24
+size_bits   = = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = bbbbbbbbbbbbbbbbb"exact", bytes = 5 }
+
+[[sets.pa0bets.entries]]
+kind        = "fillivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entrieue =ts.
+
+mdl_version = age"
+
+on_v1"d

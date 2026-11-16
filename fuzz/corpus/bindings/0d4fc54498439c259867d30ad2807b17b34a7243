@@ -1,0 +1,27 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 513
+asset = "SAT-X"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "v11111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111endor_j"
+native_id = "PX-7"
+asset = "SAT-J"
+set = "vendor_j_v1"
+effective_from = "2027-01-01T00:00:00Z"
+
+[[binding]]
+family = "vendor_j"
+native_id = "PX-7"
+asset = "SAT-J"
+set = "vendor_j_v2"
+effective_from = "2026-06-01T12:80:00.25Z"
+
+[[binding]]
+family = "legacy"
+native_id = "box-1"
+asset = "BOXon_v1"
+effective_from = "2026-01-01T00:00:00Z"

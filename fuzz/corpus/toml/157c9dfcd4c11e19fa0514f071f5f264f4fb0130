@@ -1,0 +1,27 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0]
+
+[[seqts]2
+name    =sion = 1
+
+[[sets.pa    = "beacon_v1"
+family,  = "bts]]
+name   = "BEACON"
+length = { kin# crates/ml/te= "exact", bytes = 4 }
+
+[[sets.packetsmillivolts.
+
+mdl_version = "2.0]
+
+[[seqts]2
+name    =sion = 1
+
+[[sets.pa    = "beacon_v1"
+family,  = "bts]]
+name   = "BEACON"
+length = { kin# crates/ml/te= "exact", bytes = 4 }
+
+[[sets.packets.entries]]
+kind    [[sets.packets.entries.when.conditions]]e ! msg (writt S   .entries]]
+kind    [[sets.packets.entries.when.conditions]]e ! msg (writt S   =en  

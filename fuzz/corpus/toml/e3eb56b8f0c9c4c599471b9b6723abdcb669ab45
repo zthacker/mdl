@@ -1,0 +1,5 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "1.0"
+
+# The canonical catalog: e[[vsee

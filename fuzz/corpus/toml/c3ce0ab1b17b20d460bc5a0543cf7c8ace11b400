@@ -1,0 +1,24 @@
+# A ds since
+# boot, tied to UTC by SYSTEM_TIME, which carries both clocks.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "drone"
+encoding   = "binary"
+byte_order = "little"
+alias      = { kind = "metadata", name = "sysid" }
+metadata   = ["msgid", "sysid"]
+
+[[sets]]
+name   = "drone_v1"
+family = "drone"
+
+[sets.time]
+kind = "boot"
+unit ="2.0"
+
+[catalog.params."eps.sent"]
+type        = "f64"
+unit        = "A"
+description = "Solar arr0oay current"

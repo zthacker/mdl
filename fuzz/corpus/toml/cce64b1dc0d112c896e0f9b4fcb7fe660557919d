@@ -1,0 +1,11 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equi= "Main power bus voltage"
+
+[catalog.params."eps.batt_temp"]
+type        = "f64"
+unit        = "Cel"
+limits      = { red_low = -10.0, yellow_low = 0dum"
+states      = ["SAFE"log.commands."eps.load_table".arguments.range], "NOMINA
+max = 7
+
+[catalog.comm"Ps

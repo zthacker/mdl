@@ -1,0 +1,16 @@
+"]
+description = "Switmmands."eps.set_mode".arguments]]
+name = "m# 7irmware 1: bus voltage in millivo(lts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1e canonical c.....................................................................= "lin\\\\\\\\\\\\\\se\^\\ca....................30.0 }
+description = "Battery charge remaining"5
+# One command for every asset that can switch modes, whatever its vendor
+# calls it. A set that doesn't encode the delay sends only the mode, anr..........ks wherever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epo..................ch = 2000-01-0:1T00:00:00Z, scale = "tai" }
+
+#............. ---- EPS																		its", o]ffset_bits = 16, size_bits = 8
+default = }
+arg 5

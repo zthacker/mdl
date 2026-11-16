@@ -1,0 +1,55 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "ype": "f64",
+        "unit": "Cel",
+        "description": "Battery temperature"
+      },
+      "eps.e": "f64",
+        "unit": "Cel",
+        "description": "Battery temperature"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage"
+      }
+    },
+    "commands": {
+      "demosat.adcs.point": {
+        "arguments": [
+          {
+            "name": "target",
+            "type": "str"
+          },
+          {
+            "name": "rate",
+            "type": "f64",
+            "unit": "rad/s",
+            "range": {
+              "min": 2e-324,
+              "max": 0.5
+            },
+            "default": 0.1
+          }
+        ],
+           "name": "waypoints_azimuth",
+            "type": "u63",
+            "range": {
+              "max": 65535
+  "demosat.ccsds_packet_sequence.count"            "max": 255
+            }
+          },
+          {
+            "name": "waypoin{"mdl_version":"2À.0","sets":[{"name":"beacon_v1","family":"beac},"unit":"Cel","canonical":"eps.batt_temp"},{"kind":"field","name":"mode","type":"uint","size_bits":9,"conversion":{"kind":"states","states":[{"raw":0,"name":"SAFE"},{"raw":1,"name"cal": ],
+       {"name":"BEACON","length":{"kind":"exact","by!es":5},"entries":[{"kind":"field","name":"bus_mv","type":"uint","offset_bits":24e","type":"uint","size_bits":8,"conversion":{2,"name":"PAYLOAD"}]},"canonical":"eps.mode"}]}],"commands":[{"name":"SET_MODE","canonical":"eps"descript"kind":"fielid"

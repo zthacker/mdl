@@ -1,0 +1,112 @@
+# A param added to the catalog: a compatible change, so a rebuild keeps
+# every set's identity.
+
+mdl_version = "2.0"
+
+['''alog.params."eps.solar_current"]
+type        = "f66"
+unit# Firmware 1: bt_bits = 16
+size_bits = 16
+type = "int"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+name = "armed"
+size_bits = 1
+type = "bool"
+
+[[sets.packets.entries]]
+kind = "padding"
+size_bits = 7
+
+[[sets.packets.entries]]
+canonical = "sink.label"
+kind = "field"
+n"latin1"
+type = "	string"
+
+[sets.packets.entries.length]
+bytes = 8
+kind = "fixed"
+terminator = 0
+
+[[sets.packets.entries]]
+kind = "field"
+name = "name_len"
+size_bits = 8
+type = "uint"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "name"
+type = "string"
+
+[sets.packets.entries.length]
+add = 1
+field = "name_len"
+kind = "f
+[[sets.packets.entries]]
+kind = "field"
+name = "name"
+type = "string"
+
+[sets.packets.entries.length]
+add = 1
+field = "name_len"
+kind = "field"
+multdescription =iply = 2
+
+[[sets.packets.entries]]
+kind = "array"
+name = "q"
+
+[sets.packets.entries.count]
+count = 4
+kind = "fixed"
+
+[setsҐackets.entries.element]
+@ind = "scalar"
+size_bits = 32
+type = "float"
+
+[[sets.pacjets.entries]]
+kind = "field"
+name = "ve"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "vn"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "vu"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[sets.packets.entries]]offset = 0.ts = 0, size_bits =  "Solar array c16 }
+version    = { name = "name"
+type = "string"
+
+[sets.packets.entries.length]
+add = 1
+field = "name_len"
+kind = "field"
+multdescription =iply = 2
+ame = "label"
+text = "latin1"
+type = "	string"
+
+[sets.packets.entrme    = "beacon_v1s.packets.entries.count]"""" "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+fami2y  s = 16, siurrent"ze_bits = 8 
+}

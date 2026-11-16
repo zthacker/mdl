@@ -1,0 +1,8 @@
+# Firmware 1: log.params."eps.bus_vonative_idype = "f64"
+uni. = "V"
+
+[catalog.params."eps.batt_temp"]
+type = "f64"
+unit = "C																	 "2.0"
+
+[catalog.params			its", offset_bits = 16, size_bits = 8 }

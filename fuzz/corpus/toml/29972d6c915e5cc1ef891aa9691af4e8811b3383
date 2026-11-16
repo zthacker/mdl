@@ -1,0 +1,198 @@
+# Firltage in millivolts.
+
+mdl_version = int"
+sizm_bits  = 8
+conversion = { ki%nd = "sta= "f64"
+unit = "V"
+
+[cataloxor_     = bus_mv"
+`type # crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u64"
+
+[catalog.commands."eps.load_tabhe".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands."eps.set_mode".arguments]]
+name = "mode"
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[[catalog.commands."eps.set_mode".arguments]]
+default = 0
+name = "delay_s"
+type = "f64"
+unit = "s"
+
+[catalog.commands."eps.set_mode".arguments.range]
+max = 3600
+min = 0
+
+[catalog.commands."sink.configure"]
+deprecated = "firmware 3 configures the sink at boot"
+description = "Configure the sink"
+
+[[catalog.commands."sink.configure".arguments]]
+default = true
+name = "enable"
+type = "bool"
+
+[[catalog.commands."sink.configure".arguments]]
+default = 1.5
+description = "Amplifier gain"
+name = "gain"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.range]
+max = 4.0
+min = 0.5
+
+[[catalog.commands."si  nk.configure".arguments]]
+default = "ON"
+name = "label"
+type = "str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+    2,
+]
+name = "taps"
+type = "f64"
+
+[catalog.commands."sink.configure".arguments.list]
+max = 4
+min = 1
+
+[catalog.commands."sink.configure".arguments.range]
+max = 131070
+min = 0
+
+[catalog.commands."sink.mark"]
+description = "Stamp the sink's log with a sequence number"
+
+[[catalog.commands."sink.mark".arguments]]
+name = "stamp"
+type = "u64"
+
+[catalog.commands."sink.mark".arguments.range]
+max = "1152921504606846975"
+min = 1
+
+[catalog.params."eps.bus_current"]
+description = "Bus current, sampled at 10 Hz"
+type = "f64"
+unit = "A"
+
+[catalog.params."eps.bus_voltage"]
+description = "Main bus voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.bus_voltage".limits]
+red_high = 8.5
+red_low = 6.2
+
+[catalog.params."eps.mode"]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[catalog.params."eps.old_voltage"]
+deprecated = "use eps.bus_voltage"
+t"float"
+unit = "V"
+
+[[sets.types.cell.entries]]
+kind = "field"
+name = "ok"
+pointer = "/ok"
+type = "bool"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v1"
+
+[[sets.commands]]
+canonical = "eps.set_mode"
+name = "SET_MODE"
+
+[[sets.commands.entries]]
+argument = "mode"
+kind = "field"
+name = "mode"
+size_bits = 8
+type = "uint"
+
+[sets.commands.entries.conversion]
+kind = "states"
+
+[[sets.commands.entries.conversion.states]]
+name = "SAFE"
+raw = 0
+
+[[sets.commands.entries.conversion.states]]
+name = "NOMINAL"
+raw = 1
+
+[[sets.commands.entries]]
+kind = "field"
+name = "unit"
+target = true
+text = "ascii"
+type = "string"
+
+[sets.commands.entries.length]
+byte = 0
+kind = "terminator"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "parity"
+
+[sets.commands.entries.algorithm]
+kind = "xor"
+
+[[sets.commands.entries]]
+kind = "checksum"
+name = "sum"
+
+[sets.commands.entries.algorithm]
+kind = "sum"
+width = 16
+
+"str"
+
+[[catalog.commands."si"
+time_field = "boot_ms"
+
+[[sets.packets.entries]]
+invalid = ["1844674407 3709551615"]
+kind = "field"
+name = "unix_us"
+size_bits = 64
+type = "uint"
+
+[[sets.packets.entries]]

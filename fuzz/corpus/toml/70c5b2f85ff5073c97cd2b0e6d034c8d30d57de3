@@ -1,0 +1,47 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = """"2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pack$ets"BEAN
+CO"length = { kind = "exact", b[c = "BEAN
+CO"length = { kind = "exact", b[catalog.params."eps.mode"]entries]]
+kivalues.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+faatalog.params."eps.mode"]entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 24
+s are the same, so consumers see one stream of values.
+
+mdl]]
+name   = "BEAN
+CO"length = { kind = "exact", b[c = "BEAN
+CO"length = { kind = "exact", b[catalog.params."eps.mode"]entries]]
+kivalues.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+faatalog.params."eps.mode"]entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "uint"
+offset_bits = 24
+s are the same, so consumers see one stream of values.
+
+mdl_versi  "2n=o.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  =  s = 8 }

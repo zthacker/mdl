@@ -1,0 +1,37 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[
+family  = "beacon" OML ar", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_(wr 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "line# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+conversion = { kind = "states", st~tes = [
+    { raw = 0, name = "SAFE" },
+    ts.commands.entries]]
+kind      = "checksum"
+name      = "crc"
+algorithm = { kind = "crc", width = 16, poly = 0x1021, init = 0xFFFF false, reflect_out = falseox,r _     = "bus_mv"
+type   OML ar", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_(writt     =en voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset = 0.ts = 0, size_bits = e_bits  = 8
+conversion = { kind = "states", st~tes = [
+    { raw = 0, name = "SAFbits = 8 } 

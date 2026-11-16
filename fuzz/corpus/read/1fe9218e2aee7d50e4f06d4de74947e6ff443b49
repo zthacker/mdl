@@ -1,0 +1,88 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.z": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.ccsds_packet_iadip.d": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_id.sechdrflag": {
+        "type": "bool"
+      },
+      "demosat.ccsds_packet_id.tysat.adcs.point": {
+        "arguments": [
+          {
+            "name": "target",
+            "type": "str"
+          },
+          {
+            "name": "rate",
+            "type": "f64",
+            "unit": "rad/s",
+            "range": {
+              "min": 5e-324,
+              "max": 0.5
+            },
+            "default": 0.1
+          }
+        ],
+        "description": "Slew to a target"
+      },
+      "demosat.adcs.track": {
+        "arguments": [
+          {
+            "name": "waypoints_azimuth",
+            "type": "u64",
+            "range": {
+              "max": 65535
+            },
+            "list": {
+              "max": 255
+            }
+          },
+          {
+            "name": "waypoints_elevation",
+            "type": "u64",
+            "rankkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkge": {
+   "max": 0.5
+            },
+            "default": 0.1
+          }
+        ],
+        "description": "Slew to a target"
+      },
+      "demosat.adcs.track": {
+        "arguments": [
+          {
+            "name": "waypoints_azimuth",
+            "type": "u64",
+            "range": {
+              "max": 65535
+            },
+            "list": {
+              "max": 255
+            }
+          },
+          {
+            "name": "waypoints_elevation",
+            "type": "u,
+            "
+    "sets": [
+    {
+      "name": "demosat",
+      "family": "demosat",
+      "types": {
+        "Tr",
+          "entries": [
+    ack_W 

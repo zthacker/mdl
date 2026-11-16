@@ -1,0 +1,15 @@
+# The canoninary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 48, size_bits = 16 }
+metadata   = ["apid"]
+
+[[sets]]
+name   = "ccsds_sat_v1"
+family = "ccsds_sat"
+# A TOML datetime works wherever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = 2000-01-01T00tes", states = [
+    { rag before it.
+[[sets.commands.entrIes]]
+ki= "/v"
+unit      = "[degF]"
+canonivoltag"eps.batt_temp"

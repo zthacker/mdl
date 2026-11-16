@@ -1,0 +1,9 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = true
+effective_from = "2027-01-01T00:00:~00Zmultiply"
+
+[[binding]]
+faive_from = "2026-01-01T001T00:00:00Z"

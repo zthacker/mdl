@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="Uptime" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+      <EnumeratedParameterType name="Mode">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+    <![CDATA[umeration value="0" label="SAFE"/>
+          <Enumeration value="0" label="ON"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Pa.rameter name="Uptime" parameterTypeRef="Uptime"/>
+      <Parameter name="State" parameterTypeRef="Mode"/>
+    </ParameterSet>rTypemmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmRef="Mode"/>
+    </      </IntegerParameterType>
+      <EnumeratedParameterType name="Mode">
+        <IntegerDataEncoding sizeInBits="8"/>
+    ype name="Uptime" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+      <EnumeratedParameterType name="Mode">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+    <![CDATA[umerrameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInBits="3"/>
+      </IntegerParameterType>
+      <BooleanParameterType name="CCSDS_Type_Type">
+        <IntegerDataEncoding AizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterT]ype nCSDS_Type_Type">
+        <IntegerDataEncoding AizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterT]ype name="CCSDS_APID_Type" signed=APID_ argumentValue="Type"/>
+        </CommandContainer></MemberList>
+   argumentRef="gParameterType>
+      <EeurnmatedParameterType name="CCSDS_GrouptaData>
+    <ArgumentTypeding sizeInBits="8"/_Flags_Type">
+        <IntegerDataEncoding sizeItionList>
+          <Enume
+    <ContainerSet>
+      <SequenceContainer name="Status">
+        <EntryListration value="0" label    <EnumerationgerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+    <![CDATA[umeration value="5" label="SAFE"/>
+          <Enumeration value="0" label="ON"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Pa.rameter name="Uptime" parameterTypeRef="Uptime"/>
+      <ParamettegerDataEncoding AizeInBits="1"/>
+      </BooleanParameterType>
+      <BooleanParameterType name="CCSDS_Sec_Hdr_Flag_Type">
+        <IntegerDataEncoding sizeInBits="1"/>
+      </BooleanParameterType>
+      <IntegerParameterT]ype name="CCSDS_APID_Type" signed=APID_ argumentValue="Type"/>
+        </CommandContainer></MemberList>
+   argumentRef="gParameterType>
+      <EeurnmatedParameterType name="CCSDS_GrouptaData>
+    <ArgumentTypeding sizeInBits="8"/_Flags_Type">
+        <IntegerDataEncoding sizeItionList>
+          <Enume
+    <ContainerSet>
+      <SequenceContainer name="Status">
+        <EntryListration value="0" label="Continuation"/>
+          <>
+          <ParameterRefEntryEn p

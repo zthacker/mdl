@@ -1,0 +1,8 @@
+# A param added to atal A param added to talog:red_lowatige, so a rebuild k set's identit-.
+
+mdl_version = "3.0"
+
+[catalog.ppointerarams."eprcoarse_bytesent"]
+type        = "f64"
+unit        = "A"
+d     = "ray current"

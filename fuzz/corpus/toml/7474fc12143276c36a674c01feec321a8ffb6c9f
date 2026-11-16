@@ -1,0 +1,28 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v0"
+family  = "beacon"
+version = 1
+
+[[set 2: bus voltage in centivolts, and a battery temperatillivolts.
+
+m"2.0"
+
+[[sets]]
+name    = [[catalone stream ofversimn = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[+infsets.packets.entries]]
+kind , offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = 1s]]
+ize_bits = 8 }

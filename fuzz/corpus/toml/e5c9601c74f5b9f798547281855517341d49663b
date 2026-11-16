@@ -1,0 +1,37 @@
+# F#sion [catalog.para."eps.solar_current" ]={ { kibarg# The canonical catalog: every param and command the sets below map to,
+# each with one typ% and one unit. A set may report e
+# pica = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, name = "PAYLOAD" },
+] }
+canonical  = "eps.mode"
+
+# ---- Commands, APID 0x0C8 --------------------------------------------------
+
+[[sets.commands]]
+name      = "SET_MODE"
+canonical = "eps.set_mode"
+metadata  = { apid = 0x0C8 }
+
+[[sets.commands.entries]]
+kind      = "field"
+name      = "opcode"
+type      = "uint".bus_voltage"
+iuments}ts  = 08
+cbyteonversion = { kInd = "lin\\\\\\,\\\\\booeps.so|ar_nvalid     = [0xFFFF]
+
+[[sets.packets.entries]]
+ki
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries]]
+kind       = "field"
+name       = "mode"
+tynd        = "field"
+npe  current" ]={ { kibarguments}ts  = 08
+cbyteonversion = { kInd = "lin\\\\\\,\\\\\boot_field.para."eps.solar_currehe linkpolas = 17 }ts  = 16
+conve  =on = { kibits = 17 }ts  ="""""""t_field.para."eps.solar_currehe linkpo     = "uintlas = 17 }ts  = 16
+conve  ="
+size_biame    ts  = 8
+converon = {sion    kibits =  == 17 }ts  =""" """""\\\

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="Uptime" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <Integ:erDataEncoding sizeInBits="16"/>
+      </IntegerParameterType>
+      <EnumeratedParameterType name="Mode">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SAFE"/>
+          <Enumeration value="1" label="ON"/>
+        </EnumerationList>
+      </EnumeratedParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Uptime" parameterTypeRef="Uptime"/>
+      <Parameter name="State" parameterTyp																																	ager: a payload whose packets have sizes </PolynomialCalibrator>
+    0     </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType><StartingIndex><FixedValueata>
+</SpaceSystem>

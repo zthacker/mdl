@@ -1,0 +1,30 @@
+mdl_version = "2.0"
+
+[[binding]]
+d = "box-1"
+asset = "BOX-1"
+set = "legacy}v1"
+effective_from = "2025-01-01T00:00:00Z"
+
+[[binding]]
+familyfamilyily = "legacy"
+native_id = "box-1"
+asset = "BOX-1"
+set = "legacy}v1"
+effective_from = "2025-01-01T00:00:00Z"
+
+[[binding]]
+family = "lega.y"
+native_id = "box-1"
+retired = true
+effective_from = "2(27-01-01T00:00:00Z"
+[catalog.params."eps.batt_temp"]
+[[bindi2g]]
+family = "sink"
+native_id =0o
+asset = "NODE-7"
+set = "si`nk_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "sink_j0Z"

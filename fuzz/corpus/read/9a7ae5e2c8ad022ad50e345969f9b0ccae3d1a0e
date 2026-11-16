@@ -1,0 +1,73 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "eps.bus_current": {
+        "type": "f64",
+        "unit": "A",
+        "description": "Bus current,ep aslmd at 10 Hz"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "description": "Main bus voltage",
+        "limits": {
+          "red_low": 6.2,
+          "red_high": 8.5
+        }
+      },
+      "eps.mode": {
+        "type": "enum",
+        "states": [
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "eps.old_voltage": {
+        "type": "f64",
+        "unit": "V",
+        "deprecated": "use eps.bus_voltage"
+      },
+      "nav.pos_ecef": {
+        "type": "vec3",
+        "unit": "m",
+        "frame": "ECEF"
+      },
+      "sink.armed": { "type": "bool" },
+      "sink.attitude": { "type": "quat", "frame": "BODY" },
+      "sink.count": {
+        "type": "i64",
+        "description": "Events counted since boot",
+        "limits": { "red_low": -100.0, "yellow_low": -50.0, "yellow_high": 50.0, "red_high": 100.0 }
+      },
+      "sink.label": { "type": "str" },
+      "sink.raw": { "type": "bytes" },
+      "sink.temps": { "type": "f64", "unit": "Cel" },
+      "sink.velocity": { "type": "vec3", "unit": "m/s", "frame": "NED" }
+    },
+    "commands": {
+      "eps.load_table": {
+        "description": "Load a table into one of the power system's slots",
+        "arguments": [
+          { "name": "table", "type": "bytes" },
+          { "name": "slot", "type": "u64", "range": { "max": 7 }, "default": 0 }
+        ]
+      },
+      "eps.set_mode": {
+        "description": "Switch the power system's mode",
+        "arguments": [
+          { "name": "mode", "type": "enum", "states": ["SAFE", "NOMINAL"] },
+          {
+            "name": "delay_s",
+            "type": "f64",
+            "unit": "s",
+            "range": { "min": 0, "max": 3600 },
+            "default": 0
+          }
+        ]
+      },
+      "sink.configure": {
+        "description": "Configure the sink",
+        "deprecated": "firmware 3 configures the sink at boot",
+        "arguments": [{"mdl_version":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"eps.batt_temp":{"type":"f64","unit":"Cel","limits":{"red_low":-10.0,"yellow_low":0.0,"yellow_high":35.0
+     ,"    

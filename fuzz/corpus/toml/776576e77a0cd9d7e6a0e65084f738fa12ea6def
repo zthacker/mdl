@@ -1,0 +1,40 @@
+# Firmware 1: family  = "beacon"
+version = 1
+
+[[set# F"compare"
+op = "eq"
+value = 2s.packets]]
+name   = "BEccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccble"]
+description = "Load a targuments]]
+name = "table"
+type = "bytes"
+
+[[catalog.ription = "Load a table into one of the posi{e_bitsm's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalog.commands."eps 7
+
+[catalog.commands."eps.set_mode"]
+descs.range]
+max = 4.0
+min = 0.5
+
+[[catalorange]
+ma	x = 4.0
+min = 0.5
+
+[[catalog.commands."sink.configure".arguments]]
+default = "ON"
+name = "label"
+type =*"str"
+
+[[.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u64"
+
+[catalog.cbits", offset_bits = 16, size_bits																 = 8 }its", offset_bits = 16, size_bits
+ = 8 }

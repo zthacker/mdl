@@ -1,0 +1,98 @@
+# A parar added to the catalkeeps
+# every set's idens voltage in cetream of valVVV!V]]
+kind        =[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 15
+conversion  = { kind = "line# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    ts.commands.entries]]
+kind      = "c# Firmware 1: bus voltage in millivolts.
+
+mdl_veets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 15
+conversion  = { kind = "line# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    ts.commands.entries]]
+kind      = "checksum"
+name      = "crc"
+algorithm = { kind = "crc", width = 16, poly = 0x1021, init = 0xFFFF false, reflect_out = false, xor_     = "bus_mv"
+type   OML ar", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_(writt     =en voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scues.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = &beacon"version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type    hecksum"
+name      = "crc"
+algorithm = { kind = "crc", width = 16, poly = 0x1021, init = 0xFFFF false, reflect_out = false, xor_     = "bus_mv"
+type   OML ar", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.bus_(writt     =en voltage"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "batt_temp"
+type       = "int"
+size_bits  = 16
+conversion = { kind = "linear", scues.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = &beacon"version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+lengt    = "uint"
+offset_bits = 24
+size_bits   = 15
+conversion  = { kind = "line# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+conversion = { kind = "states", tity.
+
+mdl_version = "2.0
+description = "Slar array current"

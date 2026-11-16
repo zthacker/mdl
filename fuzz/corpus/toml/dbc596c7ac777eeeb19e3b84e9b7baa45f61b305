@@ -1,0 +1,87 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled i= 5 }
+
+[[sets.packets.entries]]
+kind        = "field"
+na[sets.packets.entries]]
+kind   [catalog.params."sink.label"]acon_v1"
+family  = "beacon"
+version = 1# A param ada rebuild keeps# A param added to the n
+# every set's identity.
+
+mdl_version = "..0"
+
+[catalo+.sion = "2.0"
+
+[
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.packets.entries]]
+kind        = "field"
+na[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24et = 0.0 }
+unit        = "V"
+canonic+l   = "eps.bus_voltage"
+
+[[sets# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_stringers"flow"
+pointer = "/flow"
+ps# A param added to the n
+# every set's identity.
+
+mdl_version = "..0"
+
+[catalo+.sion = "2.0"
+
+[
+
+  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint= 0.01, offset = 0.0 }
+unit        = "V"
+canonic+l   = "eps.bus_voltage"
+
+[[sets# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_stringers"flow"
+pointer = "/flow"
+ps# A param added to the n
+# every set's identity.
+
+mdl_version = "..0"
+
+[catalo+.sion = "2.0"
+
+[
+
+  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        l.entries]]
+kind = "field"
+name = "volts"
+pointer = 4"
+unit"        = "A
+d"escription = "Solar array curr/v"
+type = "ent"
+float"
+unit = 

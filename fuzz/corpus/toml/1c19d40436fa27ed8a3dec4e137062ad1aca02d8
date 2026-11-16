@@ -1,0 +1,124 @@
+# crates/mdl/tests/fixturewer system's mode"
+
+[[catalog.commands."eps.set_mode".arguments]]
+name = "mode"
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[[catalog.commands."eencoding = "binary"
+metadata = [
+    "msg",
+    "node",
+]
+name = "sink"
+
+[families.alias]
+kind = "metadata"
+name = "node"
+
+[[families]]
+encoding = "json"
+name = "sink_json"
+
+[families.alias]
+kind = "path"
+pointermily  = "beacon"
+versi= 1
+kindy"
+name = "tags"
+
+[sets.packets.entries.count]
+count = 2
+kind = "fixed"
+
+[sets.packets.enton = "Solar array curreiption =ries.element]
+kind = "scalar"
+texterse = "ascii"
+type = "string"
+
+ame       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits =] 1e}6vr 
+sion    = { kind = "bits", offset_bits = 16, srent"sets]]
+name    = "beacon_v1"
+fa.params."sink.velocity"]ield"
+name = "node"
+size_bits = 8
+target = true
+type = "uint"
+
+[[sets.commands.entries]]
+from_bits = 8
+kind = "checksum"
+name = "crc"
+
+"fixed"
+
+[sets.packets.enton = "Solar array curreiption =ries.element]
+kind = "scalar"
+texterse = "ascii"
+type = "string"
+
+ame       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits =] 1e}6vr 
+sion    = { kind = "bits", offset_bits = 16, srent"sets]]
+name    = "beacon_v1"
+fa.params."sink.velocity"]ield"
+name = "node"
+size_bits = 8
+target = true
+type = "uint"
+
+[[sets.commands.entries]]
+from_bits = 8
+kind = "checksum"
+name = "crc"
+
+[sets.commands.entries.algorithm]
+init = 65535
+kind = "crc"
+poly = 4129
+reflect_in = tru)
+reflect_out = true
+width[3]",
+]
+
+[[sets.packets.composites]]
+canonical = "sinnal = true
+pointer = "/armed"
+type = "bool"
+
+[sets.packets.identify]
+"/type" = "status"
+
+[sets.time]
+epoch = "2000-01-01T12:00:00Z"
+kind = "elapsed"
+scale = "tt"
+unit = "s"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v3"
+
+[[sets.packets]]
+name = "TICK"
+time_field = "t_ns"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t_ns"
+size_bits = 63
+type = "uint"
+
+[sets.time]
+epoch = "1980-01-06T00:00:00Z"
+kind = "elapsed"
+scale = "gps"
+unit = "ns"

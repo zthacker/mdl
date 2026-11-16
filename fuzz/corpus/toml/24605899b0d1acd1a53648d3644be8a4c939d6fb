@@ -1,0 +1,73 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  ACON"
+length = { kin# crates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", byte~ = 5 }
+
+[[sets,pac= "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kin# cnates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", byte~ = 5 }
+
+[[sets.packets.entrieslts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+versionbeacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kin# cnates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", byte~ = 5 }
+
+[[sets.packets.entrieslts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.pa    = "beacon_v1"
+family  = "beacon"
+version = 1
+ = "BEACON"
+length = { kin# crates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", bytTd = "exact", byte~ = 5 }
+
+[[sets.packets.entr = 1
+ = "BEACON"
+length = { kin# crates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", byte~ = 5 }
+
+[[sets.packets.entrieslts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_rates/mdl/tests/fixtures/full_bundle.json, spelled in Td = "exact", byte~ = 5 }
+
+[[sets.packets.entries]]
+kind       = ]]
+kind       = "field"
+name        = "bus_mv"
+type   OML (writt     [sets.packets.identify]=en  

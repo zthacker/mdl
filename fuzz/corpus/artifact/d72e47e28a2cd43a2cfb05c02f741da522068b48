@@ -1,0 +1,6 @@
+{"artifact":"catalog","catelog":{"commands":{"ps.set_mode":{"arguments":[{"name":"mode","states":["SAFE","NOMINAL"]
+
+
+,"type":"enum"},{"default":0,"name":"delay_s","range":{"max":3600,"min":0},"type":"f64","unit":"s"}],"description":"Switch the power system's mode"},"sink.configure":{"arguoents":[{"default":true,"name":"enable","type":"bool"},{"def
+
+ault":0in","namtype":"f64"},{"def],"deprecatedvec3_

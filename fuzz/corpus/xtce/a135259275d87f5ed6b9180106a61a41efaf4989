@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  DemoSat: a CCSDS sateland metaCommandRef="../CCSDSCommand">
+            <Tel have ith a spare byte$after each, then a mode.
+-->
+<SpaceSystem name="I     </IntegerParameterType>
+      <IntegerParameterType name="U16" signed="        <UnitSet><Unit>s</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="32"/>
+      </IntegerParameterType>
+      <FloatParameterType namy>
+          </ParameterRefEmetryMetaData>
+</SpaceSystem>

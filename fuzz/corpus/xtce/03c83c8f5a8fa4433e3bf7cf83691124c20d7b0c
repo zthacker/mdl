@@ -1,0 +1,38 @@
+<?xml version=command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/10090102">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+    rt by its APID. Commands work the<![CDATA[ same
+  way: the root's abstract meta-command writes a telecommand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/40360408">
+  <TelemetryMetaData>
+    <Parameter parameterRef="T abstract="ypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDat</AizeInBits="1"/>
+      </IntegerParameterType>
+    opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/10090102">
+  <TelemetryMetaD</ParameterInstanceRef>Set>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <IntegerDataEncoding sizeInB
+    <ParameterTypeSet>
+      <IntegerParameterType name="CCSDS_Version_Type" signed="false">
+        <In       <StringDataEncoding encoding="US-ASCII">
+          <Variable maxSizeInBits="4097">
+            <DynamicValue>
+              <ParameterInstanceRef parameterRef="mand's primary
+  header and an opcode, and each subsystem's commands inherit it, fixing
+  the APID and the opcode.
+-->
+<SpaceSystem name="DemoSat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <Tel]]>tryMetaData>
+    <Parameter parameterRef="T abstract="ypeSet>
+      <I- hol

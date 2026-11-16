@@ -1,0 +1,26 @@
+# Firmware 1: bus voltage in millivolts.
+
+eam of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        he same way in both, which is what lets them share a
+# link: d node id, thene 1: bus volttery temperature. The
+# canonical para of values.
+
+md[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[ thene 1: bus volttery temperature. The
+# canonical params ase the same, so consumers seeays where those are. Each set says which format it decodes,
+# so a message pick one stream of values.
+
+md[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[Z[[[[[[[[[[[[[[[[[[[[[[[  way in boe_har

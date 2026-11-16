@@ -1,0 +1,1 @@
+{"artifact":"family","family":{"alias":{"kind":"bits","offset_bits":48,"size_bits":16},"byte_order":"big","encoding":"binary","metadata":["apid","fmt"],"name":"vendor_x","version":{"kind":"metadata","name":"\"fmt"}},"mdl_version":"2.0"}

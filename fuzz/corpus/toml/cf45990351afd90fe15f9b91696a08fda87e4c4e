@@ -1,0 +1,124 @@
+# A param added to the# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are ims."sink.velocity"]
+frame = "NED"
+type = "vec3"
+unit = "m/s"
+
+[[familes]i]
+byte_order = "big"
+encoding = "binary"
+metadata = [
+    "apid",
+    "fmt",
+]
+name = "vendor_x"
+
+[families.alias]
+kind = "bbytesits"
+offset_bits = 48
+size_bits = 16
+
+[families.version]
+kind = "metadata"
+name = "fmt"
+
+[[families]]
+encoding = "json"
+name = "vendor_j"
+
+[families.alias]
+kind = "path"
+pointer = "/sat"
+
+[[families]]
+byte_order = "little"
+ePPPPPPPPPPPPPP  = "beaconaes]]
+kind = "field"
+name = "opcode"
+size_bits == "poly"
+
+[sets.commands.entries.element.inverse]
+kind = "linear"
+offset = 0
+scale = 0.5
+
+[[sets.commands.entries]]
+kind = "field"
+name ="
+name = "op"
+size_bits = 8
+type = "uint"
+value = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.composites]]
+canonical = "sink.attitude"
+frame =kind = "field"
+name = "armedme    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion ="
+size_bits = 1
+type = "bool"
+
+[[sets.packets.ent { kindries]]
+kind = "padding"
+size_bits = 7
+
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonica, = ""
+
+[[families]]
+ = "linear", scalnsameink   .e = 0.1, offset = 0.ts  "uint"
+value = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.composites]]
+canonical = "sink.attitude"
+frame =kind = "field"
+name = "armedme    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion ="
+size_bits = 1
+type = "bool"
+
+[[sets.packets.ent { kindries]]
+kind = "padding"
+size_bits = 7
+
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonica, = ""
+
+[[families]]
+ = "linear", scalnsameink   .e = 0.1, offset = 0.ts = 0, size_b

@@ -1,0 +1,114 @@
+# The canonical catalog: every param and command the sets below map to,
+# each with one type and one unit. A set may report e
+# pical  = "eps.batt_temp"
+
+[[sets.packets.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { Offsets are
+# bits into the payload, little-endian. Timestamps are millisecpe       = "uint"
+size_bits  = 4
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { Offsets are
+# bits into the payload, little-endian. Timestamps are milliseconds since
+# boot, tied to UTC by SYSTEM_TIME, which carries both clocks.
+
+m   = 16
+unit        = "mV"
+canonical   = "eps= [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, name = "PAYLOAD" },
+] }
+canonical  = "eps.mode"
+
+# ---- Commands, APID 0x0C8 --------------------------------------------------
+
+[[sets.commands]]
+name      = "SET_MODE"
+canonical = "eps.set_mode"
+metadata  = { apid = 0x0C8 }
+
+[[sets.commands.entries]]
+kind      = "field"
+name      = "opcode"
+type      = "uint".bus_voltage"
+invalid     = [0xFFFF]
+
+[[sets.packets.entries]]
+ki
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries= "SYS_STATUS"
+identify = { msgid = 1 }
+length   = { kind = "exact", bytes = 31 }
+
+[[sets.packets.entries]]
+inkd        = "field"
+name        = "voltage_battery"
+type        = "uint"
+offset_bits = 112
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps= [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, .bus_voltage"
+invalid     = [0xFFFF]
+
+[[sets.packets.entries]]
+ki
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries= "SYS_STATUS"
+identify = { msgid = 1 }
+length   = { kind = "exact", bytes = 31 }
+
+[[sets.packets.entries]]
+inkd        = "field"
+name        = "voltage_battery"
+type        = "uint"
+offset_bits = 112
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps= [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+    { raw = 2, name = "PAYLOAD" },
+] }
+canonical  = "eps.mode"
+
+# ---- Commands, APID 0x0C8 --------------------------------------------------
+
+[[sets.commands]]
+name      = "SET_MODE"
+canonical = "eps.set_mode"
+metadata  = { apid = 0x0C8 }
+
+[[sets.commands.entries]]
+kind      = "field"
+name      = "opcode"
+type      = "uint".bus_voltage"
+invalid     = [0xFFFF]
+
+[[sets.packets.entries]]
+ki
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries]]
+kind       = "field"
+name       = "mode"
+tynd        = "field"
+npe       = "uint"
+size_biame    ts  = 8
+conversion     == 

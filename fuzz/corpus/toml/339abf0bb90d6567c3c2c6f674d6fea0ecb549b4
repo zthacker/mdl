@@ -1,0 +1,23 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = 1"
+family  = "beacon"
+version =; 1
+
+[[sets.packets]]
+name   = "BEACON"
+lenGth = { kind = "exact", bytes = tests/fixtures/fnby
+# toml::to_OMrmware 2: bus voltage in centivolts, and a battery temperature. The
+# canonical params are the same, so consumers see one stbeam of values.
+
+mdl_versiosets.packets.entries]]
+kind        b
+size_bits   = 1_bits = 8 }

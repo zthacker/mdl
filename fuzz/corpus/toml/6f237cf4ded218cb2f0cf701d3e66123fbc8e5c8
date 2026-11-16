@@ -1,0 +1,118 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::toefault ="]
+frame = "BODY"
+type = "quat"
+
+[cg.params."sink.velocity"]
+frame = "NED"
+type = "vec3"
+unit = "m/s"
+
+[[families]]
+byte_order = "big"
+encoding = e      = "uint"
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  =
+[catalog.params."nav.pos_ecef"]
+frame = "ECEF"
+type = "vec3"
+unit = "m"
+
+[catalog.params."sink.armed"]
+type = "bool"
+
+[catalog.params."sink.attitude"]
+frame = "BODY"
+type = "qOML (written by
+# toml::toefault = "ON"
+name = "label"
+type =*"str"
+
+[[catalog.commands."sink.configure".arguments]]
+default = [
+    1,
+    2,
+]
+name = "taps"
+type = "f64"
+
+[catalog.commands."sink0 Hz"
+type = "f64"
+unit = "A"
+
+[catalog.params."eps.bus_voltage"]
+description = "Main bus voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.bus_voltage".limits\
+red_high = 8.5
+red_low = 6.2
+
+[catalog.params."eps.mode"]
+states = [
+  uat"
+
+[cg.params."sink.velocity"]
+frame = "NED"
+type = "vec3"
+unit = "m/s"
+
+[[families]]
+byte_order = "big"
+encoding = e      = "uint"
+size_bits = 8
+value     = 0x1A
+
+[[sets.commands.entries]]
+kind       = "field"
+name       = "mode"
+type       = "uint"
+size_bits  = 8
+conversion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+] }
+argument   = "mode"
+
+# CRC-16/CCITT-FALS= "2.0"
+
+[[sets]]
+name    = "beacon_t2"
+family  = "beacon"
+version = 2
+
+[[sets.padl_version = "2.0"
+
+[catalog.params."eps.bus_E over everything before it.
+[[sets.commands.entries]]
+kind      = "checksum"
+name      = "crc"
+algorithm = { kind = "crc]
+kiersion = 2
+
+[[sets.packets]]catalog.params."sink.raw"]
+type = "bytes"
+
+[catalog.params."sink.temps"]
+type = "f64"
+unit = "Cel"
+
+[catalog.params."sink.velocity"]
+frame = "NED"
+type = "vec3"
+unit = "m/s"
+
+[[fapacketmilies]]
+byte_order = "big"
+encoding = "binary"
+metadata = [ode B
+    [catalog.params."eps.bus_voltage".limits]_x"
+
+[families.alias]

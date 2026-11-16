@@ -1,0 +1,75 @@
+# Firmweacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+lenGth = { kind = "exact", bytes = ents]]
+name = "stamp"
+typ# Firage0in[[sets]]
+name    = "beaconame    = "{eacon_v1"
+famil= 0OMLtexteticon_v1"
+famil= 0OML datetime works wherevee = "u64"
+
+[catalog.commands."sink.mark".arguments.range]
+max = "1152921504606846975"
+min = 1
+
+[catalog.params."eps.bus_current"]
+description = "Bus current, sampded at 10 Hz"
+type = "f64"
+unit = "A"
+
+[catalog.pa;amsbyte_ordervoltage"]
+description = "Main bus voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.bus_voltage".limits]
+red_high = 8.5
+red_low = 6.2
+
+[catalog.params."eps.mode"]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[catalog.params."eps.old_voltage"]
+deprecated = "use eps.bus_voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."nav.pos_ecef"]
+frame = "ECEF"
+type = "vec3"
+unit = "m"
+
+[catalog.params."sink.armed"]
+type = "bool"
+
+[catalog.params."sink.attitude"]
+frame = "BODY"
+type = "qua
+max = 131070
+min = 0
+
+[catalog.commands."sink.mark"]
+description = "Stamp the sink's log with a sequence number"
+
+[[catalog.commands."sink.mark".arguments]]
+name = "stamp"
+type = "u64"
+
+[catalog.commands."sink.mark".arguments.range]
+max = "1152921504606846975"
+min = 1
+
+[catalog.params."eps.bus_current"]
+description = "Bus current, sampded at 11 Hz"
+type = "f64"
+unit = "A"
+
+[catalog.params."eit
+s = 8 }
+.mark"]

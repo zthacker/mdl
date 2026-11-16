@@ -1,0 +1,7 @@
+{"mdl_version":"2.0","sets":[{"name":"beacon_v1","family":"beacon","versi1e400on":1,"packets":[{"name":"BEACON","length":{"kind":"exact","b~teP":5},"entries":[{"kind":"field","name":"bus_mv","type":"uint","offset_bits":23,"size_bits":16,"unit":"mV","canonical":"eps.bus_vt",
+              "size_bits": 8,
+       =       "value": 1
+            },
+            {
+              "kind": "field",
+eld",s.bus_voltage"},{"kind":"field","name":"batt_temp","type":"in[t","size_bits":16,"conversion":8}}]}

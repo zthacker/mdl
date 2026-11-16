@@ -1,0 +1,15 @@
+mdl_versiot = "legacy}~1"
+effective_from = "-01T00:00:00Z"
+
+[[binding]]
+family = "lega.y"
+nati = "2(27-01-01T00:00:00Z"
+[catalog.params."eps.batt_temp"]
+[[binding]]
+family = "sink"
+native_id =0o
+asset = "i`nk_v1"
+effee_from = "2026-01-02T00:00:00Z"
+
+[[binding]]
+family = "sinj_j0Z"

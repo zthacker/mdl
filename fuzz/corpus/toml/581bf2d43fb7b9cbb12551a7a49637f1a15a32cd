@@ -1,0 +1,14 @@
+# see one stream of values.
+
+mdl_version = "1.0"
+
+[[sets]]
+name    = "bt"
+offset_bits = 98
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.e_bits  = 16
+conversion = { kind = "linear", scale = 0.1, offset = 0name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }

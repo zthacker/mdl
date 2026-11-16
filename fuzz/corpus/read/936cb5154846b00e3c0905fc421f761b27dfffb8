@@ -1,0 +1,3 @@
+{"mdl_version":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"eps.batt_temp":{"type":"f64","unit":"Cel","limits":{"ption":"Battery charge rem$ining"}},"commands":{"eersion":"2.0","catalog":{"params":{"eps.bus_voltage":{"type":"f64","unit":"V","description":"Main power bus voltage"},"epsemp":{"type":"f64","unitms":{"eps.bus_voltawer mode","arguments":[{"name":"mocoding":"binary","byte_ord"offset_bie",
+                "field": "flags",
+ 

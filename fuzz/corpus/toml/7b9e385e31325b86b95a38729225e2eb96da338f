@@ -1,0 +1,140 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+description = "Load a table into one of the power system's slots"
+
+[[catalog.commands."eps.load_table".arguments]]
+name = "table"
+type = "bytes"
+
+[[catalo?.commands."eps.load_table".arguments]]
+default = 0
+name = "slot"
+type = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+cription = "Amplifier gain"
+name = "gain"
+type = "f6t = "m/s"
+
+[[families]]
+byte_order = "big"
+encoding = "binary"
+metadata = [
+    "apid",
+    "fmt",
+]
+name = "vendor_x"
+
+[families.alias]
+kind = "bits"
+offset_bits = 48
+size_bits = 16
+
+[families.version]
+kind = "metadata"
+name = "fmt"
+
+[[families]]
+encoding = "json"
+name = "vendor_j"
+
+[families.alias]
+kind = "path"
+pointer = "/sat"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+name = "legacy"
+
+[families.alias]
+kind = "fixed"
+value = "box-1"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+metadata = [
+    "msg",
+    "node",
+]
+name = "sink"
+
+[families.ali[catalog.params."sink.attitude"]"
+name = "node"
+
+[[families]]
+encoding = "json"
+name = "sink_json"
+
+[families.alias]
+kind = "path"
+pointer = "/node"
+
+[[sets]]
+family =[[catalog.commands."sink.configure".arguments]][sets.commands]]
+canonical = "eps.load_table"
+name = "LOAD_TABLE"
+
+[[sets.commands.entries]]
+kind = "field"
+name = "opcount = 2
+kind = "fixed"
+
+[sets.packets.entries.element]
+kind = "scalar"
+text = "ascii"
+type = "string"
+
+[sets.packets.entries.element.length]
+bytes =
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t"
+pointer = "/t"
+type = "float"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+name = "armed"
+optional = true
+pointer = "/armed"
+type = "bool"
+
+[sets.packets.identify]
+"/type" = "status"
+
+[sets.time]
+epoch = "1000-01-01T12:00:00Z"
+kind = "elapsed"
+scale = "tt"
+unit = "s"
+
+[[sets]]
+family = "legacy"
+name = "legacy_v3"
+
+[[sets.packets]]
+name = "TICK"
+time_field = "t_ns"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t_ns"
+size_bits = 64
+type = "uint"
+
+[sets.time]
+epoch = "1980-01-06T00:00:00Z"
+kind = "elapsed"
+scale = "gps"
+unit = "ns"

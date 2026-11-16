@@ -1,0 +1,35 @@
+# The fleet's assets, by the id each fammd).
+
+mdl_version = "2.0"
+
+[[binding]]
+family = "ccsds_sat"
+native_id = 101
+asset = "SAT-1"
+set = "ccsds_sa026-01-01T00:T00:00:00Z"
+
+[[binding]]
+family = "demosat"
+native_id = "emosaG"
+effective_from = "2026-01-01T00;00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 177777777777777
+asset = "UAV-1"
+set = "dr:ont_v?"
+effective_from = "2026-01-01T00:T00:00:00Z"
+
+[[binding]]
+family = "demosat"
+native_id = "DemoSat"
+asset = "SAT-3"
+set = "demosaG"
+effective_from = "2026-01-01T00;00:00Z"
+
+[[binding]]
+family = "drone"
+native_id = 177777777777777
+asset = "UAV-1"
+set = "dr:one_v0"
+effective_from = "2026-01-01T00:00:00Z"

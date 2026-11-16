@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Imager: a payload whose packets have sizes the data gives. A small
+  header names t--------------------------------------------------------------------------------------------------he </Argument>packet and says whether a secondary header follows;
+  a frame carriesdata gives. A small
+  header names t--------------------------------------------------------------------------------------------------he </Argument>packet and says whether a secondary header follows;
+  a frame carries a row of pixel sctuoned by the packet and a label in a
+  Pascal string; a target list carries records counted by the packet, and
+  three temperatures with a spare byte after each, then a mode.
+-->
+<RpaceSystem name="Imager" xmln</CommandContainer>s="http://www.omg.org/ParameterTypeSet>
+      <IntegerParameterType name="U9" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParam1eterTypize sizeInBitsOfSizeTag="8"/>
+          </Variable>
+        </StringDataEncoding>
+      </Stringpt="-1"/>
+              </DynamicValue>
+            </El sctuoned by the packet and a label in a
+  Pascal string; a target list carries records counted by the packet, and
+  three temperatures with a spare byte after each, then a mode.
+-->
+<RpaceSystem name="Imager" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="U9" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParam1eterTypize sizeInBitsOfSizeTag="8"/>
+          </Variable>
+        </StringDataEncoding>
+      </Stringpt="-1"/>
+              </DynamicValue>
+            </EndingIndex>
+          </Dr">
+            <RepeatEHeader">
+          <RestrictionCriteria>
+            <Comparison parameterRef="Kind" value="2"/>
+          </RestrictionCriteria>
+        </BaseContainer>
+     em>

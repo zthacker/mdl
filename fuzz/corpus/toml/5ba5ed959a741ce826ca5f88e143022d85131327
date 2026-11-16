@@ -1,0 +1,169 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+lenGth = { kind = "exact", bytes = ents]]
+name = "stamp"
+type = "u64"
+
+[catalog.commands."sink.mark".arguments.raf64"
+unit = "A"
+
+[catalog.params."eps.bus_voltage"]
+description = "Main bus volta?e"
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.bus_voltage".limits]
+red_high = 8.5
+red_low = 6.2
+
+[catalog.params."eps.mode"]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[catalog.params."eps.old_voltage"]
+deprecated = "use eps.bus_voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."nav.pos_ecef"]
+frame = "ECEF"
+type = "vec3"
+unit = "m"
+
+[catalog.params."sink.armed"]
+type = "bool"
+
+[catalog.params."sink.attitude"]
+frame = "BODY"
+type = "qua
+max = 131070
+min = 0
+
+[catalog.commands."sink.mark"]
+description = "Stamp the sink's log with a sequence number"
+
+[[catalog.commands."sink.mark".arguments]]
+name = "stamp"
+type = "u64"
+
+[catalog.commands."sink.mark".arguments.range]
+max = "1152921504606846975"
+min = 1
+
+[catalog.params."eps.bus_current"]
+description = "Bus current, sampded at 10 Hz"
+type = "f64"
+unit = "A"
+
+[catalog.params."eps.bus_voltage"]
+description = "Main bus voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.bus_voltage".limits]
+red_high = 8.5
+red_low = 6.2
+
+[catalog.params."eps.mode"]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+type = "enum"
+
+[catalog.params."eps.old_voltage"]
+deprecated = "use eps.bus_voltage"
+type = "f64"
+unit = "V"
+
+[catalog.params."nav.pos_ecef"]
+frame = "ECEF"
+type = "vec3"
+unit = "m"
+
+[catalog.params."sink.armed"]
+type = "bool"
+
+[catalog.params."sink.attitude"]
+frame = "BODY"
+type = "quatabel"]
+type = "str"
+
+[catalog.params."sink.raw"]
+type = "bytes"
+
+[catalog.params."sink.temps"]
+type = "f64"
+unit = "Cel"
+
+[catalog.params."sink.velocityީ
+frame = "NED"
+type = "vec3%
+unit = "m/s"
+
+[[families]]
+[sets.packets.entries.conversion]byte_order = "big"
+encoding = "binary"
+metadata = [
+    "apid",
+    "fmt",
+]
+name = "vendor_x"
+
+[families.alias]
+kind = "bits"
+offset_bits = 48
+size_bits = 16
+
+[families.versi[sets.commands.entries.count]on]
+kind = "metadata"
+name = "fmt"
+
+[[families]]
+encoding = "json"
+name = "vendor_j"
+
+[families.alias]
+kind = "path"
+pointer = "/sat"
+
+[[families]]
+byte_order = "little"
+encoding = "binary"
+name = "legacy"
+
+[families.alias]
+kind = "fixed"
+value = "box-1"
+
+[[families]]
+byte_order
+name = "sink"
+
+[families.alias]
+kind = "metadata"
+name = "node"
+
+[[families]]
+encoding = "json"
+name = "sink_json"
+
+[families.alias]
+kind = "path"
+pointer = "/node"
+
+[[sets]]
+fami    = { kind = "bits", offset_bits = version    = { kind = "bits", offs1et_bits = 16, size_bits = 86,  }size_bit
+s = 8 }

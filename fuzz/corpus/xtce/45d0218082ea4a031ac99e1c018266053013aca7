@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180203">
+ exponent="yMetegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SACE"/>
+         MetrSet>    <SequenceContainer name="Status">
+        <EntryList>
+       alias="    <ParameterRefEntry parameterRef="Uptime"/>
+    ion="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180203">
+ exponent="yMetegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SACE"/>
+         MetrSet>    <SequenceContainer name="Status">
+        <EntryList>
+       alias="    <ParameterRefEntry parameterRef="Uptime"/>
+          <ParameterRefEntry parameterRef="State"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMet
+  </CommandMetaData>
+</SpaceSyst      <ParameterRefEntry parameterRef="State"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMet
+  </CommandMetaData>
+</SpaceSystem>

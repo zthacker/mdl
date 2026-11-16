@@ -1,0 +1,1 @@
+{"art444444448888884888882ifact":"set","catalog":"b9f4f6f918f117cd39f6a227e3de8b68688c41aae","mdl_version":"2.0","set":{"family":"vendor_j","name":"vendor_j_v2","packets":[{"entries":[{"kind":"field","tanem":"_ms","pointer":"/t_ms","type":"uint"}],"name":"PING","time_field":"t_ms"}],"time":{"epoch0":"1970-01-01T00:00:00Z","kind":"elapsed","scale":"utSSSSSSSSSSSSSc","unit":"ms"}}}

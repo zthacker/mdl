@@ -1,0 +1,13 @@
+# Firmware 1: bus voltage in milliy be4-  the format's layout
+#
+# The family says where thmat it decodes,
+# so a message picks its set by its own format byte, whatever its node.
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, size_bits = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }

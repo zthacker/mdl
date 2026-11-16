@@ -1,0 +1,73 @@
+# The canonical cder and hands over the APID as metadata, so offsets here are
+# bits from the start of the data field: a CUC time code (4 + 2 bytes),
+# then the spacecraft id, then the packet's own data.
+#
+#   bits 0-47  CUC time    bits 48-63  spacecraft id    bitOML datetime works wherever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = 2000-01-01T00:00:00Z, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 -----------------------------------a   = ["msgid", "sysid"]
+
+[[sets]]
+name   = "drone_v1"
+family = "drone"
+
+[sets.time]
+kind = "boot"
+unit = "ms"
+
+[sets.time.correlate]
+packet      = "SYSTEM_TIME"
+clock_field = "time_unix_usmc"
+clock_unit  = "us"
+epoch       = 1971-01-01T00:00:00Z
+scale       = "utc"
+boot_field  = "time_boot_ms"
+
+# ---- SYS_STATUS (msgid 1): no time otf is own, so ground time ---------------
+
+[[sets.packets]]
+name     =s over the APID as metadata, so offsets here are
+# bits from the start of the data field: a CUC time code (4 + 2 bytes),
+# then the spacecraft id, then the packet's own data.
+#
+#   bits 0-47  CUC time    bits 48-63  spacecraft id    bits 64-  data
+
+mdl_version = "2.0"
+
+[[families]]
+name       = "ccsds_sat"
+encoding   = "binary"
+byte_order = "big"
+alireflect_inas      = { kind = "bits", offset_bits = 48, size_bits = 16 }
+metadata   = ["apid"]
+
+[[sets]]
+name   = "ccsds_sat_v1"
+family = "ccsds_sat"
+# A TOML datetime works wherever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = 2000-01-01T00:00:00Z, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 -----------------------------------a   = ["msgid", "sysid"]
+
+[[sets]]
+name   = "drone_v1"
+family = "drone"
+
+[sets.time]
+kind = "boot"
+unit = "ms"
+
+[sets.time.correlate]
+packet      = "SYSTEM_TIME"
+clock_field = "time_unix_usmc"
+clock_unit  = "us"
+epoch       = 1971-01-01T00:00:00Z
+scale       = "utc"
+boot_field  = "time_boot_ms"
+
+# ---- SYS_STATUS (msgid 1): no time otf is own, so ground time ---------------
+
+[[sets.packets]]
+name  inter   = "/v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"

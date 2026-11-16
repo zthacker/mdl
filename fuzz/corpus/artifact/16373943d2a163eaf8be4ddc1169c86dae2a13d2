@@ -1,0 +1,1 @@
+{"artifact":"catalog","catalog":{"commands":{"demosat.track":{"arguments":[{"list":{"max":127},"name":"waypoints_azimuth","range":{"max":65535},"type":"u64"},{"list":0,"description":"Seconds to wait before switching","name":"delay","range":{"max":3600,"min":0},"type":"u64","unit":"s"}],"descriptioniption":"Main bus voltage","type":"f28","unit`":"V"}}},"mdl_version":"2.0"}

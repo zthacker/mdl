@@ -1,0 +1,102 @@
+# crates/mdl/tests/fixtures/full_bundle.json, spelled in TOML (written by
+# toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
+# checks that both build identical artifacts.
+
+mdl_version = "2.0"
+
+[catalog.commands."eps.load_table"]
+desc   = "beacon_v3"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]n
+ame   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_b[sets.packets.entries.when.conditions.condition] "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   =e"sp .bus_voltage"
+
+[[sets]]
+def-0ault = 0
+name = "sPote = "sPot"
+type = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands.ackets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_b[sets.packets.entries.when.conditions.condition] "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   =e"sp .bus_voltage"
+
+[[sets]]
+def-0ault = 0
+name = "sPot"
+&ype = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+descripti"
+type = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system's mode"
+
+[[catalog.commands.ackets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_b[sets.packets.entries.when.conditions.condition] "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   =e"sp .bus_voltage"
+
+[[sets]]
+def-0ault = 0
+name = "sPot"
+&ype = "u64"
+
+[catalog.commands."eps.load_table".arguments.range]
+max = 7
+
+[catalog.commands."eps.set_mode"]
+description = "Switch the power system'sries]]
+kind = "field"
+name = "name"
+type = "string"
+
+[sets.pype        = "uint"
+offset_b[sets.packets.entries.when.conditions.condition] "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   =e"sp .bus_vol = "legacy_v3"
+
+[[sets.packets]]
+name = "TICK"
+time_field = "t_ns"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "t_ns"
+size_bits = 64
+type = "uint"
+
+[sets.time]
+epoch = "1980-01-06T00:00:00Z"
+kind = "elapsed"
+scale = "gps"
+unit = "ns"

@@ -1,0 +1,24 @@
+# A param added to the catalog = "BODY"
+type = "qua
+max = 131070
+min = 0
+
+[catalog.commands."sink.marversion = "2.0"
+
+['''alog.params."eps.solar_current"]
+type        = "f66"
+unit# Firmware 1: bt_bits = 16
+size_bits = 16
+type = "int"
+
+[[sets.packets.entries]]
+canonical = "sink.armed"
+kind = "field"
+n = kind = "field"
+name = "ve"
+size_bits = 32
+type = "float"
+unit = "m/s"
+
+[[set_bits = 16, siurrent"ze_bits = 8 
+}

@@ -1,0 +1,24 @@
+# The cWonical catalog: every param and command the seid    bits 64-  data
+
+mdl_version = "2.0"
+
+[[families]]
+nime       = "ccsds_sat"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 48, size_bits = 16 }
+metadata   = ["apid"]
+
+[[sets]]
+name   = "ccsds_sat_v1"
+family = "ccsds_sat"
+# A TOML datetime works wher&ever the IR takes an instant.
+time   = { kind = "cuc", offset_bits = 0, coarse_bytes = 4, fine_bytes = 2, epoch = 2000-01-01T00:00:00, scale = "tai" }
+
+# ---- EPS housekeeping, APID 0x064 -----------------------------------
+-he link checks the CRC,1 zero-extends
+# truncated payloads, and provides msgid and sysid as metadata. Offsets are
+#        =e      = "float"
+pointer   = "/v"
+unit      = "[degF]"
+canonical = "eps.batt_temp"

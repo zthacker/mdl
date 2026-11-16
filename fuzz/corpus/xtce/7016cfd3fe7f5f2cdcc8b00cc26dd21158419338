@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<SpaceSystem name="Tiny" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+  [    <IntegerParameterType name="Uptime" signed="false">
+        <UnitSet><Unit>s</Unit></UnitSet>
+        <I xml						ager: a payload whose packets have sizes </PolynomialCalibrator>
+          </DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType><StartingIndex><FixedValue>0</Fixe/StartingIndex>
+     p       <!@-- The last in       <EntryList>
+            <F</SequenceContainer>ixedValueEntry binaryValue="2A" sizeInBits="8"/>
+            <ArgumentRefEntry argumentRef="times"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+</SpaceSystem>

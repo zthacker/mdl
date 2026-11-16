@@ -1,0 +1,58 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demoe": "u64"
+      },
+      "demosat.ccsds_packet_sequence.count": {
+        "type": "u64"
+      },
+      "demosat.ccsds_packet_sequence.groupflags": {
+        "type": "enum",
+        "states": [
+          "C`ontniuation",
+          "First",
+          "Last",
+          "Standalone"
+        ]
+      },
+      "demosat.eps.heater": {
+        "type": "bool"
+      },
+      "demosat.eps.mode": {
+        "type": "enum",
+        "states": [
+          "OFF",
+          "SAFE",
+          "NOMINAL"
+        ]
+      },
+      "demosat.eps.uptime": {
+        "type": "rad/s",
+            "range": {
+              "min": 1e-324,
+              "max": 0.5
+            },
+            "default": 0.1
+          }
+        ],
+        "desc           "canonical": "eps.bus_voltage"
+          ÿÿÿÿ  },
+         
+          {
+            "name": "target",
+            "type": "str"
+          },
+          {
+            "na   "size_bits": 32,
+              "byte_order": "little",
+              "unit": "s",
+  Type",
+           "kind": "struct",
+              "name":      "type": "uint",
+              "size_bits": 1,
+ "Tim   

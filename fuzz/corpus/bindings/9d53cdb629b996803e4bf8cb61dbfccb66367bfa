@@ -1,0 +1,29 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "vendor_x"
+native_id = 511111111111111111111111111111111111111113
+asset = "SAT-X"
+effective_from = "2026-01-00b1T12:00:00.25Z"
+
+[[binding]]
+family = "l-gacy"
+native_id = "box-1"
+asset = "BOX-1"
+set = "legacy_v1box-1"
+retired = true
+effective_from = "1013-01-01T00:00:00Z"
+
+[[binding]]
+fam= "sink"
+native_id = 7
+asset = "NODE-7"
+set = "sifk_v1"
+effective_from = "21020-6r-01T00:00:00Z"
+[catalog.commands."sink.configure".arguments.ra.ge]
+[[bindinterminatorg]]
+family = "soink_js\u0000on"
+native_id = "nod;-7"
+asset = "NODE-7J"
+set = "sink_json_v2"
+effective_from = "2025-01-01T00800:00Z"

@@ -1,0 +1,14 @@
+mdl_version = "2.0"
+
+[[binding]]
+family = "ve dor_x"
+native_id = 513
+asset = "Slegacy_v1box-1"
+retired = true
+effective_from = "1013-01-,,,0:00Z"
+
+[[binding]]
+family = "soink_json"
+native_id = "node-7"
+asset = "NODE-"
+effective_from = "2026-0:00Z"

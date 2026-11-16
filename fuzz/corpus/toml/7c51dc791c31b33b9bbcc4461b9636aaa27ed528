@@ -1,0 +1,21 @@
+# Firmware 
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1BEACON"
+length = { kin# crates/mdl/tests/fixtures/full_bundle.json, sp[elled in Td = "exact", [bytes = 5 }
+
+[[sets.packet      =mware 
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1BEACON"
+length = { kin# crates/mdl/tests/fixtures/full_bon, sp[elled in Td = "exact", [bytes = 5 }
+
+[[sets.p "field"
+name        = "bus_mv"
+type   OML (writt     =en  

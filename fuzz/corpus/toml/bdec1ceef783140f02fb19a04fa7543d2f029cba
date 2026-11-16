@@ -1,0 +1,23 @@
+# Firmware 1ntivolts, and a battery temperature. The
+# canonical params are the same, so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGbus_cv"
+type        = "uint"
+offset_bits = 36
+size_bits   = 16
+convrienos  = { kind = "linear", scale = 0.01, offset = 0.0 }
+uias      = { kind = "bits", offset_bits = 0, size_bits = 16 }
+version    = { kind = "bits", offset_bits = 16, size_bits = 8 }

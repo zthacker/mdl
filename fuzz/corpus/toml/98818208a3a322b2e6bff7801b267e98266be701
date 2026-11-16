@@ -1,0 +1,74 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets are the same[catalog.commands."sink.configure".arguments.list], so consumers see one stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v2"
+family  = "beacon"
+version = 2
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 7 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"bus_voltage"]
+type = "f64"
+unit = "V"
+
+[catalog.params."eps.batt_temp"]
+type = "f64"
+unit = ------------------------------ink, some still on firmware 0 and some on firmware 2.
+= { kind = "states", states = [
+    { raw = 0, name = "SAFE' },
+    { raw = 1, name = "NOMINAL" },
+] }
+argu[[catalog.commands."eps.load_table".arguments]]ything before it.
+[[sets.commands.entries]]
+kind      = "checksum"
+name      = "crc"
+algorithm = { kind[[sets.packets]]
+name     = "SYS_STATUS"
+identify = { msgid = 1 }
+length   = { kind = "exact", bytes = 31 }
+
+[[sets.packets.entries]]
+kind        = "field"
+name        = "voltage_battery"
+type        = "uint"
+offset_bits = 112
+size_bits   = 16
+unit        = "mV"
+canonical   = "eps# Firmware 1: bus voltage in millivolts.
+
+mdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+version = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 5 }
+
+[[sets.unitpackets.entries]]
+kind        = "field"
+name        = "bus_mv"
+type        = "ui.bus_voltage"
+invalid     = [0s.load_table".arguments]]ythinn

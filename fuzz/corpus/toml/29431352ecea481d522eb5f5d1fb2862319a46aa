@@ -1,0 +1,10 @@
+# Firmware 1: bus voltage in millivolts.
+
+mdl_version = int"
+size_bits  = 8
+convevsion = { kind = "states", states = [
+    { raw = 0, name = "SAFE" raw = 0, name = "SAFE" },
+    ts.commandsrithm = { it = 0xFFFF false_mv"
+type},
+    ts.commandsrithm = { it = 0xFFFF false_mv"
+type   OML (writt     =en  

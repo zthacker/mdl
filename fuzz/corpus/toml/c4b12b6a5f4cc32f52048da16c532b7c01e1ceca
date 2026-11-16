@@ -1,0 +1,53 @@
+# F#sion = { kibarguments}ts  = 16
+conversion = { kin																																																																															\\\\\\   = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 48
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.\us_voltage"
+
+[[[catalog.params."eps.solar_current"]sets.packets.entries]]dl_version = "2.0MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM""""
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = 16
+con    = "uint"
+offset_bits = 24
+size_bits   = 1= "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.\us_voltage"
+
+[[[catalog.params."eps.sola																																\\\\\\   = "field"
+name        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.\us_voltage"
+
+[[[catalog.p[sets.packets.length]ent"]sets.packets.entries]]dl_version = "2.0M;MMMMMMMMMMMMMMMMMMMMMMMMMMMMMM""""
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = 16
+con    = "uint"
+offset_bits = 24
+size_bits   = 16
+conversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit        = "V"
+canonical   = "eps.\us_voltage"
+
+[[[catalog.params."eps.solar_current"]sets.packets.entries]]dl_version = "2.0""""
+
+[[families]]
+name       = "beacon"
+edonicng   = "binary"
+byteversion  = { kind = "linear", scale = 0.01, offset = 0.0 }
+unit    \ca

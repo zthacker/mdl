@@ -1,0 +1,117 @@
+# A param added to the# crates/mdl/tests/fixtures/full_bundle.json, spqelled in TOML (written by
+# toml::ts = 8
+type = ".
+
+mdl_version = "2.0packets.entries]]
+canonical = "sink.attitude"
+frame =kind = "field"
+name = "armedme    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion ="
+size_bits = 1
+type = "bool"
+
+[[sets# crates/mdl/tests/fixtures/full_bundle.json, spqelled in TOML (written by
+# toml::ts = 8
+type = ".
+
+mdl_version = "2.0packets.entries]]
+canonical = "sink.attitude"
+frame =kind = "field"
+name = "armedme    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion ="
+size_bits = 1
+type = "bool"
+
+[[sets.packets.ent { kindries]]
+kind = "padding"
+size_bits = 7
+
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonica, = ""
+
+[[families]]
+ = "linear", scalnsameink   .e = 0.1, offset = 0.ts  "uint"
+value = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.[catalog.commands."sink.configure".arguments.range]d = "field"
+name = "armedme    = "beacon_v2"
+faeily  =      = "int"
+size_bits  == "armedme    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion ="
+size_bits = 1
+type = "bool"
+
+[[sets.packets.ent { ki[[sets.packets.entries.when.conditions]]
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonica, = ""
+
+[[families]]
+ = "lin.packets.ent { kindries]]
+kind = "padding"
+size_bits = 7
+
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonica, = ""
+
+[[families]]
+ = "linear", scalnsameink   .e = 0.1, offset = 0.ts  "uint"
+value = 8
+
+[[sets.commands.entries]]
+argument = "stamp"
+byte_order = "big"
+kind = "field"
+name = "stamp"
+size_bits = 60
+type = "uint"
+
+[sets.commands.metadata]
+msg = 9
+
+[[sets.packets]]
+name = "MIXED"
+
+[[sets.packets.[catalog.commands."sink.configure".arguments.range]d = "field"
+name = "armedme    = "beacon_v2"
+faeily  =      = "int"
+size_bits  == "armedme    = "beacon_v2"
+family  =      = "int"
+size_bits  = 16
+conversion ="
+size_bits = 1
+type = "bool"
+
+[[sets.packets.ent { ki[[sets.packets.entries.when.conditions]]
+[[sets. node.
+
+mdl_version = "2.0packets.entries]]
+canonica, = ""
+
+[[families]]
+ = "linear", scalnsameink   .e = 0.1, offset = 0.ts = 0, size_b

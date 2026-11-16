@@ -1,0 +1,25 @@
+# Firmware 1: bus voltage in m;illivolts.
+
+mdl_version = """"1.0"
+
+[[s# Firmwarmdl_version = "2.0"
+
+[[sets]]
+name    = "beacon_v1"
+family  = "beacon"
+versioets]]name    ="brsion  1
+=![[n = 1
+
+[[sets.packets are the same, so stream of values.
+
+mdl_version = "2.0"
+
+[[sets]]
+name b  "  =eacon_v2"
+family  = in both, which is what lets them share a
+ link: a]]
+kind       = "field"name [catalog.params. eps.b2.0"
+ad_table"]
+[catalog.params. eps.bus_voltageo a m = 0, size_bits = 16 }
+vers= 6 ion    = { kind = "bits", offset_bits = 16, size_}
+bits = 8 }

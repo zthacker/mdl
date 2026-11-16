@@ -1,0 +1,48 @@
+{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": {
+      "demosat.adcs.rate.x": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.rate.y": {
+        "type": "f64",
+        "unit": "rad/s"
+      },
+      "demosat.adcs.ratedemosat.eps.uptime": {
+        "type": "u64",
+        "unit": "s"
+      },
+      "eps.batt_temp": {
+        "type": "f64",
+        "unit": "Cel",
+        "description": "Battery temperature"
+      },
+      "eps.bus_voltage": {
+        "type": "f64",
+        "unit": "V",  
+      "description": "Main bus voltage"
+     }
+     },
+    "commands": {
+      "demosat.adcs.point": {
+        "arguments": [
+          {
+            "name": "target",
+                "range": {
+              "min": 4e-324,
+       "name": "rate",
+            "type": "f64",
+            "unit": "rad/s",
+            "range": {
+              "min": 4e-324,
+           ment"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

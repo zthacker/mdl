@@ -1,0 +1,13 @@
+# Firmware 0: bus voltage e        = "bus_cv"
+type        = "uint"
+offset_bits = 24
+size_bits   = = 1
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", by[catalog.params."sink.velociyt"]s]]
+kind        = "field"-name        = "bus_mv"
+type        = "uint"
+offset_bits = 24
+size_bits   = 16
+unitdl_version = "its = 8 }
