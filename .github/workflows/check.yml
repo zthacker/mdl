@@ -2,7 +2,8 @@
 # examples walkthrough and the README's example, and the docs), on every
 # push to main and every pull request, plus the tests on the oldest Rust
 # the workspace supports. On pushes to main, `just props` also runs the
-# property tests at 10,000 cases each, and each fuzz target runs for 60 s.
+# property tests at 10,000 cases each, and each fuzz target runs for a
+# minute (five for the generated ones).
 
 name: check
 
@@ -65,7 +66,7 @@ jobs:
       - run: just props
 
   fuzz:
-    name: fuzz ${{ matrix.target }} for 60 s
+    name: fuzz ${{ matrix.target }}
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
@@ -75,7 +76,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [artifact, bindings, canonical, read, timestamp, toml, units, xtce]
+        target:
+          [artifact, bindings, canonical, decode, decode_command, encode, layouts, read,
+           shapes, timestamp, toml, units, xtce]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -88,20 +91,28 @@ jobs:
         with:
           tool: just,cargo-fuzz
       # What earlier runs grew beyond the seeds and the committed corpus,
-      # saved again after this run.
-      - uses: actions/cache@v4
+      # saved again after this run. Not for the generated targets, which
+      # keep seeds only: their corpus records the testkit's branches.
+      - if: matrix.target != 'layouts' && matrix.target != 'shapes'
+        uses: actions/cache@v4
         with:
           path: fuzz/cache/${{ matrix.target }}
           key: fuzz-cache-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-cache-${{ matrix.target }}-
-      - run: just fuzz ${{ matrix.target }} 60 cache
-      # Only what adds coverage beyond the seeds and the corpus is kept, so
-      # replaying the cache can't come to fill the 60 s.
+      # 60 s a target; 300 s for the generated ones, each of whose inputs
+      # builds a whole case, about 10 a second for layouts.
       - run: >-
+          just fuzz ${{ matrix.target }}
+          ${{ (matrix.target == 'layouts' || matrix.target == 'shapes') && 300 || 60 }} cache
+      # Only what adds coverage beyond the seeds and the corpus is kept, so
+      # replaying the cache can't come to fill the run.
+      - if: matrix.target != 'layouts' && matrix.target != 'shapes'
+        run: >-
           just fuzz-merge ${{ matrix.target }} cache/${{ matrix.target }} 0
           seeds/${{ matrix.target }} corpus/${{ matrix.target }}
       # The input that crashed, to reproduce with `cargo fuzz run`, shrink
-      # with `cargo fuzz tmin` and keep in fuzz/regressions. An input kept
+      # with `cargo fuzz tmin` and keep in fuzz/regressions (layouts' and
+      # shapes' as a unit test of the definition and payload). An input kept
       # for time (timeout-*), memory (oom-*) or a leak (leak-*) needs a unit
       # test too: the replay test has no memory limit or leak checker, and
       # gives an input a minute.
