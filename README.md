@@ -176,6 +176,19 @@ record the generators' branches, and a crash they find is kept as a unit
 test. After `Cargo.lock` changes, `just fuzz-lock` gives the harness the
 same versions.
 
+`just corpus <dir>` tries the XTCE importer on real documents. Each `.xml`
+file under `<dir>` that holds a SpaceSystem is imported, alone and, if
+alone it has references it can't resolve, with the rest of its directory;
+what imports is validated and built, and each packet decoded from payloads
+made for it, all under the fuzz targets' checks. The report,
+`target/xtce-corpus.md`, says what each import gave and what was refused
+and why; the run fails only for a bug in MDL. No corpus is committed or
+run in CI. Public XTCE to try:
+[Yamcs](https://github.com/yamcs/yamcs) (its `examples` and the test
+resources of `yamcs-core` and `yamcs-xtce`) and
+[space_packet_parser](https://github.com/medley56/space_packet_parser)
+(`tests/test_data`).
+
 Issues and pull
 requests are welcome at <https://github.com/zthacker/mdl>.
 [`ROADMAP.md`](ROADMAP.md) says what's next, such as build files for
@@ -190,7 +203,7 @@ several imports.
 | `crates/mdl-xtce` | the XTCE importer: OMG XTCE space system definitions as bundles |
 | `crates/morphc` | the command line: build, inspect, decode, encode |
 | `crates/mdl-testkit` | IR generators, the list of IR features, and oracles that work out from the spec what telemetry decodes to, what commands encode to, and the error a damaged message or a refused request gives, for the property tests (never published) |
-| `crates/mdl-fuzz` | what each fuzz target checks, and a test that replays every committed fuzz input (never published) |
+| `crates/mdl-fuzz` | what each fuzz target checks, a test that replays every committed fuzz input, and the XTCE corpus runner (never published) |
 | `fuzz` | the cargo-fuzz harness, its seeds, corpus and dictionaries, and the crashes kept as regressions |
 | `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
