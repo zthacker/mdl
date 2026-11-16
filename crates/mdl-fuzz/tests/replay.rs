@@ -13,11 +13,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::thread;
 use std::time::Duration;
 
-use mdl_fuzz::TARGETS;
+use mdl_fuzz::{TARGETS, Target};
 
 /// The repository: `crates/mdl-fuzz`, two levels up.
 fn root() -> PathBuf {
@@ -57,47 +59,99 @@ fn names(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// Each input runs on a thread of its own, named for it, within the budget.
-/// What ends the process instead of the thread (a stack overflow, an
-/// allocation that fails) can't be caught: a stack overflow names the
-/// thread, and the path of the input running is in
-/// `target/tmp/replay-input`.
-#[test]
-fn every_committed_input_passes_its_target() {
-    let running = Path::new(env!("CARGO_TARGET_TMPDIR")).join("replay-input");
-    let mut failed = Vec::new();
+/// Every input, by its path, with its target.
+fn inputs() -> Vec<(String, Target)> {
+    let mut inputs = Vec::new();
     for (name, target) in TARGETS {
         for kind in INPUTS {
             let dir = fuzz_dir().join(kind).join(name);
             for file in names(&dir) {
-                let path = dir.join(&file).display().to_string();
-                fs::write(&running, &path).unwrap();
-                let data = fs::read(&path).unwrap();
-                let (done, finished) = mpsc::channel();
-                let input = thread::Builder::new()
-                    .name(path.clone())
-                    .stack_size(STACK)
-                    .spawn(move || {
-                        target(&data);
-                        // Nobody listens after a timeout.
-                        let _ = done.send(());
-                    })
-                    .unwrap();
-                match finished.recv_timeout(BUDGET) {
-                    Ok(()) => input.join().unwrap(),
-                    // It ended without saying so: it panicked, and the hook
-                    // printed why.
-                    Err(RecvTimeoutError::Disconnected) => {
-                        assert!(input.join().is_err());
-                        failed.push(path);
-                    }
-                    Err(RecvTimeoutError::Timeout) => {
-                        failed.push(format!("{path}: still running after {BUDGET:?}"));
-                    }
-                }
+                inputs.push((dir.join(&file).display().to_string(), target));
             }
         }
     }
+    inputs
+}
+
+/// How an input failed.
+enum Failure {
+    /// It panicked; the hook printed why.
+    Panic(String),
+    /// It was still running when the budget ran out.
+    Timeout(String),
+}
+
+/// The input at `path` run on a thread of its own, named for it, within
+/// the budget; how it failed, if it did.
+fn run(path: &str, target: Target) -> Option<Failure> {
+    let data = fs::read(path).unwrap();
+    let (done, finished) = mpsc::channel();
+    let input = thread::Builder::new()
+        .name(path.to_string())
+        .stack_size(STACK)
+        .spawn(move || {
+            target(&data);
+            // Nobody listens after a timeout.
+            let _ = done.send(());
+        })
+        .unwrap();
+    match finished.recv_timeout(BUDGET) {
+        Ok(()) => {
+            input.join().unwrap();
+            None
+        }
+        // It ended without saying so: it panicked, and the hook printed why.
+        Err(RecvTimeoutError::Disconnected) => {
+            assert!(input.join().is_err());
+            Some(Failure::Panic(path.to_string()))
+        }
+        Err(RecvTimeoutError::Timeout) => Some(Failure::Timeout(format!(
+            "{path}: still running after {BUDGET:?}"
+        ))),
+    }
+}
+
+/// The inputs are shared among a worker for each core, each running one at
+/// a time (see [`run`]); a generated target's input builds a whole case,
+/// which makes them slow one after another. After a timeout no worker
+/// takes another input: a hang in a shared path would otherwise cost a
+/// minute an input, and the hung threads, which nothing can stop, go when
+/// the process ends. What ends the process instead of a thread (a stack
+/// overflow, an allocation that fails) can't be caught: a stack overflow
+/// names the thread, and the path of the input each worker is running is
+/// in `target/tmp/replay-input-<worker>`.
+#[test]
+fn every_committed_input_passes_its_target() {
+    let inputs = inputs();
+    let next = AtomicUsize::new(0);
+    let stop = AtomicBool::new(false);
+    let failed = Mutex::new(Vec::new());
+    let workers = thread::available_parallelism().map_or(4, |n| n.get());
+    thread::scope(|scope| {
+        for worker in 0..workers {
+            let (inputs, next, stop, failed) = (&inputs, &next, &stop, &failed);
+            scope.spawn(move || {
+                let running =
+                    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("replay-input-{worker}"));
+                while !stop.load(Ordering::Relaxed) {
+                    let Some((path, target)) = inputs.get(next.fetch_add(1, Ordering::Relaxed))
+                    else {
+                        break;
+                    };
+                    fs::write(&running, path).unwrap();
+                    match run(path, *target) {
+                        None => {}
+                        Some(Failure::Panic(why)) => failed.lock().unwrap().push(why),
+                        Some(Failure::Timeout(why)) => {
+                            stop.store(true, Ordering::Relaxed);
+                            failed.lock().unwrap().push(why);
+                        }
+                    }
+                }
+            });
+        }
+    });
+    let failed = failed.into_inner().unwrap();
     assert!(
         failed.is_empty(),
         "inputs that fail their target: {failed:#?}"
@@ -152,6 +206,26 @@ fn corpus_inputs_are_small() {
         }
     }
     assert!(large.is_empty(), "run `just fuzz-cmin`: {large:#?}");
+}
+
+/// The generated targets commit seeds only. A grown corpus would record
+/// the testkit's branches, its code being instrumented too, and an input
+/// means what the generators make of its seed at one commit, so a crash
+/// such a target finds is kept as a unit test of its definition and
+/// payload.
+#[test]
+fn generated_targets_keep_seeds_only() {
+    for name in ["layouts", "shapes"] {
+        for kind in ["corpus", "regressions"] {
+            let kept = names(&fuzz_dir().join(kind).join(name));
+            assert!(
+                kept.is_empty(),
+                "fuzz/{kind}/{name} holds {} inputs; {name} keeps seeds only (a crash \
+                 becomes a unit test)",
+                kept.len()
+            );
+        }
+    }
 }
 
 /// The versions of each package a lockfile holds, by name.

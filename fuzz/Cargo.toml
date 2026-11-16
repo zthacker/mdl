@@ -76,3 +76,38 @@ path = "fuzz_targets/xtce.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_command"
+path = "fuzz_targets/decode_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "encode"
+path = "fuzz_targets/encode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layouts"
+path = "fuzz_targets/layouts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shapes"
+path = "fuzz_targets/shapes.rs"
+test = false
+doc = false
+bench = false

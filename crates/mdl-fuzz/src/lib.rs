@@ -10,11 +10,17 @@
 
 mod documents;
 mod frontends;
+mod generated;
+mod input;
+mod kitchen;
+mod messages;
 mod pipeline;
 mod values;
 
 pub use documents::{artifact, canonical, read};
 pub use frontends::{bindings, toml, xtce};
+pub use generated::{layouts, shapes};
+pub use messages::{decode, decode_command, encode};
 pub use values::{timestamp, units};
 
 /// A target: takes the fuzzer's bytes, panics on what it finds.
@@ -22,11 +28,16 @@ pub type Target = fn(&[u8]);
 
 /// Every target, by the name its binary in `fuzz/` and its directories
 /// under `fuzz/seeds`, `fuzz/corpus` and `fuzz/regressions` go by.
-pub const TARGETS: [(&str, Target); 8] = [
+pub const TARGETS: [(&str, Target); 13] = [
     ("artifact", artifact),
     ("bindings", bindings),
     ("canonical", canonical),
+    ("decode", decode),
+    ("decode_command", decode_command),
+    ("encode", encode),
+    ("layouts", layouts),
     ("read", read),
+    ("shapes", shapes),
     ("timestamp", timestamp),
     ("toml", toml),
     ("units", units),
@@ -51,4 +62,11 @@ pub fn warm_up() {
     ));
     units(b"km/h\nm/s");
     xtce(include_bytes!("../../../examples/xtce/imager.xml"));
+    decode(&[0; 8]);
+    decode_command(&[0; 8]);
+    encode(&[0, 1, 1, 0, 5, 0x80]);
+    shapes(&[0; 32]);
+    for kind in 0..4 {
+        layouts(&[kind]);
+    }
 }

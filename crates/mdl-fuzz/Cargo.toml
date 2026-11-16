@@ -13,8 +13,11 @@ name = "mdl_fuzz"
 
 [dependencies]
 mdl.workspace = true
+mdl-testkit.workspace = true
 mdl-toml.workspace = true
 mdl-xtce.workspace = true
+proptest.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

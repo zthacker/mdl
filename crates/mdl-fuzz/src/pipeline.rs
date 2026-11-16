@@ -2,29 +2,36 @@
 //! the targets share.
 
 use std::fmt::Debug;
-use std::sync::OnceLock;
 
 use mdl::artifact::{Written, build};
 use mdl::diagnostics::Diagnostics;
 use mdl::ir::{Artifact, Bundle};
-use mdl::read::{Loaded, read_artifact, read_bundle};
+use mdl::read::{Loaded, read_artifact};
 use mdl::route::FamilySets;
 use mdl::source::{SourceDiagnostic, SourceMap, Sources, Span};
 use mdl::validate::{Validated, validate};
 
-/// What a consumer does with a bundle: validate it, build its artifacts,
-/// read each back, and assemble each family with the sets built for it.
-/// Past validation, whose diagnostics are returned, every step must work:
-/// validation rules out every build error, an artifact built reads back as
-/// itself with the digest it was built with, and a family assembles.
+/// What a consumer does with a bundle: validate it, then [`assemble`] it.
+/// Validation's diagnostics are returned; past it, every step must work.
 pub(crate) fn load(bundle: Bundle) -> Result<(), Diagnostics> {
     let valid = validate(bundle)?;
-    let artifacts = match build(&valid) {
+    assemble(&valid);
+    Ok(())
+}
+
+/// A valid bundle's artifacts built, each read back, and each family
+/// assembled with the sets built for it, by family name. Every step must
+/// work: validation rules out every build error, an artifact built reads
+/// back as itself with the digest it was built with, and a family
+/// assembles.
+pub(crate) fn assemble(valid: &Validated) -> Vec<(String, FamilySets)> {
+    let artifacts = match build(valid) {
         Ok(artifacts) => artifacts,
         Err(error) => panic!("a valid bundle didn't build: {error}"),
     };
     let catalog = read_back(&artifacts.catalog);
     let sets: Vec<Loaded<Artifact>> = artifacts.sets.values().map(read_back).collect();
+    let mut families = Vec::new();
     for (name, written) in &artifacts.families {
         let family = read_back(written);
         let its_sets: Vec<Loaded<Artifact>> = sets
@@ -34,11 +41,14 @@ pub(crate) fn load(bundle: Bundle) -> Result<(), Diagnostics> {
             )
             .cloned()
             .collect();
-        if let Err(error) = FamilySets::new(&family, &its_sets, std::slice::from_ref(&catalog)) {
-            panic!("family {name} didn't assemble from the artifacts built for it: {error}");
+        match FamilySets::new(&family, &its_sets, std::slice::from_ref(&catalog)) {
+            Ok(assembled) => families.push((name.clone(), assembled)),
+            Err(error) => {
+                panic!("family {name} didn't assemble from the artifacts built for it: {error}")
+            }
         }
     }
-    Ok(())
+    families
 }
 
 /// An artifact read from the canonical text it was built as, which gives
@@ -55,23 +65,6 @@ fn read_back(written: &Written) -> Loaded<Artifact> {
         "a built artifact's text"
     );
     loaded
-}
-
-/// The kitchen sink (`crates/mdl/tests/fixtures/full_bundle.json`),
-/// validated once.
-pub(crate) fn kitchen_sink() -> &'static Validated {
-    static KITCHEN_SINK: OnceLock<Validated> = OnceLock::new();
-    KITCHEN_SINK.get_or_init(|| {
-        let bytes = include_bytes!("../../mdl/tests/fixtures/full_bundle.json");
-        let bundle = match read_bundle(bytes) {
-            Ok(loaded) => loaded.value,
-            Err(error) => panic!("the kitchen sink didn't read: {error}"),
-        };
-        match validate(bundle) {
-            Ok(valid) => valid,
-            Err(diagnostics) => panic!("the kitchen sink isn't valid: {diagnostics:?}"),
-        }
-    })
 }
 
 /// The input as one or more files, split at NUL bytes, which neither TOML

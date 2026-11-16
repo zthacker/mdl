@@ -5,7 +5,8 @@ use mdl::bindings::Bindings;
 use mdl::source::{Parsed, SourceDiagnostic, Sources};
 use mdl_xtce::Options;
 
-use crate::pipeline::{check_order, check_placed, check_spans, files, kitchen_sink, load};
+use crate::kitchen::kitchen_sink;
+use crate::pipeline::{check_order, check_placed, check_spans, files, load};
 
 /// A bindings file (`spec/bindings.md` §1), checked against the kitchen
 /// sink when it reads (§6). Every error and diagnostic has a message.
@@ -15,7 +16,7 @@ pub fn bindings(data: &[u8]) {
     };
     match Bindings::from_toml(text) {
         Ok(bindings) => {
-            if let Err(diagnostics) = bindings.check(kitchen_sink()) {
+            if let Err(diagnostics) = bindings.check(&kitchen_sink().validated) {
                 for diagnostic in diagnostics.iter() {
                     assert!(!diagnostic.message.is_empty(), "{diagnostic:?}");
                 }

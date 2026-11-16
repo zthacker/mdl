@@ -27,33 +27,59 @@ props:
 # Fuzz one target of fuzz/ for a while, 60 s by default (nightly and
 # cargo-fuzz): release build with debug assertions and overflow checks,
 # 10 s at most an input, 512 MB at most an allocation. Starts from
-# fuzz/seeds/<target> and fuzz/corpus/<target>, and new inputs land in the
-# corpus, or in fuzz/<into>/<target> when another directory is named (CI's
-# cache); crashes land in fuzz/artifacts/<target>.
-fuzz target seconds="60" into="corpus":
+# fuzz/seeds/<target> and the committed fuzz/corpus/<target>, neither of
+# which it writes; new inputs land in fuzz/grown/<target>, or
+# fuzz/<into>/<target> (CI's cache), and crashes in fuzz/artifacts/<target>.
+fuzz target seconds="60" into="grown":
     #!/usr/bin/env bash
     set -euo pipefail
     case "{{target}}" in
-        artifact|canonical|read) dict=json ;;
+        artifact|canonical|decode|decode_command|layouts|read) dict=json ;;
         bindings|toml) dict=toml ;;
         xtce) dict=xml ;;
         *) dict= ;;
     esac
-    cd fuzz
-    inputs="seeds/{{target}}"
-    if [ "{{into}}" != corpus ]; then
-        inputs="$inputs corpus/{{target}}"
+    # layouts' input is a seed then damage to a payload of any length:
+    # without these, libFuzzer keeps to its seeds' 37 bytes.
+    length=
+    if [ "{{target}}" = layouts ]; then
+        length="-max_len=4096 -len_control=0"
     fi
-    mkdir -p "{{into}}/{{target}}"
-    cargo +{{nightly}} fuzz run --debug-assertions "{{target}}" "{{into}}/{{target}}" $inputs -- \
+    cd fuzz
+    mkdir -p "{{into}}/{{target}}" "corpus/{{target}}"
+    cargo +{{nightly}} fuzz run --debug-assertions "{{target}}" "{{into}}/{{target}}" \
+        "seeds/{{target}}" "corpus/{{target}}" -- \
         -max_total_time="{{seconds}}" -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=512 \
-        ${dict:+-dict=dicts/$dict.dict}
+        ${dict:+-dict=dicts/$dict.dict} $length
 
-# Shrink a target's corpus, before committing it, to the inputs that add
-# coverage beyond its seeds, up to 4 KB each; larger ones stay out of the
-# repository (CI's cache keeps its own)
-fuzz-cmin target:
+# Add to a target's committed corpus what fuzzing grew that adds coverage
+# beyond the seeds and the corpus, up to 4 KB each, removing nothing, so
+# history grows only by new coverage; larger inputs stay out of the
+# repository (CI's cache keeps its own). The generated targets keep seeds
+# only.
+fuzz-cmin target: (_corpus-kept target)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    just fuzz-merge "{{target}}" "grown/{{target}}" 4096 "seeds/{{target}}" "corpus/{{target}}"
+    mkdir -p "fuzz/corpus/{{target}}"
+    find "fuzz/grown/{{target}}" -type f -exec mv {} "fuzz/corpus/{{target}}/" \;
+
+# Minimize a target's committed corpus again from its seeds, up to 4 KB an
+# input. It replaces most inputs with smaller ones that cover the same, so
+# it's for now and then, when the corpus has drifted (a target's checks or
+# the code changed a lot), not for each refresh.
+fuzz-reset target: (_corpus-kept target)
     @just fuzz-merge "{{target}}" "corpus/{{target}}" 4096 "seeds/{{target}}"
+
+# The generated targets (layouts, shapes) commit seeds only: libFuzzer
+# keeps nearly every seed they're given, the testkit's own code being
+# instrumented, so their corpus records the generators' branches, not
+# MDL's.
+_corpus-kept target:
+    #!/usr/bin/env bash
+    case "{{target}}" in
+        layouts|shapes) echo "{{target}} commits seeds only; nothing to minimize"; exit 1 ;;
+    esac
 
 # Shrink fuzz/<dir> to the inputs that add coverage beyond the base
 # directories under fuzz/, up to `cap` bytes each (0 for any size). An
