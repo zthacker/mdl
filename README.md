@@ -160,14 +160,21 @@ the property tests at 10,000 cases each, as CI does on pushes to main.
 
 `just fuzz <target> [seconds]` fuzzes one target of `fuzz/` (it needs
 nightly Rust and `cargo install cargo-fuzz`); CI runs each for 60 seconds
-on pushes to main. What each target checks is in `crates/mdl-fuzz`, so
+on pushes to main, and the two that generate definitions with the testkit,
+`layouts` and `shapes`, for 300. What each target checks is in
+`crates/mdl-fuzz`, so
 `just check` replays every committed input on stable: the hand-picked
 seeds in `fuzz/seeds/<target>`, the corpus grown from them in
 `fuzz/corpus/<target>`, and each crash found, kept in
-`fuzz/regressions/<target>` once fixed. Before committing a grown corpus,
-`just fuzz-cmin <target>` keeps the inputs that add coverage beyond the
-seeds, up to 4 KB each. After `Cargo.lock` changes, `just fuzz-lock`
-gives the harness the same versions.
+`fuzz/regressions/<target>` once fixed. What fuzzing finds lands in
+`fuzz/grown/<target>`, untracked; `just fuzz-cmin <target>` adds to the
+corpus what of it adds coverage beyond the seeds and the corpus, up to
+4 KB each, and removes nothing, so history grows only by new coverage.
+`just fuzz-reset <target>` minimizes a corpus again from its seeds, now
+and then. `layouts` and `shapes` keep seeds only: their corpus would
+record the generators' branches, and a crash they find is kept as a unit
+test. After `Cargo.lock` changes, `just fuzz-lock` gives the harness the
+same versions.
 
 Issues and pull
 requests are welcome at <https://github.com/zthacker/mdl>.
