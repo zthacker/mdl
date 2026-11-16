@@ -8,6 +8,7 @@
 //! grown from them (`fuzz/corpus/<target>`) and the crashes found and fixed
 //! (`fuzz/regressions/<target>`).
 
+pub mod corpus;
 mod documents;
 mod frontends;
 mod generated;

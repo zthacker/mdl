@@ -126,6 +126,16 @@ fuzz-lock:
     cp Cargo.lock fuzz/Cargo.lock
     cargo update --manifest-path fuzz/Cargo.toml --workspace
 
+# Import every XTCE document under a directory (the argument, or
+# MDL_XTCE_CORPUS), build what imports and decode synthesized payloads with
+# it, under the fuzz targets' checks. The report goes to
+# target/xtce-corpus.md, or MDL_XTCE_CORPUS_REPORT; it fails only on a bug
+# in MDL. Optimized, with overflow checks and debug assertions on (the
+# props profile), as the fuzz targets run. The README lists public corpora.
+[positional-arguments]
+corpus *dir:
+    cargo run -q --profile props -p mdl-fuzz --bin corpus -- "$@"
+
 # Format all code
 fmt:
     cargo fmt --all
