@@ -19,13 +19,19 @@ it out would change a decoded or encoded value, a warning otherwise.
 
 ## 1. Documents
 
-An import reads one or more documents. Each MUST be well-formed XML
-without a DTD [`xtce.syntax`] whose root is a `SpaceSystem` in
+An import reads one or more documents. Each MUST be well-formed XML, its
+namespaces too (no prefix bound to none, `xmlns:p=""`), without a DTD
+[`xtce.syntax`], whose root is a `SpaceSystem` in
 `http://www.omg.org/space/xtce` (XTCE 1.0 and 1.1) or
-`http://www.omg.org/spec/XTCE/20180204` (XTCE 1.2) [`xtce.document`]. Each
-root is a top-level SpaceSystem; two with one name are an error at the
-later one, which isn't imported [`xtce.duplicate`]. References may cross
-documents.
+`http://www.omg.org/spec/XTCE/20180204` (XTCE 1.2) [`xtce.document`]. A
+root SpaceSystem in no namespace, or in a name documents written for Yamcs
+give XTCE 1.2's namespace (`https://www.omg.org/spec/XTCE/20180204`, and
+`SpaceSystem.xsd` below it over `http` or `https`), is read as XTCE with a
+warning [`xtce.namespace`]: Yamcs reads elements by their local names, so
+such documents load there. Either way, every element is in its root's
+namespace. Each root is a top-level SpaceSystem; two with one name are an
+error at the later one, which isn't imported [`xtce.duplicate`].
+References may cross documents.
 
 Every element the importer reads is checked. An attribute or child it
 doesn't read is an error [`xtce.unsupported`], since it can't tell whether
@@ -33,8 +39,8 @@ leaving it out would change a value, unless this document lists it as
 left out (§7), which is a warning [`xtce.ignored`]. Attributes in the XML
 Schema instance and XML namespaces (`xsi:schemaLocation`, `xml:lang`)
 describe the document and are skipped; attributes in other namespaces are
-warnings, and elements in other namespaces, XInclude among them, are
-errors.
+warnings, and elements in a namespace other than the root's, XInclude
+among them, are errors.
 
 SpaceSystems nest at most 64 deep, and aggregates (an aggregate whose
 member is an aggregate, and so on) at most 32, MDL's bound on struct
@@ -640,7 +646,7 @@ is [`xtce.ignored`]:
 
 | Code | What |
 | --- | --- |
-| `xtce.syntax` | Text that isn't well-formed XML, or has a DTD. |
+| `xtce.syntax` | Text that isn't well-formed XML (with namespaces), or has a DTD. |
 | `xtce.document` | A document that isn't XTCE, or no documents. |
 | `xtce.invalid` | Something XTCE doesn't allow: a missing attribute, a value that isn't a number, a container that inherits from itself, criteria that can't all hold. |
 | `xtce.reference` | A reference that names nothing. |
@@ -650,6 +656,7 @@ is [`xtce.ignored`]:
 | `xtce.ignored` | A warning: something left out that doesn't change decoded or encoded values. |
 | `xtce.renamed` | A warning: a name changed to fit MDL's rules. |
 | `xtce.differs` | A warning: a command MDL encodes otherwise than Yamcs (§6.3). |
+| `xtce.namespace` | A warning: a document read as XTCE whose root is in no namespace, or in a misspelling of XTCE 1.2's (§1). |
 
 An element is reported at its tag, an attribute at its value, and text at
 the text. A problem in a definition many packets share is reported once.

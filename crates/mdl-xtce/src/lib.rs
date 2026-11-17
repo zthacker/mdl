@@ -88,18 +88,19 @@ use xml::El;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]
 pub enum Code {
-    /// Text that isn't well-formed XML, or has a DTD.
+    /// Text that isn't well-formed XML (with namespaces), or has a DTD.
     Syntax,
     /// A document that isn't XTCE: its root isn't a SpaceSystem in an
-    /// XTCE namespace. Also no documents at all.
+    /// XTCE namespace, in none, or in a misspelling of XTCE 1.2's that MDL
+    /// reads. Also no documents at all.
     Document,
     /// Something XTCE doesn't allow: a missing attribute, a value that
     /// isn't a number, a container that inherits from itself.
     Invalid,
     /// A reference that names nothing.
     Reference,
-    /// Two items of one kind with one name in a SpaceSystem, or two root
-    /// SpaceSystems with one name.
+    /// Two items of one kind with one name in a SpaceSystem (SpaceSystems
+    /// among them), or two root SpaceSystems with one name.
     Duplicate,
     /// A name that can't become an MDL name, or two that become the same.
     Name,
@@ -114,6 +115,9 @@ pub enum Code {
     /// Something imported that MDL encodes differently from Yamcs: a
     /// warning naming the difference.
     Differs,
+    /// A document read as XTCE whose root isn't in an XTCE namespace: in
+    /// none, or in a misspelling of XTCE 1.2's. A warning.
+    Namespace,
 }
 
 impl Code {
@@ -129,6 +133,7 @@ impl Code {
         Code::Ignored,
         Code::Renamed,
         Code::Differs,
+        Code::Namespace,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -143,6 +148,7 @@ impl Code {
             Code::Ignored => "xtce.ignored",
             Code::Renamed => "xtce.renamed",
             Code::Differs => "xtce.differs",
+            Code::Namespace => "xtce.namespace",
         }
     }
 }

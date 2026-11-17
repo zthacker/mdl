@@ -18,6 +18,15 @@ use crate::report::Report;
 /// XTCE 1.0 and 1.1 share a namespace.
 pub(crate) const XTCE_1_1: &str = "http://www.omg.org/space/xtce";
 pub(crate) const XTCE_1_2: &str = "http://www.omg.org/spec/XTCE/20180204";
+
+/// What documents written for Yamcs put in place of XTCE 1.2's namespace:
+/// its https spelling, and the schema's address. Yamcs reads elements by
+/// their local names, so such documents load there.
+const XTCE_1_2_MISSPELLED: [&str; 3] = [
+    "https://www.omg.org/spec/XTCE/20180204",
+    "http://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd",
+    "https://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd",
+];
 const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
 
 /// The file's text as an XTCE document, or its problems reported.
@@ -35,15 +44,51 @@ pub(crate) fn parse<'a>(file: SourceFile<'a>, report: &mut Report) -> Option<Doc
             return None;
         }
     };
+    // XML namespaces don't let a prefix name no namespace, which roxmltree
+    // reads as an empty one. The first element in document order with such
+    // a prefix in scope is the one declaring it.
+    for node in document.descendants().filter(Node::is_element) {
+        let unbound = node
+            .namespaces()
+            .find_map(|declared| declared.name().filter(|_| declared.uri().is_empty()));
+        if let Some(prefix) = unbound {
+            report.error(
+                Code::Syntax,
+                El::new(node, file).span(),
+                format!(
+                    "xmlns:{prefix}=\"\" binds a prefix to no namespace, which XML namespaces \
+                     don't allow"
+                ),
+            );
+            return None;
+        }
+    }
     let root = document.root_element();
     let name = root.tag_name();
-    let known = matches!(name.namespace(), Some(XTCE_1_1 | XTCE_1_2));
-    if name.name() != "SpaceSystem" || !known {
-        let found = match name.namespace() {
+    let span = El::new(root, file).span();
+    let namespace = namespace_of(root);
+    let official = matches!(namespace, Some(XTCE_1_1 | XTCE_1_2));
+    // Read as XTCE, with a warning: Yamcs reads them. Every element still
+    // has to be in the root's namespace (`El::check`).
+    let tolerated = namespace.is_none_or(|namespace| XTCE_1_2_MISSPELLED.contains(&namespace));
+    if name.name() == "SpaceSystem" && !official && tolerated {
+        let found = match namespace {
+            Some(namespace) => format!("{namespace}, which isn't XTCE 1.2's namespace"),
+            None => "no namespace".to_string(),
+        };
+        report.warning(
+            Code::Namespace,
+            span,
+            format!(
+                "this document's root is in {found}; MDL reads it as XTCE, as Yamcs does, but \
+                 its namespace should be {XTCE_1_2} (XTCE 1.2) or {XTCE_1_1} (XTCE 1.0 and 1.1)"
+            ),
+        );
+    } else if name.name() != "SpaceSystem" || !official {
+        let found = match namespace {
             Some(namespace) => format!("{} in namespace {namespace}", name.name()),
             None => format!("{} in no namespace", name.name()),
         };
-        let span = El::new(root, file).span();
         report.error(
             Code::Document,
             span,
@@ -177,11 +222,11 @@ impl<'d> El<'d> {
 
     /// Element children in the element's own namespace.
     pub(crate) fn children(&self) -> impl Iterator<Item = El<'d>> + 'd {
-        let namespace = self.node.tag_name().namespace();
+        let namespace = namespace_of(self.node);
         let file = self.file;
         self.node
             .children()
-            .filter(move |n| n.is_element() && n.tag_name().namespace() == namespace)
+            .filter(move |n| n.is_element() && namespace_of(*n) == namespace)
             .map(move |n| El::new(n, file))
     }
 
@@ -265,7 +310,7 @@ impl<'d> El<'d> {
                 ),
             }
         }
-        let namespace = self.node.tag_name().namespace();
+        let namespace = namespace_of(self.node);
         for node in self.node.children() {
             if node.is_text() {
                 let text = node.text().unwrap_or_default();
@@ -284,19 +329,31 @@ impl<'d> El<'d> {
             }
             let child = El::new(node, self.file);
             let name = child.name();
-            match node.tag_name().namespace() {
+            match namespace_of(node) {
                 Some(XINCLUDE) => report.error(
                     Code::Unsupported,
                     child.span(),
                     "XInclude isn't supported; give the importer the included files instead",
                 ),
-                other if other != namespace => report.error(
+                // XTCE where XTCE doesn't allow it.
+                Some(xtce) if Some(xtce) != namespace && is_xtce_namespace(xtce) => report.error(
+                    Code::Invalid,
+                    child.span(),
+                    outside(name, Some(xtce), owner, namespace),
+                ),
+                // In no namespace under XTCE: XTCE without its namespace, or
+                // a vendor's element; MDL can't tell.
+                None if namespace.is_some() => report.error(
+                    Code::Unsupported,
+                    child.span(),
+                    outside(name, None, owner, namespace),
+                ),
+                Some(other) if Some(other) != namespace => report.error(
                     Code::Unsupported,
                     child.span(),
                     format!(
-                        "{name} from namespace {} isn't XTCE, so this can't be imported \
-                         faithfully",
-                        other.unwrap_or("(none)")
+                        "{name} from namespace {other} isn't XTCE, so this can't be imported \
+                         faithfully"
                     ),
                 ),
                 _ if expect.children.contains(&name) => {}
@@ -326,6 +383,33 @@ pub(crate) struct Expect<'s> {
     pub(crate) ignored: &'s [&'s str],
     /// Whether the element holds text.
     pub(crate) text: bool,
+}
+
+/// An element outside its parent's namespace, for a message.
+fn outside(name: &str, namespace: Option<&str>, owner: &str, parent: Option<&str>) -> String {
+    let place = |namespace: Option<&str>| match namespace {
+        Some(namespace) => format!("namespace {namespace}"),
+        None => "no namespace".to_string(),
+    };
+    format!(
+        "{name} is in {}, and {owner} in {}; an XTCE document keeps every element in its root's \
+         namespace",
+        place(namespace),
+        place(parent)
+    )
+}
+
+/// An element's namespace. `xmlns=""` puts an element in none, which
+/// roxmltree gives as an empty one.
+fn namespace_of<'a>(node: Node<'a, '_>) -> Option<&'a str> {
+    node.tag_name()
+        .namespace()
+        .filter(|namespace| !namespace.is_empty())
+}
+
+/// An XTCE namespace, or one MDL reads as XTCE 1.2's.
+fn is_xtce_namespace(namespace: &str) -> bool {
+    namespace == XTCE_1_1 || namespace == XTCE_1_2 || XTCE_1_2_MISSPELLED.contains(&namespace)
 }
 
 fn is_document_namespace(namespace: &str) -> bool {

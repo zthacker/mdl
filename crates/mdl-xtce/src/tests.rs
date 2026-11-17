@@ -166,6 +166,112 @@ fn only_xtce_documents_are_read() {
     assert_eq!(result.unwrap_err()[0].code, "xtce.document");
 }
 
+/// A SpaceSystem in no namespace, or in a misspelling of XTCE 1.2's that
+/// documents written for Yamcs use, is read as XTCE with a warning, Yamcs
+/// reading elements by their local names. Every element still keeps to
+/// the root's namespace, and any other namespace isn't XTCE.
+#[test]
+fn documents_yamcs_reads_whatever_their_namespace_are_read_with_a_warning() {
+    let body = telemetry(U8, &param("A", "U8"), &container("P", &entry("A")));
+    let expected = bundle(&doc(&body));
+    let fix = "its namespace should be http://www.omg.org/spec/XTCE/20180204 (XTCE 1.2) or \
+               http://www.omg.org/space/xtce (XTCE 1.0 and 1.1)";
+    for namespace in [
+        None,
+        // `xmlns=""` is no namespace too.
+        Some(""),
+        Some("https://www.omg.org/spec/XTCE/20180204"),
+        Some("http://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd"),
+        Some("https://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd"),
+    ] {
+        let text = match namespace {
+            None => format!(r#"<SpaceSystem name="Sat">{body}</SpaceSystem>"#),
+            Some(namespace) => {
+                format!(r#"<SpaceSystem name="Sat" xmlns="{namespace}">{body}</SpaceSystem>"#)
+            }
+        };
+        let (sources, result) = import_all(&[("sat.xml", &text)]);
+        let parsed = result.unwrap();
+        let found = shown(&sources, &parsed.warnings);
+        assert_eq!(found.len(), 1, "{namespace:?}: {found:#?}");
+        let (_, code, at, message) = &found[0];
+        assert_eq!((code.as_str(), at.as_str()), ("xtce.namespace", "1:1"));
+        let root = match namespace {
+            None | Some("") => "no namespace".to_string(),
+            Some(namespace) => format!("{namespace}, which isn't XTCE 1.2's namespace"),
+        };
+        assert_eq!(
+            *message,
+            format!(
+                "this document's root is in {root}; MDL reads it as XTCE, as Yamcs does, but {fix}"
+            )
+        );
+        assert_eq!(serde_json::to_value(&parsed.bundle).unwrap(), expected);
+    }
+
+    // An element outside the root's namespace: in none under XTCE, and in
+    // XTCE under none.
+    let none_under_xtce = format!(
+        r#"<SpaceSystem name="Sat" xmlns="{XTCE}"><TelemetryMetaData xmlns=""/></SpaceSystem>"#
+    );
+    assert_eq!(
+        one_problem(&none_under_xtce),
+        (
+            "xtce.unsupported".to_string(),
+            "TelemetryMetaData is in no namespace, and SpaceSystem Sat in namespace \
+             http://www.omg.org/spec/XTCE/20180204; an XTCE document keeps every element in its \
+             root's namespace"
+                .to_string()
+        )
+    );
+    let xtce_under_none =
+        format!(r#"<SpaceSystem name="Sat"><TelemetryMetaData xmlns="{XTCE}"/></SpaceSystem>"#);
+    let (sources, result) = import_all(&[("sat.xml", &xtce_under_none)]);
+    let found = shown(&sources, &result.unwrap_err());
+    let found: Vec<(&str, &str)> = found
+        .iter()
+        .map(|(_, code, _, message)| (code.as_str(), message.as_str()))
+        .collect();
+    assert_eq!(found.len(), 2, "{found:#?}");
+    assert_eq!(found[0].0, "xtce.namespace");
+    assert_eq!(
+        found[1],
+        (
+            "xtce.invalid",
+            "TelemetryMetaData is in namespace http://www.omg.org/spec/XTCE/20180204, and \
+             SpaceSystem Sat in no namespace; an XTCE document keeps every element in its root's \
+             namespace"
+        )
+    );
+
+    // Any other namespace isn't XTCE.
+    let other = r#"<SpaceSystem name="Sat" xmlns="http://example.com/xtce"/>"#;
+    assert_eq!(one_problem(other).0, "xtce.document");
+}
+
+/// A prefix bound to no namespace (`xmlns:p=""`) isn't namespace-well-formed
+/// XML, though roxmltree reads it, as an empty namespace. It's refused
+/// where it's declared, on the root or below.
+#[test]
+fn a_prefix_bound_to_no_namespace_is_refused() {
+    let message = "xmlns:p=\"\" binds a prefix to no namespace, which XML namespaces don't allow";
+    for text in [
+        format!(r#"<SpaceSystem name="Sat" xmlns="{XTCE}" xmlns:p="" p:note="x"/>"#),
+        r#"<p:SpaceSystem name="Sat" xmlns:p=""/>"#.to_string(),
+        format!(
+            r#"<SpaceSystem name="Sat" xmlns="{XTCE}"><TelemetryMetaData xmlns:p=""><ParameterSet/></TelemetryMetaData></SpaceSystem>"#
+        ),
+    ] {
+        let (sources, result) = import_all(&[("sat.xml", &text)]);
+        let found = shown(&sources, &result.unwrap_err());
+        assert_eq!(found.len(), 1, "{text}: {found:#?}");
+        assert_eq!(
+            (found[0].1.as_str(), found[0].3.as_str()),
+            ("xtce.syntax", message)
+        );
+    }
+}
+
 #[test]
 fn references_resolve_as_yamcs_resolves_them() {
     // The header is in the root; Sub's packet names it several ways.

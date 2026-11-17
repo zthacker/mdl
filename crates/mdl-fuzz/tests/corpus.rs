@@ -60,7 +60,11 @@ fn each_kind_of_document_is_reported() {
     );
     write(&dir, "pair/types.xml", types.as_bytes());
     write(&dir, "pair/packets.xml", packets.as_bytes());
-    write(&dir, "pair/legacy.xml", br#"<SpaceSystem name="Legacy"/>"#);
+    write(
+        &dir,
+        "pair/legacy.xml",
+        br#"<SpaceSystem name="Legacy" xmlns="http://example.com/legacy"/>"#,
+    );
     // B at bit 4 overlaps A: it imports, and validation refuses it.
     let overlap = document(
         "Overlap",
