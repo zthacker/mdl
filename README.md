@@ -28,6 +28,35 @@ with them.
 > Status: pre-0.1, under active development. The IR, APIs and CLI will
 > change.
 
+## Definitions and the canonical catalog
+
+MDL does two jobs, and keeps them apart.
+
+**Definitions describe a vendor's bytes:** where each value sits in each
+message, how to convert it from raw counts, and how to tell one packet
+from another. Each family's definitions are its own; one vendor's
+housekeeping packet says nothing about another's.
+
+**The catalog is the one vocabulary every source maps into.** It names
+each value once, with its type, unit, frame and limits: `eps.bus_voltage`
+is an f64 in volts, whichever vendor's packet it came from. A definition
+maps fields to catalog names, and validation checks that they agree in
+type and unit (and, for vectors, frame). Whatever reads the data
+downstream (an archive, alarms, a display, a model) reads catalog names,
+and never needs to know whose spacecraft sent a value.
+
+Definitions are compiled, but not into code. `morphc build` validates
+them, writes each catalog, family and set in one canonical form, and
+names it by its SHA-256; the decoder and encoder interpret those
+artifacts at runtime. So a new packet or a changed layout is a
+definitions change, and nothing that consumes the data is rebuilt. A
+set's digest is the `def_version` stamped on everything it decodes or
+encodes, so every value can be traced to the definitions behind it.
+
+A decoded message keeps each entry's raw value and the canonical samples,
+and gives any field's engineering value, through its conversion, on
+request.
+
 ## Quick start
 
 The crates aren't on crates.io yet, so morphc is installed from a clone:
