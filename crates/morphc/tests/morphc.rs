@@ -875,6 +875,26 @@ fn inspect_set_shows_where_each_entry_sits() {
     );
 }
 
+/// A signed form other than two's complement is part of an entry's type.
+#[test]
+fn inspect_set_shows_signed_forms() {
+    let out = morphc_in(
+        &paired(),
+        &["inspect", "set", "sink_v1", "-"],
+        Some(FULL_BUNDLE),
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains("  32   16    trim     int16 sign-magnitude "),
+        "{text}"
+    );
+    assert!(
+        text.contains("  48   24    offsets  int8 ones' complement x 3"),
+        "{text}"
+    );
+}
+
 #[test]
 fn inspect_set_shows_ranges_counts_and_pointers() {
     let binary = morphc_in(

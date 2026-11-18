@@ -183,12 +183,14 @@ fn from_field(from: &FromField) -> String {
 
 /// A scalar's type: `uint16`, `float32`, `bool`, `string(8)`,
 /// `string(8, ..0x00)` (ending at the first NUL), `bytes(n)`,
-/// `string(..0x00)`, `bytes(to the end)`, with ` le` or ` be` when it names
-/// its own byte order.
+/// `string(..0x00)`, `bytes(to the end)`, with its signed form when it
+/// isn't two's complement (`int12 sign-magnitude`), and ` le` or ` be` when
+/// it names its own byte order.
 fn scalar_type(
     ty: &mdl::ir::ScalarType,
     size_bits: Option<u32>,
     length: Option<&ByteLength>,
+    signed: Option<&mdl::ir::Signed>,
     byte_order: Option<&mdl::ir::ByteOrder>,
 ) -> String {
     let name = ir(ty);
@@ -214,6 +216,11 @@ fn scalar_type(
             None => name,
         },
     };
+    match signed.map(ir).as_deref() {
+        Some("sign_magnitude") => text.push_str(" sign-magnitude"),
+        Some("ones_complement") => text.push_str(" ones' complement"),
+        _ => {}
+    }
     match byte_order.map(ir).as_deref() {
         Some("little") => text.push_str(" le"),
         Some("big") => text.push_str(" be"),
@@ -235,6 +242,7 @@ fn scalar_element(element: &ScalarElement) -> String {
         &element.ty,
         element.size_bits,
         element.length.as_ref(),
+        element.signed.as_ref(),
         element.byte_order.as_ref(),
     )
 }
@@ -247,6 +255,7 @@ pub fn entry_type(entry: &Entry) -> String {
             &field.ty,
             field.size_bits,
             field.length.as_ref(),
+            field.signed.as_ref(),
             field.byte_order.as_ref(),
         ),
         Entry::Array(array) => {
