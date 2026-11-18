@@ -2368,15 +2368,74 @@ fn a_build_file_says_what_it_needs() {
         stderr(&options)
     );
     write(
-        "[[input]]\npath = \"defs/vendors/imager.xml\"\nalias = { kind = \"metadata\", name = \"apid\" }\n",
+        "[[input]]\npath = \"defs/vendors/imager.xml\"\nalias = { kind = \"path\", pointer = \"/id\" }\n",
     );
     let alias = build(&["build", "-c", "bad.toml"]);
-    // The alias reads metadata the imported family doesn't declare: a
-    // definitions problem, located like any other.
+    // A path alias on a binary family: a definitions problem, located
+    // like any other.
     assert_eq!(alias.status.code(), Some(1), "{}", stderr(&alias));
+    let said = stderr(&alias);
+    assert!(
+        said.contains("error[wrong_encoding]: path locators only apply"),
+        "{said}"
+    );
+    assert!(said.contains(" --> defs/vendors/imager.xml:"), "{said}");
     for out in [both, flags, unknown] {
         assert_eq!(out.status.code(), Some(2));
     }
+}
+
+/// An XTCE import whose alias a build file reads from metadata builds,
+/// and a message carrying that metadata decodes as the asset bound to it.
+#[test]
+fn a_build_files_metadata_alias_builds_and_decodes() {
+    let dir = scratch("buildfile_metadata_alias");
+    fs::write(
+        dir.join("sat.xml"),
+        r#"<SpaceSystem name="SmallSat" xmlns="http://www.omg.org/spec/XTCE/20180204"><TelemetryMetaData><ParameterTypeSet><IntegerParameterType name="U8" signed="false"><IntegerDataEncoding sizeInBits="8"/></IntegerParameterType></ParameterTypeSet><ParameterSet><Parameter name="Mode" parameterTypeRef="U8"/></ParameterSet><ContainerSet><SequenceContainer name="Status"><EntryList><ParameterRefEntry parameterRef="Mode"/></EntryList></SequenceContainer></ContainerSet></TelemetryMetaData></SpaceSystem>"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.join("morphc.toml"),
+        "[[input]]\npath = \"sat.xml\"\nalias = { kind = \"metadata\", name = \"scid\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("bindings.toml"),
+        "mdl_version = \"2.0\"\n\n[[binding]]\nfamily = \"smallsat\"\nnative_id = 42\nasset = \"SAT-1\"\n\
+         set = \"smallsat\"\neffective_from = \"2026-01-01T00:00:00Z\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("capture.jsonl"),
+        "{\"hex\": \"07\", \"meta\": {\"scid\": 42}, \"time\": \"2026-06-01T12:00:00Z\"}\n",
+    )
+    .unwrap();
+    let built = morphc_in(
+        &dir,
+        &["build", "-c", "morphc.toml", "--out", "store"],
+        None,
+    );
+    assert_eq!(built.status.code(), Some(0), "{}", stderr(&built));
+    let args = [
+        "decode",
+        "store",
+        "--family",
+        "smallsat",
+        "--records",
+        "capture.jsonl",
+        "--bindings",
+        "bindings.toml",
+        "--format",
+        "json",
+    ];
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    let telemetry = &report["decode"]["messages"][0]["telemetry"];
+    assert_eq!(telemetry["asset"], "SAT-1", "{report:#}");
+    assert_eq!(telemetry["native_id"], 42, "{report:#}");
+    assert_eq!(telemetry["samples"][0]["value"], 7, "{report:#}");
 }
 
 #[test]

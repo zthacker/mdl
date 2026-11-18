@@ -1270,13 +1270,28 @@ fn options_name_the_family_and_set() {
         .with_family("vendor_x")
         .with_set("vendor_x_v1")
         .with_alias(mdl::ir::Locator::metadata("scid"));
-    let bundle = serde_json::to_value(read(sources.iter(), &options).unwrap().bundle).unwrap();
+    let parsed = read(sources.iter(), &options).unwrap();
+    let bundle = serde_json::to_value(&parsed.bundle).unwrap();
     assert_eq!(bundle["families"][0]["name"], "vendor_x");
     assert_eq!(
         bundle["families"][0]["alias"],
         json!({ "kind": "metadata", "name": "scid" })
     );
     assert_eq!(bundle["sets"][0]["name"], "vendor_x_v1");
+    // The family declares the metadata its alias reads, so it validates.
+    assert_eq!(bundle["families"][0]["metadata"], json!(["scid"]));
+    assert!(validate(parsed.bundle).is_ok());
+    // Another alias declares none.
+    let fixed = bundle_of(&sources, &Options::new());
+    assert_eq!(
+        fixed["families"][0]["alias"],
+        json!({ "kind": "fixed", "value": "Sat" })
+    );
+    assert!(fixed["families"][0].get("metadata").is_none(), "{fixed:#}");
+}
+
+fn bundle_of(sources: &Sources, options: &Options) -> Value {
+    serde_json::to_value(read(sources.iter(), options).unwrap().bundle).unwrap()
 }
 
 /// The packets of a document that imports without a warning and

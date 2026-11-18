@@ -18,6 +18,9 @@ pub(super) struct Bundle<'a, 'd> {
     pub(super) family: &'a str,
     pub(super) order: Order,
     pub(super) alias: Value,
+    /// The metadata name a metadata alias reads, which the family
+    /// declares.
+    pub(super) metadata: Option<String>,
     pub(super) set: &'a str,
     pub(super) packets: &'a [Packet<'d>],
     pub(super) structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
@@ -48,6 +51,11 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     family.put("encoding", "binary", None);
     family.put("byte_order", parts.order.as_str(), None);
     family.put("alias", parts.alias, None);
+    if let Some(name) = parts.metadata {
+        let mut metadata = List::default();
+        metadata.push(name, None);
+        family.put_list("metadata", metadata);
+    }
     let mut families = List::default();
     families.push_object(family);
 

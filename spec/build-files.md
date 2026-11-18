@@ -42,7 +42,7 @@ Each `input` table has these keys and no others:
 | `path` | string | Required. A definition file or directory, as an input on morphc's command line. A relative path is taken from the directory the build file really lives in (after following links to it), so a link to a build file lists the same inputs as the file. Not `-`. |
 | `family` | string | The imported family's name (XTCE import option). |
 | `set` | string | The imported set's name. |
-| `alias` | table | Where an imported asset's own id is, written as a family's `alias` is in the IR: `{ kind = "fixed", value = "..." }`, `{ kind = "metadata", name = "..." }`, `{ kind = "path", pointer = "..." }` or `{ kind = "bits", offset_bits = ..., size_bits = ... }`. |
+| `alias` | table | Where an imported asset's own id is, written as a family's `alias` is in the IR: `{ kind = "fixed", value = "..." }`, `{ kind = "metadata", name = "..." }`, `{ kind = "path", pointer = "..." }` or `{ kind = "bits", offset_bits = ..., size_bits = ... }`. A `metadata` alias also declares its name in the family's `metadata`. |
 | `naming` | string | `short` or `qualified`: how names are made from XTCE names. |
 
 Each option left out takes the importer's default ([xtce](xtce.md)): the

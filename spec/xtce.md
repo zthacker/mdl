@@ -84,8 +84,10 @@ An import produces one family and one set:
   or an argument writes is, and big-endian otherwise, each field in the
   other order naming its own (`decoding.md` §2.1), so a big-endian header
   ahead of little-endian data is described as it is. A command's
-  constants are bit patterns, and don't count. Its alias is the option, or a fixed value: the first root
-  SpaceSystem's name.
+  constants are bit patterns, and don't count. Its alias is the option,
+  or a fixed value: the first root SpaceSystem's name. An alias read from
+  metadata makes that name the family's one metadata name, since the
+  family has to declare it and XTCE has nowhere to.
 - **Set.** Its name is the option, or the family's. It has one packet for
   each concrete sequence container, in document order, a struct type for
   each embedded container and each array element that isn't a scalar

@@ -364,6 +364,12 @@ impl<'d, 'r> Import<'d, 'r> {
             .alias
             .clone()
             .unwrap_or_else(|| Locator::fixed(root.name));
+        // A metadata alias reads a value the link provides, which its
+        // family declares; an XTCE document can't, so the import does.
+        let metadata = match &alias {
+            Locator::Metadata { name, .. } => Some(name.clone()),
+            _ => None,
+        };
         let alias = match serde_json::to_value(alias) {
             Ok(alias) => alias,
             Err(err) => {
@@ -382,6 +388,7 @@ impl<'d, 'r> Import<'d, 'r> {
             family: &family,
             order,
             alias,
+            metadata,
             set: &set,
             packets: &packets,
             structs: &self.structs,
