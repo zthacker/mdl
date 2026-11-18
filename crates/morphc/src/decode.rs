@@ -823,17 +823,9 @@ fn command_result(decoded: &DecodedCommand<'_>) -> CommandResult {
 }
 
 /// `good`, `invalid`, `out_of_calibration`, as the library names them.
+/// As the library spells it, so a quality added there needs nothing here.
 fn quality(quality: Quality) -> String {
-    match quality {
-        Quality::Good => "good",
-        Quality::UnknownState => "unknown_state",
-        Quality::OutOfCalibration => "out_of_calibration",
-        Quality::OutOfRange => "out_of_range",
-        Quality::NonFinite => "non_finite",
-        Quality::Invalid => "invalid",
-        _ => "unsupported",
-    }
-    .to_string()
+    quality.as_str().to_string()
 }
 
 fn event_time(time: &EventTime, ground: Timestamp) -> Json {
