@@ -1,0 +1,9 @@
+mdl_version = "2.0"
+
+# Node 7 is the asset NODE-7, its beacons decoded by beacon_v1.
+[[binding]]
+family         = "beacon"
+native_id      = 7
+asset          = "NODE-7"
+set            = "beacon_v1"
+effective_from = "2026-01-01T00:00:00Z"

@@ -5,6 +5,7 @@ operator adds to run it.
 
 | Path | What it holds |
 | --- | --- |
+| [`beacon`](beacon) | The smallest whole example, which the [README](../README.md#a-worked-example) walks through: one catalog, one family, one set with a calibrated voltage and a mode, and a bindings file. |
 | [`toml/mission`](toml/mission) | One catalog shared by three very different assets, in MDL's TOML: a CCSDS satellite (CUC time, an APID per packet, a calibration table, a command with a CRC), a satellite sending JSON lines (in Fahrenheit, converted to Celsius), and a MAVLink drone (little-endian, time since boot). |
 | [`toml/mixed_versions`](toml/mixed_versions) | Two firmware versions on one link. A format byte in every message picks the set that decodes it. |
 | [`xtce/demosat.xml`](xtce/demosat.xml) | A CCSDS satellite as XTCE tools describe one: inherited headers, APIDs, calibrators, a spline, an enumeration, vectors, commands with defaults, ranges, calibrated currents and a list of waypoint records. Its bus voltage, battery temperature and mode command map to the mission catalog's names through MDL aliases. |
@@ -14,7 +15,8 @@ operator adds to run it.
 The TOML and XTCE examples are also read, validated and decoded by their
 crates' own tests (`cargo test -p morpheus-mdl-toml --test examples`,
 `cargo test -p morpheus-mdl-xtce --test examples`); `fleet` is used by the
-walkthrough below.
+walkthrough below, and `beacon` by the README's worked example, which runs
+as a test too.
 
 ## Walkthrough: a fleet from definitions to commands
 

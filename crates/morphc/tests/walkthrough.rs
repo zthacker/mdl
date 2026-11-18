@@ -1,5 +1,6 @@
-//! The walkthrough in `examples/README.md`, run as written. Each `$ morphc`
-//! line of a console block runs in a copy of the examples, and must show
+//! The walkthrough in `examples/README.md`, and the worked example in the
+//! README, run as written. Each `$ morphc` line of a console block runs in
+//! a copy of the examples, from `examples/`, and must show
 //! the block's lines: all of them, in order, except where a `...` line
 //! skips some. `(exit N)` as the last line is the exit code, 0 when it's
 //! left out. Output is stderr, then stdout: morphc writes every
@@ -7,11 +8,11 @@
 //!
 //! After an intended change to what morphc prints (or to an identity),
 //! `UPDATE_WALKTHROUGH=1 cargo test -p morpheus-morphc --test walkthrough` rewrites
-//! each block from the real output, keeping a block's leading `...`, for
-//! the diff to be reviewed.
+//! each block of both from the real output, keeping a block's leading
+//! `...`, for the diff to be reviewed.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 struct Step {
@@ -156,16 +157,73 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+fn repository() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
 #[test]
 fn the_walkthrough_runs_as_written() {
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
-    let readme_path = examples.join("README.md");
-    let readme = fs::read_to_string(&readme_path).unwrap();
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("walkthrough");
+    runs_as_written("examples/README.md", &["toml", "xtce", "fleet"], 10);
+}
+
+#[test]
+fn the_readmes_worked_example_runs_as_written() {
+    runs_as_written("README.md", &["beacon"], 2);
+}
+
+/// The README's JSON for the worked example is what morphc prints for its
+/// beacon, value for value.
+#[test]
+fn the_readmes_json_is_what_morphc_prints() {
+    let readme = fs::read_to_string(repository().join("README.md")).unwrap();
+    let block: String = readme
+        .lines()
+        .skip_while(|line| *line != "```json")
+        .skip(1)
+        .take_while(|line| *line != "```")
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let shown: serde_json::Value = serde_json::from_str(&block).unwrap();
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("readme-json");
     if dir.exists() {
         fs::remove_dir_all(&dir).unwrap();
     }
-    for part in ["toml", "xtce", "fleet"] {
+    copy_dir(&repository().join("examples/beacon"), &dir.join("beacon"));
+    let morphc = |args: &str| {
+        let out = Command::new(env!("CARGO_BIN_EXE_morphc"))
+            .current_dir(&dir)
+            .args(args.split_whitespace())
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        out.stdout
+    };
+    morphc("build beacon/beacon.toml --out store");
+    let printed: serde_json::Value = serde_json::from_slice(&morphc(
+        "decode store --family beacon --hex 070b1901 --bindings beacon/bindings.toml \
+         --time 2026-06-01T12:00:00Z --raw --format json",
+    ))
+    .unwrap();
+    assert_eq!(shown, printed["decode"]["messages"][0]["telemetry"]);
+}
+
+/// Runs each console block of `readme` (a path in the repository) in a
+/// copy of the examples' `parts`, as the module docs say; at least
+/// `steps`, so a block the parser misses fails the test.
+fn runs_as_written(readme: &str, parts: &[&str], at_least: usize) {
+    let examples = repository().join("examples");
+    let readme_path = repository().join(readme);
+    let name = readme;
+    let readme = fs::read_to_string(&readme_path).unwrap();
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name.replace('/', "-"));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    for part in parts {
         copy_dir(&examples.join(part), &dir.join(part));
     }
     let update = std::env::var_os("UPDATE_WALKTHROUGH").is_some();
@@ -176,7 +234,7 @@ fn the_walkthrough_runs_as_written() {
         "UPDATE_WALKTHROUGH is set in CI"
     );
     let steps = steps(&readme);
-    assert!(steps.len() >= 10, "{} steps", steps.len());
+    assert!(steps.len() >= at_least, "{name}: {} steps", steps.len());
     let mut blocks = Vec::new();
     for step in steps {
         let out = Command::new(env!("CARGO_BIN_EXE_morphc"))
@@ -204,8 +262,8 @@ fn the_walkthrough_runs_as_written() {
         let lines: Vec<&str> = output.lines().collect();
         assert!(
             shows(&step.shown, &lines),
-            "`morphc {command}` doesn't show what examples/README.md says (UPDATE_WALKTHROUGH=1 \
-             rewrites it).\nShown there:\n{}\n\nOutput:\n{output}",
+            "`morphc {command}` doesn't show what {name} says (UPDATE_WALKTHROUGH=1 rewrites \
+             it).\nShown there:\n{}\n\nOutput:\n{output}",
             step.shown.join("\n")
         );
         assert_eq!(exit, step.exit, "`morphc {command}`");

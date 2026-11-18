@@ -1,0 +1,58 @@
+mdl_version = "2.0"
+
+# The catalog: what the rest of the system calls each value, whichever
+# source sends it.
+
+[catalog.params."eps.bus_voltage"]
+type        = "f64"
+unit        = "V"
+description = "Main bus voltage"
+
+[catalog.params."eps.mode"]
+type        = "enum"
+states      = ["SAFE", "NOMINAL"]
+description = "Power mode"
+
+# The family: one kind of source on one link. Byte 0 of every beacon is
+# the id of the node that sent it.
+
+[[families]]
+name       = "beacon"
+encoding   = "binary"
+byte_order = "big"
+alias      = { kind = "bits", offset_bits = 0, size_bits = 8 }
+
+# The set: this layout of the family's messages, and how each field maps
+# to the catalog.
+
+[[sets]]
+name   = "beacon_v1"
+family = "beacon"
+
+[[sets.packets]]
+name   = "BEACON"
+length = { kind = "exact", bytes = 4 }
+
+# Bytes 1 and 2: the bus voltage in counts of 10 mV.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "bus"
+type        = "uint"
+offset_bits = 8
+size_bits   = 16
+conversion  = { kind = "linear", scale = 10.0, offset = 0.0 }
+unit        = "mV"
+canonical   = "eps.bus_voltage"
+
+# Byte 3: the power mode.
+[[sets.packets.entries]]
+kind        = "field"
+name        = "mode"
+type        = "uint"
+offset_bits = 24
+size_bits   = 8
+conversion  = { kind = "states", states = [
+    { raw = 0, name = "SAFE" },
+    { raw = 1, name = "NOMINAL" },
+] }
+canonical   = "eps.mode"

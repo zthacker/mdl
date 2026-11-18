@@ -28,6 +28,35 @@ with them.
 > Status: pre-0.1, under active development. The IR, APIs and CLI will
 > change.
 
+## How it works
+
+```mermaid
+flowchart LR
+    subgraph sources [Definitions]
+        toml[TOML]
+        xtce[XTCE]
+        irjson[IR as JSON, from any tool]
+    end
+    toml & xtce & irjson --> bundle["IR bundle<br/>catalog, families, sets"]
+    bundle --> validate{validate}
+    validate -- "every problem, located in its source" --> sources
+    validate --> build["build<br/>canonical JSON, named by SHA-256"]
+    build --> store[("store<br/>catalog, family and set artifacts")]
+    store --> load["load<br/>a family and its sets"]
+    load --> decode["decode<br/>route, identify, read, convert, map"]
+    load --> encode["encode<br/>check, convert, write"]
+    bytes["a vendor's bytes<br/>and link metadata"] --> decode
+    bindings["bindings<br/>native id to asset and set"] --> decode
+    decode --> decoded["raw record, engineering values,<br/>canonical samples, def_version"]
+    request["a command request<br/>in catalog names"] --> encode
+    encode --> payload["payload and metadata,<br/>def_version"]
+```
+
+Definitions come from any frontend as one IR, are checked once, and are
+built into artifacts. Ground software loads the artifacts and decodes and
+encodes with them at runtime, so when a definition changes, no code is
+generated, and nothing that consumes the data is rebuilt.
+
 ## Definitions and the canonical catalog
 
 MDL does two jobs, and keeps them apart.
@@ -57,6 +86,89 @@ A decoded message keeps each entry's raw value and the canonical samples,
 and gives any field's engineering value, through its conversion, on
 request.
 
+## A worked example
+
+[`examples/beacon`](examples/beacon) is a node that sends one 4-byte
+beacon. (To run the commands below, install morphc as [Quick
+start](#quick-start) says, then work from `examples/`.) Its definitions, [`beacon.toml`](examples/beacon/beacon.toml), have
+the three parts every build has:
+
+- **the catalog** names the values the rest of the system wants:
+  `eps.bus_voltage`, an f64 in volts, and `eps.mode`, `SAFE` or `NOMINAL`;
+- **the family** says how this kind of source talks: binary, big-endian,
+  and byte 0 of every beacon is the id of the node that sent it (its
+  alias);
+- **the set** lays the beacon out: bytes 1 and 2 are the bus voltage in
+  counts of 10 mV, byte 3 the mode, each mapped to its catalog name.
+
+[`bindings.toml`](examples/beacon/bindings.toml) says node 7 is the asset
+`NODE-7`. Building checks the definitions and writes them as artifacts;
+the set's digest is its `def_version`:
+
+```console
+$ morphc build beacon/beacon.toml --out store
+catalog        38fca423ec69a622d0e974d77f9c3d5248f4e6d6c04baaa1785a2fa130841ffa  (written)
+family beacon  498f5a56972108969202903e36ef0cc98c82b0fab5e31c1634776403a8af491f  (written)
+set beacon_v1  6ac262f19dba7ca92aed618221d5e88a8d0796e9e5b26ce7415bb4f8e3cc6a66  (written)
+ok: 2 params, 0 commands, 1 family, 1 set (MDL IR 2.0); 3 new artifacts written to store
+```
+
+A beacon from node 7 is `07 0B 19 01`: node 7, then 0x0B19, 2,841 counts,
+then mode 1. Decoded with `--raw`, to show each layer:
+
+```console
+$ morphc decode store --family beacon --hex 070b1901 --bindings beacon/bindings.toml --time 2026-06-01T12:00:00Z --raw
+set beacon_v1  packet BEACON  asset NODE-7 (native id 7)
+  def_version 6ac262f19dba7ca92aed618221d5e88a8d0796e9e5b26ce7415bb4f8e3cc6a66
+  ground time 2026-06-01T12:00:00Z
+  param            value    unit  from
+  eps.bus_voltage  28.41    V     bus
+  eps.mode         NOMINAL        mode
+  entries
+  entry  raw   engineering
+  bus    2841  28410.0
+  mode   1     NOMINAL
+```
+
+Each value comes in three layers: the raw value the bits hold (2,841), the
+engineering value through the field's conversion (28,410, in the field's
+unit, mV), and the canonical sample, under the catalog's name and in its
+unit (28.41 V). The mode's raw 1 is the state `NOMINAL`. With
+`--format json`, which programs read, the decoded message is:
+
+```json
+{
+  "native_id": 7,
+  "asset": "NODE-7",
+  "stand_in": false,
+  "set": "beacon_v1",
+  "def_version": "6ac262f19dba7ca92aed618221d5e88a8d0796e9e5b26ce7415bb4f8e3cc6a66",
+  "packet": "BEACON",
+  "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+  "samples": [
+    { "param": "eps.bus_voltage", "value": 28.41, "unit": "V", "path": "bus",
+      "index": null, "time_offset_ns": null, "quality": "good" },
+    { "param": "eps.mode", "value": "NOMINAL", "unit": null, "path": "mode",
+      "index": null, "time_offset_ns": null, "quality": "good" }
+  ],
+  "record": { "bus": 2841, "mode": 1 },
+  "engineering": [
+    { "path": "bus", "value": 28410.0, "quality": "good" },
+    { "path": "mode", "value": "NOMINAL", "quality": "good" }
+  ]
+}
+```
+
+`samples` are what the rest of the system stores and plots; `record` and
+`engineering` are what the vendor's bytes said, for when a value needs
+explaining. A sample's `quality` says whether to trust it: `good`, or why
+not (`invalid` for a value that means "no reading", `unknown_state`,
+`out_of_calibration`, `out_of_range`, `non_finite`). Only a `good` sample's
+value is in the param's unit; one that isn't carries the raw value, so
+check the quality before storing or plotting it. The event time is the
+ground time here, since the beacon carries no clock. Change the
+definitions and rebuild, and what's decoded says the new `def_version`.
+
 ## Quick start
 
 The crates aren't on crates.io yet, so morphc is installed from a clone:
@@ -82,15 +194,59 @@ or later and [`just`](https://github.com/casey/just).
 
 ## Concepts
 
+What definitions say:
+
 | Term | Meaning |
 | --- | --- |
 | Catalog | The canonical params and commands every source maps to: names, types, units, states, frames, limits. Names are a schema: deprecated, never removed. |
-| Family | One kind of source on one link: its encoding, byte order, where each message says which asset sent it (the alias) and, optionally, which layout version it uses. |
+| Family | One kind of source on one link: its encoding (binary or JSON), byte order, where each message says which asset sent it (its alias) and, optionally, which set it uses (its version). |
 | Set | One layout version of a family: its packets, struct types and command packets, and how each entry maps to the catalog. |
+| Packet | One kind of message in a set: its entries, and its identify keys, the values that tell it from the set's other packets (`apid = 100`). |
+| Entry | One thing a packet holds: a field (one value, at a bit offset or a JSON Pointer), an array, a struct, padding or a checksum. A field can have a conversion, a unit and the catalog param it maps to. |
+| Command packet | How a set encodes a catalog command: the fields its arguments are written to, and its constants. |
+| Alias, native id | Where a message says which asset sent it (bits, link metadata, a JSON Pointer, or one fixed value), and the id read there. |
+| Metadata | Values the link delivers with a message (`apid`, `sysid`), which a family declares; an alias, a version or an identify key can read them, and a command packet's metadata goes out with its payload for the link to frame. |
+
+What building makes:
+
+| Term | Meaning |
+| --- | --- |
 | Bundle | A catalog with families and sets: what frontends produce and validation checks. |
 | Artifact | A catalog, family or set written as canonical JSON, named by its digest ([spec](spec/canonical-json.md)). |
 | Store | A directory of artifacts and a manifest naming the latest build ([spec](spec/store.md)). |
-| Bindings | Which asset each native id is over time, and which set decodes it ([spec](spec/bindings.md)). |
+| `def_version` | A set artifact's digest, stamped on everything it decodes or encodes. |
+
+What comes out of decoding:
+
+| Term | Meaning |
+| --- | --- |
+| Bindings, asset | Which asset each native id is over time, and, unless the family's version picks it, which set decodes it ([spec](spec/bindings.md)). |
+| Record | Each present entry's raw value (padding has none, and an absent conditional entry isn't there), as the bits or the JSON hold it. |
+| Engineering value | A field's raw value through its conversion, in the field's unit. |
+| Sample | A canonical value: the catalog param, its value in the param's unit (the raw value when its quality isn't `good`), and its quality. |
+
+## MDL and protobuf
+
+Protobuf is for bytes you design: you write a `.proto`, and protobuf
+decides how a message is written. MDL is for bytes someone else already
+designed, such as a vendor's bit-packed telemetry, which you can describe
+but not change.
+
+| | Protobuf | MDL |
+| --- | --- | --- |
+| Who decides the bytes | protobuf's own wire format | the vendor; MDL describes them |
+| Where a value sits | a tagged field | any bit offset and size, either byte order, or a JSON Pointer |
+| Calibration and units | none | polynomials, tables, splines, states; UCUM units |
+| Which message this is | the receiver knows, or an `Any` or a `oneof` says | identified by header values or link metadata |
+| Meaning across sources | shared only by importing the same types | one catalog every source maps into, however each lays its values out |
+| How it runs | usually code generated per message type | artifacts interpreted at runtime, no code generated |
+| Provenance | none | `def_version` on every decoded or encoded value |
+
+The two work together: MDL turns a fleet's bytes into canonical samples,
+and protobuf is a good way to carry those samples between services. As an
+analogy, definitions are to MDL what `.proto` files are to protobuf, and
+the IR is its `FileDescriptorSet`; but where protobuf usually generates
+code, MDL always reads artifacts at runtime.
 
 ## The library
 
@@ -234,7 +390,7 @@ several imports.
 | `crates/mdl-testkit` | IR generators, the list of IR features, and oracles that work out from the spec what telemetry decodes to, what commands encode to, and the error a damaged message or a refused request gives, for the property tests (never published) |
 | `crates/mdl-fuzz` | what each fuzz target checks, a test that replays every committed fuzz input, and the XTCE corpus runner (never published) |
 | `fuzz` | the cargo-fuzz harness, its seeds, corpus and dictionaries, and the crashes kept as regressions |
-| `examples` | a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
+| `examples` | the worked example's beacon, a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
 
 ## License
