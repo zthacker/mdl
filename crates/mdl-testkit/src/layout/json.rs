@@ -31,9 +31,10 @@ use super::time::{
     rfc3339_form, time_fields, time_json, time_scale, unit, week_value,
 };
 use super::{
-    Correlation, Encoding, FieldSpec, Kind, Length, Meaning, Message, Meta, Placed, Raw, Sample,
-    Sentinel, Telemetry, Text, Unusable, clock_fields, correlation_spec, correlation_values,
-    interval, meaning, meaning_json, offset_ns, param_json, raw_value, sentinels, type_name,
+    Correlation, Encoding, FieldSpec, Form, Kind, Length, Meaning, Message, Meta, Placed, Raw,
+    Sample, Sentinel, Telemetry, Text, Unusable, clock_fields, correlation_spec,
+    correlation_values, interval, meaning, meaning_json, offset_ns, param_json, raw_value,
+    sentinels, type_name,
 };
 pub(in crate::layout) use doc::Doc;
 use doc::Spell;
@@ -560,7 +561,7 @@ fn element_spec(depth: u32) -> BoxedStrategy<ElementSpec> {
 fn json_field_spec() -> BoxedStrategy<FieldSpec> {
     let kinds = prop_oneof![
         3 => Just(Kind::Uint(64)),
-        3 => Just(Kind::Int(64)),
+        3 => Just(Kind::Int(64, Form::TwosComplement)),
         2 => Just(Kind::Float(64)),
         1 => Just(Kind::Bool),
         2 => Just(TEXT),

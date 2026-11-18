@@ -1,5 +1,5 @@
 {
-  "mdl_version": "2.0",
+  "mdl_version": "2.1",
   "catalog": {
     "params": {
       "eps.bus_current": {
@@ -698,6 +698,14 @@
             { "canonical": "sink.attitude", "frame": "BODY", "members": ["q[0]", "q[1]", "q[2]", "q[3]"] },
             { "canonical": "sink.velocity", "frame": "ENU", "members": ["ve", "vn", "vu"] },
             { "canonical": "nav.pos_ecef", "frame": "GEODETIC", "members": ["lat", "lon", "alt"] }
+          ]
+        },
+        {
+          "name": "SIGNS",
+          "identify": { "msg": 2 },
+          "entries": [
+            { "kind": "field", "name": "trim", "type": "int", "size_bits": 16, "offset_bits": 32, "signed": "sign_magnitude", "conversion": { "kind": "linear", "scale": 0.01, "offset": 0.0 } },
+            { "kind": "array", "name": "offsets", "count": { "kind": "fixed", "count": 3 }, "element": { "kind": "scalar", "type": "int", "size_bits": 8, "signed": "ones_complement" } }
           ]
         }
       ],

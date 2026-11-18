@@ -15,13 +15,15 @@ use super::{
 use crate::layout::composite::{
     CompositeNode, CompositeSource, CompositeSpec, Head, Holder, Inside, Step, head, member_spec,
 };
-use crate::layout::{FieldSpec, Kind, Placed};
+use crate::layout::{FieldSpec, Form, Kind, Placed};
 
 /// A binary member's kind: an integer of any width, or a float.
 fn member_kind() -> BoxedStrategy<Kind> {
     prop_oneof![
         3 => (1_u32..=64).prop_map(Kind::Uint),
-        3 => (1_u32..=64).prop_map(Kind::Int),
+        3 => (1_u32..=64).prop_map(|bits| Kind::Int(bits, Form::TwosComplement)),
+        1 => (2_u32..=64, select(&[Form::SignMagnitude, Form::OnesComplement][..]))
+            .prop_map(|(bits, form)| Kind::Int(bits, form)),
         2 => select(&[32_u32, 64][..]).prop_map(Kind::Float),
     ]
     .boxed()

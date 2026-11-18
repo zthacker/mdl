@@ -430,7 +430,7 @@ impl Length {
 #[derive(Debug, Clone, PartialEq)]
 enum Kind {
     Uint(u32),
-    Int(u32),
+    Int(u32, Form),
     Float(u32),
     Bool,
     Text { length: Length, text: Text },
@@ -443,7 +443,7 @@ impl Kind {
     /// varies is whole bytes.
     fn bits(&self) -> u32 {
         match self {
-            Kind::Uint(bits) | Kind::Int(bits) | Kind::Float(bits) => *bits,
+            Kind::Uint(bits) | Kind::Int(bits, _) | Kind::Float(bits) => *bits,
             Kind::Bool => 1,
             Kind::Text { length, .. } | Kind::Bytes(length) => match length {
                 Length::Fixed { bytes, .. } => bytes * 8,
@@ -475,7 +475,7 @@ impl Kind {
 
     /// Whether it has a byte order (§2.1): only integers and floats do.
     fn ordered(&self) -> bool {
-        matches!(self, Kind::Uint(_) | Kind::Int(_) | Kind::Float(_))
+        matches!(self, Kind::Uint(_) | Kind::Int(..) | Kind::Float(_))
     }
 
     /// Whether it starts on a byte whatever its order (§2.2).
@@ -487,7 +487,7 @@ impl Kind {
     fn widened(&self, bits: u32) -> Kind {
         match self {
             Kind::Uint(_) => Kind::Uint(bits),
-            Kind::Int(_) => Kind::Int(bits),
+            Kind::Int(_, form) => Kind::Int(bits, *form),
             other => other.clone(),
         }
     }
@@ -496,10 +496,7 @@ impl Kind {
     fn integers(&self) -> Option<RangeInclusive<i128>> {
         match self {
             Kind::Uint(bits) => Some(0..=(1_i128 << bits) - 1),
-            Kind::Int(bits) => {
-                let half = 1_i128 << (bits - 1);
-                Some(-half..=half - 1)
-            }
+            Kind::Int(bits, form) => Some(form.range(*bits)),
             _ => None,
         }
     }
@@ -513,6 +510,47 @@ impl Kind {
             Kind::Text { text, length }
                 if *text != Text::Utf8 && matches!(length.terminator(), None | Some(0))
         )
+    }
+}
+
+/// How an `int`'s bits hold negative values (§2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    TwosComplement,
+    SignMagnitude,
+    OnesComplement,
+}
+
+impl Form {
+    /// The integers `bits` bits hold: two's complement one more negative
+    /// than positive, the others as many of each, with two zeros.
+    fn range(self, bits: u32) -> RangeInclusive<i128> {
+        let half = 1_i128 << (bits - 1);
+        match self {
+            Form::TwosComplement => -half..=half - 1,
+            Form::SignMagnitude | Form::OnesComplement => -(half - 1)..=half - 1,
+        }
+    }
+
+    /// The bits that hold `n`, which the form holds in `bits` bits; 0 as
+    /// +0.
+    fn bits_of(self, n: i128, bits: u32) -> u64 {
+        let magnitude = n.unsigned_abs() as u64;
+        match self {
+            _ if n >= 0 => magnitude,
+            Form::TwosComplement => fit(magnitude.wrapping_neg(), bits),
+            Form::SignMagnitude => (1 << (bits - 1)) | magnitude,
+            Form::OnesComplement => fit(!magnitude, bits),
+        }
+    }
+
+    /// Its name as `signed` spells it; two's complement isn't spelled.
+    fn name(self) -> Option<&'static str> {
+        match self {
+            Form::TwosComplement => None,
+            Form::SignMagnitude => Some("sign_magnitude"),
+            Form::OnesComplement => Some("ones_complement"),
+        }
     }
 }
 
@@ -605,7 +643,22 @@ fn kind(slot: Slot) -> BoxedStrategy<Kind> {
     .boxed();
     let mut kinds = vec![
         (3, (1_u32..=64).prop_map(Kind::Uint).boxed()),
-        (3, (1_u32..=64).prop_map(Kind::Int).boxed()),
+        (
+            3,
+            (1_u32..=64)
+                .prop_map(|bits| Kind::Int(bits, Form::TwosComplement))
+                .boxed(),
+        ),
+        // A 1-bit sign-magnitude or ones' complement int holds only zero.
+        (
+            1,
+            (
+                2_u32..=64,
+                select(&[Form::SignMagnitude, Form::OnesComplement][..]),
+            )
+                .prop_map(|(bits, form)| Kind::Int(bits, form))
+                .boxed(),
+        ),
         (2, select(&[32_u32, 64][..]).prop_map(Kind::Float).boxed()),
         (2, text),
         (1, bytes),
@@ -691,7 +744,7 @@ fn meaning(kind: &Kind) -> BoxedStrategy<Meaning> {
             }
             proptest::strategy::Union::new(choices).boxed()
         }
-        Kind::Int(_) => prop_oneof![
+        Kind::Int(..) => prop_oneof![
             1 => Just(Meaning::I64),
             1 => Just(Meaning::Bool),
             2 => number(kind),
@@ -855,7 +908,7 @@ fn sentinels(kind: &Kind) -> BoxedStrategy<Vec<Sentinel>> {
             .boxed()
     };
     match kind {
-        Kind::Uint(_) | Kind::Int(_) => set(kind
+        Kind::Uint(_) | Kind::Int(..) => set(kind
             .integers()
             .unwrap_or(0..=0)
             .prop_map(Sentinel::Int)
@@ -1134,8 +1187,14 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
     let mut json = Map::new();
     json.insert("type".into(), json!(type_name(&field.kind)));
     match &field.kind {
-        Kind::Uint(bits) | Kind::Int(bits) | Kind::Float(bits) => {
+        Kind::Uint(bits) | Kind::Float(bits) => {
             json.insert("size_bits".into(), json!(bits));
+        }
+        Kind::Int(bits, form) => {
+            json.insert("size_bits".into(), json!(bits));
+            if let Some(name) = form.name() {
+                json.insert("signed".into(), json!(name));
+            }
         }
         Kind::Bool => {
             json.insert("size_bits".into(), json!(1));
@@ -1165,7 +1224,7 @@ fn scalar_json(field: &Placed) -> Map<String, Value> {
 fn type_name(kind: &Kind) -> &'static str {
     match kind {
         Kind::Uint(_) => "uint",
-        Kind::Int(_) => "int",
+        Kind::Int(..) => "int",
         Kind::Float(_) => "float",
         Kind::Bool => "bool",
         Kind::Text { .. } => "string",
@@ -1560,7 +1619,7 @@ fn raw_value(field: &Placed) -> BoxedStrategy<Raw> {
         let sentinel = select(sentinels)
             .prop_map(move |sentinel| match (sentinel, &kind) {
                 (Sentinel::Int(n), Kind::Float(_)) => Raw::Float(n as f64),
-                (Sentinel::Int(n), Kind::Int(_)) => Raw::Int(i64::try_from(n).unwrap_or(0)),
+                (Sentinel::Int(n), Kind::Int(..)) => Raw::Int(i64::try_from(n).unwrap_or(0)),
                 (Sentinel::Int(n), _) => Raw::Uint(u64::try_from(n).unwrap_or(0)),
                 (Sentinel::Text(text), _) => Raw::Str(text),
             })
@@ -1579,11 +1638,22 @@ fn any_raw(kind: &Kind) -> BoxedStrategy<Raw> {
                 .prop_map(move |n| Raw::Uint(fit(n, bits)))
                 .boxed()
         }
-        Kind::Int(bits) => {
+        Kind::Int(bits, Form::TwosComplement) => {
             let bits = *bits;
             any::<u64>()
                 .prop_map(move |n| Raw::Int(sign_extend(fit(n, bits), bits)))
                 .boxed()
+        }
+        // Any value the form holds, the ends and zero more often.
+        Kind::Int(bits, form) => {
+            let range = form.range(*bits);
+            let (low, high) = (*range.start(), *range.end());
+            prop_oneof![
+                4 => range,
+                1 => select(vec![low, high, 0]),
+            ]
+            .prop_map(|n| Raw::Int(i64::try_from(n).unwrap_or(0)))
+            .boxed()
         }
         // Any bits, with NaN, the infinities and both zeros more often
         // than random bits give them.
@@ -1629,7 +1699,7 @@ fn bytes_value(length: Length) -> BoxedStrategy<Raw> {
 
 /// One of `values`, as an integer field's raw value.
 fn integer_raw(kind: &Kind, values: Vec<i128>) -> BoxedStrategy<Raw> {
-    let signed = matches!(kind, Kind::Int(_));
+    let signed = matches!(kind, Kind::Int(..));
     select(values)
         .prop_map(move |n| {
             if signed {
@@ -1954,8 +2024,9 @@ fn assemble(
     if !types.is_empty() {
         set["types"] = Value::Object(types);
     }
+    let sets = json!([set]);
     let bundle = json!({
-        "mdl_version": "2.0",
+        "mdl_version": crate::version_for(&sets),
         "catalog": { "params": params },
         "families": [{
             "name": "fam",
@@ -1963,7 +2034,7 @@ fn assemble(
             "byte_order": if little { "little" } else { "big" },
             "alias": { "kind": "fixed", "value": "A1" }
         }],
-        "sets": [set]
+        "sets": sets
     });
     Telemetry {
         bundle,

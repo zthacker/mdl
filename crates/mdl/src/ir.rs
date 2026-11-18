@@ -86,7 +86,10 @@ pub struct IrVersion {
 
 impl IrVersion {
     /// The newest version this build reads and writes.
-    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 0 };
+    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 1 };
+
+    /// IR 2.0, which has every feature but those a [`Need`] names.
+    pub const V2_0: IrVersion = IrVersion { major: 2, minor: 0 };
 
     pub const fn new(major: u16, minor: u16) -> Self {
         IrVersion { major, minor }
@@ -1028,6 +1031,20 @@ pub enum ByteOrder {
     Little,
 }
 
+/// How a signed integer's bits hold negative values, when it isn't two's
+/// complement (IR 2.1). `TwosComplement` spells out the default, which
+/// validation rejects, so each layout has one spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum Signed {
+    /// The top bit is the sign, the rest the magnitude.
+    SignMagnitude,
+    /// A negative value is the bitwise NOT of its magnitude.
+    OnesComplement,
+    TwosComplement,
+}
+
 /// Where a value is found before the set is known.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -1122,6 +1139,66 @@ impl Set {
             commands: Vec::new(),
         }
     }
+
+    /// The first feature newer than IR 2.0 the set uses, in the order
+    /// [`Set::needs`] finds them.
+    pub fn need(&self) -> Option<Need> {
+        self.needs().into_iter().next()
+    }
+
+    /// Every use of a feature newer than IR 2.0 in the set: in its struct
+    /// types, by name, then its packets and its command packets, each in
+    /// entry order.
+    pub fn needs(&self) -> Vec<Need> {
+        let types = self.types.iter().map(|(name, ty)| {
+            let name = crate::diagnostics::escape_pointer_token(name);
+            (format!("/types/{name}"), &ty.entries)
+        });
+        let packets = self
+            .packets
+            .iter()
+            .enumerate()
+            .map(|(i, packet)| (format!("/packets/{i}"), &packet.entries));
+        let commands = self
+            .commands
+            .iter()
+            .enumerate()
+            .map(|(i, packet)| (format!("/commands/{i}"), &packet.entries));
+        types
+            .chain(packets)
+            .chain(commands)
+            .flat_map(|(container, entries)| {
+                entries.iter().enumerate().filter_map(move |(i, entry)| {
+                    let at = format!("{container}/entries/{i}");
+                    match entry {
+                        Entry::Field(field) => field.signed.map(|_| format!("{at}/signed")),
+                        Entry::Array(ArrayEntry {
+                            element: Element::Scalar(element),
+                            ..
+                        }) => element.signed.map(|_| format!("{at}/element/signed")),
+                        _ => None,
+                    }
+                })
+            })
+            .map(|pointer| Need {
+                pointer,
+                feature: "signed",
+                version: IrVersion::new(2, 1),
+            })
+            .collect()
+    }
+}
+
+/// A feature newer than IR 2.0, where a set uses it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Need {
+    /// A JSON Pointer to it within the set.
+    pub pointer: String,
+    /// Its key: `signed` (2.1).
+    pub feature: &'static str,
+    /// The lowest version that has it.
+    pub version: IrVersion,
 }
 
 /// How event time is found.
@@ -1472,6 +1549,9 @@ pub struct Field {
     /// layout has one spelling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_order: Option<ByteOrder>,
+    /// Binary `int`s that aren't two's complement (IR 2.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed: Option<Signed>,
     /// Binary strings and bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<ByteLength>,
@@ -1530,6 +1610,7 @@ impl Field {
             pointer: None,
             size_bits: None,
             byte_order: None,
+            signed: None,
             length: None,
             text: None,
             conversion: None,
@@ -1783,6 +1864,9 @@ pub struct ScalarElement {
     /// family's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub byte_order: Option<ByteOrder>,
+    /// As for a field (IR 2.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed: Option<Signed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub length: Option<ByteLength>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1809,6 +1893,7 @@ impl ScalarElement {
             ty,
             size_bits: None,
             byte_order: None,
+            signed: None,
             length: None,
             text: None,
             conversion: None,
@@ -1824,6 +1909,7 @@ impl ScalarElement {
         let mut field = Field::new(name, self.ty);
         field.size_bits = self.size_bits;
         field.byte_order = self.byte_order;
+        field.signed = self.signed;
         field.length = self.length.clone();
         field.text = self.text;
         field.conversion = self.conversion.clone();

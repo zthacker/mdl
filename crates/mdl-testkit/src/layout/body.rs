@@ -29,8 +29,8 @@ use super::condition::{
 use super::faults::Place;
 use super::meaning::sample;
 use super::{
-    Failure, FieldSpec, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Sentinel, Slot, Text,
-    bytes_value, encode, field_json, field_spec, fit, inside_one_byte, interval, kind,
+    Failure, FieldSpec, Form, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Sentinel, Slot,
+    Text, bytes_value, encode, field_json, field_spec, fit, inside_one_byte, interval, kind,
     length_field, meaning, offset_ns, param_json, put_bits, raw_value, remaining_kind, scalar_json,
     sentinels, spec_of, text_value,
 };
@@ -326,7 +326,9 @@ fn length_spec() -> BoxedStrategy<LengthSpec> {
 fn fixed_kind() -> BoxedStrategy<Kind> {
     prop_oneof![
         3 => (1_u32..=64).prop_map(Kind::Uint),
-        3 => (1_u32..=64).prop_map(Kind::Int),
+        3 => (1_u32..=64).prop_map(|bits| Kind::Int(bits, Form::TwosComplement)),
+        1 => (2_u32..=64, select(&[Form::SignMagnitude, Form::OnesComplement][..]))
+            .prop_map(|(bits, form)| Kind::Int(bits, form)),
         2 => select(&[32_u32, 64][..]).prop_map(Kind::Float),
         1 => (1_u32..=8).prop_map(|bytes| Kind::Text {
             length: Length::Fixed { bytes, terminator: None },
@@ -488,7 +490,9 @@ fn element_spec(depth: u32, varying: bool) -> BoxedStrategy<ElementSpec> {
     let kinds = prop_oneof![
         3 => kind(Slot::Element { varying }),
         1 => (1_u32..=7).prop_map(Kind::Uint),
-        1 => (1_u32..=7).prop_map(Kind::Int),
+        1 => (1_u32..=7).prop_map(|bits| Kind::Int(bits, Form::TwosComplement)),
+        1 => (2_u32..=7, select(&[Form::SignMagnitude, Form::OnesComplement][..]))
+            .prop_map(|(bits, form)| Kind::Int(bits, form)),
     ];
     let scalar = spec_of(kinds.boxed()).prop_map(ElementSpec::Scalar);
     if depth == 0 {
@@ -2188,7 +2192,7 @@ fn inert(field: &Placed) -> bool {
         }
         | Kind::Bytes(length) => !matches!(length, Length::Terminated(_)),
         Kind::Text { .. } => false,
-        Kind::Uint(_) | Kind::Int(_) | Kind::Float(_) | Kind::Bool => true,
+        Kind::Uint(_) | Kind::Int(..) | Kind::Float(_) | Kind::Bool => true,
     }
 }
 
@@ -2244,6 +2248,13 @@ fn put(field: &Placed, raw: &Raw, payload: &mut [u8], at: u64) -> u64 {
     let bits = field.kind.bits();
     match (&field.kind, raw) {
         (_, Raw::Uint(n)) => put_bits(payload, at, bits, *n, field.little),
+        (Kind::Int(_, form), Raw::Int(n)) => put_bits(
+            payload,
+            at,
+            bits,
+            form.bits_of(i128::from(*n), bits),
+            field.little,
+        ),
         (_, Raw::Int(n)) => put_bits(payload, at, bits, fit(*n as u64, bits), field.little),
         (Kind::Float(32), Raw::Float(x)) => put_bits(
             payload,

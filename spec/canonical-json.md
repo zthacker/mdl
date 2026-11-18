@@ -80,6 +80,10 @@ canonical form, written as 64 lowercase hexadecimal characters.
 - An implementation MUST NOT compute identity over any other serialization
   (pretty-printed, re-ordered, or produced by a language's default JSON
   encoder).
+- An artifact's `mdl_version` is part of what's hashed, so an artifact
+  states exactly the lowest IR version that reads it (`frontends.md` §7):
+  an artifact's identity doesn't change when the IR gains a feature it
+  doesn't use.
 
 ## 4. Conformance
 

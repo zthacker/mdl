@@ -30,7 +30,11 @@ pub const REQUIRED: &[&str] = &[
     // UTF-8 is the default text encoding, which the IR refuses to spell.
     "text:ascii",
     "text:latin1",
+    // Two's complement is the default, which the IR refuses to spell.
+    "signed:sign_magnitude",
+    "signed:ones_complement",
     "key:entry.byte_order",
+    "key:entry.signed",
     "key:entry.offset_bits",
     "key:entry.pointer",
     "key:entry.optional",
@@ -47,6 +51,7 @@ pub const REQUIRED: &[&str] = &[
     "key:entry.target",
     "key:entry.from_bits",
     "key:element.byte_order",
+    "key:element.signed",
     "key:element.length",
     "key:element.text",
     "key:element.conversion",
@@ -332,7 +337,7 @@ fn note(name: &str, value: &Value, owner: &str, found: &mut BTreeSet<String>) {
         ("type", "param" | "argument") => "param_type",
         ("unit", "time") | ("clock_unit", _) => "time_unit",
         ("default", _) => "default",
-        ("op" | "scale" | "frame" | "text" | "encoding" | "byte_order", _) => name,
+        ("op" | "scale" | "frame" | "text" | "encoding" | "byte_order" | "signed", _) => name,
         _ => return,
     };
     let text = if enumerated == "default" { "str" } else { text };

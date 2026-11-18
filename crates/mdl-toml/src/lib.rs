@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 use mdl::diagnostics::escape_pointer_token;
 use mdl::ir::IrVersion;
 use mdl::read::read_bundle_value;
-use mdl::source::{Parsed, SourceDiagnostic, SourceFile, SourceMap, Span};
+use mdl::source::{Parsed, SourceDiagnostic, SourceFile, SourceId, SourceMap, Span};
 use serde_json::{Map, Value};
 use toml::Spanned;
 use toml::de::{DeTable, DeValue};
@@ -137,6 +137,8 @@ struct Merger {
     /// Each problem, after the order of the file it's in.
     errors: Vec<(usize, SourceDiagnostic)>,
     versions: Option<Versions>,
+    /// The version each file states, which covers the features it holds.
+    file_versions: BTreeMap<SourceId, IrVersion>,
 }
 
 impl Merger {
@@ -190,6 +192,7 @@ impl Merger {
             Ok(version) => version,
             Err(message) => return self.error(order, Code::Version, message, span),
         };
+        self.file_versions.insert(file.id(), version);
         match self.versions {
             None => {
                 self.versions = Some(Versions {
@@ -412,10 +415,47 @@ impl Merger {
             return Err(errors.into_iter().map(|(_, error)| error).collect());
         }
         match read_bundle_value(&Value::Object(self.root)) {
-            Ok(loaded) => Ok(Parsed::new(loaded.value, self.map)),
+            Ok(loaded) => {
+                let newer = newer_than_their_files(&loaded.value, &self.map, &self.file_versions);
+                if newer.is_empty() {
+                    Ok(Parsed::new(loaded.value, self.map))
+                } else {
+                    Err(newer)
+                }
+            }
             Err(err) => Err(vec![self.map.locate_read_error(&err)]),
         }
     }
+}
+
+/// Each use of a feature newer than the version its own file states: a
+/// file is written in the version it states, whatever the others say, so
+/// it can be read, copied or shared alone.
+fn newer_than_their_files(
+    bundle: &mdl::ir::Bundle,
+    map: &SourceMap,
+    versions: &BTreeMap<SourceId, IrVersion>,
+) -> Vec<SourceDiagnostic> {
+    let mut found = Vec::new();
+    for (index, set) in bundle.sets.iter().enumerate() {
+        for need in set.needs() {
+            let Some(span) = map.get(&format!("/sets/{index}{}", need.pointer)) else {
+                continue;
+            };
+            let Some(stated) = versions.get(&span.source) else {
+                continue;
+            };
+            if !stated.can_read(need.version) {
+                let message = format!(
+                    "{} needs MDL IR {}, and this file states {stated}; state mdl_version \
+                     \"{}\" to use it",
+                    need.feature, need.version, need.version
+                );
+                found.push(SourceDiagnostic::error("feature_version", message).with_span(span));
+            }
+        }
+    }
+    found
 }
 
 fn span_of(file: SourceFile<'_>, value: &Spanned<DeValue<'_>>) -> Span {

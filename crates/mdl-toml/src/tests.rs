@@ -295,14 +295,71 @@ fn every_file_states_a_version_of_one_major() {
 
 #[test]
 fn the_bundle_has_the_highest_version_and_the_reader_checks_it() {
-    let newer = "mdl_version = \"2.1\"\n";
+    let newer = "mdl_version = \"2.2\"\n";
     let found = errors(&[("catalog.toml", CATALOG), ("newer.toml", newer)]);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].0.code, "unsupported_version");
     assert_eq!(
         found[0].1,
-        Some(("newer.toml".to_string(), location(newer, "\"2.1\"")))
+        Some(("newer.toml".to_string(), location(newer, "\"2.2\"")))
     );
+}
+
+/// A feature newer than the bundle's version is an error at the key that
+/// uses it; stating the version it needs reads.
+#[test]
+fn a_feature_needs_the_version_that_has_it() {
+    let signed = set("vendor_x_v1", "V").replace(
+        "type = \"uint\"\n",
+        "type = \"int\"\nsigned = \"sign_magnitude\"\n",
+    );
+    let found = errors(&[
+        ("catalog.toml", CATALOG),
+        ("family.toml", FAMILY),
+        ("set.toml", &signed),
+    ]);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].0.code, "feature_version");
+    assert_eq!(
+        found[0].0.message,
+        "signed needs MDL IR 2.1, and this document states 2.0; state mdl_version \"2.1\" to use it"
+    );
+    assert_eq!(
+        found[0].1,
+        Some((
+            "set.toml".to_string(),
+            location(&signed, "\"sign_magnitude\"")
+        ))
+    );
+    // Each file covers the features it holds: another file stating 2.1
+    // doesn't let this one use 2.1's.
+    let newer_catalog = CATALOG.replace("mdl_version = \"2.0\"", "mdl_version = \"2.1\"");
+    let found = errors(&[
+        ("catalog.toml", &newer_catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", &signed),
+    ]);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].0.code, "feature_version");
+    assert_eq!(
+        found[0].0.message,
+        "signed needs MDL IR 2.1, and this file states 2.0; state mdl_version \"2.1\" to use it"
+    );
+    assert_eq!(
+        found[0].1,
+        Some((
+            "set.toml".to_string(),
+            location(&signed, "\"sign_magnitude\"")
+        ))
+    );
+    let stated = signed.replace("mdl_version = \"2.0\"", "mdl_version = \"2.1\"");
+    let sources = sources(&[
+        ("catalog.toml", CATALOG),
+        ("family.toml", FAMILY),
+        ("set.toml", &stated),
+    ]);
+    let parsed = read(sources.iter()).unwrap();
+    assert_eq!(parsed.bundle.mdl_version.to_string(), "2.1");
 }
 
 #[test]

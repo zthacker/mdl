@@ -75,7 +75,7 @@ impl Wanted {
     fn of(kind: &Kind) -> Wanted {
         match kind {
             Kind::Uint(_) => Wanted::Uint,
-            Kind::Int(_) => Wanted::Int,
+            Kind::Int(..) => Wanted::Int,
             Kind::Float(_) => Wanted::Float,
             Kind::Bool => Wanted::Bool,
             Kind::Text { .. } | Kind::Bytes(_) => Wanted::String,

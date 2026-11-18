@@ -118,6 +118,58 @@ fn small_bundle_digests_are_stable() {
     );
 }
 
+/// An artifact states the lowest IR version that reads it: a set using
+/// `signed` says 2.1, and every other artifact keeps 2.0 and its digest
+/// (`small_bundle_digests_are_stable` pins some). A reader refuses an
+/// artifact stating less than it uses, or more than it needs, and a bundle
+/// stating less than a feature it uses.
+#[test]
+fn artifacts_state_the_version_they_need() {
+    let artifacts = built(&fixture());
+    let version = |written: &Written| {
+        let value: Value = serde_json::from_str(&written.canonical).unwrap();
+        value["mdl_version"].as_str().unwrap().to_string()
+    };
+    assert_eq!(version(&artifacts.sets["sink_v1"]), "2.1");
+    assert_eq!(version(&artifacts.sets["vendor_x_v2"]), "2.0");
+    assert_eq!(version(&artifacts.families["sink"]), "2.0");
+    assert_eq!(version(&artifacts.catalog), "2.0");
+
+    let restated = |written: &Written, from: &str, to: &str| {
+        let text = written.canonical.replace(
+            &format!("\"mdl_version\":\"{from}\""),
+            &format!("\"mdl_version\":\"{to}\""),
+        );
+        read_artifact(text.as_bytes()).unwrap_err()
+    };
+    let less = restated(&artifacts.sets["sink_v1"], "2.1", "2.0");
+    assert_eq!(
+        (less.code(), less.path()),
+        ("feature_version", "/set/packets/1/entries/0/signed")
+    );
+    let more = restated(&artifacts.sets["vendor_x_v2"], "2.0", "2.1");
+    assert_eq!(
+        (more.code(), more.path()),
+        ("not_normal_form", "/mdl_version")
+    );
+    assert!(
+        more.detail().starts_with(
+            "this artifact states MDL IR 2.1 and needs only 2.0; an artifact states the lowest \
+             version that reads it"
+        ),
+        "{}",
+        more.detail()
+    );
+
+    let mut older = fixture();
+    older["mdl_version"] = json!("2.0");
+    let refused = read_bundle(older.to_string().as_bytes()).unwrap_err();
+    assert_eq!(
+        (refused.code(), refused.path()),
+        ("feature_version", "/sets/5/packets/1/entries/0/signed")
+    );
+}
+
 // ---- Catalog compatibility ----
 
 fn catalog(params: Value) -> Catalog {

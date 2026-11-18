@@ -347,7 +347,7 @@ fn is_key(placed: &Placed) -> bool {
     matches!(
         placed,
         Placed::Field {
-            shape: Shape::Uint(_) | Shape::Int(_) | Shape::Text(..),
+            shape: Shape::Uint(_) | Shape::Int(..) | Shape::Text(..),
             source: Source::Constant(_),
             ..
         }
@@ -527,7 +527,7 @@ fn raw_faults(
 fn other_types(shape: &Shape) -> Vec<Canon> {
     let mut others = vec![Canon::Array(Vec::new()), Canon::Object(Vec::new())];
     match shape {
-        Shape::Uint(_) | Shape::Int(_) | Shape::Float(_) => {
+        Shape::Uint(_) | Shape::Int(..) | Shape::Float(_) => {
             others.extend([Canon::Str("7".into()), Canon::Bool(true)]);
         }
         Shape::Bool => others.extend([Canon::Int(1), Canon::Str("true".into())]),
@@ -548,7 +548,7 @@ fn unfit(shape: &Shape) -> Vec<&'static str> {
             "18446744073709551616",
             "-1",
         ],
-        Shape::Int(_) => vec!["1.5", "1e20", "9007199254740992.0", "9223372036854775808"],
+        Shape::Int(..) => vec!["1.5", "1e20", "9007199254740992.0", "9223372036854775808"],
         _ => Vec::new(),
     }
 }

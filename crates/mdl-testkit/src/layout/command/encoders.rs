@@ -10,6 +10,7 @@ use proptest::sample::select;
 
 use super::values::{to_argument, unrounded, value};
 use super::{Arg, ArgType, Encoder, Len, Shape, TEXTS, Through, encoder_of};
+use super::{Form, int_shape};
 use crate::layout::{Numeric, UNIT_GROUPS, scale, units};
 
 /// An argument of any type and a field that encodes it, with a default or
@@ -58,7 +59,7 @@ pub(super) fn element_encoder(whole: bool, bits: bool) -> BoxedStrategy<Encoder>
             let own_length = !matches!(encoder.shape.len(), Some(Len::Field { .. }));
             let shape = match &encoder.shape {
                 Shape::Bool => !whole,
-                Shape::Uint(_) | Shape::Int(_) => true,
+                Shape::Uint(_) | Shape::Int(..) => true,
                 _ => !bits,
             };
             own_length && shape
@@ -97,7 +98,7 @@ fn bool_encoder() -> BoxedStrategy<Encoder> {
         Just(Shape::Bool),
         (1_u32..=64).prop_map(Shape::Uint),
         // A 1-bit int holds 0 and -1, not 1.
-        (2_u32..=64).prop_map(Shape::Int),
+        (2_u32..=64).prop_map(|bits| Shape::Int(bits, Form::TwosComplement)),
     ]
     .prop_map(|shape| encoder_of(ArgType::Bool, shape))
     .boxed()
@@ -118,11 +119,7 @@ fn integer_encoder(ty: ArgType) -> BoxedStrategy<Encoder> {
     let shapes = if ty == ArgType::U64 {
         sizes.prop_map(Shape::Uint).boxed()
     } else {
-        prop_oneof![
-            sizes.clone().prop_map(Shape::Int),
-            sizes.prop_map(Shape::Uint)
-        ]
-        .boxed()
+        prop_oneof![int_shape(sizes.clone()), sizes.prop_map(Shape::Uint)].boxed()
     };
     (
         Just(ty),
@@ -255,11 +252,11 @@ fn integer_shape(a: i128, b: i128, spare: u32) -> Option<Shape> {
     } else {
         let magnitude = b.max(-a - 1);
         let bits = 128 - magnitude.leading_zeros() + 1;
-        Shape::Int(bits + spare)
+        Shape::Int(bits + spare, Form::TwosComplement)
     };
     match shape {
-        Shape::Uint(bits) | Shape::Int(bits) if bits <= 64 => Some(shape),
-        Shape::Uint(_) | Shape::Int(_) => {
+        Shape::Uint(bits) | Shape::Int(bits, _) if bits <= 64 => Some(shape),
+        Shape::Uint(_) | Shape::Int(..) => {
             let fits = shape.widened(64).integers()?;
             (fits.contains(&a) && fits.contains(&b)).then(|| shape.widened(64))
         }
@@ -518,30 +515,27 @@ fn calibration(first: i64, last: i64) -> BoxedStrategy<(Vec<f64>, bool)> {
 /// An enum argument: through states into an integer field, or its states'
 /// names written into a string field.
 fn enum_encoder() -> BoxedStrategy<Encoder> {
-    let through_states = prop_oneof![
-        (1_u32..=64).prop_map(Shape::Uint),
-        (1_u32..=64).prop_map(Shape::Int)
-    ]
-    .prop_flat_map(|shape| {
-        let raws = shape.integers().unwrap_or(0..=0);
-        let most = if let Shape::Uint(1) | Shape::Int(1) = shape {
-            2
-        } else {
-            4
-        };
-        (Just(shape), btree_set(raws, 1..=most))
-    })
-    .prop_flat_map(|(shape, raws)| {
-        let names: Vec<String> = (0..raws.len()).map(|k| format!("S{k}")).collect();
-        (Just(shape), Just(raws), Just(names).prop_shuffle())
-    })
-    .prop_map(|(shape, raws, shuffled)| {
-        let mut catalog = shuffled.clone();
-        catalog.sort();
-        let mut encoder = encoder_of(ArgType::Enum(catalog), shape);
-        encoder.through = Through::States(raws.into_iter().zip(shuffled).collect());
-        encoder
-    });
+    let through_states = prop_oneof![(1_u32..=64).prop_map(Shape::Uint), int_shape(1_u32..=64)]
+        .prop_flat_map(|shape| {
+            let raws = shape.integers().unwrap_or(0..=0);
+            let most = if let Shape::Uint(1) | Shape::Int(1, _) = shape {
+                2
+            } else {
+                4
+            };
+            (Just(shape), btree_set(raws, 1..=most))
+        })
+        .prop_flat_map(|(shape, raws)| {
+            let names: Vec<String> = (0..raws.len()).map(|k| format!("S{k}")).collect();
+            (Just(shape), Just(raws), Just(names).prop_shuffle())
+        })
+        .prop_map(|(shape, raws, shuffled)| {
+            let mut catalog = shuffled.clone();
+            catalog.sort();
+            let mut encoder = encoder_of(ArgType::Enum(catalog), shape);
+            encoder.through = Through::States(raws.into_iter().zip(shuffled).collect());
+            encoder
+        });
     let separators = select(&[0_u8, b' ', b'#', 0xFF][..]);
     let lengths = prop_oneof![
         (1_usize..=6).prop_map(Len::Fixed),

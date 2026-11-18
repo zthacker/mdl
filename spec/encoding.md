@@ -274,9 +274,13 @@ and for a record the field.
   from its own start, as `decoding.md` §5 lays out a struct's, ending at
   the furthest end of its entries.
 - **Values.** Integers and bools are written as `decoding.md` §2.1 reads
-  them, in the field's `byte_order` or else the family's, an `int` in
-  two's complement in its size; floats as IEEE 754 binary32 or binary64,
-  in the same byte order; strings and bytes from a byte boundary.
+  them, in the field's `byte_order` or else the family's, an `int` in its
+  size in its signed form (two's complement unless `signed` says
+  otherwise), 0 always as the zero with no bits set; floats as IEEE 754
+  binary32 or binary64, in the same byte order; strings and bytes from a
+  byte boundary. An `int` in sign-magnitude or ones' complement holds
+  ±(2^(n−1) − 1), one negative value fewer than two's complement, which
+  is the range its arguments are checked against.
 - **Padding and gaps.** Bits no entry covers, padding included, are 0.
 - **Size.** The payload ends where its furthest entry ends (after its
   last bit, or at its start for an entry that takes no bits, such as an
@@ -362,6 +366,12 @@ fields that can be read without decoding anything else:
   `42.0` is the key 42), never a string with a number.
 
 Fields inside arrays are never keys.
+
+A constant key is the bits its field writes, so in sign-magnitude or ones'
+complement a key of 0 matches only the zero with no bits set, which is
+what an encoder writes; a telemetry key of 0 compares values and matches
+either zero (`decoding.md` §4). A constant that isn't a key and holds the
+other zero reads as 0, so it passes §7.3's check.
 
 Validation guarantees that every two command packets of a set share a key
 with different values, so a payload matches at most one. A payload

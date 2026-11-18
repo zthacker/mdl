@@ -32,7 +32,7 @@ use proptest::prelude::*;
 use serde_json::Value;
 
 use crate::checksum::Algorithm;
-use crate::layout::{Numeric, Raw, Text};
+use crate::layout::{Form, Numeric, Raw, Text};
 
 use bundle::assemble;
 use faults::{garbling, json_garbling, refusal};
@@ -643,18 +643,34 @@ impl Len {
 #[derive(Debug, Clone, PartialEq)]
 enum Shape {
     Uint(u32),
-    Int(u32),
+    Int(u32, Form),
     Float(u32),
     Bool,
     Text(Text, Len),
     Bytes(Len),
 }
 
+/// An int of one of `sizes`: two's complement, or now and then
+/// sign-magnitude or ones' complement, which hold more than zero from 2
+/// bits on.
+fn int_shape(sizes: impl Strategy<Value = u32> + 'static) -> BoxedStrategy<Shape> {
+    (sizes, 0_u8..4)
+        .prop_map(|(bits, pick)| {
+            let form = match pick {
+                2 if bits >= 2 => Form::SignMagnitude,
+                3 if bits >= 2 => Form::OnesComplement,
+                _ => Form::TwosComplement,
+            };
+            Shape::Int(bits, form)
+        })
+        .boxed()
+}
+
 impl Shape {
     /// The bits it takes, unless its length varies.
     fn bits(&self) -> Option<u32> {
         match self {
-            Shape::Uint(bits) | Shape::Int(bits) | Shape::Float(bits) => Some(*bits),
+            Shape::Uint(bits) | Shape::Int(bits, _) | Shape::Float(bits) => Some(*bits),
             Shape::Bool => Some(1),
             Shape::Text(_, len) | Shape::Bytes(len) => match len {
                 Len::Fixed(bytes) | Len::Padded(bytes, _) => Some(*bytes as u32 * 8),
@@ -672,19 +688,25 @@ impl Shape {
 
     /// Whether it has a byte order: only integers and floats do.
     fn ordered(&self) -> bool {
-        matches!(self, Shape::Uint(_) | Shape::Int(_) | Shape::Float(_))
+        matches!(self, Shape::Uint(_) | Shape::Int(..) | Shape::Float(_))
     }
 
     /// The integers an integer or bool field holds.
     fn integers(&self) -> Option<RangeInclusive<i128>> {
         match self {
             Shape::Uint(bits) => Some(0..=(1_i128 << bits) - 1),
-            Shape::Int(bits) => {
-                let half = 1_i128 << (bits - 1);
-                Some(-half..=half - 1)
-            }
+            Shape::Int(bits, form) => Some(form.range(*bits)),
             Shape::Bool => Some(0..=1),
             _ => None,
+        }
+    }
+
+    /// The `bits` bits an integer field writes for `n`: through its form
+    /// for an int, else as `n`'s low bits.
+    fn int_bits(&self, n: i128, bits: u32) -> u64 {
+        match self {
+            Shape::Int(_, form) => form.bits_of(n, bits),
+            _ => crate::layout::fit(n as u64, bits),
         }
     }
 
@@ -692,7 +714,7 @@ impl Shape {
     fn widened(&self, bits: u32) -> Shape {
         match self {
             Shape::Uint(_) => Shape::Uint(bits),
-            Shape::Int(_) => Shape::Int(bits),
+            Shape::Int(_, form) => Shape::Int(bits, *form),
             other => other.clone(),
         }
     }
@@ -700,7 +722,7 @@ impl Shape {
     fn type_name(&self) -> &'static str {
         match self {
             Shape::Uint(_) => "uint",
-            Shape::Int(_) => "int",
+            Shape::Int(..) => "int",
             Shape::Float(_) => "float",
             Shape::Bool => "bool",
             Shape::Text(..) => "string",

@@ -47,7 +47,9 @@ Files are merged in the order given (`frontends.md` §4):
 - **`mdl_version`:** the bundle's is the highest any file states, and its
   span is that file's `mdl_version`, so a version the reader can't read is
   reported there. Every file MUST state the same major version.
-  [`toml.version`]
+  [`toml.version`] A file is written in the version it states, whatever
+  the others say: a feature newer than its own version is an error at the
+  feature (`frontends.md` §7) [`feature_version`].
 - **`catalog.params` and `catalog.commands`:** files add entries; each
   param or command is defined, whole, by one file.
 - **`families` and `sets`:** each file's are appended, in file order. Two

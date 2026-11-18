@@ -10,6 +10,7 @@ use super::rules::{
     check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
 };
 use super::set::{KeyId, KeyValue, by_value, exact, key_order, used_types};
+use crate::bits::IntForm;
 use crate::canonical::format_double;
 use crate::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::diagnostics::{Code, Place, Report};
@@ -307,17 +308,19 @@ fn binary_key(
     ) {
         return None;
     }
-    // Two's complement in the field's size; values out of range are
-    // reported by check_value, which leaves the packet out of check_distinct.
-    let raw = integer_value(value)? & ((1_i128 << size) - 1);
+    // The bits the constant writes, compared as bits; values out of range
+    // are reported by check_value, which leaves the packet out of
+    // check_distinct.
+    let form = IntForm::of(field.ty, field.signed)?;
+    let raw = form.write(integer_value(value)?, size)?;
     Some((
         KeyId::Bits {
             offset,
             size,
-            signed: false,
+            form: IntForm::Unsigned,
             order: key_order(field, family, offset, size),
         },
-        KeyValue::Int(raw),
+        KeyValue::Int(i128::from(raw)),
     ))
 }
 
@@ -1332,8 +1335,9 @@ fn integer_range(field: &Field) -> Option<(i128, i128)> {
     };
     match field.ty {
         ScalarType::Bool => Some((0, 1)),
-        ScalarType::Int => Some((-(1_i128 << (size - 1)), (1_i128 << (size - 1)) - 1)),
-        ScalarType::Uint => Some((0, (1_i128 << size) - 1)),
+        ScalarType::Uint | ScalarType::Int => {
+            IntForm::of(field.ty, field.signed).map(|form| form.range(size))
+        }
         _ => None,
     }
 }

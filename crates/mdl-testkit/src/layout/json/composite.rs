@@ -16,13 +16,13 @@ use super::{
 use crate::layout::composite::{
     CompositeNode, CompositeSource, CompositeSpec, Head, Holder, Inside, Step, head, member_spec,
 };
-use crate::layout::{FieldSpec, Kind, Placed, interval};
+use crate::layout::{FieldSpec, Form, Kind, Placed, interval};
 
 /// A JSON member's kind: a number, as a JSON field reads one (§5.3).
 fn member_kind() -> BoxedStrategy<Kind> {
     prop_oneof![
         3 => Just(Kind::Uint(64)),
-        3 => Just(Kind::Int(64)),
+        3 => Just(Kind::Int(64, Form::TwosComplement)),
         2 => Just(Kind::Float(64)),
     ]
     .boxed()

@@ -8,7 +8,7 @@
 //! first, or fits inside one byte, where byte order doesn't apply.
 //! Validation guarantees every field and locator is one of these.
 
-use crate::ir::ByteOrder;
+use crate::ir::{ByteOrder, ScalarType, Signed};
 
 /// Why a value can't be read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,13 +116,81 @@ fn span(
     Ok((first, last))
 }
 
-/// The low `size_bits` bits of `raw` as a two's-complement number:
-/// `sign_extend(0b11, 2)` is -1.
-pub(crate) fn sign_extend(raw: u64, size_bits: u32) -> i64 {
-    let unused = 64 - size_bits.clamp(1, 64);
-    // Move the value's top bit to bit 63, reinterpret the bits as signed,
-    // then shift back: `>>` on an i64 copies the sign bit in.
-    ((raw << unused) as i64) >> unused
+/// How an integer's bits are its value (`decoding.md` §2.1): unsigned, or
+/// one of the signed forms. Every reading of an integer, and every bound on
+/// one, goes through here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) enum IntForm {
+    Unsigned,
+    TwosComplement,
+    SignMagnitude,
+    OnesComplement,
+}
+
+impl IntForm {
+    /// The form of a `uint`, `int` or `bool` value; `None` for any other.
+    pub(crate) fn of(ty: ScalarType, signed: Option<Signed>) -> Option<IntForm> {
+        match (ty, signed) {
+            (ScalarType::Uint | ScalarType::Bool, _) => Some(IntForm::Unsigned),
+            (ScalarType::Int, None | Some(Signed::TwosComplement)) => Some(IntForm::TwosComplement),
+            (ScalarType::Int, Some(Signed::SignMagnitude)) => Some(IntForm::SignMagnitude),
+            (ScalarType::Int, Some(Signed::OnesComplement)) => Some(IntForm::OnesComplement),
+            _ => None,
+        }
+    }
+
+    /// The values `size_bits` bits hold: two's complement one more negative
+    /// than positive, sign-magnitude and ones' complement as many of each,
+    /// having two zeros.
+    pub(crate) fn range(self, size_bits: u32) -> (i128, i128) {
+        let size = size_bits.clamp(1, 64);
+        let half = 1_i128 << (size - 1);
+        match self {
+            IntForm::Unsigned => (0, (1_i128 << size) - 1),
+            IntForm::TwosComplement => (-half, half - 1),
+            IntForm::SignMagnitude | IntForm::OnesComplement => (-(half - 1), half - 1),
+        }
+    }
+
+    /// The value of the low `size_bits` bits of `raw`. A negative zero is
+    /// 0.
+    pub(crate) fn read(self, raw: u64, size_bits: u32) -> i128 {
+        let size = size_bits.clamp(1, 64);
+        let mask = u64::MAX >> (64 - size);
+        let raw = raw & mask;
+        let negative = raw >> (size - 1) == 1;
+        match self {
+            IntForm::Unsigned => i128::from(raw),
+            // Move the value's top bit to bit 63, reinterpret the bits as
+            // signed, then shift back: `>>` on an i64 copies the sign in.
+            IntForm::TwosComplement => {
+                let unused = 64 - size;
+                i128::from(((raw << unused) as i64) >> unused)
+            }
+            IntForm::SignMagnitude if negative => -i128::from(raw & (mask >> 1)),
+            IntForm::OnesComplement if negative => -i128::from(!raw & mask),
+            IntForm::SignMagnitude | IntForm::OnesComplement => i128::from(raw),
+        }
+    }
+
+    /// The `size_bits` bits that hold `value`, if they can: 0 as +0.
+    pub(crate) fn write(self, value: i128, size_bits: u32) -> Option<u64> {
+        let (low, high) = self.range(size_bits);
+        if value < low || value > high {
+            return None;
+        }
+        let size = size_bits.clamp(1, 64);
+        let mask = u64::MAX >> (64 - size);
+        let magnitude = u64::try_from(value.unsigned_abs()).ok()?;
+        Some(match self {
+            _ if value >= 0 => magnitude,
+            IntForm::TwosComplement => magnitude.wrapping_neg() & mask,
+            IntForm::SignMagnitude => (1 << (size - 1)) | magnitude,
+            IntForm::OnesComplement => !magnitude & mask,
+            // A negative value is outside an unsigned range.
+            IntForm::Unsigned => return None,
+        })
+    }
 }
 
 /// `size` bits of `bytes`, starting `skip` bits into the first byte. A

@@ -33,7 +33,8 @@ use thiserror::Error;
 use crate::canonical::{self, CanonicalError};
 use crate::diagnostics::{Code, Diagnostics, Place, Report};
 use crate::ir::{
-    ArgumentRange, Artifact, Bundle, Catalog, Command, Digest, IrVersion, Literal, Param, Set,
+    ArgumentRange, Artifact, Bundle, Catalog, Command, Digest, Family, IrVersion, Literal, Param,
+    Set,
 };
 use crate::read::Loaded;
 use crate::validate::{Validated, validate};
@@ -228,13 +229,14 @@ fn written(loaded: Loaded<Artifact>) -> Written {
 /// Write every artifact of a validated bundle.
 pub fn build(validated: &Validated) -> Result<Artifacts, BuildError> {
     let bundle = validated.bundle();
-    let catalog_artifact = Artifact::catalog(IrVersion::CURRENT, bundle.catalog.clone());
-    let catalog = write("catalog", stamp(catalog_artifact))?;
+    let catalog_artifact =
+        Artifact::catalog(catalog_version(&bundle.catalog), bundle.catalog.clone());
+    let catalog = write("catalog", catalog_artifact)?;
 
     let mut families = BTreeMap::new();
     for family in &bundle.families {
-        let artifact = Artifact::family(IrVersion::CURRENT, family.clone());
-        families.insert(family.name.clone(), write(&family.name, stamp(artifact))?);
+        let artifact = Artifact::family(family_version(family), family.clone());
+        families.insert(family.name.clone(), write(&family.name, artifact)?);
     }
 
     let mut sets = BTreeMap::new();
@@ -244,12 +246,12 @@ pub fn build(validated: &Validated) -> Result<Artifacts, BuildError> {
             continue;
         };
         let artifact = Artifact::set(
-            IrVersion::CURRENT,
+            set_version(set),
             catalog.digest.clone(),
             family.digest.clone(),
             in_name_order(set),
         );
-        sets.insert(set.name.clone(), write(&set.name, stamp(artifact))?);
+        sets.insert(set.name.clone(), write(&set.name, artifact)?);
     }
     Ok(Artifacts {
         catalog,
@@ -361,26 +363,31 @@ pub fn assemble(
     validate(bundle).map_err(AssembleError::Invalid)
 }
 
-/// The lowest IR version that can read `artifact`. Every feature so far is
-/// in 2.0; a feature added in a later minor version raises this only for
-/// artifacts that use it.
-pub fn required_version(_artifact: &Artifact) -> IrVersion {
-    IrVersion::new(2, 0)
+/// The lowest IR version that can read `artifact`, which it states: what
+/// it uses decides, never the version of the build that writes it. Only
+/// artifacts that use a later feature say so, so every other artifact
+/// keeps its digest when the IR grows.
+pub fn required_version(artifact: &Artifact) -> IrVersion {
+    match artifact {
+        Artifact::Catalog { catalog, .. } => catalog_version(catalog),
+        Artifact::Family { family, .. } => family_version(family),
+        Artifact::Set { set, .. } => set_version(set),
+    }
 }
 
-/// The artifact with its `mdl_version` set to what it needs.
-fn stamp(artifact: Artifact) -> Artifact {
-    let version = required_version(&artifact);
-    match artifact {
-        Artifact::Catalog { catalog, .. } => Artifact::catalog(version, catalog),
-        Artifact::Family { family, .. } => Artifact::family(version, family),
-        Artifact::Set {
-            catalog,
-            family,
-            set,
-            ..
-        } => Artifact::set(version, catalog, family, set),
-    }
+/// No catalog feature is newer than 2.0.
+fn catalog_version(_catalog: &Catalog) -> IrVersion {
+    IrVersion::V2_0
+}
+
+/// No family feature is newer than 2.0.
+fn family_version(_family: &Family) -> IrVersion {
+    IrVersion::V2_0
+}
+
+/// 2.0, unless the set uses a later feature ([`Set::need`]).
+fn set_version(set: &Set) -> IrVersion {
+    set.need().map_or(IrVersion::V2_0, |need| need.version)
 }
 
 fn write(name: &str, artifact: Artifact) -> Result<Written, BuildError> {

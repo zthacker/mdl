@@ -5,12 +5,12 @@ use std::collections::BTreeMap;
 use serde_json::Value as Json;
 
 use super::{JsonType, Problem, Record, Value};
-use crate::bits::{BitsError, read_bits, sign_extend};
+use crate::bits::{BitsError, IntForm, read_bits};
 use crate::canonical::number_text;
 use crate::checksum::{Algorithm, Compiled};
 use crate::ir::{
     ArrayEntry, ByteLength, ByteOrder, ChecksumEntry, CompareOp, Condition, Count, Element, Entry,
-    Field, FromField, Scalar, ScalarElement, ScalarType, StructType, TextEncoding,
+    Field, FromField, Scalar, ScalarElement, ScalarType, Signed, StructType, TextEncoding,
 };
 use crate::route::json_integer;
 use crate::text;
@@ -66,6 +66,7 @@ struct ScalarShape<'a> {
     ty: ScalarType,
     size_bits: Option<u32>,
     byte_order: Option<ByteOrder>,
+    signed: Option<Signed>,
     length: Option<&'a ByteLength>,
     text: Option<TextEncoding>,
 }
@@ -76,6 +77,7 @@ impl<'a> ScalarShape<'a> {
             ty: field.ty,
             size_bits: field.size_bits,
             byte_order: field.byte_order,
+            signed: field.signed,
             length: field.length.as_ref(),
             text: field.text,
         }
@@ -86,6 +88,7 @@ impl<'a> ScalarShape<'a> {
             ty: element.ty,
             size_bits: element.size_bits,
             byte_order: element.byte_order,
+            signed: element.signed,
             length: element.length.as_ref(),
             text: element.text,
         }
@@ -357,7 +360,13 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
                 let raw = read_bits(self.bytes, at, size, order).map_err(bits_problem)?;
                 let value = match (scalar.ty, size) {
                     (ScalarType::Uint, _) => Value::Uint(raw),
-                    (ScalarType::Int, _) => Value::Int(sign_extend(raw, size)),
+                    (ScalarType::Int, _) => {
+                        let form = IntForm::of(scalar.ty, scalar.signed)
+                            .ok_or(Problem::Layout("an integer"))?;
+                        let value = i64::try_from(form.read(raw, size))
+                            .map_err(|_| Problem::Layout("an int of 1 to 64 bits"))?;
+                        Value::Int(value)
+                    }
                     (ScalarType::Bool, _) => Value::Bool(raw != 0),
                     (_, 32) => {
                         let bits = u32::try_from(raw).map_err(|_| Problem::Layout("a float"))?;

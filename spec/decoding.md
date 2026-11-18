@@ -51,9 +51,26 @@ its family's, and MUST NOT be given on a value that lies inside one byte
 at every start residue it has (§5.2). `bits` locators (§3.1) and
 checksums (§5.6) always use the family's order, or the algorithm's own.
 
-A signed (`int`) value is the unsigned value read as two's complement in
-its size. A `float` is IEEE 754 binary32 or binary64. A `bool` is one bit,
-true if set. A read past the end of the packet is `past_end`.
+A signed (`int`) value is the unsigned value read in its size as two's
+complement, or, when it says so in `signed` (IR 2.1), in another form:
+
+- `sign_magnitude`: the top bit is the sign, set for a negative value, and
+  the other bits are the magnitude. 16-bit `0x8005` is −5.
+- `ones_complement`: a value with the top bit set is the negative of the
+  bitwise NOT of its bits. 16-bit `0xFFFA` is −5.
+
+Both hold ±(2^(n−1) − 1) in n bits, and both have a second zero (`0x8000`
+and `0xFFFF` in 16 bits), which reads as 0. Two's complement is the
+default and is never spelled, so each layout has one spelling: `signed`
+MUST NOT be `twos_complement` [`explicit_default`]. Only a binary `int`
+has a signed form [`field_size`, `wrong_encoding` in a self-describing
+family], and it has at least 2 bits, since in 1 bit either form holds
+only zero [`field_size`]. An identify key read in one form is a
+different key from the same bits read in another (§4), as from the same
+bits read in the other byte order.
+
+A `float` is IEEE 754 binary32 or binary64. A `bool` is one bit, true if
+set. A read past the end of the packet is `past_end`.
 
 ### 2.2 Text and bytes
 
@@ -155,11 +172,13 @@ Pointer; a metadata name the family declares; or a top-level integer or
 bool field of the packet, by its static position (§5.2) if it has one.
 Values compare as in §3.2: pointers exactly, metadata and fields by value.
 
-A field key at a static position is its position, size, signedness and
-byte order (§2.1), whatever the field is named: two packets whose keys
-read the same bits in the same way share a key. Read in different byte
-orders, the same bits are different keys, except inside one byte, where
-both orders read the same.
+A field key at a static position is its position, size, signed form
+(unsigned, two's complement, sign-magnitude or ones' complement) and byte
+order (§2.1), whatever the field is named: two packets whose keys read
+the same bits in the same way share a key. Read in different forms, or in
+different byte orders, the same bits are different keys, except that
+inside one byte both orders read the same. A key compares values, so a
+key of 0 in a form with two zeros matches either.
 
 - A message matches a packet when every key's value in the message equals
   the packet's. Validation guarantees that the packets one message can

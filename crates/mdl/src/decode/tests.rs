@@ -972,6 +972,27 @@ fn identified_in(
         .map(|decoded| (decoded.packet.name.clone(), shown(&decoded.record)))
 }
 
+/// A telemetry key compares values, so a key of 0 read in a form with two
+/// zeros matches either (`decoding.md` §4).
+#[test]
+fn a_key_of_zero_matches_either_zero() {
+    let mut value = bundle();
+    let k = json!({ "kind": "field", "name": "k", "type": "int", "size_bits": 8,
+                    "signed": "sign_magnitude" });
+    for set in value["sets"].as_array_mut().unwrap() {
+        if set["name"] == "ident_v1" {
+            set["packets"] = json!([
+                { "name": "ANY", "entries": [k.clone()] },
+                { "name": "ZERO", "identify": { "k": 0 }, "entries": [k.clone()] },
+            ]);
+        }
+    }
+    let name = |payload: &[u8]| identified_in(&value, payload).unwrap().0;
+    assert_eq!(name(&[0x00]), "ZERO");
+    assert_eq!(name(&[0x80]), "ZERO");
+    assert_eq!(name(&[0x81]), "ANY");
+}
+
 #[test]
 fn the_most_specific_matching_packet_wins() {
     let name = |payload: &[u8]| identified(payload).unwrap().0;
@@ -1030,7 +1051,7 @@ fn a_cheap_key_that_matches_nothing_skips_trial_decodes() {
                     KeyId::Bits {
                         offset: 0,
                         size: 8,
-                        signed: false,
+                        form: IntForm::Unsigned,
                         order: ByteOrder::Big,
                     },
                     KeyValue::Int(packet as i128),
@@ -1842,6 +1863,46 @@ effective_from = "2026-01-01T00:00:00Z"
 "#,
     )
     .unwrap()
+}
+
+/// The kitchen sink's SIGNS packet: a little-endian sign-magnitude field
+/// through a conversion, and ones' complement elements; either form's
+/// second zero reads as 0.
+#[test]
+fn signed_forms_decode_and_their_second_zero_is_zero() {
+    let artifacts = artifacts();
+    let sets = family_sets(&artifacts, "sink");
+    let metadata = [("msg", MetaValue::Uint(2)), ("node", MetaValue::Uint(4))];
+    let decode = |payload: &[u8]| {
+        let message = Message::new(Payload::Binary(payload), now()).with_metadata(&metadata);
+        let decoded = sets.decode(&message, &sink_registry()).unwrap();
+        assert_eq!(decoded.packet.name, "SIGNS");
+        (
+            shown(&decoded.record),
+            decoded.engineering("trim").map(|trim| trim.value),
+        )
+    };
+    let pair = |name: &str, value: &str| (name.to_string(), value.to_string());
+    // A CUC time of 0, trim 0x807B (little-endian), offsets FE 05 FF.
+    let (record, trim) = decode(&[0, 0, 0, 0, 0x7B, 0x80, 0xFE, 0x05, 0xFF]);
+    assert_eq!(
+        record,
+        [pair("trim", "-123"), pair("offsets", "[-1, 5, 0]")]
+    );
+    assert_eq!(trim, Some(SampleValue::F64(-1.23)));
+    // trim 0x8000, sign-magnitude's other zero; offsets FF 7F 80.
+    let (record, trim) = decode(&[0, 0, 0, 0, 0x00, 0x80, 0xFF, 0x7F, 0x80]);
+    assert_eq!(
+        record,
+        [pair("trim", "0"), pair("offsets", "[0, 127, -127]")]
+    );
+    assert_eq!(trim, Some(SampleValue::F64(0.0)));
+    // The ends: -32767 and -127, as many negatives as positives.
+    let (record, _) = decode(&[0, 0, 0, 0, 0xFF, 0xFF, 0x80, 0x00, 0x00]);
+    assert_eq!(
+        record,
+        [pair("trim", "-32767"), pair("offsets", "[-127, 0, 0]")]
+    );
 }
 
 #[test]

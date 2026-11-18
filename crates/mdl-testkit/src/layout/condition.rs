@@ -9,7 +9,7 @@ use proptest::prelude::*;
 use proptest::sample::select;
 use serde_json::{Value, json};
 
-use super::{FieldSpec, Kind, Length, Raw, Text, integer_json, spec_of};
+use super::{FieldSpec, Form, Kind, Length, Raw, Text, integer_json, spec_of};
 
 /// A condition on a selector field, before it's laid out.
 #[derive(Debug, Clone)]
@@ -38,7 +38,7 @@ impl Selector {
     pub(super) fn kind(self) -> Kind {
         match self {
             Selector::Uint(bits) => Kind::Uint(bits),
-            Selector::Int(bits) => Kind::Int(bits),
+            Selector::Int(bits) => Kind::Int(bits, Form::TwosComplement),
             Selector::Bool => Kind::Bool,
             Selector::Text => Kind::Text {
                 length: Length::Fixed {
@@ -288,7 +288,7 @@ fn int_raw(kind: &Kind, value: i128) -> Option<Raw> {
         Kind::Uint(_) if kind.integers()?.contains(&value) => {
             u64::try_from(value).ok().map(Raw::Uint)
         }
-        Kind::Int(_) if kind.integers()?.contains(&value) => {
+        Kind::Int(..) if kind.integers()?.contains(&value) => {
             i64::try_from(value).ok().map(Raw::Int)
         }
         _ => None,

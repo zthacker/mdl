@@ -1004,3 +1004,46 @@ fn damaged_messages_reach_every_route() {
         assert!(count >= 5, "{reached:?} is reached {count} times");
     }
 }
+
+/// Generated layouts pack negative values in each signed form, where the
+/// bits differ from two's complement, so the decoder is checked on them.
+#[test]
+fn layouts_pack_negative_values_in_every_signed_form() {
+    use std::collections::BTreeMap;
+
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+
+    use super::{Raw, telemetry};
+
+    let mut runner = TestRunner::deterministic();
+    let strategy = telemetry();
+    let mut negatives: BTreeMap<String, usize> = BTreeMap::new();
+    for _ in 0..300 {
+        let case = strategy.new_tree(&mut runner).unwrap().current();
+        let mut forms: BTreeMap<String, String> = BTreeMap::new();
+        for packet in case.bundle["sets"][0]["packets"].as_array().unwrap() {
+            for entry in packet["entries"].as_array().unwrap() {
+                if let (Some(name), Some(form)) = (entry["name"].as_str(), entry["signed"].as_str())
+                {
+                    forms.insert(name.to_string(), form.to_string());
+                }
+            }
+        }
+        for message in &case.messages {
+            for (name, raw) in &message.record {
+                if let (Some(form), Raw::Int(n)) = (forms.get(name), raw)
+                    && *n < 0
+                {
+                    *negatives.entry(form.clone()).or_default() += 1;
+                }
+            }
+        }
+    }
+    for form in ["sign_magnitude", "ones_complement"] {
+        assert!(
+            negatives.get(form).is_some_and(|count| *count >= 20),
+            "too few negative {form} values: {negatives:?}"
+        );
+    }
+}

@@ -13,7 +13,7 @@ use crate::layout::command::{
     Arg, ArgType, Const, Counted, Elements, Encoder, Encoding, Garbled, GarbledKind, Group, Layout,
     Len, Placed, Shape, Source, Target, Through,
 };
-use crate::layout::{fit, put_bits};
+use crate::layout::put_bits;
 
 /// A valid payload for the layout's command with one fault planted in it,
 /// and the code decoding it gives. `keys` are every packet's key values.
@@ -764,17 +764,12 @@ fn unknown_key(layout: &Layout, keys: &[Const], packed: &Packed) -> Option<Vec<u
     };
     let mut payload = packed.payload.clone();
     match shape {
-        Shape::Uint(bits) | Shape::Int(bits) => {
+        Shape::Uint(bits) | Shape::Int(bits, _) => {
             let unused = shape
                 .integers()?
                 .find(|n| !keys.contains(&Const::Int(*n)))?;
-            put_bits(
-                &mut payload,
-                start,
-                size as u32,
-                fit(unused as u64, *bits),
-                *little,
-            );
+            let pattern = shape.int_bits(unused, *bits);
+            put_bits(&mut payload, start, size as u32, pattern, *little);
         }
         Shape::Text(_, len) => {
             // Tags are letters a to j, so z's are no tag.
@@ -831,9 +826,13 @@ fn another_constant(
             let first = (start / 8) as usize;
             payload[first..first + bytes.len()].copy_from_slice(&bytes);
         }
+        // Its lowest bit flipped, in the field's own form: in a signed
+        // form other than two's complement, flipping the two's-complement
+        // bits can give the same value back.
         (_, Const::Int(n)) => {
             let bits = size as u32;
-            put_bits(&mut payload, start, bits, fit(*n as u64, bits) ^ 1, little);
+            let flipped = shape.int_bits(*n, bits) ^ 1;
+            put_bits(&mut payload, start, bits, flipped, little);
         }
         (_, Const::Bool(flag)) => {
             put_bits(&mut payload, start, size as u32, u64::from(!flag), little);
@@ -852,7 +851,7 @@ fn refused_raws(encoder: &Encoder, shape: &Shape) -> Vec<(u64, &'static str)> {
     let held = shape.integers();
     let integer = |n: i128| -> Option<u64> {
         let range = held.clone()?;
-        range.contains(&n).then(|| fit(n as u64, bits))
+        range.contains(&n).then(|| shape.int_bits(n, bits))
     };
     match (&encoder.ty, &encoder.through) {
         // A state's raw value the conversion doesn't list.

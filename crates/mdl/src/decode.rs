@@ -65,7 +65,7 @@ use serde_json::Value as Json;
 use thiserror::Error;
 
 use crate::bindings::Resolver;
-use crate::bits::{read_bits, sign_extend};
+use crate::bits::{IntForm, read_bits};
 use crate::checksum::{Algorithm, Compiled};
 use crate::ir::{
     ByteOrder, Catalog, CommandPacket, Entry, Family, Length, Packet, Scalar, ScalarType, Set,
@@ -680,9 +680,9 @@ impl Program {
             KeyId::Bits {
                 offset,
                 size,
-                signed,
+                form,
                 order,
-            } => bits_key(readable, *offset, *size, *signed, *order),
+            } => bits_key(readable, *offset, *size, *form, *order),
             KeyId::Bytes { offset, length } => bytes_key(readable, *offset, *length),
             KeyId::Unplaced { packet, name } => self.unplaced_key(set, *packet, name, readable),
         }
@@ -874,18 +874,14 @@ fn bits_key(
     readable: &Readable<'_>,
     offset: u64,
     size: u32,
-    signed: bool,
+    form: IntForm,
     order: ByteOrder,
 ) -> Option<KeyValue> {
     let Readable::Binary { bytes, .. } = readable else {
         return None;
     };
     let raw = read_bits(bytes, offset, size, order).ok()?;
-    Some(KeyValue::Int(if signed {
-        i128::from(sign_extend(raw, size))
-    } else {
-        i128::from(raw)
-    }))
+    Some(KeyValue::Int(form.read(raw, size)))
 }
 
 fn bytes_key(readable: &Readable<'_>, offset: u64, length: u32) -> Option<KeyValue> {

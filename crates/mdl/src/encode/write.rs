@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use super::{EncodeError, FieldProblem, Raw, Slot};
-use crate::bits::write_bits;
+use crate::bits::{IntForm, write_bits};
 use crate::canonical::{format_double, write_string};
 use crate::checksum::Algorithm;
 use crate::decode::{Record, Value};
@@ -274,7 +274,8 @@ fn write_scalar(
         .ok_or(FieldProblem::Layout("a field with a value"))?;
     let order = field.byte_order.unwrap_or(order);
     let size = scalar_bits(field, slot);
-    write_field(payload, raw, at, size, field.length.as_ref(), order)
+    let form = IntForm::of(field.ty, field.signed);
+    write_field(payload, raw, at, size, field.length.as_ref(), form, order)
 }
 
 /// An array's elements from `at`, one after the other.
@@ -319,6 +320,7 @@ fn write_field(
     at: u64,
     size: u64,
     length: Option<&ByteLength>,
+    form: Option<IntForm>,
     order: ByteOrder,
 ) -> Result<(), FieldProblem> {
     let inside = FieldProblem::Layout("a field inside the packet");
@@ -360,14 +362,12 @@ fn write_field(
         }
         Value::Uint(n) => bits(*n, payload),
         Value::Int(n) => {
-            // The two's-complement bits of n in the field's size, which n
-            // fits.
-            let all = *n as u64;
-            let value = if size >= 64 {
-                all
-            } else {
-                all & ((1 << size) - 1)
-            };
+            // The bits of n in the field's form and size, which n fits.
+            let value = u32::try_from(size)
+                .ok()
+                .zip(form)
+                .and_then(|(size, form)| form.write(i128::from(*n), size))
+                .ok_or(FieldProblem::Layout("an int its field holds"))?;
             bits(value, payload)
         }
         Value::Bool(b) => bits(u64::from(*b), payload),

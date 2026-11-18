@@ -1262,7 +1262,7 @@ fn length_field_bits(layout: &Layout, entry: usize) -> Option<u32> {
 fn target_faults(shape: &Shape) -> Vec<(Option<Target>, &'static str)> {
     let mut faults = vec![(None, "missing_target")];
     match shape {
-        Shape::Uint(_) | Shape::Int(_) => {
+        Shape::Uint(_) | Shape::Int(..) => {
             faults.push((Some(Target::Text("SN-x".into())), "target_type"));
             let held = shape.integers().unwrap_or(0..=0);
             let ids = i128::from(i64::MIN)..=i128::from(u64::MAX);

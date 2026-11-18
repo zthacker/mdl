@@ -16,6 +16,7 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::bindings::NativeId;
+use crate::bits::IntForm;
 use crate::canonical::format_double;
 use crate::convert::inverse;
 use crate::decode::{Record, Value};
@@ -1291,8 +1292,8 @@ fn rounded(x: f64) -> Option<i128> {
     (r.is_finite() && r.abs() < 1.7e38).then_some(r as i128)
 }
 
-/// The integers a uint or int field holds: by its size in a binary payload,
-/// 64 bits in a JSON one.
+/// The integers a uint or int field holds: by its size and form in a
+/// binary payload, 64 bits in a JSON one.
 fn integer_bounds(field: &Field, binary: bool) -> Option<(i128, i128)> {
     let size = if binary {
         field.size_bits.filter(|size| (1..=64).contains(size))?
@@ -1300,8 +1301,9 @@ fn integer_bounds(field: &Field, binary: bool) -> Option<(i128, i128)> {
         64
     };
     match field.ty {
-        ScalarType::Uint => Some((0, (1_i128 << size) - 1)),
-        ScalarType::Int => Some((-(1_i128 << (size - 1)), (1_i128 << (size - 1)) - 1)),
+        ScalarType::Uint | ScalarType::Int => {
+            IntForm::of(field.ty, field.signed).map(|form| form.range(size))
+        }
         _ => None,
     }
 }

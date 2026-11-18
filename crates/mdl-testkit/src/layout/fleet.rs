@@ -1067,8 +1067,9 @@ fn assemble(
             sets.push(json);
         }
     }
+    let sets = Value::Array(sets);
     let bundle = json!({
-        "mdl_version": "2.0",
+        "mdl_version": crate::version_for(&sets),
         "catalog": { "params": params },
         "families": (0..families).map(|family| family_json(plan, family)).collect::<Vec<_>>(),
         "sets": sets

@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use super::validate;
+use crate::bits::IntForm;
 use crate::diagnostics::Code;
 use crate::ir::{Bundle, ByteOrder, Conversion, Entry};
 
@@ -1326,6 +1327,64 @@ fn a_number_can_have_its_own_byte_order() {
         Code::WrongEncoding,
         "/sets/1/packets/0/entries/0/byte_order",
         |v| v["sets"][1]["packets"][0]["entries"][0]["byte_order"] = json!("little"),
+    );
+}
+
+/// `signed` is for binary ints of two bits or more, in a form other than
+/// the default two's complement (IR 2.1); an identify key read in another
+/// form is another key, and its value has to fit the form.
+#[test]
+fn a_signed_form_is_for_binary_ints_of_two_bits_or_more() {
+    let int = |name: &str, bits: u32, form: &str| json!({ "kind": "field", "name": name, "type": "int", "size_bits": bits, "signed": form });
+    assert_eq!(
+        one(json!([
+            int("a", 12, "sign_magnitude"),
+            int("b", 4, "ones_complement")
+        ])),
+        vec![]
+    );
+    // Two's complement is the default, spelled out.
+    assert_eq!(
+        one(json!([int("a", 8, "twos_complement")])),
+        vec![(Code::ExplicitDefault, entry(0, "/signed"))]
+    );
+    // One bit holds only zero in either form.
+    assert_eq!(
+        one(json!([int("a", 1, "ones_complement"), uint("pad", 7)])),
+        vec![(Code::FieldSize, entry(0, "/size_bits"))]
+    );
+    // Only ints have a form.
+    let mut unsigned = uint("u", 8);
+    unsigned["signed"] = json!("sign_magnitude");
+    assert_eq!(
+        one(json!([unsigned])),
+        vec![(Code::FieldSize, entry(0, "/signed"))]
+    );
+    // A self-describing payload's numbers have no bits.
+    assert_one(
+        Code::WrongEncoding,
+        "/sets/1/packets/0/entries/0/signed",
+        |v| v["sets"][1]["packets"][0]["entries"][0]["signed"] = json!("sign_magnitude"),
+    );
+    // -128 is two's complement's in 8 bits, not sign-magnitude's.
+    let keyed = |form: &str, value: i64| json!({ "name": "A", "identify": { "k": value }, "entries": [int("k", 8, form)] });
+    assert_eq!(
+        problems(with_packets(vec![keyed("sign_magnitude", -127)])),
+        vec![]
+    );
+    assert_one(
+        Code::IdentifyValue,
+        "/sets/0/packets/0/identify/k",
+        with_packets(vec![keyed("sign_magnitude", -128)]),
+    );
+    // 0x81 is -1 in sign-magnitude and -127 in two's complement: the same
+    // bits read in two forms are two keys, so both packets match it.
+    let twos = json!({ "name": "B", "identify": { "k": -127 },
+                       "entries": [{ "kind": "field", "name": "k", "type": "int", "size_bits": 8 }] });
+    assert_one(
+        Code::AmbiguousIdentify,
+        "/sets/0/packets/1/identify",
+        with_packets(vec![keyed("sign_magnitude", -1), twos]),
     );
 }
 
@@ -3872,7 +3931,7 @@ fn command_identities_are_constants_a_decoder_reads_directly() {
     let opcode = KeyId::Bits {
         offset: 0,
         size: 8,
-        signed: false,
+        form: IntForm::Unsigned,
         order: ByteOrder::Big,
     };
     let apid = KeyId::Metadata("apid".to_string());

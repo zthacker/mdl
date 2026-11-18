@@ -160,7 +160,7 @@ fn ties(encoder: &Encoder, min: f64, max: f64) -> Option<BoxedStrategy<f64>> {
                 })
                 .boxed(),
         ),
-        Shape::Uint(_) | Shape::Int(_) => {
+        Shape::Uint(_) | Shape::Int(..) => {
             let (first, last) = (a.round() as i64, b.round() as i64);
             (first < last).then(|| {
                 (first..last)

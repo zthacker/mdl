@@ -43,8 +43,9 @@ fn bundle_with(given: f64) -> Gen {
         maybe(given, list(set(given), 1..3)),
     )
         .prop_map(|(catalog, families, sets)| {
+            let version = sets.as_ref().map_or("2.0", crate::version_for);
             object([
-                ("mdl_version", Some(json!("2.0"))),
+                ("mdl_version", Some(json!(version))),
                 ("catalog", Some(catalog)),
                 ("families", families),
                 ("sets", sets),
@@ -557,6 +558,10 @@ fn text_encoding() -> Gen {
     word(&["utf8", "ascii", "latin1"])
 }
 
+fn signed() -> Gen {
+    word(&["sign_magnitude", "ones_complement", "twos_complement"])
+}
+
 /// Sentinels: at least one, since an empty list is written absent.
 fn sentinels() -> Gen {
     list(scalar(), 1..3)
@@ -570,6 +575,7 @@ fn field(given: f64) -> Gen {
         maybe(given, text()),
         maybe(given, u32_value()),
         maybe(given, byte_order()),
+        maybe(given, signed()),
     );
     let reading = (
         maybe(given, byte_length(given)),
@@ -590,7 +596,7 @@ fn field(given: f64) -> Gen {
     (place, reading, writing)
         .prop_map(
             |(
-                (name, ty, offset_bits, pointer, size_bits, byte_order),
+                (name, ty, offset_bits, pointer, size_bits, byte_order, signed),
                 (length, text, conversion, unit, canonical, invalid),
                 (when, optional, value, argument, inverse, target),
             )| {
@@ -602,6 +608,7 @@ fn field(given: f64) -> Gen {
                     ("pointer", pointer),
                     ("size_bits", size_bits),
                     ("byte_order", byte_order),
+                    ("signed", signed),
                     ("length", length),
                     ("text", text),
                     ("conversion", conversion),
@@ -626,6 +633,7 @@ fn element(given: f64) -> Gen {
             scalar_type(),
             maybe(given, u32_value()),
             maybe(given, byte_order()),
+            maybe(given, signed()),
             maybe(given, byte_length(given)),
             maybe(given, text_encoding()),
         ),
@@ -637,12 +645,16 @@ fn element(given: f64) -> Gen {
         ),
     )
         .prop_map(
-            |((ty, size_bits, byte_order, length, text), (conversion, unit, invalid, inverse))| {
+            |(
+                (ty, size_bits, byte_order, signed, length, text),
+                (conversion, unit, invalid, inverse),
+            )| {
                 object([
                     ("kind", Some(json!("scalar"))),
                     ("type", Some(ty)),
                     ("size_bits", size_bits),
                     ("byte_order", byte_order),
+                    ("signed", signed),
                     ("length", length),
                     ("text", text),
                     ("conversion", conversion),

@@ -7,6 +7,7 @@ use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::TestRunner;
 use serde_json::Value;
 
+use super::Form;
 use super::canonical::{ecmascript, utf16_order};
 use super::encoders::f64_encoder;
 use super::requests::{buffer, decoded_value, native, raw_of};
@@ -45,7 +46,7 @@ fn values_round_as_the_spec_works_them() {
     assert_eq!(unrounded(&inverse, 0.36), Some(3.4999999999999996));
     assert_eq!(raw(&inverse, 0.36), Raw::Uint(3));
 
-    let unit = linear(1.0, 0.0, Shape::Int(8));
+    let unit = linear(1.0, 0.0, Shape::Int(8, Form::TwosComplement));
     assert_eq!(raw(&unit, 2.5), Raw::Int(3));
     assert_eq!(raw(&unit, -2.5), Raw::Int(-3));
 
@@ -128,7 +129,7 @@ fn requests_reach_rounding_ties() {
                 continue;
             };
             match encoder.shape {
-                Shape::Uint(_) | Shape::Int(_) if x.fract().abs() == 0.5 => integer_ties += 1,
+                Shape::Uint(_) | Shape::Int(..) if x.fract().abs() == 0.5 => integer_ties += 1,
                 Shape::Float(32) => {
                     let near = x as f32;
                     let other = if f64::from(near) > x {

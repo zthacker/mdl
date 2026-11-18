@@ -18,6 +18,7 @@ use proptest::prelude::*;
 use proptest::sample::select;
 use proptest::strategy::Union;
 
+use super::Form;
 use super::canonical::{Canon, write};
 use super::encoders::{as_literal, defaulted, element_encoder, encoder, with_default};
 use super::packets::{group_defaults, left_out_list};
@@ -157,7 +158,7 @@ pub(super) struct CommandSpec {
 fn jsonify(mut encoder: Encoder) -> Option<Encoder> {
     encoder.shape = match encoder.shape {
         Shape::Uint(_) => Shape::Uint(64),
-        Shape::Int(_) => Shape::Int(64),
+        Shape::Int(..) => Shape::Int(64, Form::TwosComplement),
         Shape::Float(_) => Shape::Float(64),
         Shape::Bool => Shape::Bool,
         Shape::Text(..) => string_shape(),
@@ -193,7 +194,11 @@ fn json_element() -> BoxedStrategy<Encoder> {
 /// A constant: an integer of either sign out to 64 bits' ends, a bool, or
 /// text.
 fn constant() -> BoxedStrategy<(Shape, Const)> {
-    let integer = prop_oneof![Just(Shape::Uint(64)), Just(Shape::Int(64))].prop_flat_map(|shape| {
+    let integer = prop_oneof![
+        Just(Shape::Uint(64)),
+        Just(Shape::Int(64, Form::TwosComplement))
+    ]
+    .prop_flat_map(|shape| {
         let held = shape.integers().unwrap_or(0..=0);
         let (low, high) = (*held.start(), *held.end());
         let value = prop_oneof![
@@ -215,21 +220,24 @@ fn constant() -> BoxedStrategy<(Shape, Const)> {
 /// Each packet's value of the key, a constant at one pointer every packet
 /// has: distinct integers, or distinct strings, compared exactly (§7.2).
 pub(super) fn key(count: usize) -> BoxedStrategy<(Shape, Vec<Const>)> {
-    let integer =
-        prop_oneof![Just(Shape::Uint(64)), Just(Shape::Int(64))].prop_flat_map(move |shape| {
-            let held = shape.integers().unwrap_or(0..=0);
-            let (low, high) = (*held.start(), *held.end());
-            let value = prop_oneof![
-                Just(low),
-                Just(high),
-                low.max(-50)..=high.min(50),
-                low..=high
-            ];
-            let values = btree_set(value, count)
-                .prop_map(|values| values.into_iter().map(Const::Int).collect::<Vec<_>>())
-                .prop_shuffle();
-            (Just(shape), values)
-        });
+    let integer = prop_oneof![
+        Just(Shape::Uint(64)),
+        Just(Shape::Int(64, Form::TwosComplement))
+    ]
+    .prop_flat_map(move |shape| {
+        let held = shape.integers().unwrap_or(0..=0);
+        let (low, high) = (*held.start(), *held.end());
+        let value = prop_oneof![
+            Just(low),
+            Just(high),
+            low.max(-50)..=high.min(50),
+            low..=high
+        ];
+        let values = btree_set(value, count)
+            .prop_map(|values| values.into_iter().map(Const::Int).collect::<Vec<_>>())
+            .prop_shuffle();
+        (Just(shape), values)
+    });
     let text = btree_set(text_for(Text::Utf8, &Len::Remaining), count)
         .prop_map(|tags| tags.into_iter().map(Const::Text).collect::<Vec<_>>())
         .prop_shuffle()
@@ -284,7 +292,12 @@ pub(super) fn apids(keying: Keying, count: usize) -> BoxedStrategy<Vec<Option<i6
 }
 
 fn target_shape() -> BoxedStrategy<Shape> {
-    select(vec![Shape::Uint(64), Shape::Int(64), string_shape()]).boxed()
+    select(vec![
+        Shape::Uint(64),
+        Shape::Int(64, Form::TwosComplement),
+        string_shape(),
+    ])
+    .boxed()
 }
 
 /// An array of a list argument's values or of records, its lists' bounds

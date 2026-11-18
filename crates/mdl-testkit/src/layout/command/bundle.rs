@@ -51,11 +51,12 @@ pub(super) fn assemble(
     if !types.is_empty() {
         set["types"] = Value::Object(types);
     }
+    let sets = json!([set]);
     let bundle = json!({
-        "mdl_version": "2.0",
+        "mdl_version": crate::version_for(&sets),
         "catalog": { "commands": commands },
         "families": [family],
-        "sets": [set]
+        "sets": sets
     });
     Commands {
         bundle,
@@ -299,6 +300,11 @@ fn shape_json(
         json.insert("length".into(), length_json(len, name));
     }
     match shape {
+        Shape::Int(_, form) => {
+            if let Some(name) = form.name() {
+                json.insert("signed".into(), json!(name));
+            }
+        }
         Shape::Text(Text::Ascii, _) => {
             json.insert("text".into(), json!("ascii"));
         }

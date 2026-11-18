@@ -42,10 +42,12 @@ fn from_toml(files: &[(String, String)]) -> Artifacts {
     }
 }
 
-/// `part` as one TOML file of a bundle.
+/// `part` as one TOML file of a bundle, at the fixture's version, which
+/// every part may need.
 fn file(name: &str, part: Map<String, Value>) -> (String, String) {
+    let bundle: Value = serde_json::from_str(JSON).unwrap();
     let mut document = Map::new();
-    document.insert("mdl_version".to_string(), json!("2.0"));
+    document.insert("mdl_version".to_string(), bundle["mdl_version"].clone());
     document.extend(part);
     (name.to_string(), toml::to_string(&document).unwrap())
 }

@@ -10,7 +10,7 @@ use super::{
     Arg, ArgType, Const, Counted, Decoded, Elements, Encoder, Encoding, Given, Layout, Len, Placed,
     Request, Shape, Source, Target, Through, json,
 };
-use crate::layout::{Raw, convert, encode, fit, put_bits};
+use crate::layout::{Raw, convert, encode, put_bits};
 
 /// A valid request, before what it encodes to is worked out: each
 /// argument's spelled value, if given, by catalog index; the target; and
@@ -681,7 +681,7 @@ fn grow(payload: &mut Vec<u8>, bits: u64) {
 fn pattern(raw: &Raw, shape: &Shape) -> u64 {
     match (raw, shape) {
         (Raw::Uint(n), _) => *n,
-        (Raw::Int(n), Shape::Int(bits)) => fit(*n as u64, *bits),
+        (Raw::Int(n), Shape::Int(bits, form)) => form.bits_of(i128::from(*n), *bits),
         (Raw::Bool(b), _) => u64::from(*b),
         (Raw::Float(x), Shape::Float(32)) => u64::from((*x as f32).to_bits()),
         (Raw::Float(x), _) => x.to_bits(),
@@ -711,7 +711,7 @@ pub(super) fn buffer(mut bytes: Vec<u8>, len: &Len) -> Vec<u8> {
 
 fn constant_raw(shape: &Shape, value: &Const) -> Raw {
     match (shape, value) {
-        (Shape::Int(_), Const::Int(n)) => Raw::Int(*n as i64),
+        (Shape::Int(..), Const::Int(n)) => Raw::Int(*n as i64),
         (_, Const::Int(n)) => Raw::Uint(*n as u64),
         (_, Const::Bool(b)) => Raw::Bool(*b),
         (_, Const::Text(text)) => Raw::Str(text.clone()),
@@ -721,7 +721,7 @@ fn constant_raw(shape: &Shape, value: &Const) -> Raw {
 /// The raw value an argument's value becomes in its field (§3.1, §3.4).
 pub(super) fn raw_of(encoder: &Encoder, shape: &Shape, value: &Arg) -> Raw {
     let integer = |n: i128| match shape {
-        Shape::Int(_) => Raw::Int(n as i64),
+        Shape::Int(..) => Raw::Int(n as i64),
         Shape::Bool => Raw::Bool(n != 0),
         _ => Raw::Uint(n as u64),
     };
@@ -763,7 +763,7 @@ fn target_raw(shape: &Shape, target: &Target) -> Raw {
         Target::Int(n) => Target::Int(*n),
     };
     match (shape, id) {
-        (Shape::Int(_), Target::Int(n)) => Raw::Int(n as i64),
+        (Shape::Int(..), Target::Int(n)) => Raw::Int(n as i64),
         (Shape::Uint(_), Target::Int(n)) => Raw::Uint(n as u64),
         (_, Target::Int(n)) => Raw::Str(n.to_string()),
         (_, Target::Text(text)) => Raw::Str(text),

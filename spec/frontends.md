@@ -48,7 +48,7 @@ A diagnostic has:
 
 - a **severity**, `error` or `warning`;
 - a **code**. The reader's codes (`invalid_json`, `wrong_shape`,
-  `unsupported_version` and the others) and validation's (`unit_mismatch`
+  `unsupported_version`, `feature_version` and the others) and validation's (`unit_mismatch`
   and the others) are used as they are. A frontend's own codes start with
   its name and a dot (`toml.syntax`), so they never collide with the
   core's or each other's. A code is never renamed or reused once released;
@@ -156,3 +156,33 @@ The JSON frontend reads one bundle document: `{ "mdl_version", "catalog",
   file that starts with a byte order mark is refused at the mark, saying
   so. A duplicate key is reported at its second appearance, with the first
   as its first location (§3).
+
+## 7. IR versions
+
+A document states the IR version it's written in, `mdl_version`, as
+`"major.minor"`. A reader reads its own major version, and minor versions
+up to its own; a newer one is `unsupported_version`, saying to upgrade.
+Each minor version adds features and changes nothing before it:
+
+| Version | Adds |
+| --- | --- |
+| 2.0 | The IR. |
+| 2.1 | `signed` on an `int` field or scalar element: `sign_magnitude` or `ones_complement` (`decoding.md` §2.1). |
+
+- A bundle MUST state at least the version of every feature it uses, so a
+  document that says 2.0 means what a 2.0 reader understands
+  [`feature_version`, at the feature]. A frontend that reads several files
+  holds each file to its own version: in TOML, a feature newer than the
+  version its file states is an error there, whatever the other files
+  state (`toml.md`).
+- An artifact MUST state exactly the lowest version that reads it: a set
+  that uses a 2.1 feature says 2.1, and every other artifact 2.0. What an
+  artifact uses decides its version, never the version of the build that
+  writes it, and a feature's version never changes. A reader refuses an
+  artifact that states less than it uses [`feature_version`] or more than
+  it needs [`not_normal_form`]. So an artifact's identity
+  (`canonical-json.md` §3), and a set's `def_version`, don't change when
+  the IR grows.
+- A frontend that writes the version itself states the one its bundle
+  needs: the XTCE importer says 2.1 when it imports a sign-magnitude or
+  ones' complement integer, and 2.0 otherwise.

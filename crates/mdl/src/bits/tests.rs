@@ -186,3 +186,86 @@ fn writes_refuse_what_reads_refuse_and_values_too_wide() {
     write_bits(&mut byte, 1, 3, 0b101, ByteOrder::Little).unwrap();
     assert_eq!(byte, [0b0101_0000]);
 }
+
+#[test]
+fn integer_forms_read_and_write_their_bit_patterns() {
+    use IntForm::*;
+    // 16-bit -5 in each signed form, and 5, which they share.
+    for (form, bits) in [
+        (TwosComplement, 0xFFFB),
+        (SignMagnitude, 0x8005),
+        (OnesComplement, 0xFFFA),
+    ] {
+        assert_eq!(form.write(-5, 16), Some(bits), "{form:?}");
+        assert_eq!(form.read(bits, 16), -5, "{form:?}");
+        assert_eq!(form.write(5, 16), Some(0x0005), "{form:?}");
+        assert_eq!(form.write(0, 16), Some(0), "{form:?}");
+    }
+    // A negative zero reads as 0.
+    assert_eq!(SignMagnitude.read(0x8000, 16), 0);
+    assert_eq!(OnesComplement.read(0xFFFF, 16), 0);
+    // Two bits: -1, 0 and 1, and the second zero.
+    assert_eq!(SignMagnitude.range(2), (-1, 1));
+    assert_eq!(
+        [0b00, 0b01, 0b10, 0b11].map(|raw| SignMagnitude.read(raw, 2)),
+        [0, 1, 0, -1]
+    );
+    assert_eq!(
+        [0b00, 0b01, 0b10, 0b11].map(|raw| OnesComplement.read(raw, 2)),
+        [0, 1, -1, 0]
+    );
+    // The ends at 64 bits.
+    let most = i128::from(i64::MAX);
+    assert_eq!(TwosComplement.range(64), (-most - 1, most));
+    assert_eq!(SignMagnitude.range(64), (-most, most));
+    assert_eq!(SignMagnitude.write(-most, 64), Some(u64::MAX));
+    assert_eq!(OnesComplement.write(-most, 64), Some(1 << 63));
+    assert_eq!(TwosComplement.write(-most - 1, 64), Some(1 << 63));
+    assert_eq!(SignMagnitude.write(-most - 1, 64), None);
+    assert_eq!(Unsigned.range(64), (0, i128::from(u64::MAX)));
+    assert_eq!(Unsigned.read(u64::MAX, 64), i128::from(u64::MAX));
+    // Outside the range, nothing is written.
+    assert_eq!(Unsigned.write(-1, 8), None);
+    assert_eq!(Unsigned.write(256, 8), None);
+    assert_eq!(TwosComplement.write(128, 8), None);
+    assert_eq!(OnesComplement.write(-128, 8), None);
+    // Only the low bits are read.
+    assert_eq!(SignMagnitude.read(0xFF05, 8), 5);
+}
+
+fn int_forms() -> impl Strategy<Value = IntForm> {
+    prop_oneof![
+        Just(IntForm::Unsigned),
+        Just(IntForm::TwosComplement),
+        Just(IntForm::SignMagnitude),
+        Just(IntForm::OnesComplement),
+    ]
+}
+
+proptest! {
+    /// Every value a form holds is written and read back.
+    #[test]
+    fn every_value_in_range_round_trips(form in int_forms(), size in 2_u32..=64, pick in any::<u128>()) {
+        let (low, high) = form.range(size);
+        let span = u128::try_from(high - low).unwrap() + 1;
+        let value = low + i128::try_from(pick % span).unwrap();
+        let bits = form.write(value, size).unwrap();
+        prop_assert!(size == 64 || bits >> size == 0);
+        prop_assert_eq!(form.read(bits, size), value);
+    }
+
+    /// Every bit pattern reads as a value written back the same, but a
+    /// negative zero, which is written as +0.
+    #[test]
+    fn every_pattern_reads_back(form in int_forms(), size in 2_u32..=64, raw in any::<u64>()) {
+        let mask = u64::MAX >> (64 - size);
+        let raw = raw & mask;
+        let negative_zero = match form {
+            IntForm::SignMagnitude => raw == 1 << (size - 1),
+            IntForm::OnesComplement => raw == mask,
+            _ => false,
+        };
+        let back = form.write(form.read(raw, size), size).unwrap();
+        prop_assert_eq!(back, if negative_zero { 0 } else { raw });
+    }
+}

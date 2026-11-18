@@ -2,7 +2,7 @@
 # toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
 # checks that both build identical artifacts.
 
-mdl_version = "2.0"
+mdl_version = "2.1"
 
 [catalog.commands."eps.load_table"]
 description = "Load a table into one of the power system's slots"
@@ -1184,6 +1184,39 @@ kind = "remaining"
 
 [sets.packets.identify]
 msg = 1
+
+[[sets.packets]]
+name = "SIGNS"
+
+[[sets.packets.entries]]
+kind = "field"
+name = "trim"
+offset_bits = 32
+signed = "sign_magnitude"
+size_bits = 16
+type = "int"
+
+[sets.packets.entries.conversion]
+kind = "linear"
+offset = 0.0
+scale = 0.01
+
+[[sets.packets.entries]]
+kind = "array"
+name = "offsets"
+
+[sets.packets.entries.count]
+count = 3
+kind = "fixed"
+
+[sets.packets.entries.element]
+kind = "scalar"
+signed = "ones_complement"
+size_bits = 8
+type = "int"
+
+[sets.packets.identify]
+msg = 2
 
 [sets.time]
 coarse_bytes = 4

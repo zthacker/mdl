@@ -40,10 +40,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::MAX_NESTING;
 use super::rules::{MAX_SAFE_INTEGER, check_int, check_integer_spelling, integer_value};
+use crate::bits::IntForm;
 use crate::diagnostics::{Code, Place, Report};
 use crate::ir::{
     ArrayEntry, ByteLength, ByteOrder, CompareOp, Condition, Conversion, Count, Element, Entry,
-    Field, FromField, Length, Scalar, ScalarElement, ScalarType, StructType, TextEncoding,
+    Field, FromField, Length, Scalar, ScalarElement, ScalarType, Signed, StructType, TextEncoding,
 };
 use crate::layout::Placement;
 
@@ -506,6 +507,7 @@ impl<'a> Layout<'a> {
                 check_values(
                     field.ty,
                     field.size_bits,
+                    field.signed,
                     field.conversion.as_ref(),
                     scope.sentinels(&field.invalid),
                     place,
@@ -576,6 +578,7 @@ impl<'a> Layout<'a> {
                 check_values(
                     element.ty,
                     element.size_bits,
+                    element.signed,
                     element.conversion.as_ref(),
                     &element.invalid,
                     &element_place,
@@ -725,6 +728,7 @@ impl<'a> Layout<'a> {
             ty,
             size_bits,
             byte_order,
+            signed,
             length,
             text,
         } = shape;
@@ -760,6 +764,22 @@ impl<'a> Layout<'a> {
                 &place.key("text"),
                 "only string fields have a text encoding",
             );
+        }
+        match signed {
+            Some(_) if ty != ScalarType::Int => report.error(
+                Code::FieldSize,
+                &place.key("signed"),
+                format!(
+                    "only int values have a signed form; this one is {}",
+                    type_name(ty)
+                ),
+            ),
+            Some(Signed::TwosComplement) => report.error(
+                Code::ExplicitDefault,
+                &place.key("signed"),
+                "two's complement is the default; omit signed",
+            ),
+            _ => {}
         }
         if let ScalarType::String | ScalarType::Bytes = ty {
             if size_bits.is_some() {
@@ -812,19 +832,28 @@ impl<'a> Layout<'a> {
                 "only strings and bytes have a length; numbers have size_bits",
             );
         }
+        // In one bit, sign-magnitude and ones' complement hold only zero.
+        let two_zeros = ty == ScalarType::Int
+            && matches!(signed, Some(Signed::SignMagnitude | Signed::OnesComplement));
         let (allowed, rule) = match ty {
             ScalarType::Float => (matches!(size_bits, Some(32 | 64)), "32 or 64"),
             ScalarType::Bool => (size_bits == Some(1), "1"),
+            _ if two_zeros => (size_bits.is_some_and(|s| (2..=64).contains(&s)), "2 to 64"),
             _ => (size_bits.is_some_and(|s| (1..=64).contains(&s)), "1 to 64"),
         };
         let bits = match size_bits {
             Some(bits) if allowed => u64::from(bits),
             _ => {
                 let shown = size_bits.map_or("no size".to_string(), |s| format!("{s} bits"));
+                let what = match signed {
+                    Some(Signed::SignMagnitude) if two_zeros => "sign-magnitude int",
+                    Some(Signed::OnesComplement) if two_zeros => "ones' complement int",
+                    _ => type_name(ty),
+                };
                 report.error(
                     Code::FieldSize,
                     &place.key("size_bits"),
-                    format!("a {} field has {rule} bits, not {shown}", type_name(ty)),
+                    format!("a {what} field has {rule} bits, not {shown}"),
                 );
                 return None;
             }
@@ -977,7 +1006,8 @@ impl<'a> Layout<'a> {
             report.error(Code::WrongEncoding, &place.key(key), message.to_string());
         };
         let binary_only = "self-describing entries are located with pointer; offset_bits, \
-                           size_bits, byte_order, length and count only apply to binary payloads";
+                           size_bits, byte_order, signed, length and count only apply to binary \
+                           payloads";
         let needs_pointer = "self-describing entries say where they are: pointer";
         match entry {
             Entry::Padding(_) => report.error(
@@ -998,6 +1028,7 @@ impl<'a> Layout<'a> {
                     (field.offset_bits.is_some(), "offset_bits"),
                     (field.size_bits.is_some(), "size_bits"),
                     (field.byte_order.is_some(), "byte_order"),
+                    (field.signed.is_some(), "signed"),
                     (field.length.is_some(), "length"),
                 ] {
                     if present {
@@ -1016,6 +1047,7 @@ impl<'a> Layout<'a> {
                 }
                 check_values(
                     field.ty,
+                    None,
                     None,
                     field.conversion.as_ref(),
                     scope.sentinels(&field.invalid),
@@ -1037,6 +1069,7 @@ impl<'a> Layout<'a> {
                     let element_place = place.key("element");
                     if element.size_bits.is_some()
                         || element.byte_order.is_some()
+                        || element.signed.is_some()
                         || element.length.is_some()
                     {
                         report.error(Code::WrongEncoding, &element_place, binary_only);
@@ -1050,6 +1083,7 @@ impl<'a> Layout<'a> {
                     }
                     check_values(
                         element.ty,
+                        None,
                         None,
                         element.conversion.as_ref(),
                         &element.invalid,
@@ -1079,6 +1113,7 @@ struct ScalarShape<'a> {
     ty: ScalarType,
     size_bits: Option<u32>,
     byte_order: Option<ByteOrder>,
+    signed: Option<Signed>,
     length: Option<&'a ByteLength>,
     text: Option<TextEncoding>,
 }
@@ -1089,6 +1124,7 @@ impl<'a> ScalarShape<'a> {
             ty: field.ty,
             size_bits: field.size_bits,
             byte_order: field.byte_order,
+            signed: field.signed,
             length: field.length.as_ref(),
             text: field.text,
         }
@@ -1099,6 +1135,7 @@ impl<'a> ScalarShape<'a> {
             ty: element.ty,
             size_bits: element.size_bits,
             byte_order: element.byte_order,
+            signed: element.signed,
             length: element.length.as_ref(),
             text: element.text,
         }
@@ -1506,7 +1543,7 @@ fn check_condition_value(field: &Field, value: &Scalar, place: &Place, report: &
             check_integer_spelling(value, "condition value", place, report);
             match (
                 integer_value(value),
-                integer_range(field.ty, field.size_bits),
+                integer_range(field.ty, field.size_bits, field.signed),
             ) {
                 (None, _) => report.error(
                     Code::ReferenceType,
@@ -1534,6 +1571,7 @@ fn check_condition_value(field: &Field, value: &Scalar, place: &Place, report: &
 fn check_values(
     ty: ScalarType,
     size_bits: Option<u32>,
+    signed: Option<Signed>,
     conversion: Option<&Conversion>,
     invalid: &[Scalar],
     place: &Place,
@@ -1541,7 +1579,7 @@ fn check_values(
 ) {
     let numeric = matches!(ty, ScalarType::Uint | ScalarType::Int | ScalarType::Float);
     let integer = matches!(ty, ScalarType::Uint | ScalarType::Int);
-    let range = integer_range(ty, size_bits);
+    let range = integer_range(ty, size_bits, signed);
     if let Some(conversion) = conversion {
         let conversion_place = place.key("conversion");
         match conversion {
@@ -1644,14 +1682,17 @@ fn check_values(
 }
 
 /// The raw values an integer or bool field can hold, when its size is known.
-fn integer_range(ty: ScalarType, size_bits: Option<u32>) -> Option<(i128, i128)> {
+fn integer_range(
+    ty: ScalarType,
+    size_bits: Option<u32>,
+    signed: Option<Signed>,
+) -> Option<(i128, i128)> {
     if ty == ScalarType::Bool {
         return Some((0, 1));
     }
     let bits = size_bits.filter(|s| (1..=64).contains(s))?;
     match ty {
-        ScalarType::Uint => Some((0, (1_i128 << bits) - 1)),
-        ScalarType::Int => Some((-(1_i128 << (bits - 1)), (1_i128 << (bits - 1)) - 1)),
+        ScalarType::Uint | ScalarType::Int => IntForm::of(ty, signed).map(|form| form.range(bits)),
         _ => None,
     }
 }

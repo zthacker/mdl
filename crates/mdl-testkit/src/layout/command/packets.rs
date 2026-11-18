@@ -13,6 +13,7 @@ use super::{
     Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Encoding, Group, Layout, Len, Placed,
     Scale, Shape, Source, TEXTS, encoder_of,
 };
+use super::{Form, int_shape};
 use crate::checksum::{Algorithm, algorithm};
 use crate::layout::{Text, inside_one_byte};
 
@@ -502,7 +503,7 @@ fn record_field(bits: bool) -> BoxedStrategy<RecordField<Encoder>> {
     let constant = if bits {
         prop_oneof![
             (1_u32..=12).prop_map(Shape::Uint),
-            (2_u32..=12).prop_map(Shape::Int),
+            int_shape(2_u32..=12),
             Just(Shape::Bool),
         ]
         .prop_flat_map(|shape| {
@@ -582,14 +583,11 @@ pub(super) fn left_out_list() -> BoxedStrategy<Encoder> {
 }
 
 fn constant() -> BoxedStrategy<(Shape, Const)> {
-    let integer = prop_oneof![
-        (1_u32..=64).prop_map(Shape::Uint),
-        (1_u32..=64).prop_map(Shape::Int)
-    ]
-    .prop_flat_map(|shape| {
-        let values = shape.integers().unwrap_or(0..=0);
-        (Just(shape), values.prop_map(Const::Int))
-    });
+    let integer = prop_oneof![(1_u32..=64).prop_map(Shape::Uint), int_shape(1_u32..=64)]
+        .prop_flat_map(|shape| {
+            let values = shape.integers().unwrap_or(0..=0);
+            (Just(shape), values.prop_map(Const::Int))
+        });
     let text = (
         select(TEXTS),
         prop_oneof![
@@ -618,7 +616,7 @@ fn target_shape() -> BoxedStrategy<Shape> {
     ];
     prop_oneof![
         (1_u32..=64).prop_map(Shape::Uint),
-        (1_u32..=64).prop_map(Shape::Int),
+        (1_u32..=64).prop_map(|bits| Shape::Int(bits, Form::TwosComplement)),
         (select(TEXTS), lengths).prop_map(|(text, len)| Shape::Text(text, len)),
     ]
     .boxed()
@@ -646,16 +644,14 @@ fn trailer(little: bool) -> BoxedStrategy<Trailer> {
 /// tag has one length, so the tags are values of one key (§7.2).
 pub(super) fn key(count: usize) -> BoxedStrategy<(Shape, Vec<Const>)> {
     let sizes = select(&[2_u32, 3, 4, 5, 6, 7, 8, 16][..]);
-    let integer = prop_oneof![
-        sizes.clone().prop_map(Shape::Uint),
-        sizes.prop_map(Shape::Int)
-    ]
-    .prop_flat_map(move |shape| {
-        let values = btree_set(shape.integers().unwrap_or(0..=0), count)
-            .prop_map(|values| values.into_iter().map(Const::Int).collect::<Vec<_>>())
-            .prop_shuffle();
-        (Just(shape), values)
-    });
+    let integer = prop_oneof![sizes.clone().prop_map(Shape::Uint), int_shape(sizes)].prop_flat_map(
+        move |shape| {
+            let values = btree_set(shape.integers().unwrap_or(0..=0), count)
+                .prop_map(|values| values.into_iter().map(Const::Int).collect::<Vec<_>>())
+                .prop_shuffle();
+            (Just(shape), values)
+        },
+    );
     let tag = (2_usize..=6, proptest::option::of(select(&[0_u8, b' '][..])))
         .prop_flat_map(|(bytes, terminator)| {
             let length = match terminator {

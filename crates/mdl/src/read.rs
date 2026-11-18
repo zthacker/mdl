@@ -26,6 +26,7 @@ use serde::de::{DeserializeOwned, IgnoredAny};
 use serde_json::{Number, Value};
 use thiserror::Error;
 
+use crate::artifact::required_version;
 use crate::canonical::{self, CanonicalError};
 use crate::diagnostics::escape_pointer_token;
 use crate::ir::{Artifact, Bundle, Catalog, Digest, Family, IrVersion, Set};
@@ -69,15 +70,27 @@ pub enum ReadError {
     #[non_exhaustive]
     Shape { path: String, message: String },
     /// An artifact spelled differently from its normal form (a `null`, an
-    /// empty optional list): its digest would differ from the same value
-    /// written normally. `path` is the first place that differs.
+    /// empty optional list, a version higher than it needs): its digest
+    /// would differ from the same value written normally. `path` is the
+    /// first place that differs.
     #[error(
         "{}",
-        at(path, &format!("{detail} (artifacts are written in normal form: absent values and \
-                            empty optional lists are omitted)"))
+        at(path, &format!("{detail} (artifacts are written in normal form, so an artifact has \
+                            one spelling and one digest)"))
     )]
     #[non_exhaustive]
     NotNormalForm { path: String, detail: String },
+    /// A document that uses a feature (`feature`, at `path`) newer than
+    /// its `mdl_version`. An artifact that states more than it needs is
+    /// `NotNormalForm` instead.
+    #[error("{}", at(path, &feature_version(feature, *needed, *stated)))]
+    #[non_exhaustive]
+    FeatureVersion {
+        path: String,
+        feature: &'static str,
+        needed: IrVersion,
+        stated: IrVersion,
+    },
 }
 
 impl ReadError {
@@ -90,6 +103,7 @@ impl ReadError {
             ReadError::BadVersion { .. } => "invalid_version",
             ReadError::UnsupportedVersion { .. } => "unsupported_version",
             ReadError::NotNormalForm { .. } => "not_normal_form",
+            ReadError::FeatureVersion { .. } => "feature_version",
         }
     }
 
@@ -101,7 +115,8 @@ impl ReadError {
                 | CanonicalError::OutOfRange { path, .. },
             )
             | ReadError::Shape { path, .. }
-            | ReadError::NotNormalForm { path, .. } => path,
+            | ReadError::NotNormalForm { path, .. }
+            | ReadError::FeatureVersion { path, .. } => path,
             ReadError::BadVersion { .. } | ReadError::UnsupportedVersion { .. } => "/mdl_version",
             ReadError::Canonical(_) | ReadError::NotAnObject { .. } | ReadError::MissingVersion => {
                 ""
@@ -130,15 +145,28 @@ impl ReadError {
             }
             ReadError::Shape { message, .. } => message.clone(),
             ReadError::NotNormalForm { detail, .. } => format!(
-                "{detail} (artifacts are written in normal form: absent values and empty \
-                 optional lists are omitted)"
+                "{detail} (artifacts are written in normal form, so an artifact has one \
+                 spelling and one digest)"
             ),
+            ReadError::FeatureVersion {
+                feature,
+                needed,
+                stated,
+                ..
+            } => feature_version(feature, *needed, *stated),
             ReadError::NotAnObject { .. }
             | ReadError::MissingVersion
             | ReadError::BadVersion { .. }
             | ReadError::UnsupportedVersion { .. } => self.to_string(),
         }
     }
+}
+
+fn feature_version(feature: &str, needed: IrVersion, stated: IrVersion) -> String {
+    format!(
+        "{feature} needs MDL IR {needed}, and this document states {stated}; state mdl_version \
+         \"{needed}\" to use it"
+    )
 }
 
 fn at(path: &str, message: &str) -> String {
@@ -209,6 +237,28 @@ pub fn read_artifact(bytes: &[u8]) -> Result<Loaded<Artifact>, ReadError> {
     {
         return Err(ReadError::NotNormalForm { path, detail });
     }
+    // An artifact states exactly the lowest version that reads it.
+    let (needed, stated) = (required_version(&artifact), artifact.mdl_version());
+    if let Artifact::Set { set, .. } = &artifact
+        && let Some(need) = set.need()
+        && !stated.can_read(need.version)
+    {
+        return Err(ReadError::FeatureVersion {
+            path: format!("/set{}", need.pointer),
+            feature: need.feature,
+            needed: need.version,
+            stated,
+        });
+    }
+    if stated != needed {
+        return Err(ReadError::NotNormalForm {
+            path: "/mdl_version".to_string(),
+            detail: format!(
+                "this artifact states MDL IR {stated} and needs only {needed}; an artifact \
+                 states the lowest version that reads it"
+            ),
+        });
+    }
     Ok(Loaded {
         value: artifact,
         digest: Digest::of_canonical(&canonical),
@@ -239,7 +289,19 @@ pub fn read_bundle_value(value: &Value) -> Result<Loaded<Bundle>, ReadError> {
     canonical::check_numbers(value)?;
     let (value, canonical) = canonical_value(value)?;
     check_tags(&value, Holder::Document, &mut String::new())?;
-    let bundle = typed(&value)?;
+    let bundle: Bundle = typed(&value)?;
+    for (index, set) in bundle.sets.iter().enumerate() {
+        if let Some(need) = set.need()
+            && !bundle.mdl_version.can_read(need.version)
+        {
+            return Err(ReadError::FeatureVersion {
+                path: format!("/sets/{index}{}", need.pointer),
+                feature: need.feature,
+                needed: need.version,
+                stated: bundle.mdl_version,
+            });
+        }
+    }
     Ok(Loaded {
         value: bundle,
         digest: Digest::of_canonical(&canonical),
@@ -753,12 +815,12 @@ mod tests {
 
     #[test]
     fn versions_are_checked_before_the_shape() {
-        // A 2.1 document using a field 2.0 doesn't know: the error is about
+        // A 2.2 document using a field 2.1 doesn't know: the error is about
         // the version, not the field.
-        let newer = br#"{"mdl_version":"2.1","catalog":{"commands":{}}}"#;
+        let newer = br#"{"mdl_version":"2.2","catalog":{"commands":{}}}"#;
         assert_eq!(
             read_bundle(newer).unwrap_err().to_string(),
-            "this document needs MDL IR 2.1, but this build reads up to 2.0; upgrade to read it"
+            "this document needs MDL IR 2.2, but this build reads up to 2.1; upgrade to read it"
         );
         let major = br#"{"mdl_version":"3.0","catalog":{}}"#;
         assert_eq!(

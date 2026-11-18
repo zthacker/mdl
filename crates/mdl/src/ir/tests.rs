@@ -77,7 +77,7 @@ fn absent_values_are_omitted_not_written_as_null() {
     );
     assert_eq!(
         serde_json::to_value(Bundle::new(Catalog::default())).unwrap(),
-        json!({ "mdl_version": "2.0", "catalog": {} })
+        json!({ "mdl_version": "2.1", "catalog": {} })
     );
     assert_eq!(
         serde_json::to_value(Count::remaining()).unwrap(),
@@ -99,7 +99,7 @@ fn readers_accept_null_for_absent_values_and_empty_collections() {
     assert!(field.invalid.is_empty());
 
     let bundle: Bundle = serde_json::from_value(json!({
-        "mdl_version": "2.0", "catalog": { "params": null }, "families": null, "sets": null
+        "mdl_version": "2.1", "catalog": { "params": null }, "families": null, "sets": null
     }))
     .unwrap();
     assert_eq!(bundle, Bundle::new(Catalog::default()));
@@ -313,7 +313,7 @@ fn artifacts_are_tagged_and_sets_carry_their_dependencies() {
         "set": { "name": "s", "family": "f" }
     });
     let parsed: Artifact = serde_json::from_value(artifact.clone()).unwrap();
-    assert_eq!(parsed.mdl_version(), IrVersion::CURRENT);
+    assert_eq!(parsed.mdl_version(), IrVersion::V2_0);
     let Artifact::Set { catalog, set, .. } = &parsed else {
         panic!("expected a set artifact");
     };
@@ -366,7 +366,7 @@ fn scalars_are_integers_or_strings() {
 #[test]
 fn ir_versions_have_exactly_one_spelling() {
     let v: IrVersion = "2.0".parse().unwrap();
-    assert_eq!(v, IrVersion::CURRENT);
+    assert_eq!(v, IrVersion::V2_0);
     assert_eq!(v.to_string(), "2.0");
     assert_eq!(
         "10.12".parse::<IrVersion>().unwrap(),

@@ -11,6 +11,7 @@ use super::rules::{
     check_finite, check_integer_spelling, check_member_pointer, check_not_empty, check_pointer,
     check_scalar, check_unit_code, integer_value, is_identifier, is_token,
 };
+use crate::bits::IntForm;
 use crate::checksum;
 use crate::convert::spline_is_finite;
 use crate::diagnostics::{Code, Place, Report};
@@ -716,12 +717,12 @@ fn check_packets(
 pub(crate) enum KeyId {
     Metadata(String),
     Pointer(String),
-    /// A field at a known position, read in `order`: the same bits read in
-    /// the other order are another key.
+    /// A field at a known position, read in `order` as `form`: the same
+    /// bits read in the other order, or as another form, are another key.
     Bits {
         offset: u64,
         size: u32,
-        signed: bool,
+        form: IntForm,
         order: ByteOrder,
     },
     /// Whole bytes at a known byte-aligned position: a fixed-length string
@@ -970,7 +971,7 @@ impl PacketKeys<'_> {
                     (Some(offset), Some(size)) if field.when.is_none() => KeyId::Bits {
                         offset,
                         size,
-                        signed: field.ty == ScalarType::Int,
+                        form: IntForm::of(field.ty, field.signed)?,
                         order: key_order(field, family, offset, size),
                     },
                     _ => {
@@ -1061,11 +1062,7 @@ fn check_field_value(
     };
     // An invalid size is reported by the layout check; skip the range then.
     let size = field.size_bits.filter(|s| (1..=64).contains(s))?;
-    let (low, high) = match field.ty {
-        ScalarType::Bool => (0, 1),
-        ScalarType::Int => (-(1_i128 << (size - 1)), (1_i128 << (size - 1)) - 1),
-        _ => (0, (1_i128 << size) - 1),
-    };
+    let (low, high) = IntForm::of(field.ty, field.signed)?.range(size);
     if !(low..=high).contains(&n) {
         report.error(
             Code::IdentifyValue,
