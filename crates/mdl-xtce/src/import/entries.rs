@@ -912,6 +912,7 @@ pub(super) fn size_tag<'d>(
         ty: ("uint", span),
         size_bits: Some((bits, span)),
         order: (bits > 8).then(|| order.unwrap_or((Order::Big, span))),
+        signed: None,
         length: None,
         text: None,
         conversion: None,

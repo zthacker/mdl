@@ -128,7 +128,7 @@ An import produces one family and one set:
 
 | XTCE type | Field | Param |
 | --- | --- | --- |
-| `IntegerParameterType` | `uint` (`unsigned`) or `int` (`twosComplement`, or XTCE 1.0's `twosCompliment`), 1 to 64 bits | `i64`, or `u64` when `signed="false"` |
+| `IntegerParameterType` | `uint` (`unsigned`) or `int` (`twosComplement`, or XTCE 1.0's `twosCompliment`; `signMagnitude` and `onesComplement` as `signed`, IR 2.1), 1 to 64 bits | `i64`, or `u64` when `signed="false"` |
 | `FloatParameterType` | `float` (IEEE 754, 32 or 64 bits), or an integer encoding with or without a calibrator | `f64` |
 | `EnumeratedParameterType` | an integer encoding with a `states` conversion from its `EnumerationList` | `enum`, its labels in order, each once |
 | `BooleanParameterType` | `bool` for one bit, else `uint` | `bool`: nonzero is true |
@@ -182,8 +182,8 @@ Encodings:
 - Unsupported, each an error: `ContextCalibratorList`,
   `MathOperationCalibrator`, splines of order 2 or more or whose points
   name different orders, a calibrator on an integer, enumerated or boolean
-  type (MDL's calibrations give floats), sign-magnitude, ones' complement
-  and BCD integers, floats other than IEEE 754 binary32 and binary64, text
+  type (MDL's calibrations give floats), BCD and packed BCD integers,
+  floats other than IEEE 754 binary32 and binary64, text
   other than the three encodings above, binary transform algorithms,
   enumerations over a range of values (`maxValue`), type inheritance
   (`baseType`), absolute time parameters (an MDL field holds a number, not

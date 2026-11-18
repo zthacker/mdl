@@ -611,8 +611,9 @@ fn what_mdl_cant_represent_is_an_error() {
              instant, so the decoded value would change",
         ),
         (
-            r#"<IntegerParameterType name="T"><IntegerDataEncoding sizeInBits="8" encoding="signMagnitude"/></IntegerParameterType>"#,
-            "signMagnitude integers aren't supported: MDL reads unsigned and two's complement",
+            r#"<IntegerParameterType name="T"><IntegerDataEncoding sizeInBits="8" encoding="BCD"/></IntegerParameterType>"#,
+            "BCD integers aren't supported: MDL reads unsigned, two's complement, sign-magnitude \
+             and ones' complement",
         ),
         (
             r#"<FloatParameterType name="T"><FloatDataEncoding sizeInBits="32" encoding="MILSTD_1750A"/></FloatParameterType>"#,
@@ -2245,6 +2246,55 @@ fn fixed_values_are_right_aligned_bit_patterns() {
             ("fixed2", 5, &json!(0), None),
         ]
     );
+}
+
+/// Sign-magnitude and ones' complement integers import as MDL's `signed`
+/// forms, and the bundle says the IR version that has them. An argument
+/// with no valid range takes what its field holds, one negative value
+/// fewer than two's complement.
+#[test]
+fn sign_magnitude_and_ones_complement_integers_are_signed_forms() {
+    let types = r#"<IntegerParameterType name="SM" signed="true"><IntegerDataEncoding sizeInBits="12" encoding="signMagnitude"/></IntegerParameterType>
+        <IntegerParameterType name="OC" signed="true"><IntegerDataEncoding sizeInBits="8" encoding="onesComplement"/></IntegerParameterType>"#;
+    let params = format!("{}{}", param("Trim", "SM"), param("Bias", "OC"));
+    let text = doc(&telemetry(
+        types,
+        &params,
+        &container("P", &format!("{}{}", entry("Trim"), entry("Bias"))),
+    ));
+    let imported = bundle(&text);
+    assert_eq!(imported["mdl_version"], "2.1");
+    let entries = &imported["sets"][0]["packets"][0]["entries"];
+    assert_eq!(
+        (
+            &entries[0]["type"],
+            &entries[0]["signed"],
+            &entries[0]["size_bits"]
+        ),
+        (&json!("int"), &json!("sign_magnitude"), &json!(12))
+    );
+    assert_eq!(entries[1]["signed"], "ones_complement");
+
+    let argument_type = r#"<IntegerArgumentType name="SM" signed="true" sizeInBits="8"><IntegerDataEncoding sizeInBits="8" encoding="signMagnitude"/></IntegerArgumentType>"#;
+    let text = doc(&commands(
+        &format!("{ARG_U8}{argument_type}"),
+        &go(&argument("A", "SM"), &argument_entry("A")),
+    ));
+    let commanded = bundle(&text);
+    let argument = &commanded["catalog"]["commands"]["sat.go"]["arguments"][0];
+    assert_eq!(
+        argument["range"],
+        json!({ "min": -127, "max": 127 }),
+        "{argument:#}"
+    );
+
+    // Without either, the bundle stays at 2.0.
+    let plain = doc(&telemetry(
+        U8,
+        &param("A", "U8"),
+        &container("P", &entry("A")),
+    ));
+    assert_eq!(bundle(&plain)["mdl_version"], "2.0");
 }
 
 #[test]

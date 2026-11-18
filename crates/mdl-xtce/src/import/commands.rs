@@ -2410,6 +2410,7 @@ fn pattern(entry: El<'_>, bits: u32, span: Span) -> Scalar<'_> {
         ty: ("uint", entry.span()),
         size_bits: Some((bits, span)),
         order: (bits > 8).then_some((Order::Big, span)),
+        signed: None,
         length: None,
         text: None,
         conversion: None,

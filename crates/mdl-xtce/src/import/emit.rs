@@ -1,5 +1,6 @@
 //! The bundle written out as JSON, with the span of each value.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use mdl::ir::IrVersion;
@@ -31,6 +32,7 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     let writer = Writer {
         order: parts.order,
         structs: parts.structs,
+        signed: Cell::new(false),
     };
     let mut params = Object::default();
     for (name, param) in parts.params {
@@ -86,8 +88,14 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     let mut sets = List::default();
     sets.push_object(set);
 
+    // The version the bundle needs, as a document states it.
+    let version = if writer.signed.get() {
+        IrVersion::new(2, 1)
+    } else {
+        IrVersion::V2_0
+    };
     let mut bundle = Object::at(parts.root);
-    bundle.put("mdl_version", IrVersion::CURRENT.to_string(), None);
+    bundle.put("mdl_version", version.to_string(), None);
     bundle.put_object("catalog", catalog);
     bundle.put_list("families", families);
     bundle.put_list("sets", sets);
@@ -203,6 +211,8 @@ fn argument_object(argument: &Argument<'_>) -> Object {
 struct Writer<'a, 'd> {
     order: Order,
     structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
+    /// Whether a scalar written spells `signed`, which IR 2.1 has.
+    signed: Cell<bool>,
 }
 
 impl Writer<'_, '_> {
@@ -354,6 +364,10 @@ impl Writer<'_, '_> {
             && own != self.order
         {
             object.put("byte_order", own.as_str(), Some(span));
+        }
+        if let Some((form, span)) = scalar.signed {
+            object.put("signed", form, Some(span));
+            self.signed.set(true);
         }
         if let Some((text, span)) = scalar.text {
             object.put("text", text, Some(span));

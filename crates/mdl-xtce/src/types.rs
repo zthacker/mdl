@@ -162,6 +162,9 @@ pub(crate) struct Scalar<'d> {
     pub(crate) size_bits: Option<(u32, Span)>,
     /// The encoding's byte order, for numbers wider than a byte.
     pub(crate) order: Option<(Order, Span)>,
+    /// An `int` that isn't two's complement: `sign_magnitude` or
+    /// `ones_complement`, as MDL's `signed` spells it.
+    pub(crate) signed: Option<(&'static str, Span)>,
     pub(crate) length: Option<Length<'d>>,
     pub(crate) text: Option<(&'static str, Span)>,
     pub(crate) conversion: Option<Object>,
@@ -967,7 +970,15 @@ fn derived_range(
 
 /// The integers an integer encoding holds: unsigned, or two's complement.
 fn encoding_integers(encoding: &Encoding<'_>) -> (i128, i128) {
-    signed_or_not(encoding.ty == "int", encoding.size)
+    let (low, high) = signed_or_not(encoding.ty == "int", encoding.size);
+    // Sign-magnitude and ones' complement spend a pattern on a second
+    // zero, so they hold one negative value fewer.
+    let low = if encoding.signed.is_some() {
+        low + 1
+    } else {
+        low
+    };
+    (low, high)
 }
 
 /// The integers of `bits` bits, signed (two's complement) or not.
@@ -1634,6 +1645,7 @@ fn string<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
         ty: ("string", encoding.span()),
         size_bits: None,
         order: None,
+        signed: None,
         length: Some(length),
         text,
         conversion: None,
@@ -2209,6 +2221,7 @@ fn binary<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
         ty: ("bytes", encoding.span()),
         size_bits: None,
         order: None,
+        signed: None,
         length: Some(length),
         text: None,
         conversion: None,
@@ -2510,6 +2523,7 @@ struct Encoding<'d> {
     size: u32,
     size_span: Span,
     order: Option<(Order, Span)>,
+    signed: Option<(&'static str, Span)>,
     calibrator: Option<Calibrator>,
 }
 
@@ -2520,6 +2534,7 @@ impl<'d> Encoding<'d> {
             ty: (self.ty, self.el.span()),
             size_bits: Some((self.size, self.size_span)),
             order: self.order,
+            signed: self.signed,
             length: None,
             text: None,
             conversion: self.calibrator.as_ref().map(Calibrator::conversion),
@@ -2567,19 +2582,21 @@ fn integer_encoding<'d>(el: El<'d>, report: &mut Report) -> Option<Encoding<'d>>
             return None;
         }
     };
-    let ty = match el.attr("encoding") {
-        None => "uint",
+    let (ty, signed) = match el.attr("encoding") {
+        None => ("uint", None),
         Some(attr) => match attr.value.trim() {
-            "unsigned" => "uint",
+            "unsigned" => ("uint", None),
             // XTCE 1.0 and 1.1 spell it this way.
-            "twosComplement" | "twosCompliment" => "int",
+            "twosComplement" | "twosCompliment" => ("int", None),
+            "signMagnitude" => ("int", Some(("sign_magnitude", attr.span))),
+            "onesComplement" => ("int", Some(("ones_complement", attr.span))),
             other => {
                 report.error(
                     Code::Unsupported,
                     attr.span,
                     format!(
-                        "{other} integers aren't supported: MDL reads unsigned and two's \
-                         complement"
+                        "{other} integers aren't supported: MDL reads unsigned, two's \
+                         complement, sign-magnitude and ones' complement"
                     ),
                 );
                 return None;
@@ -2597,6 +2614,7 @@ fn integer_encoding<'d>(el: El<'d>, report: &mut Report) -> Option<Encoding<'d>>
         size,
         size_span,
         order,
+        signed,
         calibrator,
     })
 }
@@ -2656,6 +2674,7 @@ fn float_encoding<'d>(el: El<'d>, report: &mut Report) -> Option<Encoding<'d>> {
         size,
         size_span,
         order,
+        signed: None,
         calibrator,
     })
 }
