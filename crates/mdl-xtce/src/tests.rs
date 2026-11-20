@@ -3,7 +3,7 @@ use mdl::validate::validate;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{Code, Options, read};
+use crate::{CatalogRole, Code, Options, read};
 
 const XTCE: &str = "http://www.omg.org/spec/XTCE/20180204";
 
@@ -2147,6 +2147,151 @@ fn meta_commands_are_catalog_commands_and_command_packets() {
 }
 
 #[test]
+fn a_referring_import_maps_onto_a_catalog_it_doesnt_define() {
+    let alias =
+        |name: &str| format!(r#"<AliasSet><Alias nameSpace="MDL" alias="{name}"/></AliasSet>"#);
+    let params = format!(
+        r#"{}<Parameter name="Temp" parameterTypeRef="U8">{}</Parameter><Parameter name="TempB" parameterTypeRef="U8">{}</Parameter>{}"#,
+        param("Kind", "U8"),
+        alias("eps.battery_tmp"),
+        alias("eps.battery_tmp"),
+        param("Volts", "U8"),
+    );
+    // P and Q, told apart by Kind.
+    let derived = |name: &str, kind: u8, entries: &str| {
+        format!(
+            r#"<SequenceContainer name="{name}"><EntryList>{entries}</EntryList><BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="Kind" value="{kind}"/></RestrictionCriteria></BaseContainer></SequenceContainer>"#
+        )
+    };
+    let containers = format!(
+        r#"<SequenceContainer name="Base" abstract="true"><EntryList>{}</EntryList></SequenceContainer>{}{}"#,
+        entry("Kind"),
+        derived("P", 1, &(entry("Temp") + &entry("Volts"))),
+        derived("Q", 2, &entry("TempB")),
+    );
+    let stop = r#"<MetaCommand name="Stop"><CommandContainer name="Stop"><EntryList>
+        <FixedValueEntry name="Sync" binaryValue="EB90" sizeInBits="16"/>
+        </EntryList></CommandContainer></MetaCommand>"#;
+    let metas = go(
+        &(argument("A", "Delay") + &argument("B", "U8") + &argument("C", "Gain")),
+        &(argument_entry("A") + &argument_entry("B") + &argument_entry("C")),
+    )
+    .replace(
+        r#"<MetaCommand name="Go">"#,
+        &format!(r#"<MetaCommand name="Go">{}"#, alias("sat.go")),
+    ) + stop;
+    let delay = r#"<IntegerArgumentType name="Delay" signed="false" initialValue="5"><UnitSet><Unit>s</Unit></UnitSet><IntegerDataEncoding sizeInBits="8"/><ValidRangeSet><ValidRange minInclusive="0" maxInclusive="10"/></ValidRangeSet></IntegerArgumentType>"#;
+    // A float written as an 8-bit integer: its valid range states a
+    // minimum, and its maximum is worked out from the encoding.
+    let gain = r#"<FloatArgumentType name="Gain"><IntegerDataEncoding sizeInBits="8"/><ValidRangeSet><ValidRange minInclusive="1"/></ValidRangeSet></FloatArgumentType>"#;
+    let text = doc(&(telemetry(U8, &params, &containers)
+        + &commands(&format!("{ARG_U8}{delay}{gain}"), &metas)));
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text.as_str());
+    let options = Options::new().with_catalog(CatalogRole::Refer);
+    let parsed =
+        read(sources.iter(), &options).unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    // Where an offset in the document is, as `shown` puts it.
+    let at = |offset: Option<usize>| {
+        let location = sources.iter().next().unwrap().location(offset.unwrap());
+        format!("{}:{}", location.line, location.column)
+    };
+    // A meta-command without an alias is left out, named. (Gain's type
+    // gets the warning any import of it gets: Yamcs drops the fraction MDL
+    // rounds.)
+    let warnings = shown(&sources, &parsed.warnings);
+    assert_eq!(warnings.len(), 2, "{warnings:#?}");
+    assert_eq!(warnings[0].1, "xtce.differs");
+    assert_eq!(
+        warnings[1],
+        (
+            Severity::Warning,
+            "xtce.ignored".to_string(),
+            at(text.find(r#"<MetaCommand name="Stop">"#)),
+            "meta-command /Sat/Stop isn't imported: the catalog is another input's, and without \
+             an alias in the MDL namespace it names no command there"
+                .to_string()
+        )
+    );
+    // Nothing is added to the catalog. Fields in two packets map to one
+    // name; a parameter without an alias maps to none.
+    let mut bundle = parsed.bundle;
+    let json = serde_json::to_value(&bundle).unwrap();
+    assert_eq!(json["catalog"], json!({}));
+    let packets = &json["sets"][0]["packets"];
+    let canonical =
+        |packet: usize, entry: usize| packets[packet]["entries"][entry].get("canonical");
+    assert_eq!(canonical(0, 0), None, "{packets:#}");
+    assert_eq!(
+        canonical(0, 1),
+        Some(&json!("eps.battery_tmp")),
+        "{packets:#}"
+    );
+    assert_eq!(canonical(0, 2), None, "{packets:#}");
+    assert_eq!(
+        canonical(1, 1),
+        Some(&json!("eps.battery_tmp")),
+        "{packets:#}"
+    );
+    let commands = &json["sets"][0]["commands"];
+    assert_eq!(commands.as_array().map(Vec::len), Some(1), "{commands:#}");
+    assert_eq!(commands[0]["canonical"], "sat.go");
+    assert_eq!(commands[0]["entries"][2]["argument"], "a");
+    // The vendor's range and initial value are the packet's own (IR 2.2),
+    // since the owner's command sets the catalog's. B's type states
+    // neither, and C's only a minimum: what an encoding holds isn't a limit
+    // the vendor stated.
+    assert_eq!(
+        commands[0]["arguments"],
+        json!({
+            "a": { "unit": "s", "range": { "min": 0, "max": 10 }, "default": 5 },
+            "c": { "range": { "min": 1 } }
+        })
+    );
+    assert_eq!(json["mdl_version"], "2.2");
+    // Against the owner's catalog, the misspelt alias is a problem,
+    // reported where each parameter has it. The owner's command allows A
+    // more than its 8-bit field holds, which the vendor's range keeps it to;
+    // B it allows any u64, which nothing here narrows, so that's reported.
+    bundle.catalog = serde_json::from_value(json!({
+        "params": {"eps.battery_temp": {"type": "u64"}},
+        "commands": {"sat.go": {"arguments": [
+            {"name": "a", "type": "u64", "unit": "s", "range": {"min": 0, "max": 1000}},
+            {"name": "b", "type": "u64"},
+            {"name": "c", "type": "f64", "range": {"min": 0, "max": 10}}
+        ]}}
+    }))
+    .unwrap();
+    let diagnostics = parsed.map.locate_all(&validate(bundle).unwrap_err());
+    let typo = |offset| {
+        (
+            Severity::Error,
+            "unknown_canonical".to_string(),
+            at(offset),
+            "param eps.battery_tmp isn't in the catalog; did you mean eps.battery_temp?"
+                .to_string(),
+        )
+    };
+    assert_eq!(
+        shown(&sources, &diagnostics),
+        [
+            (
+                Severity::Error,
+                "value_range".to_string(),
+                at(text
+                    .find(r#"argumentRef="B""#)
+                    .map(|start| start + r#"argumentRef=""#.len())),
+                "argument b has no range, so it can be any u64, but field B holds raw 0 to \
+                 255; give the argument, or this packet's arguments, a range it can hold"
+                    .to_string()
+            ),
+            typo(text.find("eps.battery_tmp")),
+            typo(text.rfind("eps.battery_tmp")),
+        ]
+    );
+}
+
+#[test]
 fn a_command_inherits_arguments_and_entries_root_first() {
     // Three levels: the root declares the APID and the opcode, the middle
     // assigns the APID and adds a flag, the leaf assigns the opcode and
@@ -3150,6 +3295,64 @@ fn a_range_on_raw_values_is_the_engineering_values_that_give_them() {
         (0.0, 1000.0)
     );
     assert!((100.0 * max.next_up()).round() > 1000.0);
+}
+
+/// The limits a referring import gives the packet of `Go`, whose argument
+/// `A` is of type `ty`.
+fn referred_limits(ty: &str) -> Value {
+    let text = go_with(ty, "A").replace(
+        r#"<MetaCommand name="Go">"#,
+        r#"<MetaCommand name="Go"><AliasSet><Alias nameSpace="MDL" alias="sat.go"/></AliasSet>"#,
+    );
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text.as_str());
+    let options = Options::new().with_catalog(CatalogRole::Refer);
+    let parsed =
+        read(sources.iter(), &options).unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    serde_json::to_value(&parsed.bundle).unwrap()["sets"][0]["commands"][0]["arguments"].clone()
+}
+
+#[test]
+fn a_referring_import_limits_an_argument_to_the_ends_its_type_states() {
+    let polynomial = |slope: i32| {
+        format!(
+            r#"<PolynomialCalibrator><Term coefficient="0" exponent="0"/><Term coefficient="{slope}" exponent="1"/></PolynomialCalibrator>"#
+        )
+    };
+    let raw = |ends: &str| {
+        format!(
+            r#"<ValidRangeSet validRangeAppliesToCalibrated="false"><ValidRange {ends}/></ValidRangeSet>"#
+        )
+    };
+    let ends = |limits: &Value| {
+        let range = &limits["a"]["range"];
+        (range["min"].as_f64(), range["max"].as_f64())
+    };
+    // Raw 10 and up: engineering 9.5 and up where raw rises with it, and
+    // -9.5 and down where it falls. The other end is what the encoding
+    // holds, which isn't stated.
+    let rising = referred_limits(&calibrated(&polynomial(1), &raw(r#"minInclusive="10""#)));
+    assert_eq!(ends(&rising), (Some(9.5), None), "{rising}");
+    let falling = referred_limits(&calibrated(&polynomial(-1), &raw(r#"minInclusive="10""#)));
+    assert_eq!(ends(&falling), (None, Some(-9.5)), "{falling}");
+    // Both raw ends state both engineering ends, whichever way.
+    let both = referred_limits(&calibrated(
+        &polynomial(-1),
+        &raw(r#"minInclusive="10" maxInclusive="20""#),
+    ));
+    // (Raw 20.5 would round away from zero to 21, so the low end is just
+    // inside -20.5.)
+    let (min, max) = ends(&both);
+    assert!(
+        min.is_some_and(|min| (-20.5..-20.49).contains(&min)),
+        "{both}"
+    );
+    assert_eq!(max, Some(-9.5), "{both}");
+    // A type that states no range gives no limit.
+    assert_eq!(
+        referred_limits(&calibrated(&polynomial(1), "")),
+        Value::Null
+    );
 }
 
 #[test]

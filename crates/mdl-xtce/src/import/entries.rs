@@ -558,7 +558,7 @@ impl<'d> Import<'d, '_> {
                     span: place.span,
                     scalar: (**scalar).clone(),
                     length,
-                    canonical: Some(canonical),
+                    canonical,
                     argument: None,
                     value: None,
                     offset,
@@ -618,7 +618,7 @@ impl<'d> Import<'d, '_> {
         place: &Place,
     ) -> Option<Entry<'d>> {
         let canonical = match &element {
-            Element::Scalar(scalar) => Some(self.register(key, el, scalar, None)?),
+            Element::Scalar(scalar) => self.register(key, el, scalar, None)?,
             Element::Struct(_) => None,
         };
         Some(Entry::Array(Box::new(ArrayField {
@@ -923,6 +923,7 @@ pub(super) fn size_tag<'d>(
         raw: Raw::Integer,
         limits: None,
         range: None,
+        stated: None,
         initial: None,
     }
 }

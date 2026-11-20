@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use super::commands::{Argument, Command};
 use super::{Element, Entry, Packet, Param, StructType, TypeId};
+use crate::CatalogRole;
 use crate::out::{List, Object, integer_json};
 use crate::types::{ArgumentRange, Order, Scalar};
 
@@ -26,6 +27,10 @@ pub(super) struct Bundle<'a, 'd> {
     pub(super) packets: &'a [Packet<'d>],
     pub(super) structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
     pub(super) commands: &'a [Command<'d>],
+    /// Under [`CatalogRole::Refer`], command packets encode another
+    /// input's catalog commands, so none is written here; each packet
+    /// carries its arguments' ranges and initial values as its own limits.
+    pub(super) catalog: CatalogRole,
 }
 
 pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
@@ -33,6 +38,8 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
         order: parts.order,
         structs: parts.structs,
         signed: Cell::new(false),
+        refer: parts.catalog == CatalogRole::Refer,
+        limited: Cell::new(false),
     };
     let mut params = Object::default();
     for (name, param) in parts.params {
@@ -40,7 +47,7 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     }
     let mut catalog = Object::at(parts.root);
     catalog.put_object("params", params);
-    if !parts.commands.is_empty() {
+    if !parts.commands.is_empty() && parts.catalog == CatalogRole::Define {
         let mut commands = Object::default();
         for command in parts.commands {
             commands.put_object(&command.canonical.0, command_object(command));
@@ -89,7 +96,9 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     sets.push_object(set);
 
     // The version the bundle needs, as a document states it.
-    let version = if writer.signed.get() {
+    let version = if writer.limited.get() {
+        IrVersion::new(2, 2)
+    } else if writer.signed.get() {
         IrVersion::new(2, 1)
     } else {
         IrVersion::V2_0
@@ -177,25 +186,7 @@ fn argument_object(argument: &Argument<'_>) -> Object {
         object.put_object("list", list);
     }
     if let Some(range) = &scalar.range {
-        let mut object_range = Object::at(scalar.el.span());
-        match range {
-            ArgumentRange::Number(range) => {
-                for (key, end) in [("min", range.min), ("max", range.max)] {
-                    if let Some((value, span)) = end {
-                        object_range.put(key, value, Some(span));
-                    }
-                }
-            }
-            // A decimal string past ±(2^53 - 1), as the IR writes integers.
-            ArgumentRange::Integer(range) => {
-                for (key, end) in [("min", range.min), ("max", range.max)] {
-                    if let Some((value, span)) = end {
-                        object_range.put(key, integer_json(value), Some(span));
-                    }
-                }
-            }
-        }
-        object.put_object("range", object_range);
+        object.put_object("range", range_object(range, scalar.el.span()));
     }
     if let Some((value, span)) = &argument.default {
         object.put("default", value.clone(), Some(*span));
@@ -206,6 +197,62 @@ fn argument_object(argument: &Argument<'_>) -> Object {
     object
 }
 
+/// An argument's range, at its type.
+fn range_object(range: &ArgumentRange, at: Span) -> Object {
+    let mut object = Object::at(at);
+    match range {
+        ArgumentRange::Number(range) => {
+            for (key, end) in [("min", range.min), ("max", range.max)] {
+                if let Some((value, span)) = end {
+                    object.put(key, value, Some(span));
+                }
+            }
+        }
+        // A decimal string past ±(2^53 - 1), as the IR writes integers.
+        ArgumentRange::Integer(range) => {
+            for (key, end) in [("min", range.min), ("max", range.max)] {
+                if let Some((value, span)) = end {
+                    object.put(key, integer_json(value), Some(span));
+                }
+            }
+        }
+    }
+    object
+}
+
+/// What a referring import's command packet accepts of its arguments, by
+/// name (IR 2.2): what each argument's type states of its range, and its
+/// initial value, in its unit, for those that state either. `None` when
+/// none does. A range worked out from the encoding isn't one: validation
+/// checks the catalog's against what each field holds anyway.
+fn packet_arguments(command: &Command<'_>) -> Option<Object> {
+    let mut arguments = Object::at(command.el.span());
+    let mut any = false;
+    for argument in &command.arguments {
+        let scalar = &argument.scalar;
+        let range = scalar
+            .stated
+            .as_ref()
+            .map(|range| range_object(range, scalar.el.span()));
+        if range.is_none() && argument.default.is_none() {
+            continue;
+        }
+        let mut object = Object::at(argument.el.span());
+        if let Some((unit, span)) = &scalar.unit {
+            object.put("unit", unit.as_str(), Some(*span));
+        }
+        if let Some(range) = range {
+            object.put_object("range", range);
+        }
+        if let Some((value, span)) = &argument.default {
+            object.put("default", value.clone(), Some(*span));
+        }
+        arguments.put_object(&argument.name.0, object);
+        any = true;
+    }
+    any.then_some(arguments)
+}
+
 /// Writes entries, knowing the family's byte order and the struct types'
 /// names.
 struct Writer<'a, 'd> {
@@ -213,6 +260,10 @@ struct Writer<'a, 'd> {
     structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
     /// Whether a scalar written spells `signed`, which IR 2.1 has.
     signed: Cell<bool>,
+    /// Whether command packets refer to another input's catalog commands.
+    refer: bool,
+    /// Whether a command packet has limits of its own, which IR 2.2 has.
+    limited: Cell<bool>,
 }
 
 impl Writer<'_, '_> {
@@ -246,6 +297,12 @@ impl Writer<'_, '_> {
             command.canonical.0.as_str(),
             Some(command.canonical.1),
         );
+        if self.refer
+            && let Some(arguments) = packet_arguments(command)
+        {
+            object.put_object("arguments", arguments);
+            self.limited.set(true);
+        }
         if !command.entries.is_empty() {
             object.put_list("entries", self.entries(&command.entries));
         }

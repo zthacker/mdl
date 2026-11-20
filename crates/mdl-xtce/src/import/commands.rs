@@ -25,7 +25,6 @@ use super::arguments::{
 };
 use super::entries::{Location, from_field};
 use super::{ArrayField, Element, Entry, Field, Import, ParamKey, StructType, TypeId, id};
-use crate::Code;
 use crate::calibration::duration_seconds;
 use crate::names::{catalog_part, identifier};
 use crate::out::integer_json;
@@ -35,6 +34,7 @@ use crate::types::{
     raw_value,
 };
 use crate::xml::{self, El, Expect};
+use crate::{CatalogRole, Code};
 
 /// A command, once worked out.
 pub(super) struct Command<'d> {
@@ -189,6 +189,27 @@ impl<'d> Import<'d, '_> {
     }
 
     fn command(&mut self, space: usize, el: El<'d>) -> Option<Command<'d>> {
+        // Referring to another input's catalog, a meta-command encodes the
+        // command its alias names, and one without an alias names none.
+        let referred = match self.catalog {
+            CatalogRole::Define => None,
+            CatalogRole::Refer => match self.mdl_alias(el)? {
+                Some(alias) => Some(alias),
+                None => {
+                    self.report.warning(
+                        Code::Ignored,
+                        el.span(),
+                        format!(
+                            "meta-command {}/{} isn't imported: the catalog is another input's, \
+                             and without an alias in the MDL namespace it names no command there",
+                            self.tree.path(space),
+                            el.item_name().unwrap_or_default()
+                        ),
+                    );
+                    return None;
+                }
+            },
+        };
         let chain = self.command_chain(space, el)?;
         let mut declared: Vec<Declared<'d>> = Vec::new();
         let mut complete = true;
@@ -248,8 +269,13 @@ impl<'d> Import<'d, '_> {
             return None;
         }
         self.check_entries(&entries, "command packet")?;
+        // Referring, the catalog command is the owner's, and its
+        // arguments' ranges and initial values are the packet's own limits.
         let arguments = self.catalog_arguments(&chain, &declared)?;
-        let canonical = self.base_name(space, el)?;
+        let canonical = match referred {
+            Some(alias) => alias,
+            None => self.base_name(space, el)?,
+        };
         Some(Command {
             name: String::new(),
             space,
@@ -2421,6 +2447,7 @@ fn pattern(entry: El<'_>, bits: u32, span: Span) -> Scalar<'_> {
         raw: Raw::Integer,
         limits: None,
         range: None,
+        stated: None,
         initial: None,
     }
 }

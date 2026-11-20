@@ -168,6 +168,25 @@ pub enum Naming {
     Qualified,
 }
 
+/// Whether an import defines the catalog names its parameters and
+/// meta-commands are given, or refers to names another input defines.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CatalogRole {
+    /// Each parameter and meta-command is a catalog param or command,
+    /// named by its alias in the MDL namespace, else by its SpaceSystem
+    /// path and name.
+    #[default]
+    Define,
+    /// The catalog is another input's (a build's catalog owner), and the
+    /// import adds nothing to it. A parameter with an alias in the MDL
+    /// namespace maps to the param of that name, which validation checks
+    /// the catalog has; one without maps to none. A meta-command with an
+    /// alias encodes the command of that name; one without is left out,
+    /// with a warning that names it.
+    Refer,
+}
+
 /// What XTCE doesn't say about the bundle.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -181,6 +200,7 @@ pub struct Options {
     /// root SpaceSystem's name.
     pub alias: Option<Locator>,
     pub naming: Naming,
+    pub catalog: CatalogRole,
 }
 
 impl Options {
@@ -205,6 +225,11 @@ impl Options {
 
     pub fn with_naming(mut self, naming: Naming) -> Self {
         self.naming = naming;
+        self
+    }
+
+    pub fn with_catalog(mut self, role: CatalogRole) -> Self {
+        self.catalog = role;
         self
     }
 }

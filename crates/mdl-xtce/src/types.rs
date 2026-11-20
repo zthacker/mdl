@@ -182,6 +182,10 @@ pub(crate) struct Scalar<'d> {
     pub(crate) limits: Option<Limits>,
     /// A number argument type's valid range, as the argument's range.
     pub(crate) range: Option<ArgumentRange>,
+    /// The ends of `range` the type's valid range states, without those
+    /// worked out from the encoding: what a referring import writes as a
+    /// packet's own limits, the encoding's capacity being checked anyway.
+    pub(crate) stated: Option<ArgumentRange>,
     /// An argument type's initial value, as XTCE writes it.
     pub(crate) initial: Option<(&'d str, Span)>,
 }
@@ -773,20 +777,21 @@ fn integer<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>
     } else {
         "u64"
     };
-    let (limits, range) = match role {
-        Role::Parameter => (limits(el, report), None),
+    let (limits, range, stated) = match role {
+        Role::Parameter => (limits(el, report), None, None),
         Role::Argument => match integer_valid_range(el, report)? {
-            Some(range) => (None, Some(ArgumentRange::Integer(range))),
+            Some(range) => {
+                let stated = Some(ArgumentRange::Integer(range.clone()));
+                (None, Some(ArgumentRange::Integer(range)), stated)
+            }
             None => {
                 let held = Held {
                     signed,
                     bits: type_bits,
                     param,
                 };
-                (
-                    None,
-                    integer_holds(&encoding, held).map(ArgumentRange::Integer),
-                )
+                let range = integer_holds(&encoding, held).map(ArgumentRange::Integer);
+                (None, range, None)
             }
         },
     };
@@ -796,6 +801,7 @@ fn integer<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>
         unit,
         limits,
         range,
+        stated,
         initial: initial(el, role),
         ..encoding.scalar(el)
     })
@@ -825,22 +831,57 @@ fn float<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scalar<'d>> 
         Role::Argument => {
             float_argument_differences(el, &encoding, report)?;
             let given = valid_range(el, report)?;
+            // Whether raw values rise with engineering values, which decides
+            // the engineering end a range on raw values states.
+            let mut rises = true;
             let range = match &encoding.calibrator {
-                None if encoding.ty != "float" => Some(rounded_range(given, &encoding, report)),
-                None => given,
+                None if encoding.ty != "float" => {
+                    Some(rounded_range(given.clone(), &encoding, report))
+                }
+                None => given.clone(),
                 Some(calibrator) => {
                     let calibration = argument_calibration(calibrator, report)?;
-                    let range = calibrated_range(given, &calibration.to_raw, &encoding, report)?;
+                    let range =
+                        calibrated_range(given.clone(), &calibration.to_raw, &encoding, report)?;
+                    if let (Some((low, _)), Some((high, _))) = (range.min, range.max) {
+                        let raw = |value| calibration.to_raw.raw(value);
+                        rises = raw(low) <= raw(high);
+                    }
                     scalar.conversion = Some(calibration.conversion);
                     scalar.inverse = calibration.inverse;
                     Some(range)
                 }
             };
+            scalar.stated = range
+                .as_ref()
+                .and_then(|range| stated_ends(given.as_ref(), range, rises))
+                .map(ArgumentRange::Number);
             scalar.range = range.map(ArgumentRange::Number);
             scalar.initial = initial(el, role);
         }
     }
     Some(scalar)
+}
+
+/// The ends of an argument's `range` its type's valid range, `given`,
+/// states, as MDL reads them (rounded into the encoding, kept to a spline's
+/// points), leaving out those worked out from the encoding. A range on raw
+/// values states the engineering end each of its ends becomes: the same
+/// one where raw values `rises` with engineering values, the other where
+/// they fall.
+fn stated_ends(given: Option<&ValidRange>, range: &ValidRange, rises: bool) -> Option<ValidRange> {
+    let given = given?;
+    let (states_min, states_max) = match (given.raw.is_some(), rises) {
+        (true, false) => (given.max.is_some(), given.min.is_some()),
+        _ => (given.min.is_some(), given.max.is_some()),
+    };
+    let min = range.min.filter(|_| states_min);
+    let max = range.max.filter(|_| states_max);
+    (min.is_some() || max.is_some()).then_some(ValidRange {
+        min,
+        max,
+        raw: None,
+    })
 }
 
 /// What a number encoding holds, as raw values.
@@ -1656,6 +1697,7 @@ fn string<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
         raw: Raw::Other,
         limits: None,
         range: None,
+        stated: None,
         initial: initial(el, role),
     })
 }
@@ -2232,6 +2274,7 @@ fn binary<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Opti
         raw: Raw::Other,
         limits: None,
         range: None,
+        stated: None,
         initial: initial(el, role),
     })
 }
@@ -2545,6 +2588,7 @@ impl<'d> Encoding<'d> {
             raw: Raw::Other,
             limits: None,
             range: None,
+            stated: None,
             initial: None,
         }
     }

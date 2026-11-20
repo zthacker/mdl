@@ -105,6 +105,18 @@ An import produces one family and one set:
   first location [`xtce.name`]. A param's description is the parameter's
   `shortDescription` and `LongDescription`, or a member's. Each concrete
   meta-command is a catalog command (§6).
+- **Referring to another catalog.** With the importer's catalog role
+  `refer` (which `morphc` gives a build's inputs that don't own its
+  catalog, [build files](build-files.md) §3), the import adds nothing to
+  the catalog. A parameter with an alias in the `MDL` namespace is a field
+  mapped to the param of that name, a member's name adding its part as
+  above, which validation checks the catalog has (`unknown_canonical`);
+  any number of parameters may map to one name. A parameter without one
+  is a field with no catalog name. Meta-commands are as §6.1 says. What
+  validation compares with the catalog stays checked: a field's type,
+  unit and states against its param, a command packet's arguments
+  against its command's. Descriptions aren't carried, the catalog's
+  being the owner's.
 - **Names in a set.** A field is named for its parameter, members joined
   by `_` (`CCSDS_Packet_ID_APID`), and a packet for its container. A name
   that isn't an MDL identifier has `_` for each other character, and `_`
@@ -338,9 +350,15 @@ it otherwise.
 ### 6.1 Meta-commands
 
 - **Commands.** Each `MetaCommand` that isn't `abstract` is a catalog
-  command and a command packet. Its chain is the meta-commands it
-  inherits from (`BaseMetaCommand`), root first, then itself; one that
-  inherits from itself is an error [`xtce.invalid`].
+  command and a command packet. Referring to another catalog (§3), one
+  with an alias in the `MDL` namespace is a command packet encoding the
+  command of that name, whose arguments the packet names as below, and
+  isn't a catalog command; one without is left out [`xtce.ignored`].
+  Each argument's range and default (§6.2), in its unit, are then the
+  packet's own limits (`encoding.md` §2.6, IR 2.2), so the vendor's
+  limits hold whatever the owner's command allows. Its chain is the
+  meta-commands it inherits from (`BaseMetaCommand`), root first, then
+  itself; one that inherits from itself is an error [`xtce.invalid`].
 - **Arguments.** A command's arguments are those each meta-command in its
   chain declares (`ArgumentList`), in chain order, less those an
   `ArgumentAssignment` gives a value. An assignment, in a meta-command's

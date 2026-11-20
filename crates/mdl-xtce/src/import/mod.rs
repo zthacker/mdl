@@ -28,7 +28,7 @@ use crate::report::Report;
 use crate::space::{Kind, Tree};
 use crate::types::{Order, Raw, Scalar, Shape, Types, description};
 use crate::xml::{self, El, Expect};
-use crate::{Code, Naming, Options};
+use crate::{CatalogRole, Code, Naming, Options};
 
 mod arguments;
 mod commands;
@@ -262,11 +262,14 @@ pub(crate) struct Import<'d, 'r> {
     tree: &'r Tree<'d>,
     report: &'r mut Report,
     naming: Naming,
+    catalog: CatalogRole,
     types: Types<'d>,
-    /// Imported params, by catalog name.
+    /// Imported params, by catalog name; none when the import refers to
+    /// another input's catalog.
     params: BTreeMap<String, Param<'d>>,
-    /// The catalog name of each parameter or member imported.
-    names: BTreeMap<ParamKey<'d>, (String, Span)>,
+    /// The catalog name of each parameter or member imported, if it maps
+    /// to one.
+    names: BTreeMap<ParamKey<'d>, Option<(String, Span)>>,
     /// Each parameter's shape, once worked out.
     shapes: BTreeMap<ElId, Option<Shape<'d>>>,
     /// Parameters some entry or comparison names.
@@ -289,6 +292,7 @@ impl<'d, 'r> Import<'d, 'r> {
             tree,
             report,
             naming: options.naming,
+            catalog: options.catalog,
             types: Types::default(),
             params: BTreeMap::new(),
             names: BTreeMap::new(),
@@ -393,6 +397,7 @@ impl<'d, 'r> Import<'d, 'r> {
             packets: &packets,
             structs: &self.structs,
             commands: &commands,
+            catalog: self.catalog,
         }))
     }
 
@@ -802,11 +807,20 @@ impl<'d, 'r> Import<'d, 'r> {
         el: El<'d>,
         scalar: &Scalar<'d>,
         member_description: Option<(String, Span)>,
-    ) -> Option<(String, Span)> {
+    ) -> Option<Option<(String, Span)>> {
         if let Some(name) = self.names.get(key) {
             return Some(name.clone());
         }
-        let (mut name, span) = self.base_name(key.0, el)?;
+        let refer = self.catalog == CatalogRole::Refer;
+        let base = if refer {
+            self.mdl_alias(el)?
+        } else {
+            Some(self.base_name(key.0, el)?)
+        };
+        let Some((mut name, span)) = base else {
+            self.names.insert(key.clone(), None);
+            return Some(None);
+        };
         for member in &key.2 {
             let Some(part) = catalog_part(member) else {
                 self.report.error(
@@ -818,6 +832,12 @@ impl<'d, 'r> Import<'d, 'r> {
             };
             name.push('.');
             name.push_str(&part);
+        }
+        // A reference: the catalog owner defines the param, and fields in
+        // several packets may name it.
+        if refer {
+            self.names.insert(key.clone(), Some((name.clone(), span)));
+            return Some(Some((name, span)));
         }
         if let Some(first) = self.params.get(&name) {
             let first_span = first.el.span();
@@ -845,8 +865,8 @@ impl<'d, 'r> Import<'d, 'r> {
                 description,
             },
         );
-        self.names.insert(key.clone(), (name.clone(), span));
-        Some((name, span))
+        self.names.insert(key.clone(), Some((name.clone(), span)));
+        Some(Some((name, span)))
     }
 
     /// A parameter's or meta-command's catalog name: its alias in the MDL
