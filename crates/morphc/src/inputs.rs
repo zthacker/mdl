@@ -8,7 +8,9 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, bail};
 use mdl::source::{Parsed, SourceDiagnostic, SourceFile, Sources};
 
-use crate::{buildfile, store};
+use mdl::store;
+
+use crate::buildfile;
 
 /// Which frontend reads a file, chosen by its extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

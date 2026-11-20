@@ -681,7 +681,7 @@ fn json_output_reports_problems_and_failures_too() {
     let problems = morphc_in(&dir, &["build", "defs", "--format", "json"], None);
     assert_eq!(problems.status.code(), Some(1));
     let report: Value = serde_json::from_str(&stdout(&problems)).unwrap();
-    assert_eq!(report["report"], 1);
+    assert_eq!(report["report"], 2);
     assert_eq!(report["ok"], false);
     assert_eq!(report["build"], Value::Null);
     let error = report["diagnostics"]
@@ -1634,7 +1634,8 @@ fn encode_writes_the_bytes_the_library_pins() {
     let report: Value = serde_json::from_str(&stdout(&track)).unwrap();
     let packet = &report["encode"]["packet"];
     assert_eq!(packet["payload"], "1065c000000002020064000a00c80014");
-    assert_eq!(packet["encoding"], "binary");
+    assert_eq!(packet["family"], "demosat");
+    assert_eq!(packet["command"], "demosat.adcs.track");
     assert_eq!(packet["record"]["N"], 2);
 
     let defaulted = encode(&["--command", "eps.set_mode", "--arg", "mode=SAFE"]);

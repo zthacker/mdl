@@ -138,6 +138,7 @@ unit (28.41 V). The mode's raw 1 is the state `NOMINAL`. With
 
 ```json
 {
+  "family": "beacon",
   "native_id": 7,
   "asset": "NODE-7",
   "stand_in": false,
@@ -388,7 +389,7 @@ Issues and pull requests are welcome at <https://github.com/zthacker/mdl>.
 | `crates/mdl-fuzz` | what each fuzz target checks, a test that replays every committed fuzz input, and the XTCE corpus runner (never published) |
 | `fuzz` | the cargo-fuzz harness, its seeds, corpus and dictionaries, and the crashes kept as regressions |
 | `examples` | the worked example's beacon, a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
-| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md) |
+| `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md), [the runtime API every binding calls](spec/api.md), [versions and compatibility](spec/compatibility.md) |
 
 ## License
 

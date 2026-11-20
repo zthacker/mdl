@@ -1,12 +1,9 @@
 //! Values in reports: decoded and encoded values as JSON, and bytes as
 //! hex both ways.
 
-use mdl::decode::{Record, SampleValue, Value};
 use mdl::encode::ArgumentValue;
 use serde::Serialize;
 use serde_json::Value as Json;
-
-use crate::describe::ir;
 
 /// Why a message didn't decode or a command didn't encode: the library's
 /// stable code and its message.
@@ -88,31 +85,6 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// A sample or engineering value: numbers as JSON numbers (integers past
-/// ±(2^53 - 1) as text, non-finite floats tagged), bytes as hex, a state
-/// as its name, vectors and quaternions as objects with their frame.
-pub fn sample_json(value: &SampleValue) -> Json {
-    match value {
-        SampleValue::F64(f) => float_json(*f),
-        SampleValue::I64(n) => integer_json(i128::from(*n)),
-        SampleValue::U64(n) => integer_json(i128::from(*n)),
-        SampleValue::Bool(b) => Json::Bool(*b),
-        SampleValue::Str(text) => Json::String(text.clone()),
-        SampleValue::Bytes(bytes) => Json::String(hex(bytes)),
-        SampleValue::Enum(state) => Json::String(state.clone()),
-        SampleValue::Vec3 { frame, x, y, z, .. } => serde_json::json!({
-            "frame": ir(frame), "x": float_json(*x), "y": float_json(*y), "z": float_json(*z)
-        }),
-        SampleValue::Quat {
-            frame, w, x, y, z, ..
-        } => serde_json::json!({
-            "frame": ir(frame), "w": float_json(*w), "x": float_json(*x),
-            "y": float_json(*y), "z": float_json(*z)
-        }),
-        other => unsupported(other),
-    }
-}
-
 pub fn argument_json(value: &ArgumentValue) -> Json {
     match value {
         ArgumentValue::Bool(b) => Json::Bool(*b),
@@ -122,30 +94,6 @@ pub fn argument_json(value: &ArgumentValue) -> Json {
         ArgumentValue::Text(text) => Json::String(text.clone()),
         ArgumentValue::Bytes(bytes) => Json::String(hex(bytes)),
         ArgumentValue::List(values) => Json::Array(values.iter().map(argument_json).collect()),
-        other => unsupported(other),
-    }
-}
-
-pub fn record_json(record: &Record<'_>) -> Json {
-    Json::Object(
-        record
-            .iter()
-            .map(|(name, value)| (name.to_string(), value_json(value)))
-            .collect(),
-    )
-}
-
-pub fn value_json(value: &Value<'_>) -> Json {
-    match value {
-        Value::Uint(n) => integer_json(i128::from(*n)),
-        Value::Int(n) => integer_json(i128::from(*n)),
-        Value::Float(f) => float_json(*f),
-        Value::Bool(b) => Json::Bool(*b),
-        Value::Str(text) => Json::String(text.clone()),
-        Value::Bytes(bytes) => Json::String(hex(bytes)),
-        Value::Array(values) => Json::Array(values.iter().map(value_json).collect()),
-        Value::Record(record) => record_json(record),
-        Value::Null => Json::Null,
         other => unsupported(other),
     }
 }
@@ -190,10 +138,6 @@ mod tests {
         assert_eq!(
             integer_json(i128::from(u64::MAX)),
             json!("18446744073709551615")
-        );
-        assert_eq!(
-            sample_json(&SampleValue::Bytes(vec![0xc0, 0xff])),
-            json!("c0ff")
         );
         assert_eq!(unsupported(&Some(1)), json!({ "unsupported": "Some(1)" }));
     }

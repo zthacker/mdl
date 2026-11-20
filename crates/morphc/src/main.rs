@@ -22,7 +22,6 @@ mod encode;
 mod inputs;
 mod inspect;
 mod report;
-mod store;
 mod values;
 
 use std::collections::BTreeSet;
@@ -36,6 +35,7 @@ use mdl::ir::{Artifact, Bundle, Locator};
 use mdl::read::{Loaded, read_artifact};
 use mdl::route::FamilySets;
 use mdl::source::{Parsed, SourceDiagnostic, SourceId, SourceMap, Sources, Span, merge_owned};
+use mdl::store;
 use mdl::validate::{Validated, validate};
 
 use crate::inputs::{Frontend, Input};

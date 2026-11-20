@@ -100,7 +100,8 @@ name (marked `stand_in` and "no bindings"), decoded by the family's version
 locator, `--set` or its only set. Every message's samples, or the error
 that stopped it, are reported. `--command` decodes command payloads into
 their arguments with `--set`; `--raw` adds each entry's raw and engineering
-value. Results are printed when every message is done.
+value to what people read (the JSON document always has them). Results
+are printed when every message is done.
 
 ## encode
 
@@ -123,14 +124,18 @@ which prints its usage on stderr and exits 2:
 
 | Key | Holds |
 | --- | --- |
-| `report` | The document's format version, 1. |
+| `report` | The document's format version, 2. |
 | `ok` | Whether everything succeeded. |
 | `error` | Why morphc couldn't run (exit code 2); null otherwise. |
 | `diagnostics` | Each with `severity`, `code`, `message`, `context`, `path` (a JSON Pointer into the bundle, or into the file `context` names, such as a bindings file), and `location` and `first` as `file`, byte offsets `start` and `end`, and lines and columns from 1. |
 | `notes` | What to do next, for people. |
-| `build`, `inspect`, `decode` or `encode` | The command's result: the artifacts with their digests; a view tagged by `view`, with IR values as the IR writes them and a set's layout; each message with its line and its telemetry, command or error; the packet or the error. Null when the definitions have problems, and left out when morphc couldn't run. |
+| `build`, `inspect`, `decode` or `encode` | The command's result: the artifacts with their digests; a view tagged by `view`, with IR values as the IR writes them and a set's layout; each message with its line and its telemetry (a decoded message as the runtime API gives it, [spec/api.md](../../spec/api.md) §3.1), command or error; the packet (an encoded command, §3.2, its payload in hex whatever the family's encoding) or the error. Null when the definitions have problems, and left out when morphc couldn't run. |
 
-Values: integers past ±(2^53 - 1) are decimal text, non-finite floats
-`{"non_finite": "NaN"}`, bytes hex, and a kind of value this morphc
-doesn't know `{"unsupported": ...}`. Codes that aren't the library's start
-with `morphc.`.
+Values are those of the runtime API (spec/api.md §1): integers past
+±(2^53 - 1) are decimal text, non-finite floats `{"non_finite": "NaN"}`
+(`"inf"`, `"-inf"`), bytes hex and instants RFC 3339; a kind of value this
+morphc doesn't know is `{"unsupported": ...}`. Codes that aren't the
+library's start with `morphc.`. Version 2 of the document took the runtime
+API's shapes: a decoded message gained `family` and always has `record`
+and `engineering`, and an encoded command gained `family` and lost
+`encoding`, its payload hex for a JSON family too.

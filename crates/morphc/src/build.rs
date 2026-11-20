@@ -11,8 +11,8 @@ use mdl::artifact::{self, Artifacts, BuildError, Written};
 use mdl::ir::Digest;
 
 use crate::report::{Built, Report, Row};
-use crate::store::{self, Found, Manifest, Stored};
 use crate::{Given, ReadArgs, definitions, inputs};
+use mdl::store::{self, Found, Manifest, Stored};
 
 #[derive(Debug, Args)]
 pub struct BuildArgs {

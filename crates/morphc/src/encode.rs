@@ -8,15 +8,15 @@ use std::process::ExitCode;
 use anyhow::{Context, bail};
 use clap::Args;
 use mdl::bindings::NativeId;
-use mdl::encode::{ArgumentValue, CommandRequest, Encoded};
+use mdl::encode::{ArgumentValue, CommandRequest};
 use mdl::ir::{Argument, Element, Encoding, Entry, ParamType, StructType};
-use mdl::message::MetaValue;
+use mdl::runtime::{EncodedCommand, Value};
 use mdl::source::SourceDiagnostic;
 use serde::Serialize;
-use serde_json::{Map, Value as Json};
+use serde_json::Value as Json;
 
 use crate::report::{Outcome, Report};
-use crate::values::{Failure, hex, integer_json, parse_hex, record_json, unsupported};
+use crate::values::{Failure, hex, parse_hex};
 use crate::{Opened, Origin, ReadArgs, family_sets, open};
 
 #[derive(Debug, Args)]
@@ -103,17 +103,15 @@ pub fn run(args: &EncodeArgs) -> anyhow::Result<ExitCode> {
             }
             Encode {
                 ok: true,
-                packet: Some(packet_out(
-                    &encoded,
-                    &args.command,
-                    family_sets.family().encoding,
-                )),
+                packet: Some(EncodedCommand::of(&encoded, &family, &args.command)),
                 error: None,
+                json_family: family_sets.family().encoding == Encoding::Json,
             }
         }
         Err(err) => Encode {
             ok: false,
             packet: None,
+            json_family: false,
             error: Some(Failure {
                 code: err.code().to_string(),
                 message: err.to_string(),
@@ -258,64 +256,15 @@ fn element_value(ty: ParamType, value: &Json) -> Result<ArgumentValue, String> {
 #[derive(Debug, Serialize)]
 pub struct Encode {
     ok: bool,
+    /// The command as the runtime API gives it (`spec/api.md` §3.2).
     #[serde(skip_serializing_if = "Option::is_none")]
-    packet: Option<PacketOut>,
+    packet: Option<EncodedCommand>,
     /// Why it couldn't be encoded: the library's stable code and message.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<Failure>,
-}
-
-#[derive(Debug, Serialize)]
-struct PacketOut {
-    set: String,
-    /// The set artifact's digest, to record with what was sent.
-    def_version: String,
-    packet: String,
-    command: String,
-    /// `binary` or `json`.
-    encoding: String,
-    /// The payload: hex for a binary family, the JSON text for a JSON one.
-    payload: String,
-    /// The metadata a link frames the payload with.
-    metadata: Map<String, Json>,
-    /// Arguments left out, which took their defaults, in catalog order.
-    defaulted: Vec<String>,
-    /// The catalog's deprecation note, when the command is retired.
-    deprecated: Option<String>,
-    /// Each field's and checksum's raw value, as decoding gives them.
-    record: Json,
-}
-
-fn packet_out(encoded: &Encoded<'_>, command: &str, family: Encoding) -> PacketOut {
-    // A JSON payload is UTF-8 text.
-    let (encoding, payload) = match (family, std::str::from_utf8(&encoded.payload)) {
-        (Encoding::Json, Ok(text)) => ("json", text.to_string()),
-        _ => ("binary", hex(&encoded.payload)),
-    };
-    PacketOut {
-        set: encoded.set.name.clone(),
-        def_version: encoded.def_version.to_string(),
-        packet: encoded.packet.name.clone(),
-        command: command.to_string(),
-        encoding: encoding.to_string(),
-        payload,
-        metadata: encoded
-            .metadata()
-            .into_iter()
-            .map(|(name, value)| {
-                let value = match value {
-                    MetaValue::Uint(n) => integer_json(i128::from(n)),
-                    MetaValue::Int(n) => integer_json(i128::from(n)),
-                    MetaValue::Text(text) => Json::String(text.to_string()),
-                    other => unsupported(&other),
-                };
-                (name.to_string(), value)
-            })
-            .collect(),
-        defaulted: encoded.defaulted.iter().map(|s| (*s).to_string()).collect(),
-        deprecated: encoded.deprecated.map(str::to_string),
-        record: record_json(&encoded.record),
-    }
+    /// For people: the payload is a JSON family's text.
+    #[serde(skip)]
+    json_family: bool,
 }
 
 impl Outcome for Encode {
@@ -328,17 +277,23 @@ impl Outcome for Encode {
         let Some(p) = &self.packet else {
             return String::new();
         };
+        // A JSON payload is UTF-8 text, shown as sent.
+        let payload = match (self.json_family, std::str::from_utf8(&p.payload)) {
+            (true, Ok(text)) => text.to_string(),
+            _ => hex(&p.payload),
+        };
         let mut text = format!(
-            "set {}  command {}  encodes {}\n  def_version {}\n  payload {}\n",
-            p.set, p.packet, p.command, p.def_version, p.payload
+            "set {}  command {}  encodes {}\n  def_version {}\n  payload {payload}\n",
+            p.set, p.packet, p.command, p.def_version
         );
         if !p.metadata.is_empty() {
             let metadata: Vec<String> = p
                 .metadata
                 .iter()
                 .map(|(name, value)| match value {
-                    Json::String(text) => format!("{name} = {text}"),
-                    other => format!("{name} = {other}"),
+                    Value::Text(text) => format!("{name} = {text}"),
+                    Value::Integer(n) => format!("{name} = {n}"),
+                    other => format!("{name} = {other:?}"),
                 })
                 .collect();
             text.push_str(&format!("  metadata {}\n", metadata.join(", ")));

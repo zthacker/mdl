@@ -13,20 +13,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, bail};
 use clap::{ArgGroup, Args};
 use mdl::bindings::{Binding, Bindings, BindingsError, NativeId, Resolver};
-use mdl::decode::{Decoded, DecodedCommand, EventTime, Quality, Record, Value};
+use mdl::decode::DecodedCommand;
 use mdl::ir::{Bundle, Encoding};
 use mdl::message::{Message, MetaValue, Payload};
+use mdl::runtime::{DecodedMessage, Value};
 use mdl::source::SourceDiagnostic;
 use mdl::time::Timestamp;
 use serde::Serialize;
-use serde_json::{Map, Value as Json};
+use serde_json::Value as Json;
 
-use crate::describe::ir;
 use crate::report::{Outcome, Report};
-use crate::values::{
-    Failure, argument_json, integer_json, parse_hex, record_json, sample_json, unsupported,
-    value_json,
-};
+use crate::values::{Failure, argument_json, parse_hex};
 use crate::{Opened, Origin, ReadArgs, family_sets, open};
 
 #[derive(Debug, Args)]
@@ -230,9 +227,10 @@ pub fn run(args: &DecodeArgs) -> anyhow::Result<ExitCode> {
                         .decode(&message_in, assets)
                         .map(|decoded| {
                             let stand_in = matches!(assets, Assets::StandIn(_));
-                            Decodes::Telemetry(telemetry(
-                                &decoded, &opened, time, args.raw, stand_in,
-                            ))
+                            Decodes::Telemetry(Telemetry {
+                                decoded: DecodedMessage::of(&decoded, &family_sets, time, stand_in),
+                                raw: args.raw,
+                            })
                         })
                         .map_err(|err| failure(err.code(), err.to_string())),
                 }
@@ -654,116 +652,32 @@ impl MessageResult {
     }
 }
 
-#[derive(Debug, Serialize)]
+/// A decoded message, which the JSON document holds as the runtime API
+/// gives it (`spec/api.md` §3.1).
+#[derive(Debug)]
 struct Telemetry {
-    /// What the alias locator read: a number for an integer id, text
-    /// otherwise.
-    native_id: Json,
-    asset: String,
-    /// The asset is a stand-in (no bindings file), not a registry's.
-    stand_in: bool,
-    set: String,
-    def_version: String,
-    packet: String,
-    event_time: Json,
-    samples: Vec<SampleOut>,
-    /// With --raw: every entry's raw value, as a tree like the packet's.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    record: Option<Json>,
-    /// With --raw: each field's and scalar element's engineering value,
-    /// by path.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    engineering: Option<Vec<EngineeringOut>>,
-    /// With --raw, for people: every entry's raw value by path, in the
-    /// packet's order.
-    #[serde(skip)]
-    raw_rows: Vec<(String, String)>,
-}
-
-#[derive(Debug, Serialize)]
-struct SampleOut {
-    param: String,
-    value: Json,
-    /// The catalog param's unit.
-    unit: Option<String>,
-    /// Where it came from: an entry's path, or a composite's members.
-    path: String,
-    index: Option<u64>,
-    time_offset_ns: Option<i64>,
-    quality: String,
-}
-
-#[derive(Debug, Serialize)]
-struct EngineeringOut {
-    path: String,
-    value: Json,
-    quality: String,
-}
-
-fn telemetry(
-    decoded: &Decoded<'_>,
-    opened: &Opened,
-    ground: Timestamp,
+    decoded: DecodedMessage,
+    /// With --raw, for people: each entry's raw and engineering value.
     raw: bool,
-    stand_in: bool,
-) -> Telemetry {
-    let catalog = &opened.validated.bundle().catalog;
-    let samples = decoded
-        .samples
-        .iter()
-        .map(|sample| SampleOut {
-            param: sample.param.to_string(),
-            value: sample_json(&sample.value),
-            unit: catalog
-                .params
-                .get(sample.param)
-                .and_then(|p| p.unit.clone()),
-            path: sample.path.clone(),
-            index: sample.index,
-            time_offset_ns: sample.time_offset_ns,
-            quality: quality(sample.quality),
-        })
-        .collect();
-    let native_id = &decoded.route.native_id;
-    let mut raw_rows = Vec::new();
-    if raw {
-        record_rows(&decoded.record, "", &mut raw_rows);
-    }
-    Telemetry {
-        native_id: match native_id.as_int() {
-            Some(n) => integer_json(n),
-            None => Json::String(native_id.to_string()),
-        },
-        asset: decoded.route.binding.asset.clone(),
-        stand_in,
-        set: decoded.route.set.name.clone(),
-        def_version: decoded.route.def_version.to_string(),
-        packet: decoded.packet.name.clone(),
-        event_time: event_time(&decoded.event_time, ground),
-        samples,
-        record: raw.then(|| record_json(&decoded.record)),
-        engineering: raw.then(|| {
-            decoded
-                .engineering_values()
-                .into_iter()
-                .map(|(path, engineering)| EngineeringOut {
-                    path,
-                    value: sample_json(&engineering.value),
-                    quality: quality(engineering.quality),
-                })
-                .collect()
-        }),
-        raw_rows,
+}
+
+impl Serialize for Telemetry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.decoded.serialize(serializer)
     }
 }
 
 /// Every entry's raw value by path (`pos.x`, `samples[3]`, as the library
 /// names engineering values), in the record's order; an empty array as
-/// `[]`.
-fn record_rows(record: &Record<'_>, prefix: &str, rows: &mut Vec<(String, String)>) {
-    for (name, value) in record.iter() {
+/// `[]`. From the runtime's value, which keeps the packet's order (a JSON
+/// object's keys have none).
+fn record_rows(record: &Value, prefix: &str, rows: &mut Vec<(String, String)>) {
+    let Value::Object(entries) = record else {
+        return;
+    };
+    for (name, value) in entries {
         let path = if prefix.is_empty() {
-            name.to_string()
+            name.clone()
         } else {
             format!("{prefix}.{name}")
         };
@@ -771,16 +685,19 @@ fn record_rows(record: &Record<'_>, prefix: &str, rows: &mut Vec<(String, String
     }
 }
 
-fn value_rows(value: &Value<'_>, path: String, rows: &mut Vec<(String, String)>) {
+fn value_rows(value: &Value, path: String, rows: &mut Vec<(String, String)>) {
     match value {
-        Value::Record(record) => record_rows(record, &path, rows),
-        Value::Array(values) if values.is_empty() => rows.push((path, "[]".to_string())),
-        Value::Array(values) => {
+        Value::Object(_) => record_rows(value, &path, rows),
+        Value::List(values) if values.is_empty() => rows.push((path, "[]".to_string())),
+        Value::List(values) => {
             for (index, value) in values.iter().enumerate() {
                 value_rows(value, format!("{path}[{index}]"), rows);
             }
         }
-        scalar => rows.push((path, plain(&value_json(scalar)))),
+        scalar => rows.push((
+            path,
+            plain(&serde_json::to_value(scalar).unwrap_or(Json::Null)),
+        )),
     }
 }
 
@@ -820,33 +737,6 @@ fn command_result(decoded: &DecodedCommand<'_>) -> CommandResult {
             .collect(),
         target: decoded.target.as_ref().map(NativeId::to_string),
     }
-}
-
-/// `good`, `invalid`, `out_of_calibration`, as the library names them.
-/// As the library spells it, so a quality added there needs nothing here.
-fn quality(quality: Quality) -> String {
-    quality.as_str().to_string()
-}
-
-fn event_time(time: &EventTime, ground: Timestamp) -> Json {
-    let mut out = Map::new();
-    match time {
-        EventTime::Ground => {
-            out.insert("kind".into(), "ground".into());
-            out.insert("time".into(), ground.to_string().into());
-        }
-        EventTime::At(at) => {
-            out.insert("kind".into(), "at".into());
-            out.insert("time".into(), at.to_string().into());
-        }
-        EventTime::SinceBoot { value, unit } => {
-            out.insert("kind".into(), "since_boot".into());
-            out.insert("value".into(), integer_json(i128::from(*value)));
-            out.insert("unit".into(), ir(unit).into());
-        }
-        other => return unsupported(other),
-    }
-    Json::Object(out)
 }
 
 // ---- For people ----------------------------------------------------------------------
@@ -922,30 +812,34 @@ fn table(rows: &[Vec<String>]) -> String {
 }
 
 fn telemetry_text(t: &Telemetry) -> String {
-    let native_id = plain(&t.native_id);
-    let asset = if t.stand_in {
+    // From the JSON document's form, so people read the values tools do.
+    let json = serde_json::to_value(&t.decoded).unwrap_or(Json::Null);
+    let native_id = plain(&json["native_id"]);
+    let asset = if t.decoded.stand_in {
         format!("native id {native_id} (no bindings)")
     } else {
-        format!("asset {} (native id {native_id})", t.asset)
+        format!("asset {} (native id {native_id})", t.decoded.asset)
     };
-    let time = match t.event_time.get("kind").and_then(Json::as_str) {
-        Some("ground") => format!("ground time {}", plain(&t.event_time["time"])),
-        Some("at") => format!("event time {}", plain(&t.event_time["time"])),
+    let event_time = &json["event_time"];
+    let time = match event_time["kind"].as_str() {
+        Some("ground") => format!("ground time {}", plain(&event_time["time"])),
+        Some("at") => format!("event time {}", plain(&event_time["time"])),
         Some("since_boot") => format!(
             "{} {} since boot",
-            plain(&t.event_time["value"]),
-            plain(&t.event_time["unit"])
+            plain(&event_time["value"]),
+            plain(&event_time["unit"])
         ),
-        _ => t.event_time.to_string(),
+        _ => event_time.to_string(),
     };
     let mut text = format!(
         "set {}  packet {}  {asset}\n  def_version {}\n  {time}\n",
-        t.set, t.packet, t.def_version
+        t.decoded.set, t.decoded.packet, t.decoded.def_version
     );
-    if t.samples.is_empty() {
+    let samples = json["samples"].as_array().map_or(&[][..], Vec::as_slice);
+    if samples.is_empty() {
         text.push_str("  no catalog samples\n");
     } else {
-        let all_good = t.samples.iter().all(|s| s.quality == "good");
+        let all_good = samples.iter().all(|s| s["quality"] == "good");
         let mut header = vec![
             "param".to_string(),
             "value".to_string(),
@@ -956,40 +850,45 @@ fn telemetry_text(t: &Telemetry) -> String {
             header.push("quality".to_string());
         }
         let mut rows = vec![header];
-        for sample in &t.samples {
-            let from = match sample.time_offset_ns {
-                Some(offset) if offset != 0 => format!("{} (+{offset} ns)", sample.path),
-                _ => sample.path.clone(),
+        for sample in samples {
+            let path = plain(&sample["path"]);
+            let from = match sample["time_offset_ns"].as_i64() {
+                Some(offset) if offset != 0 => format!("{path} (+{offset} ns)"),
+                _ => path,
             };
-            let mut row = vec![
-                sample.param.clone(),
-                plain(&sample.value),
-                sample.unit.clone().unwrap_or_default(),
-                from,
-            ];
-            if sample.quality != "good" {
-                row.push(sample.quality.clone());
+            let unit = match &sample["unit"] {
+                Json::Null => String::new(),
+                unit => plain(unit),
+            };
+            let mut row = vec![plain(&sample["param"]), plain(&sample["value"]), unit, from];
+            if sample["quality"] != "good" {
+                row.push(plain(&sample["quality"]));
             }
             rows.push(row);
         }
         text.push_str(&table(&rows));
     }
-    if let Some(engineering) = &t.engineering {
+    if t.raw {
+        let engineering = json["engineering"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        let mut raw_rows = Vec::new();
+        record_rows(&t.decoded.record, "", &mut raw_rows);
         let mut rows = vec![vec![
             "entry".to_string(),
             "raw".to_string(),
             "engineering".to_string(),
         ]];
-        for (path, value) in &t.raw_rows {
+        for (path, value) in &raw_rows {
             let converted = engineering
                 .iter()
-                .find(|e| e.path == *path)
+                .find(|e| e["path"] == *path.as_str())
                 .map(|e| {
-                    let value = plain(&e.value);
-                    if e.quality == "good" {
+                    let value = plain(&e["value"]);
+                    if e["quality"] == "good" {
                         value
                     } else {
-                        format!("{value} ({})", e.quality)
+                        format!("{value} ({})", plain(&e["quality"]))
                     }
                 })
                 .unwrap_or_default();
