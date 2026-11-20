@@ -5,7 +5,8 @@ MAY are to be interpreted as described in RFC 2119.
 
 Every binding of MDL to another language calls one runtime, this
 repository's, through one coarse API: open a store, decode messages,
-encode commands. A binding converts its language's inputs for the runtime
+encode commands, describe the build, and look up which asset a native id
+is. A binding converts its language's inputs for the runtime
 and the runtime's results into its language's values, and does nothing
 else. No MDL semantics live in a binding, so a feature reaches every
 language when the runtime gains it, and no second implementation has to
@@ -132,6 +133,43 @@ float (NaN and the infinities included, which encoding refuses with
 
 The result is an encoded command (§3.2), or an error (§4).
 
+### 2.5 describe
+
+Inputs: a handle. The result is a description of the build it opened
+(§3.3): the catalog, each family and each set, with their digests, and
+where each entry of a binary set can be. The same store and runtime
+release give the same description: the IR parts change only with the
+manifest, and a release may compute a layout's bounds more tightly.
+
+### 2.6 binding and asset
+
+`binding` takes a handle, a family, a native id and an instant. Its result
+is what the native id is at the instant (§3.4), resolved as decoding a
+message received then resolves it (`bindings.md` §4): its binding, or,
+without bindings, the stand-in §2.2 describes (`missing_set` where there
+can't be one). Its set is checked as routing checks it (`decoding.md`
+§3), with the same codes, so a lookup and a message's decoding agree: a
+set named for a family whose version locator chooses is
+`unexpected_set`, no set for a family without one `missing_set`, a set
+the build doesn't have `unknown_set`. It's absent when the native id is
+no asset then: no row binds it yet, or its row is retired.
+
+`asset` takes a handle, a family, an asset's name and an instant, and
+looks the other way: its result is what the native id that is the asset
+at the instant is (§3.4), which is where a command to the asset goes,
+its set checked as `binding`'s is. It's absent when no native id is the
+asset then. A registry may bind one asset to several native ids at once;
+then there's no one destination, and the result is `ambiguous_asset`.
+Without bindings, the asset is the native id its name spells
+(`bindings.md` §3), a stand-in.
+
+Encoding takes the set and the native id (§2.4), which `asset` gives for a
+family without a version locator. A family with one picks each message's
+set by its version, so no binding says which set a command to an asset
+uses: a ground system takes it from what it knows of the asset, such as
+the set of its latest decoded telemetry (§3.1's `set`). MDL has no rule
+of its own for it.
+
 ## 3. Results
 
 ### 3.1 A decoded message
@@ -212,6 +250,62 @@ An object with these keys:
 | `deprecated` | text: the catalog's deprecation note; absent when the command isn't deprecated |
 | `record` | the raw record of what was written: each field's and checksum's raw value, as decoding the payload gives them |
 
+### 3.3 A description
+
+An object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `format` | integer: the result format's version (§1) |
+| `catalog` | an object: `digest`, text, the catalog artifact's digest; and `catalog`, the catalog |
+| `families` | a list, in name order, of objects: `name`, text; `digest`, text; `family`, the family; and `sets`, a list of its sets' names, text, in name order |
+| `sets` | a list, in name order, of objects: `name`, text; `family`, text; `def_version`, text, the set artifact's digest; `pins_catalog`, text, the digest of the older catalog the set pins, absent when it pins the manifest's; `set`, the set; and `layout`, below, absent for a self-describing (JSON) family |
+
+The catalog, a family and a set are the IR's own JSON values for them, as
+their artifacts hold them, read by the IR's specifications. They aren't
+converted by §1's rules: an integer the IR writes as a decimal string
+(past ±(2^53 − 1)) stays that string, in JSON and in a binding. MDL
+specifies the IR once; a second rendering of it, value by value, could
+come to mean something else. Each value inside them has the IR's type,
+not §1's: a range end is a number or a decimal string, a bytes default is
+hex text, and a number keeps its field's type, so an `f64` written `10` in
+an artifact is the float 10.0. They're the same values as the artifacts
+hold, not the same spelling, and a binding returns them as plain maps,
+lists and scalars, without §1's integer rule inside them.
+
+**Layout** (`decoding.md` §5.2): where each entry of a binary set can be,
+in bits from its container's start, as §1's integers. An object of
+`packets` and `commands`, lists in the set's order, and `types`, an object
+by struct type name, each of a container: `name`; `entries`, a list with
+one placement for each of the container's entries in the IR, in the same
+order, padding and checksums included; `size_min_bits`, the fewest bits its
+entries take; and `size_max_bits`, the most, absent when unbounded. A
+placement is an object of
+
+| Key | Value |
+| --- | --- |
+| `static_offset_bits` | integer: its static position (`decoding.md` §5.2), absent when a message can move it |
+| `start_min_bits` | integer: the earliest bit it can start at |
+| `start_max_bits` | integer: the latest, absent when earlier data can move it without bound |
+| `size_min_bits` | integer: its smallest size when present |
+| `size_max_bits` | integer: its largest, absent when unbounded |
+| `conditional` | boolean: a condition can leave it out |
+
+A struct type's positions count from the struct's own start, wherever it's
+read.
+
+### 3.4 A binding
+
+An object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `family` | text |
+| `native_id` | integer or text (§1) |
+| `asset` | text |
+| `set` | text: the set that decodes the asset's messages, absent when the family's version locator chooses |
+| `stand_in` | boolean: true when there are no bindings, and the native id stands for an asset of its own (§2.2) |
+
 ## 4. Errors
 
 An error is an object with a `code`, which is stable and names the
@@ -234,7 +328,9 @@ decoding and encoding, and these:
 
 | Code | Operation | Meaning |
 | --- | --- | --- |
-| `unknown_family` | decode, encode | the build has no family of that name |
+| `unknown_family` | decode, encode, binding, asset | the build has no family of that name |
+| `ambiguous_asset` | asset | several native ids are the asset at the instant |
+| `invalid_layout` | describe | a set validated, but its layout can't be worked out: a bug in MDL |
 | `store_unreadable` | open | a file of the store can't be read, or isn't there |
 | `manifest_version` | open | the manifest's format version isn't one this runtime reads |
 | `bad_manifest` | open | the manifest isn't one: not JSON, a key that isn't the format's, a value of the wrong kind |
@@ -244,7 +340,7 @@ decoding and encoding, and these:
 | `duplicate_artifact` | open | two artifacts of one kind have one name |
 | `duplicate_version` | open | two sets of one family have one version |
 | `incompatible_catalog` | open | a set pins an older catalog the manifest's catalog isn't compatible with; its problems say how |
-| `invalid_build` | open | the build doesn't validate, by this release's rules; its problems are validation's diagnostics |
+| `invalid_build` | open, describe | the build doesn't validate, by this release's rules; its problems are validation's diagnostics. From describe, the build's parts and its artifacts disagree: a bug in MDL |
 | `invalid_bindings` | open | the bindings have rows that aren't valid in themselves (`bindings.md` §7); its problems are the rows' |
 
 An artifact that can't be read is the read's own error (`wrong_shape`,

@@ -18,8 +18,10 @@ use serde_json::{Value as Json, json};
 /// A family `sat` whose HK packet has a CUC time, an alias, a converted
 /// field, a float, a count past 2^53 and bytes, and a deprecated command
 /// with metadata and a default; a family `pair` of two sets with no
-/// version locator, whose sets come from bindings; and a family `vers` of
-/// two sets its version locator chooses between.
+/// version locator, whose sets come from bindings; a family `vers` of two
+/// sets its version locator chooses between, `vers_a`'s packet ending
+/// after a terminated string; a JSON family `web`; and a catalog command
+/// whose argument's range ends past 2^53.
 fn bundle() -> Json {
     let set = |name: &str, family: &str| {
         json!({ "name": name, "family": family, "packets": [
@@ -45,6 +47,11 @@ fn bundle() -> Json {
                     "arguments": [
                         { "name": "delay", "type": "u64", "unit": "s", "range": { "max": 600 }, "default": 5 }
                     ]
+                },
+                "eps.stamp": {
+                    "arguments": [
+                        { "name": "n", "type": "u64", "range": { "min": 1, "max": "1152921504606846975" } }
+                    ]
                 }
             }
         },
@@ -58,7 +65,8 @@ fn bundle() -> Json {
               "alias": { "kind": "fixed", "value": "p1" } },
             { "name": "vers", "encoding": "binary", "byte_order": "big",
               "alias": { "kind": "fixed", "value": "v1" },
-              "version": { "kind": "metadata", "name": "fmt" }, "metadata": ["fmt"] }
+              "version": { "kind": "metadata", "name": "fmt" }, "metadata": ["fmt"] },
+            { "name": "web", "encoding": "json", "alias": { "kind": "path", "pointer": "/id" } }
         ],
         "sets": [
             {
@@ -86,8 +94,20 @@ fn bundle() -> Json {
             },
             set("pair_v1", "pair"),
             set("pair_v2", "pair"),
-            versioned("vers_a", 1),
-            versioned("vers_b", 2)
+            {
+                "name": "vers_a", "family": "vers", "version": 1,
+                "packets": [{ "name": "P", "entries": [
+                    { "kind": "field", "name": "x", "type": "uint", "size_bits": 8 },
+                    { "kind": "field", "name": "label", "type": "string",
+                      "length": { "kind": "terminator", "byte": 0 } },
+                    { "kind": "field", "name": "tail", "type": "uint", "size_bits": 8 }
+                ] }]
+            },
+            versioned("vers_b", 2),
+            { "name": "web_v1", "family": "web", "packets": [{ "name": "P", "entries": [
+                { "kind": "field", "name": "id", "type": "uint", "pointer": "/id" },
+                { "kind": "field", "name": "v", "type": "float", "pointer": "/v" }
+            ] }] }
         ]
     })
 }
@@ -285,7 +305,7 @@ fn a_store_from_bytes_reads_as_its_directory_does() {
     );
     assert_eq!(
         from_bytes.families().collect::<Vec<_>>(),
-        ["pair", "sat", "vers"]
+        ["pair", "sat", "vers", "web"]
     );
     // One the manifest names, missing.
     let fewer = &artifacts[1..];
@@ -554,4 +574,252 @@ fn a_runtime_is_shared_across_threads() {
     // Metadata the link delivers reaches the decoder.
     let with_meta = message.with_metadata(&[("apid", MetaValue::Uint(3))]);
     assert!(runtime.decode("sat", &with_meta).is_ok());
+}
+
+#[test]
+fn describe_gives_the_build_with_its_digests_and_layouts() {
+    let (dir, artifacts) = store_dir("describe");
+    let runtime = Runtime::open(&dir, None).unwrap();
+    let description = runtime.describe().unwrap();
+    let shown = json_of(&description.to_value().unwrap());
+    assert_eq!(shown["format"], 1);
+    assert_eq!(
+        shown["catalog"]["digest"],
+        artifacts.catalog.digest.to_string()
+    );
+    assert_eq!(
+        shown["catalog"]["catalog"]["params"]["eps.volts"],
+        json!({ "type": "f64", "unit": "V" })
+    );
+    let names = |list: &Json| -> Vec<String> {
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&shown["families"]), ["pair", "sat", "vers", "web"]);
+    let sat = &shown["families"][1];
+    assert_eq!(sat["digest"], artifacts.families["sat"].digest.to_string());
+    assert_eq!(sat["sets"], json!(["sat_v1"]));
+    assert_eq!(
+        sat["family"]["alias"],
+        json!({ "kind": "bits", "offset_bits": 48, "size_bits": 8 })
+    );
+    assert_eq!(
+        names(&shown["sets"]),
+        ["pair_v1", "pair_v2", "sat_v1", "vers_a", "vers_b", "web_v1"]
+    );
+    let sat_v1 = &shown["sets"][2];
+    assert_eq!(
+        sat_v1["def_version"],
+        artifacts.sets["sat_v1"].digest.to_string()
+    );
+    assert_eq!(sat_v1["pins_catalog"], Json::Null);
+    assert_eq!(sat_v1["set"]["packets"][0]["name"], "HK");
+    // Each entry where it is: after the CUC time, the id, volts, temp,
+    // count and tag; and the command's opcode and delay.
+    let starts = |container: &Json| -> Vec<Json> {
+        container["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|placement| placement["static_offset_bits"].clone())
+            .collect()
+    };
+    let hk = &sat_v1["layout"]["packets"][0];
+    assert_eq!(starts(hk), [48, 56, 72, 104, 168].map(Json::from));
+    assert_eq!(hk["size_min_bits"], 184);
+    assert_eq!(
+        hk["entries"][4],
+        json!({ "static_offset_bits": 168, "start_min_bits": 168, "start_max_bits": 168,
+                "size_min_bits": 16, "size_max_bits": 16, "conditional": false })
+    );
+    let reset = &sat_v1["layout"]["commands"][0];
+    assert_eq!(starts(reset), [0, 8].map(Json::from));
+    // After a string of any length, an entry has no static position and
+    // no latest start.
+    let vers_a = &shown["sets"][3]["layout"]["packets"][0];
+    assert_eq!(
+        vers_a["entries"][2],
+        json!({ "static_offset_bits": null, "start_min_bits": 16, "start_max_bits": null,
+                "size_min_bits": 8, "size_max_bits": 8, "conditional": false })
+    );
+    assert_eq!(vers_a["size_max_bits"], Json::Null);
+    // A JSON family's entries have no positions.
+    assert_eq!(shown["sets"][5]["layout"], Json::Null);
+    // The IR's own values, not converted: a range end past 2^53 stays the
+    // IR's decimal string, in a binding too.
+    let stamp = &shown["catalog"]["catalog"]["commands"]["eps.stamp"]["arguments"][0];
+    assert_eq!(stamp["range"]["max"], "1152921504606846975");
+    let Value::Object(top) = description.to_value().unwrap() else {
+        panic!("a description is an object");
+    };
+    let catalog = &top.iter().find(|(key, _)| key == "catalog").unwrap().1;
+    let text = format!("{catalog:?}");
+    assert!(text.contains("Text(\"1152921504606846975\")"), "{text}");
+}
+
+#[test]
+fn bindings_are_looked_up_by_native_id_and_by_asset() {
+    use mdl::bindings::NativeId;
+
+    let (dir, _) = store_dir("lookups");
+    let bindings = r#"mdl_version = "2.0"
+
+[[binding]]
+family = "pair"
+native_id = "p1"
+asset = "PAIR-1"
+set = "pair_v2"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "sat"
+native_id = 1
+asset = "SAT-1"
+set = "sat_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "sat"
+native_id = 1
+retired = true
+effective_from = "2026-07-01T00:00:00Z"
+"#;
+    let runtime = Runtime::open(&dir, Some(bindings)).unwrap();
+    let at = |text: &str| Timestamp::from_rfc3339(text).unwrap();
+    let p1 = NativeId::from_text("p1");
+    let found = runtime.binding("pair", &p1, ground()).unwrap().unwrap();
+    assert_eq!(
+        json_of(&found.to_value()),
+        json!({ "family": "pair", "native_id": "p1", "asset": "PAIR-1", "set": "pair_v2",
+                "stand_in": false })
+    );
+    // Before its row takes effect, and after a row retires it, a native id
+    // is no asset.
+    assert_eq!(
+        runtime
+            .binding("pair", &p1, at("2025-12-31T23:59:59Z"))
+            .unwrap(),
+        None
+    );
+    let one = NativeId::from_text("1");
+    assert!(runtime.binding("sat", &one, ground()).unwrap().is_some());
+    assert_eq!(
+        runtime
+            .binding("sat", &one, at("2026-07-01T00:00:00Z"))
+            .unwrap(),
+        None
+    );
+    // The other way: where a command to an asset goes.
+    let sat = runtime.asset("sat", "SAT-1", ground()).unwrap().unwrap();
+    assert_eq!(
+        (sat.native_id.as_int(), sat.set.as_deref()),
+        (Some(1), Some("sat_v1"))
+    );
+    assert_eq!(
+        runtime
+            .asset("sat", "SAT-1", at("2026-08-01T00:00:00Z"))
+            .unwrap(),
+        None
+    );
+    assert_eq!(runtime.asset("sat", "nobody", ground()).unwrap(), None);
+    assert_eq!(
+        code(runtime.asset("nope", "SAT-1", ground())),
+        "unknown_family"
+    );
+    // Two native ids that are one asset at once: no one destination.
+    let twice = format!(
+        "{bindings}\n[[binding]]\nfamily = \"sat\"\nnative_id = 2\nasset = \"SAT-1\"\nset = \"sat_v1\"\neffective_from = \"2026-01-01T00:00:00Z\"\n"
+    );
+    let runtime = Runtime::open(&dir, Some(&twice)).unwrap();
+    let error = runtime.asset("sat", "SAT-1", ground()).unwrap_err();
+    assert_eq!(error.code, "ambiguous_asset");
+    assert!(
+        error.message.contains("native ids 1, 2"),
+        "{}",
+        error.message
+    );
+
+    // Without bindings, a native id stands for an asset of its own.
+    let bare = runtime.with_bindings(None);
+    let stand_in = bare.binding("sat", &one, ground()).unwrap().unwrap();
+    assert_eq!(
+        json_of(&stand_in.to_value()),
+        json!({ "family": "sat", "native_id": 1, "asset": "1", "set": "sat_v1",
+                "stand_in": true })
+    );
+    let by_name = bare.asset("sat", "1", ground()).unwrap().unwrap();
+    assert_eq!(by_name.native_id.as_int(), Some(1));
+    assert_eq!(code(bare.binding("pair", &p1, ground())), "missing_set");
+
+    // Rows the build doesn't fit: the lookups refuse them as decoding a
+    // message does, with the same codes.
+    let misfits = r#"mdl_version = "2.0"
+
+[[binding]]
+family = "pair"
+native_id = "p1"
+asset = "PAIR-1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "vers"
+native_id = "v1"
+asset = "V-1"
+set = "vers_a"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family = "sat"
+native_id = 1
+asset = "SAT-1"
+set = "sat_v9"
+effective_from = "2026-01-01T00:00:00Z"
+"#;
+    let runtime = Runtime::open(&dir, Some(misfits)).unwrap();
+    let mut warned: Vec<&str> = runtime.warnings().iter().map(|w| w.code).collect();
+    warned.sort_unstable();
+    assert_eq!(warned, ["binding_set", "binding_set", "unknown_set"]);
+    let payload = [5_u8];
+    let hk = hk();
+    let fmt = [("fmt", MetaValue::Uint(1))];
+    let cases = [
+        (
+            "pair",
+            "p1",
+            "PAIR-1",
+            Message::new(Payload::Binary(&payload), ground()),
+            "missing_set",
+        ),
+        (
+            "vers",
+            "v1",
+            "V-1",
+            Message::new(Payload::Binary(&payload), ground()).with_metadata(&fmt),
+            "unexpected_set",
+        ),
+        (
+            "sat",
+            "1",
+            "SAT-1",
+            Message::new(Payload::Binary(&hk), ground()),
+            "unknown_set",
+        ),
+    ];
+    for (family, native_id, asset, message, expected) in cases {
+        let native_id = NativeId::from_text(native_id);
+        assert_eq!(code(runtime.decode(family, &message)), expected, "{family}");
+        assert_eq!(
+            code(runtime.binding(family, &native_id, ground())),
+            expected,
+            "{family}"
+        );
+        assert_eq!(
+            code(runtime.asset(family, asset, ground())),
+            expected,
+            "{family}"
+        );
+    }
 }
