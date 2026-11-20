@@ -7,7 +7,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-use mdl::ir::Digest;
+use mdl::ir::{Digest, IrVersion};
+use mdl::{runtime, store};
 use serde_json::Value;
 
 const FULL_BUNDLE: &str = include_str!("../../mdl/tests/fixtures/full_bundle.json");
@@ -459,6 +460,28 @@ fn a_bundle_on_stdin_builds() {
     let out = morphc_in(&paired(), &["build", "-"], Some(FULL_BUNDLE));
     assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
     assert!(stdout(&out).contains("ok: "), "{}", stdout(&out));
+}
+
+/// A release states the versions it reads and writes
+/// (`spec/compatibility.md` §6): `--version` gives them, from the library
+/// morphc is built with; `-V`, the release alone.
+#[test]
+fn the_version_states_what_morphc_reads_and_writes() {
+    let release = env!("CARGO_PKG_VERSION");
+    let out = morphc(&["--version"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        format!(
+            "morphc {release} (MDL IR {}, store format {}, result format {})\n",
+            IrVersion::CURRENT,
+            store::Manifest::VERSION,
+            runtime::FORMAT
+        )
+    );
+    let out = morphc(&["-V"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(stdout(&out), format!("morphc {release}\n"));
 }
 
 #[test]

@@ -27,24 +27,39 @@ mod values;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::LazyLock;
 
 use anyhow::{Context, anyhow, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use mdl::artifact::{self, Artifacts};
-use mdl::ir::{Artifact, Bundle, Locator};
+use mdl::ir::{Artifact, Bundle, IrVersion, Locator};
 use mdl::read::{Loaded, read_artifact};
 use mdl::route::FamilySets;
 use mdl::source::{Parsed, SourceDiagnostic, SourceId, SourceMap, Sources, Span, merge_owned};
-use mdl::store;
 use mdl::validate::{Validated, validate};
+use mdl::{runtime, store};
 
 use crate::inputs::{Frontend, Input};
 use crate::report::{Format, Report};
+
+/// What `morphc --version` prints after the name: the release, and the
+/// versions it reads and writes (`spec/compatibility.md` §6). `-V` prints
+/// the release alone.
+static LONG_VERSION: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{} (MDL IR {}, store format {}, result format {})",
+        env!("CARGO_PKG_VERSION"),
+        IrVersion::CURRENT,
+        store::Manifest::VERSION,
+        runtime::FORMAT,
+    )
+});
 
 #[derive(Debug, Parser)]
 #[command(
     name = "morphc",
     version,
+    long_version = LONG_VERSION.as_str(),
     about = "The MDL (Morpheus Definition Language) compiler"
 )]
 struct Cli {
