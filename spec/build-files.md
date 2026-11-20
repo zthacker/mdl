@@ -13,7 +13,8 @@ inputs.
 version = 1
 
 [[input]]
-path = "catalog"
+path    = "catalog"
+catalog = "owner"
 
 [[input]]
 path   = "vendors/demosat.xml"
@@ -44,14 +45,15 @@ Each `input` table has these keys and no others:
 | `set` | string | The imported set's name. |
 | `alias` | table | Where an imported asset's own id is, written as a family's `alias` is in the IR: `{ kind = "fixed", value = "..." }`, `{ kind = "metadata", name = "..." }`, `{ kind = "path", pointer = "..." }` or `{ kind = "bits", offset_bits = ..., size_bits = ... }`. A `metadata` alias also declares its name in the family's `metadata`. |
 | `naming` | string | `short` or `qualified`: how names are made from XTCE names. |
+| `catalog` | string | `owner`: the input's definitions are the build's catalog (§3). Not an import option: any input may own the catalog. |
 
 Each option left out takes the importer's default ([xtce](xtce.md)): the
 family named after the first root SpaceSystem, the set after the family,
 a fixed alias of the first root SpaceSystem's name, `short` naming.
 
-A reader MUST reject an unknown key, a missing `path`, and an input with
-import options (`family`, `set`, `alias`, `naming`) but no XTCE document
-to apply them to.
+A reader MUST reject an unknown key, a missing `path`, a `catalog` other
+than `owner`, and an input with import options (`family`, `set`, `alias`,
+`naming`) but no XTCE document to apply them to.
 
 ## 2. Meaning
 
@@ -75,3 +77,36 @@ to apply them to.
   the command's.
 - A directory walk leaves out files named `morphc.toml`, so a build file
   kept beside definitions isn't read as one.
+
+## 3. Catalog owners
+
+An input with `catalog = "owner"` owns the build's catalog, and several
+inputs may. A build with an owner has a closed catalog: its names are
+those the owners' files define, and the other inputs map onto them, so a
+misspelt name fails the build instead of becoming a param no dashboard
+shows. A build with no owner is open, each input adding to the catalog.
+
+- A file is an owner's when the input it's read as part of (§2) is an
+  owner. A file an owner includes that an earlier input, not an owner,
+  already reads is an error, since it would be read as that input's and
+  own nothing: an owner is listed before a directory holding it.
+- An XTCE input that isn't an owner is imported referring to the catalog
+  ([xtce](xtce.md) §3, §6.1): a parameter's alias in the `MDL` namespace
+  names an owner's param, and a parameter without one is a field with no
+  catalog name; a meta-command's alias names an owner's command, whose
+  packet keeps the vendor's argument ranges and initial values as its own
+  limits, and a meta-command without one is left out, with a warning that
+  names it [`xtce.ignored`].
+- A catalog param or command that a file other than an owner's defines,
+  under a name no owner's file defines, is an error at that definition
+  (`catalog_owner`) ([frontends](frontends.md) §5). A JSON or XTCE file
+  that restates an owner's name merges with it as definitions from
+  several frontends do. TOML files are one bundle, so a TOML file that
+  restates an owner's name is the TOML frontend's conflict
+  (`toml.conflict`): a vendor's TOML maps onto the owner's names rather
+  than restating them.
+- A name that maps onto nothing in the catalog (an XTCE alias, a TOML
+  field's `canonical`) is reported by validation (`unknown_canonical`,
+  `unknown_command`), whose message suggests the catalog's closest name
+  when one is a few letters off (an edit for each four letters, at least
+  one, ignoring case), for the first hundred such names.

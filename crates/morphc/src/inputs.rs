@@ -1,6 +1,6 @@
 //! Definition files: found on disk, read, and put through their frontends.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
@@ -77,9 +77,18 @@ impl Input {
 /// followed; inside a directory, links to files are and links to
 /// directories aren't, and a build file in a directory is left out.
 ///
-/// Each path comes with the XTCE import its documents belong to.
-pub fn find(paths: &[(PathBuf, usize)]) -> anyhow::Result<Vec<Input>> {
-    let mut found = Found::default();
+/// Each path comes with the XTCE import its documents belong to, and
+/// `owners` says which imports own the build's catalog. A file a catalog
+/// owner names that an earlier input, not an owner, already reads is an
+/// error, since it would be read as that input's, unowned.
+pub fn find(paths: &[(PathBuf, usize)], owners: &[bool]) -> anyhow::Result<Vec<Input>> {
+    let mut found = Found {
+        paths,
+        owners,
+        inputs: Vec::new(),
+        seen: BTreeMap::new(),
+        stdin: false,
+    };
     for (path, import) in paths {
         let import = *import;
         if path.as_os_str() == "-" {
@@ -133,27 +142,43 @@ pub fn find(paths: &[(PathBuf, usize)]) -> anyhow::Result<Vec<Input>> {
     Ok(found.inputs)
 }
 
-#[derive(Default)]
-struct Found {
+struct Found<'a> {
+    paths: &'a [(PathBuf, usize)],
+    owners: &'a [bool],
     inputs: Vec<Input>,
-    /// Each file's canonical path, so one named twice is read once.
-    seen: BTreeSet<PathBuf>,
+    /// Each file's canonical path, so one named twice is read once, with
+    /// the import that reads it.
+    seen: BTreeMap<PathBuf, usize>,
     stdin: bool,
 }
 
-impl Found {
+impl Found<'_> {
     fn add(&mut self, path: &Path, frontend: Frontend, import: usize) -> anyhow::Result<()> {
         let canonical =
             fs::canonicalize(path).with_context(|| format!("can't read {}", path.display()))?;
         let shown = shown(path, &canonical);
-        if self.seen.insert(canonical) {
-            self.inputs.push(Input {
-                path: path.to_path_buf(),
-                frontend,
-                import,
-                shown,
-            });
+        if let Some(&first) = self.seen.get(&canonical) {
+            let owner = |import: usize| self.owners.get(import).copied().unwrap_or(false);
+            if owner(import) && !owner(first) {
+                let input = self
+                    .paths
+                    .iter()
+                    .find(|(_, index)| *index == first)
+                    .map_or_else(String::new, |(path, _)| shown_path(path));
+                bail!(
+                    "{shown} is read as part of input {input}, listed before the catalog owner \
+                     that includes it, so it wouldn't be owned; list the owner first"
+                );
+            }
+            return Ok(());
         }
+        self.seen.insert(canonical, import);
+        self.inputs.push(Input {
+            path: path.to_path_buf(),
+            frontend,
+            import,
+            shown,
+        });
         Ok(())
     }
 }

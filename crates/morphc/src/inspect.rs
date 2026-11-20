@@ -11,7 +11,7 @@ use clap::{Args, Subcommand};
 use mdl::artifact::{self, Artifacts};
 use mdl::ir::{
     Argument, Artifact, Bundle, ByteLength, Command, Composite, Count, Element, Encoding, Entry,
-    Family, Param, Set, StructType,
+    Family, PacketArgument, Param, Set, StructType,
 };
 use mdl::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
 use mdl::validate::Validated;
@@ -967,6 +967,12 @@ struct CommandUse {
     /// Each argument and the entry that encodes it (`slot` to `slot`,
     /// `waypoints` to `track[].x`).
     arguments: Vec<ArgumentUse>,
+    /// What the packet accepts of its arguments where it's narrower than
+    /// the catalog (IR 2.2), as the IR writes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limits: Option<serde_json::Value>,
+    #[serde(skip)]
+    limits_text: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -984,10 +990,19 @@ fn command_uses(bundle: &Bundle, name: &str) -> anyhow::Result<CommandUses> {
         for packet in set.commands.iter().filter(|c| c.canonical == name) {
             let mut arguments = Vec::new();
             encodes(&packet.entries, &set.types, "", &mut arguments);
+            let limits = match packet.arguments.is_empty() {
+                true => None,
+                false => Some(
+                    serde_json::to_value(&packet.arguments)
+                        .context("can't write a packet's limits as JSON")?,
+                ),
+            };
             packets.push(CommandUse {
                 set: set.name.clone(),
                 packet: packet.name.clone(),
                 arguments,
+                limits,
+                limits_text: packet.arguments.iter().map(limits_text).collect(),
             });
         }
     }
@@ -1066,6 +1081,21 @@ fn argument_text(argument: &Argument) -> String {
     text
 }
 
+/// `    limits  delay_s  min, range ..10, default 0`.
+fn limits_text((name, limits): (&String, &PacketArgument)) -> String {
+    let mut parts = Vec::new();
+    if let Some(unit) = &limits.unit {
+        parts.push(unit.clone());
+    }
+    if let Some(range) = &limits.range {
+        parts.push(format!("range {}", describe::bounds(range)));
+    }
+    if let Some(default) = &limits.default {
+        parts.push(format!("default {}", ir(default)));
+    }
+    format!("    limits  {name}  {}", parts.join(", "))
+}
+
 fn command_text(name: &str, command: &Command, packets: &[CommandUse]) -> String {
     let mut text = format!("command {name}\n");
     if let Some(description) = &command.description {
@@ -1106,6 +1136,10 @@ fn command_text(name: &str, command: &Command, packets: &[CommandUse]) -> String
         }
         text.push_str(&line);
         text.push('\n');
+        for limits in &packet.limits_text {
+            text.push_str(limits);
+            text.push('\n');
+        }
     }
     text
 }

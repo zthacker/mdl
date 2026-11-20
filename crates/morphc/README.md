@@ -39,6 +39,12 @@ problem is reported with its file and position.
   their place, each XTCE input an import of its own with its own options:
   `-c FILE`, or `morphc.toml` in the working directory when no inputs are
   given. Directory walks leave build files out.
+- An input marked `catalog = "owner"` in a build file owns the build's
+  catalog: the other inputs map onto its names and can't add their own
+  (`catalog_owner`). Their XTCE parameters and meta-commands map by MDL
+  alias only; a parameter without one is a field with no catalog name, and
+  a meta-command without one is left out, with a warning that names it.
+  A misspelt name is reported with the closest one the catalog has.
 - `inspect`, `decode` and `encode` also take one store, whose latest build
   they use.
 - Warnings of one kind are shown once with a count; `--all-warnings` shows

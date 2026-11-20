@@ -1013,6 +1013,20 @@ fn inspect_command_lists_every_packet_that_encodes_it() {
         text.ends_with("\nencoded by\n  set vendor_x_v2  command LOAD_TABLE  (slot, table)\n"),
         "{text}"
     );
+    // A packet's own limits (IR 2.2) follow it.
+    let set_mode = morphc_in(
+        &paired(),
+        &["inspect", "command", "eps.set_mode", "-"],
+        Some(FULL_BUNDLE),
+    );
+    assert!(
+        stdout(&set_mode).contains(
+            "  set vendor_j_v1  command SET_MODE  (mode, delay_s in delay)\n    limits  delay_s  \
+             min, range ..10, default 0\n"
+        ),
+        "{}",
+        stdout(&set_mode)
+    );
     let json = morphc_in(
         &paired(),
         &[
@@ -2305,6 +2319,146 @@ fn a_build_file_imports_each_xtce_input_as_a_family() {
         stdout(&inspect).contains("\nfamily camera  "),
         "{}",
         stdout(&inspect)
+    );
+}
+
+#[test]
+fn a_catalog_owner_closes_the_catalog_to_the_other_inputs() {
+    let dir = project("buildfile_owner");
+    let defs = dir.join("defs");
+    edit(
+        &defs.join("morphc.toml"),
+        "path = \"catalog.toml\"\n",
+        "path = \"catalog.toml\"\ncatalog = \"owner\"\n",
+    );
+    let build = || {
+        morphc_in(
+            &dir,
+            &["build", "-c", "defs/morphc.toml", "--all-warnings"],
+            None,
+        )
+    };
+
+    // The vendors' aliases map onto the owner's names, and nothing else
+    // joins the catalog: a meta-command without an alias is left out, named.
+    let out = build();
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).contains("ok: 4 params, 1 command, 2 families, 2 sets"),
+        "{}",
+        stdout(&out)
+    );
+    assert!(
+        stderr(&out).contains(
+            "warning[xtce.ignored]: meta-command /DemoSat/EPS/SetHeater isn't imported: the \
+             catalog is another input's, and without an alias in the MDL namespace it names no \
+             command there"
+        ),
+        "{}",
+        stderr(&out)
+    );
+
+    // A misspelt alias is a name the owner doesn't define.
+    let demosat = defs.join("vendors/demosat.xml");
+    edit(
+        &demosat,
+        "alias=\"eps.batt_temp\"",
+        "alias=\"eps.bat_temp\"",
+    );
+    let typo = build();
+    assert_eq!(typo.status.code(), Some(1), "{}", stderr(&typo));
+    assert!(
+        stderr(&typo).contains(
+            "error[unknown_canonical]: param eps.bat_temp isn't in the catalog; did you mean \
+             eps.batt_temp?\n   --> defs/vendors/demosat.xml:"
+        ),
+        "{}",
+        stderr(&typo)
+    );
+    edit(
+        &demosat,
+        "alias=\"eps.bat_temp\"",
+        "alias=\"eps.batt_temp\"",
+    );
+
+    // Another input may restate an owner's name, but not add one, whatever
+    // its frontend. TOML files are one bundle, so it's each file's
+    // definitions that count.
+    fs::write(
+        defs.join("extra.toml"),
+        "mdl_version = \"2.0\"\n\n[catalog.params.\"eps.heater\"]\ntype = \"bool\"\n",
+    )
+    .unwrap();
+    fs::write(
+        defs.join("extra.json"),
+        r#"{
+  "mdl_version": "2.0",
+  "catalog": {
+    "params": { "eps.batt_temp": { "type": "f64", "unit": "Cel" } },
+    "commands": { "eps.reboot": {} }
+  }
+}
+"#,
+    )
+    .unwrap();
+    edit(
+        &defs.join("morphc.toml"),
+        "catalog = \"owner\"\n",
+        "catalog = \"owner\"\n\n[[input]]\npath = \"extra.toml\"\n\n[[input]]\npath = \"extra.json\"\n",
+    );
+    let added = build();
+    assert_eq!(added.status.code(), Some(1), "{}", stderr(&added));
+    let err = stderr(&added);
+    let owned = |what: &str, at: &str| {
+        format!(
+            "error[catalog_owner]: this build's catalog is owned by other inputs, which don't \
+             define {what}; define it there, or map onto a name they define\n --> {at}"
+        )
+    };
+    assert!(
+        err.contains(&owned("param eps.heater", "defs/extra.toml:3:")),
+        "{err}"
+    );
+    assert!(
+        err.contains(&owned("command eps.reboot", "defs/extra.json:5:")),
+        "{err}"
+    );
+    assert_eq!(err.matches("error[").count(), 2, "{err}");
+    // The imports' warnings are reported with the errors.
+    assert!(
+        err.contains("warning[xtce.ignored]: meta-command /DemoSat/EPS/SetHeater"),
+        "{err}"
+    );
+
+    // An owner listed after a directory holding it would be read as that
+    // directory's, and so own nothing.
+    fs::write(
+        defs.join("ordered.toml"),
+        "[[input]]\npath = \".\"\n\n[[input]]\npath = \"catalog.toml\"\ncatalog = \"owner\"\n",
+    )
+    .unwrap();
+    let ordered = morphc_in(&dir, &["build", "-c", "defs/ordered.toml"], None);
+    assert_eq!(ordered.status.code(), Some(2), "{}", stderr(&ordered));
+    assert!(
+        stderr(&ordered).contains(
+            "defs/catalog.toml is read as part of input defs, listed before the catalog owner \
+             that includes it, so it wouldn't be owned; list the owner first"
+        ),
+        "{}",
+        stderr(&ordered)
+    );
+
+    // An input is the owner or says nothing.
+    edit(
+        &defs.join("morphc.toml"),
+        "catalog = \"owner\"",
+        "catalog = \"own\"",
+    );
+    let bad = build();
+    assert!(
+        stderr(&bad).contains("error[morphc.build_file]: unknown variant `own`, expected `owner`"),
+        "{}",
+        stderr(&bad)
     );
 }
 

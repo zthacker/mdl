@@ -60,7 +60,13 @@ pub fn run(args: &BuildArgs) -> anyhow::Result<ExitCode> {
     for note in &given.notes {
         report.note(note.clone());
     }
-    let Some((validated, map)) = definitions(&given.imports, &inputs, &sources, &mut report) else {
+    let Some((validated, map)) = definitions(
+        &given.imports,
+        &given.owners,
+        &inputs,
+        &sources,
+        &mut report,
+    ) else {
         return Ok(report.finish::<Built>(None));
     };
 

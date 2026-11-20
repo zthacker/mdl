@@ -25,6 +25,7 @@ mod report;
 mod store;
 mod values;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -34,7 +35,7 @@ use mdl::artifact::{self, Artifacts};
 use mdl::ir::{Artifact, Bundle, Locator};
 use mdl::read::{Loaded, read_artifact};
 use mdl::route::FamilySets;
-use mdl::source::{Parsed, SourceDiagnostic, SourceMap, Sources, Span, merge};
+use mdl::source::{Parsed, SourceDiagnostic, SourceId, SourceMap, Sources, Span, merge_owned};
 use mdl::validate::{Validated, validate};
 
 use crate::inputs::{Frontend, Input};
@@ -234,6 +235,8 @@ struct Given {
     /// For each import, whether it was given options (which only XTCE
     /// documents can use).
     optioned: Vec<bool>,
+    /// For each import, whether its inputs own the build's catalog.
+    owners: Vec<bool>,
     /// What to tell people about how the inputs were found and ordered.
     notes: Vec<String>,
 }
@@ -259,6 +262,7 @@ impl Given {
                 imports: vec![read.xtce.options()],
                 build_file: None,
                 optioned: vec![read.xtce.given()],
+                owners: vec![false],
                 notes: Vec::new(),
             });
         };
@@ -283,6 +287,7 @@ impl Given {
                 .map(|(index, input)| (input.path.clone(), index))
                 .collect(),
             optioned: listed.iter().map(|input| input.has_options).collect(),
+            owners: listed.iter().map(|input| input.owner).collect(),
             imports: listed.into_iter().map(|input| input.options).collect(),
             build_file: Some(file),
             notes,
@@ -292,7 +297,7 @@ impl Given {
     /// The definition files it names; import options only where there are
     /// XTCE documents to use them.
     fn find(&mut self) -> anyhow::Result<Vec<Input>> {
-        let inputs = inputs::find(&self.paths)?;
+        let inputs = inputs::find(&self.paths, &self.owners)?;
         self.notes.extend(self.toml_order(&inputs));
         for (import, optioned) in self.optioned.iter().enumerate() {
             let xtce = inputs
@@ -363,11 +368,19 @@ impl Given {
 /// to `report` either way.
 fn definitions(
     imports: &[mdl_xtce::Options],
+    owners: &[bool],
     inputs: &[Input],
     sources: &Sources,
     report: &mut Report,
 ) -> Option<(Validated, SourceMap)> {
-    let parsed = inputs::parse(sources, inputs, imports).and_then(merge);
+    let owners: BTreeSet<SourceId> = inputs
+        .iter()
+        .zip(sources.iter())
+        .filter(|(input, _)| owners.get(input.import).copied().unwrap_or(false))
+        .map(|(_, file)| file.id())
+        .collect();
+    let parsed =
+        inputs::parse(sources, inputs, imports).and_then(|parts| merge_owned(parts, &owners));
     let Parsed {
         bundle,
         map,
@@ -376,7 +389,7 @@ fn definitions(
     } = match parsed {
         Ok(parsed) => parsed,
         Err(problems) => {
-            let xtce_imports: std::collections::BTreeSet<usize> = inputs
+            let xtce_imports: BTreeSet<usize> = inputs
                 .iter()
                 .filter(|input| input.frontend == Frontend::Xtce)
                 .map(|input| input.import)
@@ -409,6 +422,7 @@ enum Origin {
     Definitions {
         inputs: Vec<Input>,
         imports: Vec<mdl_xtce::Options>,
+        owners: Vec<bool>,
         notes: Vec<String>,
     },
 }
@@ -433,6 +447,7 @@ impl Origin {
         Ok(Origin::Definitions {
             inputs,
             imports: given.imports,
+            owners: given.owners,
             notes: given.notes,
         })
     }
@@ -469,12 +484,13 @@ fn open(origin: &Origin, sources: &Sources, report: &mut Report) -> anyhow::Resu
         Origin::Definitions {
             inputs,
             imports,
+            owners,
             notes,
         } => {
             for note in notes {
                 report.note(note.clone());
             }
-            let Some((validated, _)) = definitions(imports, inputs, sources, report) else {
+            let Some((validated, _)) = definitions(imports, owners, inputs, sources, report) else {
                 return Ok(None);
             };
             let artifacts = artifact::build(&validated).context("can't write the artifacts")?;

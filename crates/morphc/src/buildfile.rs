@@ -4,7 +4,8 @@
 //!
 //! ```toml
 //! [[input]]
-//! path = "catalog"
+//! path    = "catalog"
+//! catalog = "owner"
 //!
 //! [[input]]
 //! path   = "vendors/demosat.xml"
@@ -47,6 +48,15 @@ struct Entry {
     set: Option<String>,
     alias: Option<Locator>,
     naming: Option<crate::Naming>,
+    catalog: Option<Catalog>,
+}
+
+/// What an input is to the build's catalog.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Catalog {
+    /// Its definitions are the names every other input maps onto.
+    Owner,
 }
 
 /// One input of a build file.
@@ -58,6 +68,8 @@ pub struct Input {
     pub options: mdl_xtce::Options,
     /// Whether it gives any, which only XTCE documents can use.
     pub has_options: bool,
+    /// Whether it owns the build's catalog (`catalog = "owner"`).
+    pub owner: bool,
 }
 
 /// A build file that can't be read as one, with where in its text, for
@@ -127,7 +139,8 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<Input>> {
     }
     let real = fs::canonicalize(path).with_context(|| format!("can't read {}", path.display()))?;
     let base = real.parent().unwrap_or(Path::new(""));
-    file.input
+    let mut inputs = file
+        .input
         .into_iter()
         .map(|entry| {
             if entry.path.as_os_str() == "-" {
@@ -158,7 +171,16 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<Input>> {
                 path: base.join(entry.path),
                 options,
                 has_options,
+                owner: entry.catalog.is_some(),
             })
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<Input>>>()?;
+    // Owners close the catalog: the other inputs' XTCE documents map onto
+    // its names rather than define their own.
+    if inputs.iter().any(|input| input.owner) {
+        for input in inputs.iter_mut().filter(|input| !input.owner) {
+            input.options.catalog = mdl_xtce::CatalogRole::Refer;
+        }
+    }
+    Ok(inputs)
 }
