@@ -61,6 +61,17 @@ fuzz target seconds="60" into="grown":
         -max_total_time="{{seconds}}" -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=512 \
         ${dict:+-dict=dicts/$dict.dict} $length
 
+# Build every fuzz target as `fuzz` builds it (nightly, the toolchain's
+# host, debug assertions) without running one: CI's check, on each pull
+# request, that the harness builds
+fuzz-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # The toolchain's host, as `fuzz` builds for.
+    host=$(rustc +{{nightly}} -vV | sed -n 's/^host: //p')
+    cd fuzz
+    cargo +{{nightly}} fuzz build --debug-assertions --target "$host"
+
 # Add to a target's committed corpus what fuzzing grew that adds coverage
 # beyond the seeds and the corpus, up to 4 KB each, removing nothing, so
 # history grows only by new coverage; larger inputs stay out of the
