@@ -213,7 +213,7 @@ pub fn run(args: &DecodeArgs) -> anyhow::Result<ExitCode> {
                     .collect();
                 let time = message.time.or(args.time).unwrap_or(now);
                 let message_in =
-                    Message::new(payload(encoding, bytes), time).with_metadata(&metadata);
+                    Message::new(Payload::of(encoding, bytes), time).with_metadata(&metadata);
                 let failure = |code: &str, message: String| Failure {
                     code: code.to_string(),
                     message,
@@ -260,13 +260,6 @@ fn now() -> Timestamp {
             i64::try_from(elapsed.as_nanos()).unwrap_or(i64::MAX)
         });
     Timestamp::from_unix_nanos(nanos)
-}
-
-fn payload(encoding: Encoding, bytes: &[u8]) -> Payload<'_> {
-    match encoding {
-        Encoding::Json => Payload::Json(bytes),
-        _ => Payload::Binary(bytes),
-    }
 }
 
 /// The family whose messages these are.

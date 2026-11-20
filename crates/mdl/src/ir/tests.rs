@@ -1001,3 +1001,23 @@ mod narrowing {
         }
     }
 }
+
+/// `as_str` is how serde spells each frame and time unit, which artifacts
+/// and results write.
+#[test]
+fn frames_and_time_units_are_spelled_as_serde_spells_them() {
+    let frames = [
+        Frame::Ecef,
+        Frame::EciJ2000,
+        Frame::Body,
+        Frame::Ned,
+        Frame::Enu,
+        Frame::Geodetic,
+    ];
+    for frame in frames {
+        assert_eq!(serde_json::to_value(frame).unwrap(), json!(frame.as_str()));
+    }
+    for unit in [TimeUnit::S, TimeUnit::Ms, TimeUnit::Us, TimeUnit::Ns] {
+        assert_eq!(serde_json::to_value(unit).unwrap(), json!(unit.as_str()));
+    }
+}

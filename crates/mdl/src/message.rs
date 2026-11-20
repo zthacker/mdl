@@ -41,7 +41,16 @@ pub enum Payload<'a> {
     Json(&'a [u8]),
 }
 
-impl Payload<'_> {
+impl<'a> Payload<'a> {
+    /// A message's bytes as a payload of `encoding`: a JSON family's are
+    /// its document's UTF-8 text (`spec/api.md` §2.2).
+    pub fn of(encoding: Encoding, bytes: &'a [u8]) -> Payload<'a> {
+        match encoding {
+            Encoding::Binary => Payload::Binary(bytes),
+            Encoding::Json => Payload::Json(bytes),
+        }
+    }
+
     /// The payload's encoding.
     pub fn encoding(&self) -> Encoding {
         match self {

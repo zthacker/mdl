@@ -823,3 +823,18 @@ effective_from = "2026-01-01T00:00:00Z"
         );
     }
 }
+
+/// A message's bytes take their family's encoding (`spec/api.md` §2.2), so
+/// a binding passes bytes and holds no rule of its own.
+#[test]
+fn a_payload_takes_its_familys_encoding() {
+    let (dir, _) = store_dir("payload_kinds");
+    let runtime = Runtime::open(&dir, None).unwrap();
+    let bytes = br#"{"id":1,"v":2.5}"#;
+    assert_eq!(runtime.payload("web", bytes), Ok(Payload::Json(bytes)));
+    assert_eq!(runtime.payload("sat", bytes), Ok(Payload::Binary(bytes)));
+    assert_eq!(
+        runtime.payload("nope", bytes).map_err(|error| error.code),
+        Err("unknown_family")
+    );
+}

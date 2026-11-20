@@ -1069,6 +1069,20 @@ pub enum Frame {
     Geodetic,
 }
 
+impl Frame {
+    /// The frame's IR spelling, as artifacts and results write it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Frame::Ecef => "ECEF",
+            Frame::EciJ2000 => "ECI_J2000",
+            Frame::Body => "BODY",
+            Frame::Ned => "NED",
+            Frame::Enu => "ENU",
+            Frame::Geodetic => "GEODETIC",
+        }
+    }
+}
+
 /// Default limits. Any of them may be omitted.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1464,6 +1478,18 @@ pub enum TimeUnit {
     Ms,
     Us,
     Ns,
+}
+
+impl TimeUnit {
+    /// The unit's IR spelling, as artifacts and results write it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TimeUnit::S => "s",
+            TimeUnit::Ms => "ms",
+            TimeUnit::Us => "us",
+            TimeUnit::Ns => "ns",
+        }
+    }
 }
 
 /// The packet that carries both clocks, and its two entries.

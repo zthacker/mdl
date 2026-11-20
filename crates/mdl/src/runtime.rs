@@ -25,7 +25,7 @@ use crate::diagnostics::{Diagnostic, Diagnostics};
 use crate::encode::{CommandRequest, EncodeError, Encoded};
 use crate::ir::{Artifact, Bundle, Catalog, Digest, Family, Set};
 use crate::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
-use crate::message::{Message, MetaValue};
+use crate::message::{Message, MetaValue, Payload};
 use crate::read::{Loaded, read_artifact};
 use crate::route::{FamilySets, RouteError};
 use crate::store::{self, StoreError, Stored};
@@ -131,14 +131,6 @@ impl Serialize for Value {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-/// An enum value's IR spelling (`ECEF`, `ms`).
-fn spelled<T: Serialize>(value: &T) -> String {
-    serde_json::to_value(value)
-        .ok()
-        .and_then(|value| value.as_str().map(str::to_string))
-        .unwrap_or_default()
 }
 
 /// One of the problems an error or a warning stands for: its own code,
@@ -439,6 +431,13 @@ impl Runtime {
             .families
             .get(name)
             .ok_or_else(|| ApiError::new("unknown_family", format!("there's no family {name}")))
+    }
+
+    /// A message's bytes as a payload of `family`'s encoding (`spec/api.md`
+    /// §2.2: a JSON family's are its document's text), or `unknown_family`.
+    pub fn payload<'a>(&self, family: &str, bytes: &'a [u8]) -> Result<Payload<'a>, ApiError> {
+        self.family(family)
+            .map(|sets| Payload::of(sets.family().encoding, bytes))
     }
 
     /// The message `family` sent, decoded (`spec/api.md` §2.2).
@@ -846,7 +845,7 @@ fn event_time_value(time: &EventTime, ground: Timestamp) -> Value {
         EventTime::SinceBoot { value, unit } => Value::object([
             ("kind", Value::text("since_boot")),
             ("value", Value::Integer(i128::from(*value))),
-            ("unit", Value::text(spelled(unit))),
+            ("unit", Value::text(unit.as_str())),
         ]),
     }
 }
@@ -860,13 +859,13 @@ fn sample_value(value: &SampleValue) -> Value {
         SampleValue::Str(text) | SampleValue::Enum(text) => Value::text(text),
         SampleValue::Bytes(bytes) => Value::Bytes(bytes.clone()),
         SampleValue::Vec3 { frame, x, y, z } => Value::object([
-            ("frame", Value::text(spelled(frame))),
+            ("frame", Value::text(frame.as_str())),
             ("x", Value::Float(*x)),
             ("y", Value::Float(*y)),
             ("z", Value::Float(*z)),
         ]),
         SampleValue::Quat { frame, w, x, y, z } => Value::object([
-            ("frame", Value::text(spelled(frame))),
+            ("frame", Value::text(frame.as_str())),
             ("w", Value::Float(*w)),
             ("x", Value::Float(*x)),
             ("y", Value::Float(*y)),
