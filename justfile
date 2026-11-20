@@ -52,7 +52,11 @@ fuzz target seconds="60" into="grown":
     fi
     cd fuzz
     mkdir -p "{{into}}/{{target}}" "corpus/{{target}}"
-    cargo +{{nightly}} fuzz run --debug-assertions "{{target}}" "{{into}}/{{target}}" \
+    # Unless told, cargo-fuzz builds for the platform it was built for, and
+    # its Linux release (what CI installs) is a musl build, which the
+    # sanitizer can't use: the target is the toolchain's own host.
+    host=$(rustc +{{nightly}} -vV | sed -n 's/^host: //p')
+    cargo +{{nightly}} fuzz run --debug-assertions --target "$host" "{{target}}" "{{into}}/{{target}}" \
         "seeds/{{target}}" "corpus/{{target}}" -- \
         -max_total_time="{{seconds}}" -timeout=10 -rss_limit_mb=2048 -malloc_limit_mb=512 \
         ${dict:+-dict=dicts/$dict.dict} $length
@@ -108,7 +112,9 @@ fuzz-merge target dir cap +bases:
     # each named by its SHA-1; what's there keeps its name. A child that
     # crashes on an input is restarted and the input skipped, so the log is
     # checked for one.
-    cargo +{{nightly}} fuzz run --debug-assertions "{{target}}" "$merged" "{{dir}}" -- \
+    # The toolchain's host, as `fuzz` builds for.
+    host=$(rustc +{{nightly}} -vV | sed -n 's/^host: //p')
+    cargo +{{nightly}} fuzz run --debug-assertions --target "$host" "{{target}}" "$merged" "{{dir}}" -- \
         -merge=1 -rss_limit_mb=2048 > "$log" 2>&1 || { cat "$log"; exit 1; }
     if grep -qE "panicked at|deadly signal|ERROR: libFuzzer" "$log"; then
         cat "$log"

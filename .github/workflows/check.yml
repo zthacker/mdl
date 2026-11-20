@@ -88,9 +88,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz -> target
+      # cargo-fuzz pinned too, with the nightly, so a failure reproduces.
       - uses: taiki-e/install-action@v2
         with:
-          tool: just,cargo-fuzz
+          tool: just,cargo-fuzz@0.13.2
       # What earlier runs grew beyond the seeds and the committed corpus,
       # saved again after this run. Not for the generated targets, which
       # keep seeds only: their corpus records the testkit's branches.
