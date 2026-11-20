@@ -55,13 +55,15 @@ and the changelog says so.
 ## Making a release
 
 1. **Set the version.** On a branch, set `version` under
-   `[workspace.package]` in `Cargo.toml`, then update both lockfiles,
-   which record the workspace crates' versions. Each command changes only
-   those version lines:
+   `[workspace.package]` in `Cargo.toml`, and the Elixir binding's
+   `@version` in `bindings/elixir/mix.exs` to the same, then update the
+   three lockfiles that record the workspace crates' versions. Each
+   command changes only those version lines:
 
    ```sh
    cargo update --workspace
    cargo update --workspace --manifest-path fuzz/Cargo.toml
+   cargo update --workspace --manifest-path bindings/elixir/native/mdl_nif/Cargo.toml
    ```
 
 2. **Write the changelog.** In `CHANGELOG.md`, move what's under
@@ -75,7 +77,7 @@ and the changelog says so.
 3. **Check.** Run `just check`. It ends with what the workflow checks
    first, which `just release-check` runs alone: the tag (by default `v`
    and the workspace's version) names the workspace's version, the
-   changelog has a dated section for it that says something, and both
+   changelog has a dated section for it that says something, and the
    lockfiles are current. `just release-notes` prints the notes the
    release will have.
 

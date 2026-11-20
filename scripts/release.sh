@@ -6,9 +6,11 @@
 #   scripts/release.sh version       the workspace's version
 #   scripts/release.sh check [TAG]   TAG (v and the workspace's version by
 #                                    default) names the workspace's version,
+#                                    which the Elixir binding's mix.exs states,
 #                                    CHANGELOG.md has a dated section for it,
-#                                    and Cargo.lock and fuzz/Cargo.lock match
-#                                    the manifests
+#                                    and the lockfiles (the workspace's, the
+#                                    fuzz harness's, the Elixir binding's
+#                                    native library's) match the manifests
 #   scripts/release.sh notes [TAG]   that section's text: the release notes
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -56,6 +58,14 @@ check() {
         echo "tag $tag names $named, but the workspace's version (Cargo.toml) is $version" >&2
         exit 1
     fi
+    # A binding's version is its runtime release's (compatibility.md §6).
+    local elixir
+    elixir=$(sed -n 's/^  @version "\(.*\)"$/\1/p' bindings/elixir/mix.exs)
+    if [ "$elixir" != "$version" ]; then
+        echo "bindings/elixir/mix.exs's @version is ${elixir:-missing}, but the" \
+            "workspace's version is $version; a binding's version is its runtime's" >&2
+        exit 1
+    fi
     local escaped=${version//./\\.}
     if ! grep -qE "^## \[$escaped\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
         echo "CHANGELOG.md has no dated section for $version; add one headed" \
@@ -67,11 +77,11 @@ check() {
         exit 1
     fi
     # Fails if a lockfile doesn't match the manifests: a release builds
-    # exactly the committed Cargo.lock, and the fuzz harness's lockfile
-    # names the workspace crates' versions too (`just check` builds it
-    # with --locked).
+    # exactly the committed Cargo.lock, and the fuzz harness's and the
+    # Elixir binding's native library's lockfiles name the workspace
+    # crates' versions too (CI builds them with --locked).
     local manifest
-    for manifest in Cargo.toml fuzz/Cargo.toml; do
+    for manifest in Cargo.toml fuzz/Cargo.toml bindings/elixir/native/mdl_nif/Cargo.toml; do
         if ! cargo fetch --locked --quiet --manifest-path "$manifest"; then
             echo "if ${manifest%Cargo.toml}Cargo.lock is out of date," \
                 "cargo update --workspace --manifest-path $manifest updates it" >&2

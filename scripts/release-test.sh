@@ -31,10 +31,12 @@ chmod +x "$scratch/bin/cargo"
 # its CHANGELOG.md.
 tree() {
     local dir="$scratch/$1"
-    mkdir -p "$dir/scripts" "$dir/fuzz"
+    mkdir -p "$dir/scripts" "$dir/fuzz" "$dir/bindings/elixir/native/mdl_nif"
     cp "$here/release.sh" "$dir/scripts/"
     printf '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "%s"\n' "$2" \
         > "$dir/Cargo.toml"
+    printf 'defmodule MDL.MixProject do\n  @version "%s"\nend\n' "$2" \
+        > "$dir/bindings/elixir/mix.exs"
     cat > "$dir/CHANGELOG.md"
 }
 
@@ -109,6 +111,9 @@ expect "a stale Cargo.lock" 1 \
 STALE=fuzz/Cargo.toml run good check
 expect "a stale fuzz/Cargo.lock" 1 \
     "if fuzz/Cargo.lock is out of date, cargo update --workspace --manifest-path fuzz/Cargo.toml updates it"
+STALE=bindings/elixir/native/mdl_nif/Cargo.toml run good check
+expect "the Elixir binding's stale native lockfile" 1 \
+    "if bindings/elixir/native/mdl_nif/Cargo.lock is out of date, cargo update --workspace --manifest-path bindings/elixir/native/mdl_nif/Cargo.toml updates it"
 run good notes
 expect_notes "the notes, without the heading or the blank lines around them" \
     "The release.
@@ -122,6 +127,13 @@ run good notes v9.9.9
 expect "notes for a version with no section" 1 "CHANGELOG.md has no section for 9.9.9"
 run good
 expect "no command" 2 "usage: scripts/release.sh"
+
+tree binding 1.2.3 <<< "$changelog"
+printf 'defmodule MDL.MixProject do\n  @version "1.2.2"\nend\n' \
+    > "$scratch/binding/bindings/elixir/mix.exs"
+run binding check
+expect "an Elixir binding of another version" 1 \
+    "bindings/elixir/mix.exs's @version is 1.2.2, but the workspace's version is 1.2.3"
 
 tree unlisted 1.2.4 <<< "$changelog"
 run unlisted check

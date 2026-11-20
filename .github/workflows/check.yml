@@ -1,8 +1,9 @@
 # What `just check` runs (formatting, clippy, every test including the
 # examples walkthrough and the README's example, the docs, and the release
 # scripts' tests and check), on every push to main and every pull request,
-# plus the tests on the oldest Rust the workspace supports and a build of
-# every fuzz target. On pushes to main, `just props` also runs the
+# plus the tests on the oldest Rust the workspace supports, a build of
+# every fuzz target, and the Elixir binding's checks on the oldest and newest
+# Elixir it supports. On pushes to main, `just props` also runs the
 # property tests at 10,000 cases each, and each fuzz target runs for a
 # minute (five for the generated ones).
 #
@@ -88,6 +89,42 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version 0.13.2 --locked
       - run: just fuzz-build
+
+  # The Elixir binding's checks (`just elixir`) on the oldest Elixir and
+  # Erlang/OTP it supports and the newest. Its tests build morphc and check
+  # the binding's results against morphc's.
+  elixir:
+    name: Elixir binding on Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.18"
+            otp: "25"
+          - elixir: "1.20"
+            otp: "29"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy && rustup default stable
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+      # morphc, which the tests build, and the native library, each in its
+      # own target directory.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: |
+            . -> target
+            bindings/elixir/native/mdl_nif -> target
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: just@1.59.0
+      - run: just elixir
 
   props:
     name: property tests at 10,000 cases

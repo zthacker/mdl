@@ -148,6 +148,24 @@ fuzz-lock:
     cp Cargo.lock fuzz/Cargo.lock
     cargo update --manifest-path fuzz/Cargo.toml --workspace
 
+# The Elixir binding's checks (bindings/elixir; Elixir 1.18 and Rust 1.91 or
+# later): its Hex dependencies as locked, formatting, no warnings, its tests,
+# which check its results against morphc's, and its native library's
+# formatting and clippy. CI runs it on the oldest and newest Elixir.
+elixir:
+    cd bindings/elixir && mix deps.get --check-locked
+    cd bindings/elixir && mix format --check-formatted
+    cd bindings/elixir && mix compile --warnings-as-errors
+    cd bindings/elixir && mix test --warnings-as-errors
+    cd bindings/elixir/native/mdl_nif && cargo fmt --check
+    cd bindings/elixir/native/mdl_nif && cargo clippy --locked --all-targets -- -D warnings
+
+# Give the Elixir binding's native library the workspace's versions of what
+# they share, after Cargo.lock changes, so it reads and decodes as morphc does
+elixir-lock:
+    cp Cargo.lock bindings/elixir/native/mdl_nif/Cargo.lock
+    cargo update --manifest-path bindings/elixir/native/mdl_nif/Cargo.toml --workspace
+
 # Import every XTCE document under a directory (the argument, or
 # MDL_XTCE_CORPUS), build what imports and decode synthesized payloads with
 # it, under the fuzz targets' checks. The report goes to
@@ -170,9 +188,9 @@ morphc *args:
 
 # Check the workspace is ready to tag (RELEASING.md): the tag, v and the
 # workspace's version by default, names the workspace's version,
-# CHANGELOG.md has a dated section for it, and Cargo.lock and
-# fuzz/Cargo.lock are current. The release workflow runs the same check on
-# the tag.
+# CHANGELOG.md has a dated section for it, the Elixir binding states the
+# same version, and the lockfiles are current. The release workflow runs the
+# same check on the tag.
 [positional-arguments]
 release-check *tag:
     scripts/release.sh check "$@"

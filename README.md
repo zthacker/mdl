@@ -370,6 +370,14 @@ assert_eq!(decoded.samples[0].value, SampleValue::F64(28.41));
 Encoding is the same shape: `FamilySets::encode` with a `CommandRequest`.
 This example runs as a test of the TOML crate.
 
+## Other languages
+
+Every binding calls the runtime through one API
+([spec/api.md](spec/api.md)), so a language decodes and encodes exactly as
+`morphc` and the library do. [`bindings/elixir`](bindings/elixir/README.md)
+is the Elixir binding: open a store, decode, encode, describe and look up
+bindings from Elixir, with results as Elixir values.
+
 ## Contributing
 
 `just check` runs what CI runs: formatting, clippy, every test (including
@@ -394,6 +402,12 @@ and then. `layouts` and `shapes` keep seeds only: their corpus would
 record the generators' branches, and a crash they find is kept as a unit
 test. After `Cargo.lock` changes, `just fuzz-lock` gives the harness the
 same versions.
+
+`just elixir` runs the Elixir binding's checks: its tests, which check its
+results against morphc's, its formatting and warnings, and its native
+library's clippy. It needs Elixir 1.18 or later; CI runs it on the oldest
+and newest Elixir the binding supports. After `Cargo.lock` changes,
+`just elixir-lock` gives the binding's native library the same versions.
 
 `just corpus <dir>` tries the XTCE importer on real documents. Each `.xml`
 file under `<dir>` that holds a SpaceSystem is imported, alone and, if
@@ -424,6 +438,7 @@ Issues and pull requests are welcome at <https://github.com/zthacker/mdl>.
 | `crates/mdl-testkit` | IR generators, the list of IR features, and oracles that work out from the spec what telemetry decodes to, what commands encode to, and the error a damaged message or a refused request gives, for the property tests (never published) |
 | `crates/mdl-fuzz` | what each fuzz target checks, a test that replays every committed fuzz input, and the XTCE corpus runner (never published) |
 | `fuzz` | the cargo-fuzz harness, its seeds, corpus and dictionaries, and the crashes kept as regressions |
+| `bindings/elixir` | the Elixir binding: the runtime API as a Mix library over a Rustler NIF (its own Cargo workspace), tested against morphc |
 | `examples` | the worked example's beacon, a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
 | `scripts` | the release checks and notes, for `just` and the release workflow |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md), [the runtime API every binding calls](spec/api.md), [versions and compatibility](spec/compatibility.md) |
