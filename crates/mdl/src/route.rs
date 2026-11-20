@@ -306,6 +306,22 @@ impl FamilySets {
         &self.family
     }
 
+    /// The family's sets, by name.
+    pub fn sets(&self) -> impl Iterator<Item = &Set> {
+        self.sets.values().map(|loaded| &loaded.set)
+    }
+
+    /// Whether the family's version locator chooses each message's set,
+    /// rather than each asset's binding.
+    pub fn versioned(&self) -> bool {
+        self.family.version.is_some()
+    }
+
+    /// The catalog the set of this name pins, if the set is loaded.
+    pub fn catalog(&self, set: &str) -> Option<&Catalog> {
+        self.sets.get(set).map(|loaded| loaded.catalog.as_ref())
+    }
+
     /// The set of this name, if it's loaded.
     pub(super) fn loaded(&self, set: &str) -> Option<&LoadedSet> {
         self.sets.get(set)

@@ -26,6 +26,9 @@
 //! - [`encode`]: catalog commands as command packets; [`checksum`]: the
 //!   checksums both directions compute.
 //! - [`layout`]: where each entry of a set sits, for tools.
+//! - [`store`]: artifact stores, read from a directory or from bytes, and
+//!   written; [`runtime`]: the API every binding calls (`spec/api.md`),
+//!   with results in the format that spec fixes.
 //!
 //! The package is `morpheus-mdl` (`mdl` is taken on crates.io); the crate
 //! is imported as `mdl`. The specifications in the repository's `spec`
@@ -47,7 +50,9 @@ pub mod layout;
 pub mod message;
 pub mod read;
 pub mod route;
+pub mod runtime;
 pub mod source;
+pub mod store;
 pub(crate) mod text;
 pub mod time;
 pub mod units;

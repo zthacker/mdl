@@ -123,6 +123,22 @@ pub enum AssembleError {
     Invalid(Diagnostics),
 }
 
+impl AssembleError {
+    /// The stable code `spec/api.md` §4 lists.
+    pub fn code(&self) -> &'static str {
+        match self {
+            AssembleError::WrongKind { .. } | AssembleError::DigestMismatch { .. } => {
+                "wrong_artifact"
+            }
+            AssembleError::Missing { .. } => "missing_artifact",
+            AssembleError::Duplicate { .. } => "duplicate_artifact",
+            AssembleError::DuplicateVersion { .. } => "duplicate_version",
+            AssembleError::IncompatibleCatalog { .. } => "incompatible_catalog",
+            AssembleError::Invalid(_) => "invalid_build",
+        }
+    }
+}
+
 impl Artifacts {
     /// A previous build read back from storage, to pass to [`rebuild`].
     /// `catalog` is that build's catalog; `artifacts` are its families and

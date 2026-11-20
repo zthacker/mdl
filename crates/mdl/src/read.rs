@@ -453,6 +453,16 @@ fn check_tags(value: &Value, holder: Holder, path: &mut String) -> Result<(), Re
     Ok(())
 }
 
+/// The identity a document's bytes have (`canonical-json.md` §3): the
+/// digest of their canonical form, worked out without reading the document
+/// any further (its version, its shape). `None` for bytes that aren't JSON
+/// with a canonical form.
+pub(crate) fn identity(bytes: &[u8]) -> Option<Digest> {
+    let parsed = canonical::parse_strict(bytes).ok()?;
+    let canonical = canonical::to_canonical_string(&parsed).ok()?;
+    Some(Digest::of_canonical(&canonical))
+}
+
 /// Steps 1 to 3: strict parse, canonical form, the canonical text read back
 /// as a value, and the version check.
 fn parse(bytes: &[u8]) -> Result<(Value, String), ReadError> {
