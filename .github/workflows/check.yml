@@ -7,9 +7,12 @@
 # property tests at 10,000 cases each, and each fuzz target runs for a
 # minute (five for the generated ones).
 #
-# Every action is pinned to the commit of the release named beside it, as
-# in release.yml; Rust comes from rustup, which the runners ship, and
-# cargo-fuzz from its crates.io source.
+# Every action is pinned to the commit of the release named beside it, and
+# every job to a runner image (ubuntu-24.04), as in release.yml; Rust comes
+# from rustup, which the runners ship, and cargo-fuzz from its crates.io
+# source. ubuntu-latest moved to 26.04, for which Hex builds no OTP 25.
+# Rust caches are kept per image (ImageOS in their keys), so a cache built on
+# one image is never restored on another.
 
 name: check
 
@@ -32,7 +35,7 @@ env:
 jobs:
   check:
     name: just check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,6 +46,7 @@ jobs:
       # target directory.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          env-vars: ImageOS
           workspaces: |
             . -> target
             fuzz -> target
@@ -56,7 +60,7 @@ jobs:
 
   msrv:
     name: tests on Rust 1.88
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -64,6 +68,8 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install 1.88 --profile minimal && rustup default 1.88
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          env-vars: ImageOS
       - run: cargo test --workspace --locked
 
   # The fuzz targets, built as the fuzz jobs build them but not run, on pull
@@ -71,7 +77,7 @@ jobs:
   # not on main's next push.
   fuzz-build:
     name: fuzz targets build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,6 +86,7 @@ jobs:
         run: rustup toolchain install "$MDL_FUZZ_TOOLCHAIN" --profile minimal && rustup default "$MDL_FUZZ_TOOLCHAIN"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          env-vars: ImageOS
           workspaces: fuzz -> target
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
@@ -95,7 +102,7 @@ jobs:
   # the binding's results against morphc's.
   elixir:
     name: Elixir binding on Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -118,6 +125,7 @@ jobs:
       # own target directory.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          env-vars: ImageOS
           workspaces: |
             . -> target
             bindings/elixir/native/mdl_nif -> target
@@ -129,7 +137,7 @@ jobs:
   props:
     name: property tests at 10,000 cases
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -137,6 +145,8 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          env-vars: ImageOS
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: just@1.59.0
@@ -146,7 +156,7 @@ jobs:
   fuzz:
     name: fuzz ${{ matrix.target }}
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -161,6 +171,7 @@ jobs:
         run: rustup toolchain install "$MDL_FUZZ_TOOLCHAIN" --profile minimal && rustup default "$MDL_FUZZ_TOOLCHAIN"
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
+          env-vars: ImageOS
           workspaces: fuzz -> target
       - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
