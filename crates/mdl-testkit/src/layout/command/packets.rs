@@ -10,8 +10,8 @@ use super::encoders::{
 };
 use super::values::{list_value, text_for};
 use super::{
-    Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Encoding, Group, Layout, Len, Placed,
-    Scale, Shape, Source, TEXTS, encoder_of,
+    Arg, ArgType, Bounds, Const, Counted, Elements, Encoder, Encoding, Group, Layout, Len, Limits,
+    Placed, Scale, Shape, Source, TEXTS, encoder_of,
 };
 use super::{Form, int_shape};
 use crate::checksum::{Algorithm, algorithm};
@@ -144,6 +144,10 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
         vec(array_draft(little), 0..=2),
         any::<bool>(),
         proptest::option::weighted(0.2, left_out_list()),
+        vec(
+            (proptest::bool::weighted(0.3), any::<bool>(), any::<bool>()),
+            8,
+        ),
     )
         .prop_flat_map(
             |(
@@ -154,6 +158,7 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                 drafts,
                 share,
                 left_out,
+                limits,
             )| {
                 // An argument the set leaves out has a default (§2.4).
                 let mut arguments: Vec<(Encoder, bool)> = arguments
@@ -209,6 +214,7 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                     Just(arrays),
                     Just(groups),
                     defaults,
+                    Just(limits),
                 )
             },
         )
@@ -223,11 +229,24 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                 arrays,
                 mut groups,
                 defaults,
+                limits,
             )| {
                 for (group, (count, lists)) in groups.iter_mut().zip(defaults) {
                     group.default = count;
                     for ((member, _), list) in group.members.iter().zip(lists) {
                         arguments[*member].0.default = list.map(as_literal);
+                    }
+                }
+                // Some arguments the packet encodes have their range and
+                // default in the packet (IR 2.2), and none in the catalog.
+                for ((encoder, encoded), &(packet, unit, wider)) in
+                    arguments.iter_mut().zip(limits.iter().cycle())
+                {
+                    if packet && *encoded && encoder.has_limits() {
+                        encoder.limits = Limits::Packet {
+                            unit: unit && encoder.units.is_some(),
+                            wider,
+                        };
                     }
                 }
                 CommandSpec {

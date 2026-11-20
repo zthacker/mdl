@@ -5,8 +5,8 @@ use serde_json::{Map, Value, json};
 
 use super::json::pointer_text;
 use super::{
-    Arg, ArgType, Commands, Const, Counted, Elements, Encoder, Encoding, Layout, Len, Placed,
-    Request, Shape, Source, Through,
+    Arg, ArgType, Commands, Const, Counted, Elements, Encoder, Encoding, Layout, Len, Limits,
+    Placed, Request, Shape, Source, Through,
 };
 use crate::layout::{Text, conversion_json, integer_json};
 
@@ -85,6 +85,52 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
             .collect();
         json.insert("list".into(), Value::Object(ends));
     }
+    match encoder.limits {
+        Limits::Catalog => limits_json(encoder, &mut json),
+        Limits::Packet { wider: true, .. } => wider_json(encoder, &mut json),
+        Limits::Packet { wider: false, .. } => {}
+    }
+    Value::Object(json)
+}
+
+/// The catalog's side of limits a packet narrows: the encoder's range with
+/// each end pushed one further out where the type allows, so the packet's
+/// range is what's left of both, and that range's low end as the default,
+/// where the packet gives the one it sends (a list's defaults have lengths
+/// to agree on, so a list gets none).
+fn wider_json(encoder: &Encoder, json: &mut Map<String, Value>) {
+    let (min, max) = match encoder.ty {
+        ArgType::F64 => (
+            encoder.min.map(|x| json!(x - 1.0)),
+            encoder.max.map(|x| json!(x + 1.0)),
+        ),
+        ArgType::U64 | ArgType::I64 => {
+            let (floor, ceiling) = match encoder.ty {
+                ArgType::U64 => (0, i128::from(u64::MAX)),
+                _ => (i128::from(i64::MIN), i128::from(i64::MAX)),
+            };
+            let (low, high) = encoder.integer_range;
+            (
+                low.map(|n| integer_json((n - 1).max(floor))),
+                high.map(|n| integer_json((n + 1).min(ceiling))),
+            )
+        }
+        _ => (None, None),
+    };
+    if let (Some(low), Some(_), None) = (&min, &encoder.default, encoder.list) {
+        json.insert("default".into(), low.clone());
+    }
+    let range: Map<String, Value> = [("min", min), ("max", max)]
+        .into_iter()
+        .filter_map(|(key, end)| end.map(|end| (key.to_string(), end)))
+        .collect();
+    if !range.is_empty() {
+        json.insert("range".into(), Value::Object(range));
+    }
+}
+
+/// An argument's range and default, where they're written.
+fn limits_json(encoder: &Encoder, json: &mut Map<String, Value>) {
     // An f64 argument's ends as numbers; an integer argument's exactly, as
     // decimal strings past ±(2^53 − 1).
     let ends = [
@@ -103,7 +149,24 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
     if let Some(default) = &encoder.default {
         json.insert("default".into(), arg_json(default));
     }
-    Value::Object(json)
+}
+
+/// The packet's own limits (IR 2.2): each argument whose range and
+/// default are written there, restating its unit where it says to.
+fn packet_arguments(layout: &Layout) -> Map<String, Value> {
+    let mut arguments = Map::new();
+    for (index, (encoder, _)) in layout.arguments.iter().enumerate() {
+        let Limits::Packet { unit, .. } = encoder.limits else {
+            continue;
+        };
+        let mut json = Map::new();
+        if let (true, Some((own, _))) = (unit, encoder.units) {
+            json.insert("unit".into(), json!(own));
+        }
+        limits_json(encoder, &mut json);
+        arguments.insert(format!("a{index}"), Value::Object(json));
+    }
+    arguments
 }
 
 /// A value as the catalog writes it: bytes as lowercase hex, an integer
@@ -156,6 +219,10 @@ fn packet_json(layout: &Layout) -> Value {
     let mut json = json!({ "name": layout.name, "canonical": layout.command, "entries": entries });
     if let Some(apid) = layout.apid {
         json["metadata"] = json!({ "apid": apid });
+    }
+    let arguments = packet_arguments(layout);
+    if !arguments.is_empty() {
+        json["arguments"] = Value::Object(arguments);
     }
     json
 }

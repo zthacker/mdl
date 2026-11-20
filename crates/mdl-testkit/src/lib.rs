@@ -26,14 +26,24 @@ pub mod shape;
 use serde_json::Value;
 
 /// The IR version a bundle's sets need, which it states as a document
-/// does: 2.1 if a `signed` key is anywhere in them, else 2.0.
+/// does: 2.2 if a command packet has `arguments` of its own (a map, where
+/// a catalog command's are a list), 2.1 if a `signed` key is anywhere in
+/// them, else 2.0.
 pub(crate) fn version_for(sets: &Value) -> &'static str {
-    fn uses_signed(value: &Value) -> bool {
+    fn uses(value: &Value, key: &str, holds: fn(&Value) -> bool) -> bool {
         match value {
-            Value::Object(map) => map.contains_key("signed") || map.values().any(uses_signed),
-            Value::Array(items) => items.iter().any(uses_signed),
+            Value::Object(map) => {
+                map.get(key).is_some_and(holds) || map.values().any(|v| uses(v, key, holds))
+            }
+            Value::Array(items) => items.iter().any(|v| uses(v, key, holds)),
             _ => false,
         }
     }
-    if uses_signed(sets) { "2.1" } else { "2.0" }
+    if uses(sets, "arguments", Value::is_object) {
+        "2.2"
+    } else if uses(sets, "signed", |_| true) {
+        "2.1"
+    } else {
+        "2.0"
+    }
 }

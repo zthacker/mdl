@@ -332,12 +332,17 @@ fn command(given: f64) -> Gen {
         .boxed()
 }
 
-fn argument(given: f64) -> Gen {
-    // An end is a number, or an integer past ±(2^53 − 1) as a string.
+/// An argument's range: an end is a number, or an integer past
+/// ±(2^53 − 1) as a string.
+fn argument_range(given: f64) -> Gen {
     let end = || prop_oneof![2 => finite(), 1 => safe_int(), 1 => wide_int_text()].boxed();
-    let range = (maybe(given, end()), maybe(given, end()))
+    (maybe(given, end()), maybe(given, end()))
         .prop_map(|(min, max)| object([("min", min), ("max", max)]))
-        .boxed();
+        .boxed()
+}
+
+fn argument(given: f64) -> Gen {
+    let range = argument_range(given);
     let bounds = (maybe(given, u32_value()), maybe(given, u32_value()))
         .prop_map(|(min, max)| object([("min", min), ("max", max)]))
         .boxed();
@@ -524,15 +529,30 @@ fn command_packet(given: f64) -> Gen {
         text(),
         text(),
         maybe(given, map(scalar(), 1..3)),
+        maybe(given, map(packet_argument(given), 1..3)),
         maybe(given, list(entry(given), 1..4)),
     )
-        .prop_map(|(name, canonical, metadata, entries)| {
+        .prop_map(|(name, canonical, metadata, arguments, entries)| {
             object([
                 ("name", Some(name)),
                 ("canonical", Some(canonical)),
                 ("metadata", metadata),
+                ("arguments", arguments),
                 ("entries", entries),
             ])
+        })
+        .boxed()
+}
+
+/// What a command packet accepts of one argument (IR 2.2).
+fn packet_argument(given: f64) -> Gen {
+    (
+        maybe(given, text()),
+        maybe(given, argument_range(given)),
+        maybe(given, literal()),
+    )
+        .prop_map(|(unit, range, default)| {
+            object([("unit", unit), ("range", range), ("default", default)])
         })
         .boxed()
 }

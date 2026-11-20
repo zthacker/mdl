@@ -178,6 +178,10 @@ pub const REQUIRED: &[&str] = &[
     "default:list",
     // Command packets.
     "key:command_packet.metadata",
+    "key:command_packet.arguments",
+    "key:packet_argument.unit",
+    "key:packet_argument.range",
+    "key:packet_argument.default",
 ];
 
 /// The features `value`, a bundle, uses.
@@ -216,6 +220,7 @@ fn name_map(key: &str, owner: &str) -> Option<&'static str> {
         ("types", "set") => Some("struct_type"),
         ("identify", "packet") => Some("identify"),
         ("metadata", "command_packet") => Some("metadata"),
+        ("arguments", "command_packet") => Some("packet_argument"),
         _ => None,
     }
 }
