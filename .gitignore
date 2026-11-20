@@ -25,3 +25,6 @@ rustc-ice-*.txt
 
 # The store the examples walkthrough builds
 examples/store/
+
+# What scripts/nif.sh packages
+/dist/

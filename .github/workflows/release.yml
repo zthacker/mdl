@@ -1,15 +1,18 @@
 # Releases (RELEASING.md). On a tag v<version>: check that the tagged
 # commit is on main and the tag names the workspace's version and a
 # section of CHANGELOG.md, test the commit, build morphc for each platform
-# and run the README's worked example with each binary, and make a draft
-# GitHub release holding the archives, their SHA-256 checksums and build
-# provenance attestations, for a maintainer to review and publish. Run by
+# and run the README's worked example with each binary, build the Elixir
+# binding's native library for each platform and run the binding's tests on
+# it, and make a draft GitHub release holding the archives, their SHA-256
+# checksums and build provenance attestations, for a maintainer to review
+# and publish. Run by
 # hand (workflow_dispatch), it's a dry run: the same checks and builds,
 # from any branch, the archives kept as the run's artifacts, nothing
 # released.
 #
-# Only GitHub's own actions are used, each pinned to the commit of the
-# release named beside it; rustup and the gh CLI come with the runners.
+# GitHub's own actions are used, and erlef/setup-beam for Elixir on macOS,
+# each pinned to the commit of the release named beside it; rustup and the
+# gh CLI come with the runners.
 # Nothing is cached, so no cache another workflow wrote reaches a release
 # build.
 
@@ -160,13 +163,92 @@ jobs:
           path: morphc-*.tar.gz*
           if-no-files-found: error
 
-  # The Elixir binding's precompiled native libraries will be built here
-  # too, a job per platform like build's, and attached by release.
+  # The Elixir binding's native library for each platform it's precompiled
+  # for, packaged as rustler_precompiled downloads it, checked for what it
+  # needs of the system, and the binding's tests run on the packaged library
+  # there, loaded as a Hex user's project loads it (scripts/nif.sh). Linux
+  # libraries build and test in images pinned by digest, through docker,
+  # with Rust from a pinned rustup (scripts/install-rust.sh): glibc ones
+  # build on AlmaLinux 8, so they load on glibc 2.28 and later, and test on
+  # Elixir's Debian image; musl ones build and test on Elixir's Alpine
+  # image. Every platform tests on the oldest Elixir and OTP the binding
+  # supports.
+  nif:
+    name: Elixir native library for ${{ matrix.target }}
+    needs: verify
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-15
+          - target: x86_64-apple-darwin
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.target }}
+      ALMALINUX: almalinux@sha256:768bedc30fe0a536adb0a65d2eddb7caad364e514fbddd0ae9e026975f590342 # 8
+      ELIXIR: elixir@sha256:451168956c70241c2d8f92c601c0e6239ace987c49b08aac0f5c55f5c9e6bded # 1.18-otp-25
+      ELIXIR_ALPINE: elixir@sha256:fa800cd84a38c049fbbf0550c4ab48bc7b77b9c47822511cfed5fa33ea848bf7 # 1.18-otp-25-alpine
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build (glibc, on AlmaLinux 8)
+        if: endsWith(matrix.target, '-linux-gnu')
+        run: >-
+          docker run --rm -v "$PWD:/src" -w /src -e RUST -e TARGET "$ALMALINUX"
+          bash -euc 'dnf install -y -q gcc tar gzip && scripts/install-rust.sh
+          && . "$HOME/.cargo/env" && scripts/nif.sh build "$TARGET"'
+      - name: Test (glibc)
+        if: endsWith(matrix.target, '-linux-gnu')
+        run: >-
+          docker run --rm -v "$PWD:/src" -w /src -e RUST -e TARGET "$ELIXIR"
+          bash -euc 'scripts/install-rust.sh && . "$HOME/.cargo/env"
+          && mix local.hex --force && mix local.rebar --force
+          && scripts/nif.sh test "$TARGET"'
+      - name: Build and test (musl, on Alpine)
+        if: endsWith(matrix.target, '-linux-musl')
+        run: >-
+          docker run --rm -v "$PWD:/src" -w /src -e RUST -e TARGET "$ELIXIR_ALPINE"
+          sh -euc 'apk add -q bash curl gcc musl-dev && scripts/install-rust.sh
+          && . "$HOME/.cargo/env" && mix local.hex --force && mix local.rebar --force
+          && scripts/nif.sh build "$TARGET" && scripts/nif.sh test "$TARGET"'
+      - name: Install Rust (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          rustup toolchain install "$RUST" --profile minimal --target "$TARGET"
+          rustup default "$RUST"
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        if: runner.os == 'macOS'
+        with:
+          otp-version: "25"
+          elixir-version: "1.18"
+      - name: Build and test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          scripts/nif.sh build "$TARGET"
+          scripts/nif.sh test "$TARGET"
+      # On the runner, with its binutils (or Xcode's otool on macOS).
+      - name: Check what the library needs of the system
+        run: scripts/nif.sh check "$TARGET"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nif-${{ matrix.target }}
+          path: dist/libmdl_nif-*.tar.gz*
+          if-no-files-found: error
 
   release:
     name: draft the release
     if: github.event_name == 'push'
-    needs: build
+    needs: [build, nif]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -181,15 +263,22 @@ jobs:
           pattern: morphc-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: nif-*
+          path: dist
+          merge-multiple: true
       - name: Checksums
         working-directory: dist
         run: |
           sha256sum --check ./*.sha256
-          sha256sum morphc-*.tar.gz > SHA256SUMS
+          sha256sum morphc-*.tar.gz libmdl_nif-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/morphc-*.tar.gz
+          subject-path: |
+            dist/morphc-*.tar.gz
+            dist/libmdl_nif-*.tar.gz
       # A draft: a maintainer reads it over and publishes it.
       - name: Draft the release
         env:
@@ -205,4 +294,5 @@ jobs:
             --draft --verify-tag "${prerelease[@]}" \
             --title "MDL ${GITHUB_REF_NAME#v}" \
             --notes-file notes.md \
-            dist/morphc-*.tar.gz dist/morphc-*.tar.gz.sha256 dist/SHA256SUMS
+            dist/morphc-*.tar.gz dist/morphc-*.tar.gz.sha256 \
+            dist/libmdl_nif-*.tar.gz dist/libmdl_nif-*.tar.gz.sha256 dist/SHA256SUMS
