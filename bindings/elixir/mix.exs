@@ -14,7 +14,11 @@ defmodule MDL.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       name: "MDL",
+      description:
+        "MDL's runtime for Elixir: decode telemetry and encode commands with the " <>
+          "artifact stores morphc builds",
       source_url: "https://github.com/zthacker/mdl",
+      package: package(),
       docs: [
         main: "MDL",
         source_url_pattern:
@@ -33,8 +37,22 @@ defmodule MDL.MixProject do
 
   defp deps do
     [
-      {:rustler, "~> 0.38", runtime: false},
+      {:rustler_precompiled, "~> 0.10"},
+      # Builds the native library from source in a git checkout
+      # (lib/mdl/native.ex). A Hex user downloads it instead.
+      {:rustler, "~> 0.38", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
+    ]
+  end
+
+  # Precompiled native libraries only (RELEASING.md): the native source
+  # depends on the repository's mdl crate, which isn't in the package. The
+  # checksum file says which libraries the package may load.
+  defp package do
+    [
+      licenses: ["MIT", "Apache-2.0"],
+      links: %{"GitHub" => "https://github.com/zthacker/mdl"},
+      files: ~w(lib mix.exs README.md LICENSE-MIT LICENSE-APACHE checksum-*.exs)
     ]
   end
 end

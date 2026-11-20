@@ -6,3 +6,7 @@
 /priv/native/
 erl_crash.dump
 *.ez
+# rustler_precompiled's checksum file, made for publishing to Hex
+# (RELEASING.md). Never committed: its presence makes the binding download
+# a precompiled library in place of building one (lib/mdl/native.ex).
+/checksum-*.exs

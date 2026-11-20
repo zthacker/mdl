@@ -9,21 +9,42 @@ semantics of its own, so it decodes and encodes exactly as `morphc` does.
 
 ## Installing
 
-The binding isn't on Hex yet, and it builds its native library from
-source, so it needs Rust 1.91 or later. With Elixir 1.18 or later, from
-this repository:
+From Hex, with Elixir 1.18 or later:
 
 ```elixir
 def deps do
   [
-    {:mdl, github: "zthacker/mdl", subdir: "bindings/elixir", branch: "main"}
+    {:mdl, "~> 0.1"}
   ]
 end
 ```
 
-or from a clone, `{:mdl, path: "path/to/mdl/bindings/elixir"}`. Prebuilt
-native libraries, so that Rust isn't needed, will come with a later
-release.
+The package downloads a precompiled native library from the GitHub
+release of its version, checked against the checksums the package holds,
+so it needs no Rust. Libraries are built for Linux on x86_64 and aarch64,
+with glibc 2.28 or later or with musl, and for macOS 10.12 or later on
+Intel and 11.0 or later on Apple silicon. On Alpine they need `libgcc`,
+which the library uses to turn a panic into an exception; Alpine's Erlang
+needs it too, so a system that runs the BEAM has it. For a build without
+network access, put the release's archive for the platform in a directory
+named by `RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH`.
+
+On any other platform, or to build the native library yourself, depend on
+this repository instead, with Rustler to build it and Rust 1.91 or later:
+
+```elixir
+def deps do
+  [
+    {:mdl, github: "zthacker/mdl", subdir: "bindings/elixir", tag: "v0.1.0"},
+    {:rustler, "~> 0.38", runtime: false}
+  ]
+end
+```
+
+A git checkout always builds from source. The Hex package holds no
+native source, so building from source means the git dependency: in a Hex
+install, `MDL_BUILD=1` (or rustler_precompiled's
+`RUSTLER_PRECOMPILED_FORCE_BUILD_ALL`) fails.
 
 ## Using it
 
@@ -113,6 +134,13 @@ calls runtime 0.3.1), so it reads and writes what that release does
 ([compatibility](../../spec/compatibility.md) section 6).
 
 ## Developing
+
+A checkout builds the native library from source, as above, unless a
+checksum file (`checksum-Elixir.MDL.Native.exs`, made only for publishing)
+is left in it; `just elixir` builds from source regardless. The release
+workflow builds each precompiled library, checks what it needs of the
+system, and runs these tests on it as a Hex install loads it, with
+`scripts/nif.sh` (RELEASING.md).
 
 `mix test` builds `morphc` with the repository's workspace, builds its
 test stores from the repository's definitions, and checks the binding's
