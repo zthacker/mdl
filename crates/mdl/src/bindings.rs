@@ -433,6 +433,29 @@ impl Bindings {
     }
 }
 
+impl Bindings {
+    /// The native ids that are `asset` in `family` at `at`, in native id
+    /// order, each with its binding: where a command to the asset goes. A
+    /// registry usually binds an asset to one native id at a time, but
+    /// nothing stops it binding more, and this doesn't choose between them.
+    pub fn native_ids(
+        &self,
+        family: &str,
+        asset: &str,
+        at: Timestamp,
+    ) -> Vec<(NativeId, Arc<Binding>)> {
+        let Some(ids) = self.timelines.get(family) else {
+            return Vec::new();
+        };
+        ids.keys()
+            .filter_map(|native_id| {
+                let binding = self.resolve(family, native_id, at)?;
+                (binding.asset == asset).then(|| (native_id.clone(), binding))
+            })
+            .collect()
+    }
+}
+
 impl Resolver for Bindings {
     fn resolve(&self, family: &str, native_id: &NativeId, at: Timestamp) -> Option<Arc<Binding>> {
         let changes = self.timelines.get(family)?.get(native_id)?;

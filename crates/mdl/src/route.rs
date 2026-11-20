@@ -102,6 +102,13 @@ impl Kind {
     }
 }
 
+/// What chooses an asset's set: the one its binding names, or each
+/// message's version, read by the family's version locator.
+enum Chooser<'s> {
+    Named(&'s LoadedSet),
+    Version(&'s Locator),
+}
+
 /// Where a message was sent from and which set decodes it.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -381,41 +388,18 @@ impl FamilySets {
             });
         };
 
-        let set_name = match (&self.family.version, &binding.set) {
-            (Some(_), Some(set)) => {
-                return Err(RouteError::UnexpectedSet {
-                    family: family.clone(),
-                    asset: binding.asset.clone(),
-                    set: set.clone(),
-                });
-            }
-            (Some(locator), None) => {
+        let loaded = match self.chooser(&binding)? {
+            Chooser::Named(loaded) => loaded,
+            Chooser::Version(locator) => {
                 let read = self.read(locator, LocatorRole::Version, readable, message)?;
                 let key = read.version_key(is_exact(locator));
-                match self.by_version.get(&key) {
-                    Some(name) => name,
-                    None => {
-                        return Err(RouteError::UnknownVersion {
-                            family: family.clone(),
-                            version: key.to_string(),
-                        });
-                    }
-                }
-            }
-            (None, Some(set)) => set,
-            (None, None) => {
-                return Err(RouteError::MissingSet {
+                let unknown = || RouteError::UnknownVersion {
                     family: family.clone(),
-                    asset: binding.asset.clone(),
-                });
+                    version: key.to_string(),
+                };
+                let name = self.by_version.get(&key).ok_or_else(unknown)?;
+                self.sets.get(name).ok_or_else(unknown)?
             }
-        };
-        let Some(loaded) = self.sets.get(set_name) else {
-            return Err(RouteError::UnknownSet {
-                family: family.clone(),
-                asset: binding.asset.clone(),
-                set: set_name.clone(),
-            });
         };
         let route = Route {
             native_id,
@@ -424,6 +408,46 @@ impl FamilySets {
             def_version: &loaded.def_version,
         };
         Ok((route, loaded))
+    }
+
+    /// The set `binding` decodes its asset's messages with, checked as
+    /// routing checks it (`decoding.md` §3): none for a family whose
+    /// version locator chooses each message's set; for one without, the
+    /// set the binding names, which the family has. The same errors as
+    /// routing a message: `unexpected_set`, `missing_set`, `unknown_set`.
+    pub fn bound_set(&self, binding: &Binding) -> Result<Option<&Set>, RouteError> {
+        Ok(match self.chooser(binding)? {
+            Chooser::Named(loaded) => Some(&loaded.set),
+            Chooser::Version(_) => None,
+        })
+    }
+
+    /// What chooses `binding`'s asset's set: the set it names, or each
+    /// message's version.
+    fn chooser(&self, binding: &Binding) -> Result<Chooser<'_>, RouteError> {
+        let family = &self.family.name;
+        match (&self.family.version, &binding.set) {
+            (Some(_), Some(set)) => Err(RouteError::UnexpectedSet {
+                family: family.clone(),
+                asset: binding.asset.clone(),
+                set: set.clone(),
+            }),
+            (Some(locator), None) => Ok(Chooser::Version(locator)),
+            (None, Some(set)) => {
+                self.sets
+                    .get(set)
+                    .map(Chooser::Named)
+                    .ok_or_else(|| RouteError::UnknownSet {
+                        family: family.clone(),
+                        asset: binding.asset.clone(),
+                        set: set.clone(),
+                    })
+            }
+            (None, None) => Err(RouteError::MissingSet {
+                family: family.clone(),
+                asset: binding.asset.clone(),
+            }),
+        }
     }
 
     fn read(
