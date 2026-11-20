@@ -25,8 +25,10 @@ with them.
 - **Every problem at once.** Validation reports every error, with its file,
   line and column wherever it has one, in TOML and XTCE alike.
 
-> Status: pre-0.1, under active development. The IR, APIs and CLI will
-> change.
+> Status: 0.1, the first release ([changelog](CHANGELOG.md)). What a
+> release reads and writes (the IR, artifact stores, the runtime API's
+> results) changes only as [compatibility](spec/compatibility.md) allows;
+> the Rust API and morphc's command line may change in any 0.x release.
 
 ## How it works
 
@@ -172,10 +174,40 @@ definitions and rebuild, and what's decoded says the new `def_version`.
 
 ## Quick start
 
-The crates aren't on crates.io yet, so morphc is installed from a clone:
+Each [release](https://github.com/zthacker/mdl/releases) has morphc built
+for Linux on x86_64 and aarch64 (statically linked, for any distribution)
+and macOS on Apple silicon:
 
 ```sh
-cargo install --path crates/morphc
+v=0.1.0 target=aarch64-apple-darwin  # or x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+url=https://github.com/zthacker/mdl/releases/download/v$v/morphc-$v-$target.tar.gz
+curl -fL -O "$url" -O "$url.sha256"
+shasum -a 256 -c "morphc-$v-$target.tar.gz.sha256"   # or sha256sum -c
+tar -xzf "morphc-$v-$target.tar.gz"
+"morphc-$v-$target/morphc" --version                  # put it on your PATH
+```
+
+The checksum, published beside the archive, catches a damaged download.
+That the archive is the one this repository's release workflow built is
+what its build provenance attestation shows, which the GitHub CLI checks:
+
+```sh
+gh attestation verify "morphc-$v-$target.tar.gz" --repo zthacker/mdl \
+  --signer-workflow zthacker/mdl/.github/workflows/release.yml
+```
+
+morphc isn't notarized, so if macOS refuses to run one downloaded with a
+browser, `xattr -d com.apple.quarantine morphc`, once you've checked it,
+lets it run.
+
+Or build it with Rust 1.88 or later, from the release's lockfile (the
+crates aren't on crates.io yet): `cargo install --locked --git
+https://github.com/zthacker/mdl --tag v0.1.0 morpheus-morphc`, or `cargo
+install --locked --path crates/morphc` in a clone.
+
+Then, in a clone of this repository:
+
+```sh
 cd examples
 
 morphc build toml/mission xtce/demosat.xml --out store    # definitions to artifacts
@@ -341,7 +373,8 @@ This example runs as a test of the TOML crate.
 ## Contributing
 
 `just check` runs what CI runs: formatting, clippy, every test (including
-the walkthrough and the README's example) and the docs. `just props` runs
+the walkthrough and the README's example), the docs, and the release
+scripts' tests and check. `just props` runs
 the property tests at 10,000 cases each, as CI does on pushes to main.
 
 `just fuzz <target> [seconds]` fuzzes one target of `fuzz/` (it needs
@@ -375,6 +408,9 @@ resources of `yamcs-core` and `yamcs-xtce`) and
 [space_packet_parser](https://github.com/medley56/space_packet_parser)
 (`tests/test_data`).
 
+[RELEASING.md](RELEASING.md) is how a release is made, and
+[CHANGELOG.md](CHANGELOG.md) what each one changed.
+
 Issues and pull requests are welcome at <https://github.com/zthacker/mdl>.
 
 ## Layout
@@ -389,6 +425,7 @@ Issues and pull requests are welcome at <https://github.com/zthacker/mdl>.
 | `crates/mdl-fuzz` | what each fuzz target checks, a test that replays every committed fuzz input, and the XTCE corpus runner (never published) |
 | `fuzz` | the cargo-fuzz harness, its seeds, corpus and dictionaries, and the crashes kept as regressions |
 | `examples` | the worked example's beacon, a fleet in TOML and XTCE, the files an operator adds, and a walkthrough |
+| `scripts` | the release checks and notes, for `just` and the release workflow |
 | `spec` | normative specifications: [canonical JSON and artifact identity](spec/canonical-json.md), [frontends](spec/frontends.md), [TOML](spec/toml.md), [XTCE](spec/xtce.md), [decoding](spec/decoding.md), [encoding](spec/encoding.md), [units](spec/units.md), [bindings files](spec/bindings.md), [artifact stores](spec/store.md), [build files](spec/build-files.md), [the runtime API every binding calls](spec/api.md), [versions and compatibility](spec/compatibility.md) |
 
 ## License

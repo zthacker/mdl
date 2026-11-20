@@ -4,8 +4,11 @@ The MDL compiler: definitions from any frontend into content-addressed
 artifacts, and messages through them. [`examples/README.md`](../../examples/README.md)
 walks through every command on a small fleet; this page is the reference.
 
+Each [release](../../README.md#quick-start) has morphc built for Linux and
+macOS; in a clone:
+
 ```sh
-cargo install --path crates/morphc    # or: just morphc <command> ...
+cargo install --locked --path crates/morphc    # or: just morphc <command> ...
 ```
 
 | Command | Does |
@@ -17,6 +20,10 @@ cargo install --path crates/morphc    # or: just morphc <command> ...
 
 Exit codes: 0 done, 1 the definitions have problems (or a message didn't
 decode, a command didn't encode), 2 morphc couldn't run.
+
+`morphc --version` prints the release and what it reads and writes, as
+in `morphc 0.1.0 (MDL IR 2.2, store format 1, result format 1)`
+([compatibility](../../spec/compatibility.md) §6); `-V`, the release alone.
 
 ## Inputs
 

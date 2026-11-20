@@ -22,8 +22,9 @@ as a test too.
 
 Four assets: the mission's CCSDS satellite, JSON satellite and MAVLink
 drone, written by hand in TOML, and DemoSat, described by its vendor in
-XTCE. The commands below run in this directory. Install morphc
-with `cargo install --path crates/morphc` from the repository root, or put
+XTCE. The commands below run in this directory. Install morphc from a
+[release](../README.md#quick-start), or with `cargo install --locked
+--path crates/morphc` from the repository root, or put
 `cargo run -q -p morpheus-morphc --` where they say `morphc`. Each one runs in CI
 exactly as written, and its output is checked against what's shown here
 (`cargo test -p morpheus-morphc --test walkthrough`).
