@@ -18,6 +18,11 @@ check:
     # mdl again with serde_json's arbitrary_precision, which any other crate in a consumer's build can turn on
     cargo test -p morpheus-mdl --features serde_json/arbitrary_precision
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
+    # the release scripts' tests, and that the workspace's version could be
+    # tagged: a version bump without its changelog section or lockfiles fails
+    # here, not at the tag
+    scripts/release-test.sh
+    scripts/release.sh check
 
 # Every test, with the property tests at 10,000 cases each (`check` runs
 # 256), optimized but with overflow checks and debug assertions on
@@ -145,3 +150,18 @@ fmt:
 [positional-arguments]
 morphc *args:
     cargo run -q -p morpheus-morphc -- "$@"
+
+# Check the workspace is ready to tag (RELEASING.md): the tag, v and the
+# workspace's version by default, names the workspace's version,
+# CHANGELOG.md has a dated section for it, and Cargo.lock and
+# fuzz/Cargo.lock are current. The release workflow runs the same check on
+# the tag.
+[positional-arguments]
+release-check *tag:
+    scripts/release.sh check "$@"
+
+# A release's notes, its CHANGELOG.md section (the workspace's version by
+# default), as the release workflow writes them
+[positional-arguments]
+release-notes *tag:
+    @scripts/release.sh notes "$@"

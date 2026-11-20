@@ -1,5 +1,6 @@
 # What `just check` runs (formatting, clippy, every test including the
-# examples walkthrough and the README's example, and the docs), on every
+# examples walkthrough and the README's example, the docs, and the release
+# scripts' tests and check), on every
 # push to main and every pull request, plus the tests on the oldest Rust
 # the workspace supports. On pushes to main, `just props` also runs the
 # property tests at 10,000 cases each, and each fuzz target runs for a
