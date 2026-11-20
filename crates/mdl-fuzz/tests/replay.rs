@@ -246,20 +246,34 @@ fn locked(path: &Path) -> BTreeMap<String, BTreeSet<String>> {
     versions
 }
 
-/// The harness builds with the workspace's versions of what they share, so
-/// a crash libFuzzer finds replays here. `just fuzz-lock` brings
-/// `fuzz/Cargo.lock` back in line after `Cargo.lock` changes.
+/// The fuzz harness and the Elixir binding's native library, each a
+/// workspace of its own, build with the workspace's versions of what they
+/// share: a crash libFuzzer finds replays here, and the binding reads and
+/// decodes as morphc does. `just fuzz-lock` and `just elixir-lock` bring
+/// their lockfiles back in line after `Cargo.lock` changes.
 #[test]
-fn the_harness_locks_the_workspace_versions() {
+fn the_other_lockfiles_lock_the_workspace_versions() {
     let workspace = locked(&root().join("Cargo.lock"));
-    let harness = locked(&fuzz_dir().join("Cargo.lock"));
-    let differ: Vec<String> = harness
-        .iter()
-        .filter_map(|(name, versions)| {
-            let theirs = workspace.get(name)?;
-            (!versions.is_subset(theirs))
-                .then(|| format!("{name} {versions:?}, workspace {theirs:?}"))
-        })
-        .collect();
-    assert!(differ.is_empty(), "run `just fuzz-lock`: {differ:#?}");
+    let others = [
+        (fuzz_dir().join("Cargo.lock"), "just fuzz-lock"),
+        (
+            root().join("bindings/elixir/native/mdl_nif/Cargo.lock"),
+            "just elixir-lock",
+        ),
+    ];
+    for (lockfile, recipe) in others {
+        let differ: Vec<String> = locked(&lockfile)
+            .iter()
+            .filter_map(|(name, versions)| {
+                let theirs = workspace.get(name)?;
+                (!versions.is_subset(theirs))
+                    .then(|| format!("{name} {versions:?}, workspace {theirs:?}"))
+            })
+            .collect();
+        assert!(
+            differ.is_empty(),
+            "{}: run `{recipe}`: {differ:#?}",
+            lockfile.display()
+        );
+    }
 }

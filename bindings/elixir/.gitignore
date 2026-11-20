@@ -1,0 +1,8 @@
+# Mix's build, dependencies and docs
+/_build/
+/deps/
+/doc/
+# The native library Rustler builds into
+/priv/native/
+erl_crash.dump
+*.ez

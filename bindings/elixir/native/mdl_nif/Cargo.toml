@@ -1,0 +1,23 @@
+# The Elixir binding's native library: the runtime API (spec/api.md) as
+# NIFs, which lib/mdl.ex calls. Outside the repository's workspace, with
+# its own lockfile, as the fuzz harness is.
+[package]
+name = "mdl_nif"
+version = "0.1.0"
+edition = "2024"
+# Rustler's minimum, above the repository's (1.88): the binding only.
+rust-version = "1.91"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+mdl = { path = "../../../../crates/mdl", package = "morpheus-mdl" }
+rustler = "0.38.0"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[workspace]

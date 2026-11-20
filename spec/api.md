@@ -33,7 +33,7 @@ binding returns its language's own value for it.
 | instant | a string spelled as `bindings.md` §2 spells instants: UTC, exact to the nanosecond | an integer: nanoseconds since 1970-01-01T00:00:00Z, every day counted as 86,400 seconds (the label of `decoding.md` §8.1 on the `utc` scale). Elixir's `DateTime` holds microseconds, so the binding returns the integer |
 | absent | `null` | the language's absent value (Elixir: `nil`) |
 | list | an array | a list |
-| object | an object; its keys' order means nothing | a map, keyed by text (Elixir: string keys, not atoms, so input can't exhaust the atom table) |
+| object | an object; its keys' order means nothing | a map, keyed by text (Elixir: string keys, not atoms, so input can't exhaust the atom table); a result's fixed shape may take the language's own form instead, as below |
 
 Text, bytes and an enum's state are all strings in JSON; a consumer tells
 them apart by the param's or field's type, which the catalog and the set
@@ -41,6 +41,26 @@ give. A float is never written in the integer form, and an integer never
 in the float form, whatever its value. An object always has every key this
 document lists for it; a value that doesn't apply is the absent value, not
 a missing key.
+
+A binding MAY give a result's fixed shape (an object whose keys §3 or §4
+lists) its language's own form, such as a struct whose fields are those
+keys, and MDL's own enumerations its language's symbols: a quality, a
+frame, an error's or a problem's code, an event time's kind, a time unit.
+Each of these is a fixed set in a runtime release (a release may add to
+them, as [compatibility](compatibility.md) §4 and §5 allow), so making
+them symbols can't grow without bound. Everything else that is text stays
+text: names, paths, units, states, metadata keys, and the keys of an
+object that comes from definitions or messages (a record, metadata), so
+no input can grow a table of symbols its language never frees. A binding
+documents its forms. The Elixir binding's (`bindings/elixir`) are structs
+with atom fields (`%MDL.Decoded{}`, `%MDL.Sample{}`, `%MDL.Encoded{}`,
+`%MDL.Route{}`, `%MDL.Error{}`, `%MDL.Problem{}`, and `%MDL.Vec3{}` and
+`%MDL.Quat{}` for a vector's or quaternion's value); atoms for the
+enumerations, a frame's being its IR name in lower case (`:eci_j2000`);
+an event time as `{:ground, ns}`, `{:at, ns}` or `{:since_boot, count,
+unit}`; and an engineering value as `{path, value, quality}`. Elixir's
+text and bytes are both binaries, so a bytes argument to encode is
+`{:bytes, binary}`.
 
 A native id or a metadata value is an integer or text. In JSON an integer
 past ±(2^53 − 1) is a string too, so a string that is an integer's one
@@ -321,7 +341,7 @@ a set pins (in a store `morphc` didn't build) points into that family's
 own bundle: the catalog, the family and its sets. A problem's message also
 names where it is, for people. A binding returns errors as values,
 never by unwinding across the binding's boundary (Elixir:
-`{:error, error}`, the error an object as §1 says).
+`{:error, %MDL.Error{}}`, its code an atom).
 
 The codes are those `decoding.md` §9 and `encoding.md` §8 define for
 decoding and encoding, and these:
