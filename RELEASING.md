@@ -25,11 +25,26 @@ between.
   (`RUST`), from the committed `Cargo.lock`, with nothing cached, and each
   runs the README's worked example before it's packaged. The macOS binary
   isn't signed with an Apple Developer ID or notarized.
+- **The Elixir binding's native library for each platform**,
+  `libmdl_nif-vX.Y.Z-nif-2.15-<target>.so.tar.gz` (rustler_precompiled's
+  name), with its `.sha256`, for `x86_64-unknown-linux-gnu`,
+  `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`,
+  `aarch64-unknown-linux-musl`, `aarch64-apple-darwin` and
+  `x86_64-apple-darwin` (`scripts/nif.sh`). The glibc ones are built on
+  AlmaLinux 8 and checked to need no glibc newer than 2.28; the musl ones
+  link musl dynamically and need `libgcc` (Alpine's package of that name).
+  On each platform the binding's tests run on the packaged library,
+  loaded as a Hex user's project loads it, before it's released.
 - **`SHA256SUMS`**, every archive's SHA-256 in one file.
 - **A build provenance attestation for each archive**: a signed statement,
   kept by GitHub, of the repository, commit and workflow run that built
   it, which `gh attestation verify` checks.
 
+After the release, the Elixir binding goes to Hex as the package `mdl`
+at the same version (step 9). It holds no native source, since
+that depends on this repository's `mdl` crate: it downloads its native
+library from the release, so only the six platforms above can install it
+from Hex, and any other uses the git dependency, which builds from source.
 The crates aren't published to crates.io yet (`publish = false`).
 
 ## Once, in the repository's settings
@@ -85,9 +100,10 @@ and the changelog says so.
 
 5. **Dry run.** Start the release workflow by hand on `main` (Actions,
    release, Run workflow, or `gh workflow run release.yml --ref main`). It
-   runs the checks, tests and builds a tag would, keeps the archives as the
-   run's artifacts and releases nothing. Download the archive for a
-   platform you have from the run's page and run `morphc --version`.
+   runs the checks, tests and builds a tag would, the binding's tests on
+   each native library included, keeps the archives as the run's
+   artifacts and releases nothing. Download the archive for a platform you
+   have from the run's page and run `morphc --version`.
 
 6. **Tag** `main` and push the tag:
 
@@ -105,9 +121,9 @@ and the changelog says so.
    changelog's heading are spelled the same way (`0.2.0-rc.1`).
 
 7. **Review the draft** under the repository's Releases: the notes, and
-   seven files (three archives, their three `.sha256` files and
-   `SHA256SUMS`). Download the archive for your platform from the draft
-   and check it:
+   nineteen files (morphc's three archives and the six native libraries,
+   each with its `.sha256`, and `SHA256SUMS`). Download the archive for
+   your platform from the draft and check it:
 
    ```sh
    shasum -a 256 -c morphc-X.Y.Z-<target>.tar.gz.sha256
@@ -120,6 +136,31 @@ and the changelog says so.
    is the one this repository's release workflow built.
 
 8. **Publish** the draft. This is the step that makes the release public.
+
+9. **Publish the Elixir package to Hex**, from a clean checkout of the
+   tag, with your Hex account:
+
+   ```sh
+   git switch --detach vX.Y.Z
+   scripts/release.sh hex vX.Y.Z
+   ```
+
+   It refuses unless the checkout is the tag with no changes, since Hex
+   publishes the working tree. It then runs `mix
+   rustler_precompiled.download MDL.Native --all`, which downloads every
+   native library from the published release and writes their SHA-256s
+   to `checksum-Elixir.MDL.Native.exs`: a Hex install loads only a library
+   with one of those checksums. It checks the file names exactly the
+   libraries `MDL.Native` downloads, each with the SHA-256 the release's
+   `SHA256SUMS` gives, then runs `mix hex.publish`, which lists the
+   package's files (the checksum file among them) and asks before
+   publishing. The checksum file is removed afterwards, whatever happens:
+   in a checkout, its presence makes the binding download its library
+   instead of building it.
+
+   The download needs the release published and the repository public,
+   and it compiles the binding first, from source, so it needs Rust 1.91
+   or later and Elixir 1.18 or later.
 
 ## If something goes wrong
 
@@ -138,3 +179,7 @@ and the changelog says so.
 - **After publishing**, never move or reuse a tag: people, lockfiles and
   attestations refer to it. Release a patch version instead. With release
   immutability on, GitHub enforces this.
+- **After publishing to Hex**, a version can be reverted only for a short
+  time (`mix hex.publish --revert X.Y.Z`; Hex's documentation gives the
+  window). After that, retire it (`mix hex.retire mdl X.Y.Z invalid
+  --message "..."`) and release a patch version.

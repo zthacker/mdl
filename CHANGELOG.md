@@ -8,19 +8,6 @@ them too.
 
 ## [Unreleased]
 
-### Added
-
-- The Elixir binding (`bindings/elixir`; Hex package `mdl`, not published
-  yet): the runtime API for Elixir over a Rustler NIF. Its results are
-  structs with atom fields, MDL's own enumerations are atoms, and every
-  name from definitions or messages is a string, so reloading stores never
-  grows the atom table. It builds from source, with Rust 1.91 or later and
-  Elixir 1.18 or later.
-- [spec/api.md](spec/api.md) says which of a result's values a binding may
-  give its language's own forms, and gives the Elixir binding's.
-- `Frame::as_str` and `TimeUnit::as_str`: a frame's and a time unit's IR
-  spelling.
-
 ## [0.1.0] - 2026-11-20
 
 The first release. It reads and writes MDL IR 2.2, store format 1 and
@@ -74,13 +61,25 @@ result format 1, and builds on Rust 1.88 or later.
   document for tools.
 - The runtime API every language binding calls ([spec/api.md](spec/api.md)):
   open a store, decode, encode, describe the build, and look up bindings,
-  with results whose shape and values are specified.
+  with results whose shape and values are specified, and which of them a
+  binding may give its language's own forms.
+- The Elixir binding (`bindings/elixir`, Hex package `mdl`): the runtime
+  API for Elixir 1.18 or later. Its results are structs with atom fields,
+  MDL's own enumerations are atoms, and every name from definitions or
+  messages is a string, so reloading stores never grows the atom table.
+  Every call that does MDL's work runs on a dirty scheduler. Built from
+  source rather than downloaded, it needs Rust 1.91 or later.
 
 ### Releases
 
 - Prebuilt `morphc` for Linux on x86_64 and aarch64 (statically linked)
   and macOS on Apple silicon, with SHA-256 checksums and build provenance
   attestations ([RELEASING.md](RELEASING.md)).
+- Precompiled native libraries for the Elixir binding, which the Hex
+  package downloads, so it needs no Rust: Linux on x86_64 and aarch64 with
+  glibc 2.28 or later or with musl, and macOS on Apple silicon and Intel.
+  Each is tested with the binding's suite on its platform before release,
+  and has a checksum and an attestation too.
 
 [Unreleased]: https://github.com/zthacker/mdl/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/zthacker/mdl/releases/tag/v0.1.0

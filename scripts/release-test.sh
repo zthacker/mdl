@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Tests of scripts/release.sh, run by `just check`. Each case runs it in a
-# scratch tree with a Cargo.toml and CHANGELOG.md of its own, and a
-# stand-in cargo whose `fetch` fails for a manifest named in STALE, as
-# cargo's does for a stale lockfile, and for a fetch without --locked.
+# scratch tree with a Cargo.toml and CHANGELOG.md of its own, and stand-ins:
+# a cargo whose `fetch` fails for a manifest named in STALE, as cargo's does
+# for a stale lockfile, and for a fetch without --locked; and, for `hex`, a
+# git, a mix and a curl that act out a checkout, rustler_precompiled's
+# download, Hex and the release's SHA256SUMS.
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 scratch=$(mktemp -d)
@@ -27,16 +29,79 @@ done
 EOF
 chmod +x "$scratch/bin/cargo"
 
+# HEAD_COMMIT and TAG_COMMIT, the checkout's and the tag's; DIRTY, what
+# `git status --porcelain` says, and IGNORED, what it says with --ignored.
+cat > "$scratch/bin/git" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+    "rev-parse HEAD") echo "${HEAD_COMMIT:-c0ffee}" ;;
+    "rev-parse "*) echo "${TAG_COMMIT:-c0ffee}" ;;
+    "status --porcelain")
+        if [ "${3:-}" = --ignored ]; then printf '%s' "${IGNORED:-}"; else printf '%s' "${DIRTY:-}"; fi
+        ;;
+    *) echo "git $* wasn't expected" >&2; exit 1 ;;
+esac
+EOF
+# DOWNLOADED, the checksum file rustler_precompiled's download writes;
+# PUBLISHED, a file `mix hex.publish` makes.
+cat > "$scratch/bin/mix" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+    deps.get) ;;
+    rustler_precompiled.download) cp "$DOWNLOADED" checksum-Elixir.MDL.Native.exs ;;
+    hex.publish) touch "$PUBLISHED" ;;
+    *) echo "mix $* wasn't expected" >&2; exit 1 ;;
+esac
+EOF
+# SUMS, the release's SHA256SUMS, served for the release's URL only.
+cat > "$scratch/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+url=${!#}
+[ "$url" = "https://example.com/mdl/releases/download/v1.2.3/SHA256SUMS" ] ||
+    { echo "curl $url wasn't expected" >&2; exit 22; }
+cat "$SUMS"
+EOF
+chmod +x "$scratch/bin/git" "$scratch/bin/mix" "$scratch/bin/curl"
+
 # tree NAME VERSION: a tree whose workspace is at VERSION, with stdin as
 # its CHANGELOG.md.
 tree() {
     local dir="$scratch/$1"
-    mkdir -p "$dir/scripts" "$dir/fuzz" "$dir/bindings/elixir/native/mdl_nif"
+    mkdir -p "$dir/scripts" "$dir/fuzz" "$dir/bindings/elixir/native/mdl_nif" \
+        "$dir/bindings/elixir/lib/mdl" "$dir/.github/workflows"
     cp "$here/release.sh" "$dir/scripts/"
-    printf '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "%s"\n' "$2" \
-        > "$dir/Cargo.toml"
+    printf '[workspace]\nmembers = []\n\n[workspace.package]\nversion = "%s"\nrepository = "%s"\n' \
+        "$2" "https://example.com/mdl" > "$dir/Cargo.toml"
+    cat > "$dir/bindings/elixir/lib/mdl/native.ex" <<'EOF'
+defmodule MDL.Native do
+  use RustlerPrecompiled,
+    base_url: "https://example.com/mdl/releases/download/v#{version}",
+    targets: ~w(
+      aarch64-apple-darwin
+      x86_64-unknown-linux-gnu
+    ),
+    nif_versions: ["2.15"]
+end
+EOF
+    cat > "$dir/.github/workflows/release.yml" <<'EOF'
+jobs:
+  nif:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-apple-darwin
+            runner: macos-15
+
+  release:
+    needs: [nif]
+EOF
     printf 'defmodule MDL.MixProject do\n  @version "%s"\nend\n' "$2" \
         > "$dir/bindings/elixir/mix.exs"
+    for license in LICENSE-MIT LICENSE-APACHE; do
+        echo "$license text" | tee "$dir/$license" > "$dir/bindings/elixir/$license"
+    done
     cat > "$dir/CHANGELOG.md"
 }
 
@@ -134,6 +199,92 @@ printf 'defmodule MDL.MixProject do\n  @version "1.2.2"\nend\n' \
 run binding check
 expect "an Elixir binding of another version" 1 \
     "bindings/elixir/mix.exs's @version is 1.2.2, but the workspace's version is 1.2.3"
+
+tree licenses 1.2.3 <<< "$changelog"
+echo "an older MIT license" > "$scratch/licenses/bindings/elixir/LICENSE-MIT"
+run licenses check
+expect "the Elixir binding's stale license copy" 1 \
+    "bindings/elixir/LICENSE-MIT isn't the same as LICENSE-MIT; copy it again"
+
+tree targets 1.2.3 <<< "$changelog"
+native="$scratch/targets/bindings/elixir/lib/mdl/native.ex"
+sed 's/aarch64-apple-darwin/x86_64-apple-darwin/' "$native" > "$native.new" && mv "$native.new" "$native"
+run targets check
+expect "native libraries the workflow doesn't build" 1 \
+    "the release workflow's nif job builds aarch64-apple-darwin x86_64-unknown-linux-gnu but"
+
+tree elsewhere 1.2.3 <<< "$changelog"
+native="$scratch/elsewhere/bindings/elixir/lib/mdl/native.ex"
+sed 's|example.com/mdl|example.org/fork|' "$native" > "$native.new" && mv "$native.new" "$native"
+run elsewhere check
+expect "downloads from another repository" 1 \
+    "downloads from https://example.org/fork/releases/download/v#{version}, not https://example.com/mdl's releases"
+
+# hex: the release's SHA256SUMS, and checksum files rustler_precompiled's
+# download might write.
+linux=libmdl_nif-v1.2.3-nif-2.15-x86_64-unknown-linux-gnu.so.tar.gz
+mac=libmdl_nif-v1.2.3-nif-2.15-aarch64-apple-darwin.so.tar.gz
+printf '%s  %s\n' 1111 morphc-1.2.3-x.tar.gz aaaa "$linux" bbbb "$mac" > "$scratch/sums"
+printf '%%{\n  "%s" => "sha256:bbbb",\n  "%s" => "sha256:aaaa"\n}\n' "$mac" "$linux" \
+    > "$scratch/checksums"
+printf '%%{\n  "%s" => "sha256:aaaa",\n  "%s" => "sha256:bbbb"\n}\n' "$mac" "$linux" \
+    > "$scratch/checksums-swapped"
+printf '%%{\n  "%s" => "sha256:aaaa"\n}\n' "$linux" > "$scratch/checksums-one"
+export SUMS=$scratch/sums
+
+# hex CASE CHECKSUMS [VAR=VALUE...]: release.sh hex in a fresh tree, the
+# download writing CHECKSUMS and the rest of the environment as given;
+# published says whether it published, and whether it left the checksum
+# file behind.
+hex() {
+    local name=$1 downloaded=$2
+    shift 2
+    tree "hex-$name" 1.2.3 <<< "$changelog"
+    local assignment
+    for assignment in "$@"; do
+        export "${assignment?}"
+    done
+    DOWNLOADED=$downloaded PUBLISHED=$scratch/published-$name run "hex-$name" hex
+    for assignment in "$@"; do
+        unset "${assignment%%=*}"
+    done
+    published=no
+    [ -f "$scratch/published-$name" ] && published=yes
+    if [ -f "$scratch/hex-$name/bindings/elixir/checksum-Elixir.MDL.Native.exs" ]; then
+        published="$published, the checksum file left"
+    fi
+}
+
+# expect_published WHAT YES_OR_NO
+expect_published() {
+    cases=$((cases + 1))
+    [ "$published" = "$2" ] || fail "$1: published $published"
+}
+
+hex ok "$scratch/checksums"
+expect "publishing the release's libraries" 0 "the checksum file has the release's 2 native libraries"
+expect_published "publishing the release's libraries" yes
+
+hex elsewhere "$scratch/checksums" TAG_COMMIT=beef
+expect "publishing from another commit than the tag" 1 "the checkout isn't v1.2.3"
+expect_published "publishing from another commit than the tag" no
+
+hex dirty "$scratch/checksums" "DIRTY= M lib/mdl.ex"
+expect "publishing with changes" 1 "the checkout has changes"
+expect_published "publishing with changes" no
+
+hex ignored "$scratch/checksums" "IGNORED=!! bindings/elixir/lib/scratch.ex"
+expect "publishing with an ignored file in lib" 1 "bindings/elixir/lib holds files git ignores"
+expect_published "publishing with an ignored file in lib" no
+
+hex missing "$scratch/checksums-one"
+expect "a checksum file without every library" 1 "the checksum file names $linux but MDL.Native downloads"
+expect_published "a checksum file without every library" no
+
+hex swapped "$scratch/checksums-swapped"
+expect "a checksum that isn't the release's" 1 \
+    "$mac downloaded with SHA-256 aaaa, but the release's SHA256SUMS gives bbbb"
+expect_published "a checksum that isn't the release's" no
 
 tree unlisted 1.2.4 <<< "$changelog"
 run unlisted check
