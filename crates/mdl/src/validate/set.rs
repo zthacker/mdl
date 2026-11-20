@@ -9,7 +9,7 @@ use super::layout::{Container, Layout, Shape, exact_type_sizes, static_offsets, 
 use super::mapping;
 use super::rules::{
     check_finite, check_integer_spelling, check_member_pointer, check_not_empty, check_pointer,
-    check_scalar, check_unit_code, integer_value, is_identifier, is_token,
+    check_scalar, check_unit_code, did_you_mean, integer_value, is_identifier, is_token,
 };
 use crate::bits::IntForm;
 use crate::checksum;
@@ -75,7 +75,9 @@ pub(super) fn check_all(
         let heights = check_types(set, &scope, &place, report);
         let type_sizes = exact_type_sizes(&set.types, &heights);
         check_packets(set, family, &scope, &type_sizes, &place, report);
-        let writes = command::check_packets(set, family, &bundle.catalog, &place, report);
+        let narrowed = command::narrowed_arguments(set, &bundle.catalog, &place, report);
+        let writes =
+            command::check_packets(set, family, &bundle.catalog, &narrowed, &place, report);
         command::check_record_uses(set, &place, report);
         for (index, packet) in set.commands.iter().enumerate() {
             let packet_place = place.item("commands", index, "command", &packet.name);
@@ -1393,10 +1395,13 @@ fn check_invalid(invalid: &[Scalar], place: &Place, report: &mut Report) {
 
 fn check_canonical(name: &str, scope: &Scope, place: &Place, report: &mut Report) {
     if !scope.catalog.params.contains_key(name) {
+        let close = report.suggestion("param", name, || {
+            did_you_mean(name, scope.catalog.params.keys())
+        });
         report.error(
             Code::UnknownCanonical,
             place,
-            format!("param {name} isn't in the catalog"),
+            format!("param {name} isn't in the catalog{close}"),
         );
     }
 }

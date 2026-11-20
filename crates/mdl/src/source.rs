@@ -19,7 +19,7 @@ use crate::read::ReadError;
 
 mod merge;
 
-pub use merge::merge;
+pub use merge::{check_owned_catalog, merge, merge_owned};
 
 /// The text of every file a build reads, each under a name for people (a
 /// path, usually).

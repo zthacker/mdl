@@ -273,6 +273,56 @@ fn errors_name_the_command_and_what_went_wrong() {
     );
 }
 
+/// The fixture with vendor_x_v2's SET_MODE taking delay_s up to a minute,
+/// half of one when left out (IR 2.2), in minutes.
+fn limited() -> Json {
+    let mut bundle = fixture();
+    bundle["mdl_version"] = json!("2.2");
+    bundle["sets"][0]["commands"][1]["arguments"] = json!({
+        "delay_s": { "unit": "min", "range": { "max": 1 }, "default": 0.5 }
+    });
+    bundle
+}
+
+#[test]
+fn a_packet_encodes_what_its_own_limits_allow_with_its_own_default() {
+    let sets = sets_of(&limited(), "vendor_x");
+    let nominal = || set_mode("vendor_x_v2").with_argument("mode", "NOMINAL");
+    assert_eq!(
+        sets.encode(&nominal().with_argument("delay_s", 61))
+            .unwrap_err()
+            .to_string(),
+        "command eps.set_mode, argument delay_s: 61 is outside its range, 0 to 60 in set \
+         vendor_x_v2 (0 to 3600 in the catalog)"
+    );
+    assert!(sets.encode(&nominal().with_argument("delay_s", 60)).is_ok());
+    // Half a minute is 300 counts of 0.1 s.
+    let encoded = sets.encode(&nominal()).unwrap();
+    assert_eq!(encoded.defaulted, ["delay_s"]);
+    assert_eq!(encoded.record.get("delay"), Some(&Value::Uint(300)));
+    // Another vendor's packet keeps the catalog's range.
+    let json = sets_of(&limited(), "vendor_j");
+    let request = set_mode("vendor_j_v1")
+        .with_argument("mode", "NOMINAL")
+        .with_argument("delay_s", 61);
+    assert!(json.encode(&request).is_ok());
+    // A command sent outside the packet's range decodes to the problem.
+    let open = sets_of(&fixture(), "vendor_x");
+    let payload = open
+        .encode(&nominal().with_argument("delay_s", 61))
+        .unwrap()
+        .payload;
+    assert_eq!(
+        decode_code(sets.decode_command("vendor_x_v2", &framed(&payload))),
+        "out_of_range"
+    );
+    let decoded = sets
+        .decode_command("vendor_x_v2", &framed(&encoded.payload))
+        .unwrap();
+    assert_eq!(decoded.defaulted, Vec::<&str>::new());
+    assert_eq!(arguments(&decoded)[1].1, ArgumentValue::Float(30.0));
+}
+
 /// Layouts the fixture doesn't have. Family `lab`: a fixed-length ASCII
 /// name, a binary32, padding and a 12-bit signed field (lab_v1); a command
 /// with no payload (lab_v2); linear and polynomial inverses (lab_v3); an
@@ -1498,8 +1548,8 @@ fn read_ir(bundle: &Json) -> Bundle {
 }
 
 /// Valid requests for a command, built from its definition: each argument
-/// the set encodes gets a value its catalog entry and field allow; those
-/// it leaves out take their defaults.
+/// the set encodes gets a value its catalog entry, as the packet narrows
+/// it, and field allow; those it leaves out take their defaults.
 fn valid_requests(bundle: &Json, set: &str, command: &str) -> BoxedStrategy<CommandRequest> {
     let ir = read_ir(bundle);
     let family = ir
@@ -1529,7 +1579,11 @@ fn valid_requests(bundle: &Json, set: &str, command: &str) -> BoxedStrategy<Comm
         })
         .collect();
     let mut strategies: Vec<BoxedStrategy<(String, ArgumentValue)>> = Vec::new();
-    for argument in ir.catalog.commands[command].arguments.clone() {
+    let arguments = packet
+        .arguments_of(&ir.catalog.commands[command])
+        .unwrap()
+        .into_owned();
+    for argument in arguments.clone() {
         let Some(field) = fields
             .iter()
             .find(|field| field.argument.as_deref() == Some(argument.name.as_str()))
@@ -1550,7 +1604,7 @@ fn valid_requests(bundle: &Json, set: &str, command: &str) -> BoxedStrategy<Comm
         .find(|s| s.name == set)
         .map(|s| s.types.clone())
         .unwrap_or_default();
-    let lists = list_strategies(&ir.catalog.commands[command].arguments, &packet, &types);
+    let lists = list_strategies(&arguments, &packet, &types);
     let target = fields
         .iter()
         .find(|field| field.target == Some(true))

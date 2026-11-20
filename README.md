@@ -203,7 +203,7 @@ What definitions say:
 | Set | One layout version of a family: its packets, struct types and command packets, and how each entry maps to the catalog. |
 | Packet | One kind of message in a set: its entries, and its identify keys, the values that tell it from the set's other packets (`apid = 100`). |
 | Entry | One thing a packet holds: a field (one value, at a bit offset or a JSON Pointer), an array, a struct, padding or a checksum. A field can have a conversion, a unit and the catalog param it maps to. |
-| Command packet | How a set encodes a catalog command: the fields its arguments are written to, and its constants. |
+| Command packet | How a set encodes a catalog command: the fields its arguments are written to, and its constants. It may narrow an argument's range and default for its own asset, so one vendor's limits hold under a fleet's catalog. |
 | Alias, native id | Where a message says which asset sent it (bits, link metadata, a JSON Pointer, or one fixed value), and the id read there. |
 | Metadata | Values the link delivers with a message (`apid`, `sysid`), which a family declares; an alias, a version or an identify key can read them, and a command packet's metadata goes out with its payload for the link to frame. |
 
@@ -374,10 +374,7 @@ resources of `yamcs-core` and `yamcs-xtce`) and
 [space_packet_parser](https://github.com/medley56/space_packet_parser)
 (`tests/test_data`).
 
-Issues and pull
-requests are welcome at <https://github.com/zthacker/mdl>.
-[`ROADMAP.md`](ROADMAP.md) says what's next, such as build files for
-several imports.
+Issues and pull requests are welcome at <https://github.com/zthacker/mdl>.
 
 ## Layout
 

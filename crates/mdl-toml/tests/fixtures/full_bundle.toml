@@ -2,7 +2,7 @@
 # toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
 # checks that both build identical artifacts.
 
-mdl_version = "2.1"
+mdl_version = "2.2"
 
 [catalog.commands."eps.load_table"]
 description = "Load a table into one of the power system's slots"
@@ -515,6 +515,13 @@ name = "vendor_j_v1"
 [[sets.commands]]
 canonical = "eps.set_mode"
 name = "SET_MODE"
+
+[sets.commands.arguments.delay_s]
+default = 0
+unit = "min"
+
+[sets.commands.arguments.delay_s.range]
+max = 10
 
 [[sets.commands.entries]]
 kind = "field"

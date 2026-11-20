@@ -67,6 +67,7 @@
 //! let count = Count::Remaining {};
 //! ```
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
@@ -74,6 +75,8 @@ use std::str::FromStr;
 use serde::de::{self, Deserializer, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 use sha2::Sha256;
+
+use crate::units::Unit;
 
 // ---- Versions ------------------------------------------------------------------
 
@@ -86,7 +89,7 @@ pub struct IrVersion {
 
 impl IrVersion {
     /// The newest version this build reads and writes.
-    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 1 };
+    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 2 };
 
     /// IR 2.0, which has every feature but those a [`Need`] names.
     pub const V2_0: IrVersion = IrVersion { major: 2, minor: 0 };
@@ -805,6 +808,143 @@ impl Argument {
             _ => None,
         }
     }
+
+    /// The argument as one command packet takes it (IR 2.2): its range
+    /// narrowed to the values the packet's allows too, and the packet's
+    /// default in place of its own, both in the argument's unit. An error
+    /// when the packet's values aren't ones it can take, which validation
+    /// refuses.
+    pub fn narrowed(&self, packet: &PacketArgument) -> Result<Argument, NarrowError> {
+        let units = match (packet.unit.as_deref(), self.unit.as_deref()) {
+            (None, _) => None,
+            (Some(given), Some(own)) if given == own => None,
+            (Some(given), Some(own)) if self.ty == ParamType::F64 => {
+                let from = Unit::parse(given).map_err(|_| NarrowError::Unit)?;
+                let to = Unit::parse(own).map_err(|_| NarrowError::Unit)?;
+                if !from.is_compatible(&to) {
+                    return Err(NarrowError::Unit);
+                }
+                Some((from, to))
+            }
+            _ => return Err(NarrowError::Unit),
+        };
+        let convert = |x: f64| match &units {
+            None => Some(x),
+            Some((from, to)) => from.convert(x, to).filter(|x| x.is_finite()),
+        };
+        // An open end stays open.
+        let convert_end = |end: Option<f64>| match end {
+            None => Ok(None),
+            Some(x) => convert(x).map(Some).ok_or(NarrowError::EndNotFinite),
+        };
+        let mut narrowed = self.clone();
+        if let Some(range) = &packet.range {
+            let mut theirs = self.clone();
+            theirs.range = Some(range.clone());
+            let ends = match (self.range_ends(), theirs.range_ends()) {
+                (Some(ours), Some(theirs)) => (ours, theirs),
+                _ if !matches!(self.ty, ParamType::F64 | ParamType::I64 | ParamType::U64) => {
+                    return Err(NarrowError::NotNumeric);
+                }
+                _ => return Err(NarrowError::End),
+            };
+            narrowed.range = Some(match ends {
+                (RangeEnds::Numbers(low, high), RangeEnds::Numbers(their_low, their_high)) => {
+                    let (their_low, their_high) =
+                        (convert_end(their_low)?, convert_end(their_high)?);
+                    let low = tighter(low, their_low, f64::max);
+                    let high = tighter(high, their_high, f64::min);
+                    if let (Some(low), Some(high)) = (low, high)
+                        && low > high
+                    {
+                        return Err(NarrowError::Disjoint);
+                    }
+                    ArgumentRange::new(low.map(Literal::Float), high.map(Literal::Float))
+                }
+                (RangeEnds::Integers(low, high), RangeEnds::Integers(their_low, their_high)) => {
+                    let low = tighter(low, their_low, i128::max);
+                    let high = tighter(high, their_high, i128::min);
+                    if let (Some(low), Some(high)) = (low, high)
+                        && low > high
+                    {
+                        return Err(NarrowError::Disjoint);
+                    }
+                    ArgumentRange::new(low.map(Literal::integer), high.map(Literal::integer))
+                }
+                _ => return Err(NarrowError::End),
+            });
+        }
+        if let Some(default) = &packet.default {
+            let number = |value: &Literal| {
+                let x = value.as_number().ok_or(NarrowError::DefaultNotNumber)?;
+                convert(x)
+                    .map(Literal::Float)
+                    .ok_or(NarrowError::DefaultNotFinite)
+            };
+            narrowed.default = Some(match (&units, default) {
+                (None, default) => default.clone(),
+                (Some(_), Literal::List(values)) => {
+                    Literal::List(values.iter().map(number).collect::<Result<_, _>>()?)
+                }
+                (Some(_), value) => number(value)?,
+            });
+        }
+        Ok(narrowed)
+    }
+}
+
+/// Why a command packet's limits can't narrow an argument
+/// ([`Argument::narrowed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum NarrowError {
+    /// The limits' unit isn't the argument's and doesn't convert to it (an
+    /// integer argument's converts from no other).
+    #[error("their unit doesn't convert to the argument's")]
+    Unit,
+    /// A range on an argument that isn't numeric.
+    #[error("only a numeric argument has a range")]
+    NotNumeric,
+    /// A range end that isn't a value of the argument's type.
+    #[error("a range end isn't a value of the argument's type")]
+    End,
+    /// A range end converted into the argument's unit is past a double.
+    #[error("a range end in the argument's unit is past what a double holds")]
+    EndNotFinite,
+    /// A default that isn't a number where the unit converts it.
+    #[error("the default isn't a number, which their unit converts")]
+    DefaultNotNumber,
+    /// A default converted into the argument's unit is past a double.
+    #[error("the default in the argument's unit is past what a double holds")]
+    DefaultNotFinite,
+    /// The two ranges share no value.
+    #[error("their range shares no value with the argument's")]
+    Disjoint,
+}
+
+/// Why a command packet's limits can't narrow its command's arguments
+/// ([`CommandPacket::arguments_of`]).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum LimitsError {
+    /// The packet limits an argument the command doesn't have.
+    #[error("the command has no argument {0}")]
+    Unknown(String),
+    /// The packet's limits can't narrow one of the command's arguments.
+    #[error("argument {argument}: {problem}")]
+    Narrow {
+        argument: String,
+        problem: NarrowError,
+    },
+}
+
+/// Of two range ends, the one that allows less, by `pick`; an open end
+/// (`None`) allows anything.
+fn tighter<T>(ours: Option<T>, theirs: Option<T>, pick: fn(T, T) -> T) -> Option<T> {
+    match (ours, theirs) {
+        (Some(ours), Some(theirs)) => Some(pick(ours, theirs)),
+        (ours, theirs) => ours.or(theirs),
+    }
 }
 
 /// The values a numeric argument may take, inclusive; either end may be
@@ -1140,52 +1280,57 @@ impl Set {
         }
     }
 
-    /// The first feature newer than IR 2.0 the set uses, in the order
-    /// [`Set::needs`] finds them.
+    /// The first use of the newest feature the set uses, in the order
+    /// [`Set::needs`] finds them: what decides the version it needs.
     pub fn need(&self) -> Option<Need> {
-        self.needs().into_iter().next()
+        let needs = self.needs();
+        let newest = needs.iter().map(|need| need.version).max()?;
+        needs.into_iter().find(|need| need.version == newest)
     }
 
     /// Every use of a feature newer than IR 2.0 in the set: in its struct
-    /// types, by name, then its packets and its command packets, each in
-    /// entry order.
+    /// types, by name, then its packets, then its command packets (each
+    /// one's `arguments` before its entries), each in entry order.
     pub fn needs(&self) -> Vec<Need> {
-        let types = self.types.iter().map(|(name, ty)| {
+        let mut needs = Vec::new();
+        for (name, ty) in &self.types {
             let name = crate::diagnostics::escape_pointer_token(name);
-            (format!("/types/{name}"), &ty.entries)
-        });
-        let packets = self
-            .packets
-            .iter()
-            .enumerate()
-            .map(|(i, packet)| (format!("/packets/{i}"), &packet.entries));
-        let commands = self
-            .commands
-            .iter()
-            .enumerate()
-            .map(|(i, packet)| (format!("/commands/{i}"), &packet.entries));
-        types
-            .chain(packets)
-            .chain(commands)
-            .flat_map(|(container, entries)| {
-                entries.iter().enumerate().filter_map(move |(i, entry)| {
-                    let at = format!("{container}/entries/{i}");
-                    match entry {
-                        Entry::Field(field) => field.signed.map(|_| format!("{at}/signed")),
-                        Entry::Array(ArrayEntry {
-                            element: Element::Scalar(element),
-                            ..
-                        }) => element.signed.map(|_| format!("{at}/element/signed")),
-                        _ => None,
-                    }
-                })
-            })
-            .map(|pointer| Need {
-                pointer,
-                feature: "signed",
-                version: IrVersion::new(2, 1),
-            })
-            .collect()
+            signed_needs(&format!("/types/{name}"), &ty.entries, &mut needs);
+        }
+        for (index, packet) in self.packets.iter().enumerate() {
+            signed_needs(&format!("/packets/{index}"), &packet.entries, &mut needs);
+        }
+        for (index, packet) in self.commands.iter().enumerate() {
+            if !packet.arguments.is_empty() {
+                needs.push(Need {
+                    pointer: format!("/commands/{index}/arguments"),
+                    feature: "arguments",
+                    version: IrVersion::new(2, 2),
+                });
+            }
+            signed_needs(&format!("/commands/{index}"), &packet.entries, &mut needs);
+        }
+        needs
+    }
+}
+
+/// Each entry of `container` that spells `signed` (IR 2.1).
+fn signed_needs(container: &str, entries: &[Entry], needs: &mut Vec<Need>) {
+    for (index, entry) in entries.iter().enumerate() {
+        let at = format!("{container}/entries/{index}");
+        let pointer = match entry {
+            Entry::Field(field) => field.signed.map(|_| format!("{at}/signed")),
+            Entry::Array(ArrayEntry {
+                element: Element::Scalar(element),
+                ..
+            }) => element.signed.map(|_| format!("{at}/element/signed")),
+            _ => None,
+        };
+        needs.extend(pointer.map(|pointer| Need {
+            pointer,
+            feature: "signed",
+            version: IrVersion::new(2, 1),
+        }));
     }
 }
 
@@ -1195,7 +1340,7 @@ impl Set {
 pub struct Need {
     /// A JSON Pointer to it within the set.
     pub pointer: String,
-    /// Its key: `signed` (2.1).
+    /// Its key: `signed` (2.1) or `arguments` (2.2).
     pub feature: &'static str,
     /// The lowest version that has it.
     pub version: IrVersion,
@@ -1385,6 +1530,15 @@ pub struct CommandPacket {
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub metadata: BTreeMap<String, Scalar>,
+    /// What this packet accepts of the command's arguments, by name, where
+    /// it's narrower than the catalog command (IR 2.2): one vendor's limits
+    /// under a fleet's catalog.
+    #[serde(
+        default,
+        deserialize_with = "null_as_empty",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
+    pub arguments: BTreeMap<String, PacketArgument>,
     /// The payload; absent for a command the link frames with no payload.
     #[serde(
         default,
@@ -1400,8 +1554,62 @@ impl CommandPacket {
             name: name.into(),
             canonical: canonical.into(),
             metadata: BTreeMap::new(),
+            arguments: BTreeMap::new(),
             entries,
         }
+    }
+
+    /// `command`'s arguments as this packet takes them, in the command's
+    /// order: each its `arguments` names narrowed ([`Argument::narrowed`]),
+    /// borrowed when it narrows none. An error when one names no argument
+    /// of the command or can't narrow it, which validation refuses.
+    pub fn arguments_of<'c>(
+        &self,
+        command: &'c Command,
+    ) -> Result<Cow<'c, [Argument]>, LimitsError> {
+        if self.arguments.is_empty() {
+            return Ok(Cow::Borrowed(&command.arguments));
+        }
+        let mut arguments = command.arguments.clone();
+        for (name, limits) in &self.arguments {
+            let argument = arguments
+                .iter_mut()
+                .find(|argument| &argument.name == name)
+                .ok_or_else(|| LimitsError::Unknown(name.clone()))?;
+            *argument = argument
+                .narrowed(limits)
+                .map_err(|problem| LimitsError::Narrow {
+                    argument: name.clone(),
+                    problem,
+                })?;
+        }
+        Ok(Cow::Owned(arguments))
+    }
+}
+
+/// What one command packet accepts of an argument it encodes, besides
+/// what the catalog command allows (IR 2.2). A value is sent with the
+/// packet only when both allow it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PacketArgument {
+    /// The UCUM unit `range` and `default` are in; the argument's when
+    /// absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Numeric arguments: the values the packet accepts, inclusive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<ArgumentRange>,
+    /// The value used when a request leaves the argument out, in place of
+    /// the catalog's: a list of values for a list argument.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Literal>,
+}
+
+impl PacketArgument {
+    pub fn new() -> Self {
+        PacketArgument::default()
     }
 }
 

@@ -7,7 +7,7 @@
 //! suite lists the codes an invalid document produces, while the wording of
 //! messages is free.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// What kind of problem a diagnostic reports. Stable once released: a code
@@ -154,6 +154,9 @@ pub enum Code {
     /// A value a later bundle gives that an earlier one's replaces when
     /// bundles are merged: a description, a deprecation note or limits.
     Overridden,
+    /// In a build whose catalog some inputs own, a param or command
+    /// another input defines under a name no owner defines.
+    CatalogOwner,
 }
 
 impl Code {
@@ -226,6 +229,7 @@ impl Code {
             Code::ChangedCommand => "changed_command",
             Code::Checksum => "checksum",
             Code::Overridden => "overridden",
+            Code::CatalogOwner => "catalog_owner",
         }
     }
 }
@@ -418,12 +422,18 @@ impl Place {
     }
 }
 
+/// How many misspelt names one validation suggests a name for.
+const SUGGESTED: usize = 100;
+
 /// Collects diagnostics during one validation.
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     diagnostics: Vec<(Vec<Segment>, Diagnostic)>,
     /// What's been reported: code, path, message and first definition.
     seen: BTreeSet<(Code, String, String, Option<String>)>,
+    /// Each suggestion worked out, by the kind of name and the name, so a
+    /// misspelt name used many times is searched for once.
+    suggestions: BTreeMap<(&'static str, String), String>,
 }
 
 impl Report {
@@ -461,6 +471,29 @@ impl Report {
         self.diagnostics.push((place.segments.clone(), diagnostic));
     }
 
+    /// What `find` suggests for `name`, one of the catalog's `kind` names
+    /// that isn't there: worked out once a name, and for the first
+    /// [`SUGGESTED`] names only, so a build whose names mostly miss (a
+    /// misspelt namespace, say) stays quick, and its first errors say what
+    /// was meant.
+    pub(crate) fn suggestion(
+        &mut self,
+        kind: &'static str,
+        name: &str,
+        find: impl FnOnce() -> String,
+    ) -> String {
+        let key = (kind, name.to_string());
+        if let Some(found) = self.suggestions.get(&key) {
+            return found.clone();
+        }
+        if self.suggestions.len() >= SUGGESTED {
+            return String::new();
+        }
+        let found = find();
+        self.suggestions.insert(key, found.clone());
+        found
+    }
+
     /// Whether nothing has been reported.
     pub(crate) fn is_empty(&self) -> bool {
         self.diagnostics.is_empty()
@@ -481,6 +514,7 @@ impl Report {
                 self.diagnostics.push((segments, diagnostic));
             }
         }
+        self.suggestions.extend(other.suggestions);
     }
 
     /// Whether anything at or under `place` was reported, so a later check
@@ -504,5 +538,32 @@ impl Report {
         Err(Diagnostics(
             self.diagnostics.into_iter().map(|(_, d)| d).collect(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_name_is_searched_for_once_and_only_the_first_names_are() {
+        let mut report = Report::default();
+        let mut searches = 0;
+        let mut suggest = |report: &mut Report, kind: &'static str, name: &str| {
+            report.suggestion(kind, name, || {
+                searches += 1;
+                format!("; did you mean {name}x?")
+            })
+        };
+        assert_eq!(suggest(&mut report, "param", "a.b"), "; did you mean a.bx?");
+        assert_eq!(suggest(&mut report, "param", "a.b"), "; did you mean a.bx?");
+        suggest(&mut report, "command", "a.b");
+        for index in 2..SUGGESTED {
+            suggest(&mut report, "param", &format!("a.b{index}"));
+        }
+        assert_eq!(suggest(&mut report, "param", "a.late"), "");
+        // Names already worked out are still given.
+        assert_eq!(suggest(&mut report, "param", "a.b"), "; did you mean a.bx?");
+        assert_eq!(searches, SUGGESTED);
     }
 }

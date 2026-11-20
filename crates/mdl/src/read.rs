@@ -815,12 +815,12 @@ mod tests {
 
     #[test]
     fn versions_are_checked_before_the_shape() {
-        // A 2.2 document using a field 2.1 doesn't know: the error is about
+        // A 2.3 document using a field 2.2 doesn't know: the error is about
         // the version, not the field.
-        let newer = br#"{"mdl_version":"2.2","catalog":{"commands":{}}}"#;
+        let newer = br#"{"mdl_version":"2.3","catalog":{"commands":{}}}"#;
         assert_eq!(
             read_bundle(newer).unwrap_err().to_string(),
-            "this document needs MDL IR 2.2, but this build reads up to 2.1; upgrade to read it"
+            "this document needs MDL IR 2.3, but this build reads up to 2.2; upgrade to read it"
         );
         let major = br#"{"mdl_version":"3.0","catalog":{}}"#;
         assert_eq!(

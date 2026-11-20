@@ -1,5 +1,5 @@
 {
-  "mdl_version": "2.1",
+  "mdl_version": "2.2",
   "catalog": {
     "params": {
       "eps.bus_current": {
@@ -505,6 +505,9 @@
         {
           "name": "SET_MODE",
           "canonical": "eps.set_mode",
+          "arguments": {
+            "delay_s": { "unit": "min", "range": { "max": 10 }, "default": 0 }
+          },
           "entries": [
             { "kind": "field", "name": "op", "type": "string", "pointer": "/op", "value": "set_mode" },
             { "kind": "field", "name": "mode", "type": "string", "pointer": "/args/mode", "argument": "mode" },

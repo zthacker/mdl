@@ -10,9 +10,97 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{CONTAINERS, Parsed, SourceDiagnostic, SourceMap};
+use super::{CONTAINERS, Parsed, SourceDiagnostic, SourceId, SourceMap};
 use crate::diagnostics::{Code, escape_pointer_token};
 use crate::ir::{Argument, Bundle, Catalog, Command, Param};
+
+/// The catalog names some sources don't own, in a build whose catalog
+/// others do: every catalog param and command defined in a source that
+/// isn't one of `owners`, under a name no owner defines, as an error
+/// ([`catalog_owner`](Code::CatalogOwner)) at its definition. An operator
+/// who keeps the vocabulary makes its file the owner, so a vendor's
+/// definitions can map onto its names but not add their own, and a
+/// misspelt name fails instead of becoming a param. A definition restating
+/// an owner's name is left to [`merge`], which checks the two agree.
+///
+/// A definition is an owner's when its span is in one of `owners`; one
+/// with no span is no owner's. With no owners the catalog is open, and
+/// nothing is reported. The parts are those [`merge`] is given, in any
+/// order.
+pub fn check_owned_catalog(
+    parts: &[Parsed],
+    owners: &BTreeSet<SourceId>,
+) -> Result<(), Vec<SourceDiagnostic>> {
+    if owners.is_empty() {
+        return Ok(());
+    }
+    let defined = |part: &Parsed, kind: &str, name: &str| {
+        part.map
+            .get(&format!("/catalog/{kind}/{}", escape_pointer_token(name)))
+    };
+    let owned = |span: Option<super::Span>| span.is_some_and(|span| owners.contains(&span.source));
+    let mut vocabulary = BTreeSet::new();
+    for part in parts {
+        let catalog = &part.bundle.catalog;
+        let names = catalog.params.keys().map(|name| ("params", name));
+        for (kind, name) in names.chain(catalog.commands.keys().map(|name| ("commands", name))) {
+            if owned(defined(part, kind, name)) {
+                vocabulary.insert((kind, name.as_str()));
+            }
+        }
+    }
+    let mut errors = Vec::new();
+    for part in parts {
+        let catalog = &part.bundle.catalog;
+        let names = catalog.params.keys().map(|name| ("params", name));
+        for (kind, name) in names.chain(catalog.commands.keys().map(|name| ("commands", name))) {
+            let span = defined(part, kind, name);
+            if owned(span) || vocabulary.contains(&(kind, name.as_str())) {
+                continue;
+            }
+            let what = if kind == "params" { "param" } else { "command" };
+            let mut error = SourceDiagnostic::error(
+                Code::CatalogOwner.as_str(),
+                format!(
+                    "this build's catalog is owned by other inputs, which don't define {what} \
+                     {name}; define it there, or map onto a name they define"
+                ),
+            );
+            if let Some(span) = span {
+                error = error.with_span(span);
+            }
+            errors.push(error);
+        }
+    }
+    errors.sort_by_key(|error| error.span.map(|span| (span.source, span.start)));
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+/// Bundles as one, as [`merge`] makes it, in a build whose catalog
+/// `owners` own: what [`check_owned_catalog`] finds is reported with the
+/// merge's own problems and every part's warnings, in file order. With no
+/// owners it's [`merge`].
+pub fn merge_owned(
+    parts: Vec<Parsed>,
+    owners: &BTreeSet<SourceId>,
+) -> Result<Parsed, Vec<SourceDiagnostic>> {
+    let owned = check_owned_catalog(&parts, owners);
+    match (owned, merge(parts)) {
+        (Ok(()), merged) => merged,
+        (Err(mut problems), merged) => {
+            problems.extend(match merged {
+                Ok(parsed) => parsed.warnings,
+                Err(more) => more,
+            });
+            problems.sort_by_key(|d| d.span.map(|span| (span.source, span.start)));
+            Err(problems)
+        }
+    }
+}
 
 /// Bundles as one, in the order given, which is also their precedence.
 ///
@@ -559,6 +647,63 @@ mod tests {
             at.to_string(),
             first.to_string(),
         )
+    }
+
+    #[test]
+    fn outside_its_owners_the_catalog_takes_only_names_they_define() {
+        let (sources, parts) = read(&[
+            catalog(
+                json!({ "eps.v": { "type": "f64", "unit": "V" } }),
+                json!({ "eps.go": {} }),
+            ),
+            catalog(
+                json!({ "eps.v": { "type": "f64", "unit": "V" }, "eps.vv": { "type": "f64" } }),
+                json!({ "eps.go": {}, "eps.stop": {} }),
+            ),
+        ]);
+        let ids: Vec<SourceId> = sources.iter().map(|file| file.id()).collect();
+        let first = BTreeSet::from([ids[0]]);
+        let errors = check_owned_catalog(&parts, &first).unwrap_err();
+        let error = |what: &str| {
+            row(
+                "catalog_owner",
+                &format!(
+                    "this build's catalog is owned by other inputs, which don't define {what}; \
+                     define it there, or map onto a name they define"
+                ),
+                "",
+                "1.json",
+                "-",
+            )
+        };
+        assert_eq!(
+            shown_all(&sources, &errors),
+            [error("command eps.stop"), error("param eps.vv")]
+        );
+        // With no owners the catalog is open, and an owner may add names.
+        assert!(check_owned_catalog(&parts, &BTreeSet::new()).is_ok());
+        assert!(check_owned_catalog(&parts, &ids.iter().copied().collect()).is_ok());
+    }
+
+    #[test]
+    fn a_closed_merge_reports_what_owners_dont_define_with_the_merges_problems() {
+        let (sources, parts) = read(&[
+            catalog(
+                json!({ "eps.v": { "type": "f64", "unit": "V" } }),
+                json!({}),
+            ),
+            catalog(
+                json!({ "eps.v": { "type": "f64", "unit": "A" }, "eps.w": { "type": "f64" } }),
+                json!({}),
+            ),
+        ]);
+        let first = sources.iter().map(|file| file.id()).take(1).collect();
+        let errors = merge_owned(parts, &first).unwrap_err();
+        let codes: Vec<&str> = errors.iter().map(|error| error.code).collect();
+        assert_eq!(codes, ["duplicate_name", "catalog_owner"], "{errors:#?}");
+        // With no owners it's a merge.
+        let (_, parts) = read(&[catalog(json!({ "eps.w": { "type": "f64" } }), json!({}))]);
+        assert!(merge_owned(parts, &BTreeSet::new()).is_ok());
     }
 
     #[test]

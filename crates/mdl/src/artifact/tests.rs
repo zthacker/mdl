@@ -119,7 +119,8 @@ fn small_bundle_digests_are_stable() {
 }
 
 /// An artifact states the lowest IR version that reads it: a set using
-/// `signed` says 2.1, and every other artifact keeps 2.0 and its digest
+/// `signed` says 2.1, one whose command packet has limits of its own 2.2,
+/// and every other artifact keeps 2.0 and its digest
 /// (`small_bundle_digests_are_stable` pins some). A reader refuses an
 /// artifact stating less than it uses, or more than it needs, and a bundle
 /// stating less than a feature it uses.
@@ -131,6 +132,7 @@ fn artifacts_state_the_version_they_need() {
         value["mdl_version"].as_str().unwrap().to_string()
     };
     assert_eq!(version(&artifacts.sets["sink_v1"]), "2.1");
+    assert_eq!(version(&artifacts.sets["vendor_j_v1"]), "2.2");
     assert_eq!(version(&artifacts.sets["vendor_x_v2"]), "2.0");
     assert_eq!(version(&artifacts.families["sink"]), "2.0");
     assert_eq!(version(&artifacts.catalog), "2.0");
@@ -147,6 +149,11 @@ fn artifacts_state_the_version_they_need() {
         (less.code(), less.path()),
         ("feature_version", "/set/packets/1/entries/0/signed")
     );
+    let less = restated(&artifacts.sets["vendor_j_v1"], "2.2", "2.1");
+    assert_eq!(
+        (less.code(), less.path()),
+        ("feature_version", "/set/commands/0/arguments")
+    );
     let more = restated(&artifacts.sets["vendor_x_v2"], "2.0", "2.1");
     assert_eq!(
         (more.code(), more.path()),
@@ -161,7 +168,19 @@ fn artifacts_state_the_version_they_need() {
         more.detail()
     );
 
+    // The first set that needs more than the bundle states, at its newest
+    // feature.
     let mut older = fixture();
+    older["mdl_version"] = json!("2.1");
+    let refused = read_bundle(older.to_string().as_bytes()).unwrap_err();
+    assert_eq!(
+        (refused.code(), refused.path()),
+        ("feature_version", "/sets/1/commands/0/arguments")
+    );
+    older["sets"][1]["commands"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("arguments");
     older["mdl_version"] = json!("2.0");
     let refused = read_bundle(older.to_string().as_bytes()).unwrap_err();
     assert_eq!(

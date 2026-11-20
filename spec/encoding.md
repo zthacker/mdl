@@ -37,8 +37,9 @@ checksums; this document uses those definitions and doesn't repeat them.
 
 - Each given argument MUST be one of the command's
   [`unknown_argument`], given once [`duplicate_argument`].
-- An argument left out takes its default; one without a default is
-  [`missing_argument`]. The result lists the defaulted arguments.
+- An argument left out takes its default, the packet's where it gives
+  one (§2.6); one without a default is [`missing_argument`]. The result
+  lists the defaulted arguments.
 - Arguments are checked in two passes, and the first problem is the
   error. First the given names, in the order given [`unknown_argument`,
   `duplicate_argument`]; then every argument of the command, in catalog
@@ -79,8 +80,8 @@ request that leaves an argument out never fails on the argument's default.
 
 ### 2.3 Ranges
 
-A numeric argument with a `range` MUST lie within it, ends included
-[`out_of_range`]. A range's ends are values of the argument's type,
+A numeric argument with a `range` MUST lie within it, ends included, and
+within the packet's where it gives one (§2.6) [`out_of_range`]. A range's ends are values of the argument's type,
 written as defaults are (§2.2): an `f64` argument's are numbers, and a
 `u64` or `i64` argument's are integers, written past ±(2^53 − 1) as
 decimal strings, so `{ "min": 1, "max": "1152921504606846975" }` is
@@ -116,6 +117,36 @@ lists encode together; a caller's list that disagrees with a defaulted
 one is [`bad_count`]. As for any argument with a default, a set
 may leave a list argument out (§2.4), and then only its default can be
 sent: a list equal to it value by value, in order.
+
+### 2.6 A packet's own limits
+
+A command packet MAY narrow what it accepts of the arguments it encodes
+(`arguments`, IR 2.2), as a vendor's packet under a fleet's catalog does:
+by argument name, a `range`, a `default` or both, in `unit`, the
+argument's when it's left out.
+
+- A value is checked against the catalog's range and the packet's, so
+  it MUST lie within both [`out_of_range`], whose message names the
+  range the two leave (`0 to 60`) and, when the catalog's alone would
+  allow the value, says that range is the set's and gives the catalog's.
+  A packet range wider than the catalog's narrows nothing. A list
+  argument's values are each checked.
+- The packet's default is the argument's default with that packet; the
+  catalog's is used only where the packet gives none.
+- A `unit` other than the argument's converts the range's ends and the
+  default into the argument's unit (`units.md` §4) before anything is
+  compared, which only an `f64` argument's limits can need: an integer
+  argument's are in its own unit.
+- Validation guarantees that each names an argument of the command
+  [`unknown_argument`] that the packet encodes [`unmapped_argument`] and
+  gives a range or a default [`empty`], in a unit that converts
+  [`unit_mismatch`]; that the two ranges share a value [`value_range`];
+  and that the default the packet sends is one both ranges allow
+  [`default_value`]. Its other guarantees (§2.2, §2.5, §3.1) hold for the
+  argument as the packet narrows it, so a packet that keeps an argument to
+  what its field holds encodes it, whatever the catalog allows.
+- Decoding a command (§7.4) tests a value against the narrowed range,
+  and an argument the packet leaves out decodes to its default as above.
 
 ## 3. Raw values
 
@@ -416,9 +447,9 @@ A decoded value has its argument's type, whatever its field's type or its
 default's spelling: an `i64` argument read from a `uint` field is a
 signed integer, and a `u64` default written `0` is unsigned.
 
-The value MUST be one the catalog allows, by §2.2 and §2.3, with the same
-codes, but an `f64` argument with a range is tested on its raw value,
-finite by then, in this order:
+The value MUST be one the catalog allows, as the packet narrows it
+(§2.6), by §2.2 and §2.3, with the same codes, but an `f64` argument
+with a range is tested on its raw value, finite by then, in this order:
 
 1. the raw value MUST lie between what the range's two ends become by
    §3.1 (the inverse conversion and its rounding, without the fit check),

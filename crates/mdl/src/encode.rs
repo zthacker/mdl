@@ -466,21 +466,31 @@ fn check_arguments<'a>(
         }
     }
     let encoded = encoded_arguments(packet, types);
+    // Ranges and defaults as the packet takes them; names and units are
+    // the catalog's either way.
+    let narrowed = packet
+        .arguments_of(command)
+        .map_err(|_| EncodeError::Field {
+            packet: packet.name.clone(),
+            field: "arguments".to_string(),
+            problem: FieldProblem::Layout("argument limits validation accepts"),
+        })?;
     let mut checked = BTreeMap::new();
     let mut defaulted = Vec::new();
-    for argument in &command.arguments {
-        let default = argument
+    for (argument, narrowed) in command.arguments.iter().zip(narrowed.iter()) {
+        let default = narrowed
             .default
             .as_ref()
             .map(|literal| {
-                from_literal(argument, literal).and_then(|value| check_given(argument, &value))
+                from_literal(narrowed, literal).and_then(|value| check_given(narrowed, &value))
             })
             .transpose()
             .map_err(|problem| error(&argument.name, problem))?;
         let value = match (given.get(argument.name.as_str()), &default) {
-            (Some(value), _) => {
-                check_given(argument, value).map_err(|problem| error(&argument.name, problem))?
-            }
+            (Some(value), _) => check_given(narrowed, value).map_err(|problem| {
+                let problem = in_set(problem, argument, value, &request.set);
+                error(&argument.name, problem)
+            })?,
             (None, Some(default)) => {
                 defaulted.push(argument.name.as_str());
                 default.clone()
@@ -490,7 +500,7 @@ fn check_arguments<'a>(
         // A set from before the argument was added doesn't encode it, so
         // only its default can be sent with that set.
         if !encoded.contains(argument.name.as_str()) && default.as_ref() != Some(&value) {
-            let default = argument
+            let default = narrowed
                 .default
                 .as_ref()
                 .map_or_else(|| "none".to_string(), show_literal);
@@ -742,6 +752,41 @@ fn check(argument: &Argument, value: &ArgumentValue) -> Result<Checked, Argument
     Ok(checked)
 }
 
+/// A value outside the range a set's packet narrows the argument to, which
+/// the catalog's would allow, says the range is the set's.
+fn in_set(
+    problem: ArgumentProblem,
+    catalog: &Argument,
+    value: &ArgumentValue,
+    set: &str,
+) -> ArgumentProblem {
+    match problem {
+        ArgumentProblem::OutOfRange { given, range } if check_given(catalog, value).is_ok() => {
+            ArgumentProblem::OutOfRange {
+                given,
+                range: format!(
+                    "{range} in set {set} ({} in the catalog)",
+                    range_words(catalog.range.as_ref())
+                ),
+            }
+        }
+        problem => problem,
+    }
+}
+
+/// A range in words: `0 to 10`, `at least 0`, `anything`.
+fn range_words(range: Option<&ArgumentRange>) -> String {
+    let (min, max) = range.map_or((None, None), |range| {
+        (range.min.as_ref(), range.max.as_ref())
+    });
+    match (min, max) {
+        (Some(min), Some(max)) => format!("{} to {}", show_end(min), show_end(max)),
+        (Some(min), None) => format!("at least {}", show_end(min)),
+        (None, Some(max)) => format!("at most {}", show_end(max)),
+        (None, None) => "anything".to_string(),
+    }
+}
+
 /// The value inside `range`, by `order`, which compares the value with a
 /// bound.
 fn check_range(
@@ -763,15 +808,9 @@ fn check_range(
     if above_min && below_max {
         return Ok(());
     }
-    let range = match (&range.min, &range.max) {
-        (Some(min), Some(max)) => format!("{} to {}", show_end(min), show_end(max)),
-        (Some(min), None) => format!("at least {}", show_end(min)),
-        (None, Some(max)) => format!("at most {}", show_end(max)),
-        (None, None) => "anything".to_string(),
-    };
     Err(ArgumentProblem::OutOfRange {
         given: value.to_string(),
-        range,
+        range: range_words(Some(range)),
     })
 }
 

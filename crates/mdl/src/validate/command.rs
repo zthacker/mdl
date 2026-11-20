@@ -4,33 +4,271 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use super::catalog::{check_argument, check_argument_default, check_range};
 use super::layout::static_offsets;
 use super::mapping::check_unit;
 use super::rules::{
-    check_integer_spelling, check_scalar, integer_value, is_identifier, pointer_tokens,
+    check_integer_spelling, check_scalar, check_unit_code, did_you_mean, integer_value,
+    is_identifier, pointer_tokens,
 };
 use super::set::{KeyId, KeyValue, by_value, exact, key_order, used_types};
 use crate::bits::IntForm;
 use crate::canonical::format_double;
 use crate::convert::{Converted, convert, inverse, inverts_exactly};
 use crate::diagnostics::{Code, Place, Report};
-use crate::encode::{FieldProblem, raw_unchecked, show_end, show_literal, write_problem};
+use crate::encode::{
+    FieldProblem, encoded_arguments, raw_unchecked, show_end, show_literal, write_problem,
+};
 use crate::ir::{
-    Argument, ArgumentRange, ArrayEntry, ByteLength, Catalog, CommandPacket, Conversion, Count,
-    Element, Encoding, Entry, Family, Field, Literal, ParamType, RangeEnds, Scalar, ScalarElement,
-    ScalarType, Set, StructType,
+    Argument, ArgumentRange, ArrayEntry, ByteLength, Catalog, Command, CommandPacket, Conversion,
+    Count, Element, Encoding, Entry, Family, Field, Literal, NarrowError, PacketArgument,
+    ParamType, RangeEnds, Scalar, ScalarElement, ScalarType, Set, StructType,
 };
 use crate::text;
 use crate::units::convert_between;
 
+/// Each command packet's arguments as it takes them, in the set's order:
+/// its catalog command's, each narrowed by the packet's own `arguments`
+/// (IR 2.2, [`Argument::narrowed`]) where they're valid. `None` for a
+/// packet whose command the catalog lacks, which [`check_packets`]
+/// reports.
+pub(super) fn narrowed_arguments(
+    set: &Set,
+    catalog: &Catalog,
+    place: &Place,
+    report: &mut Report,
+) -> Vec<PacketArguments> {
+    set.commands
+        .iter()
+        .enumerate()
+        .map(|(index, packet)| {
+            let mut unsettled = BTreeSet::new();
+            let Some(command) = catalog.commands.get(&packet.canonical) else {
+                return PacketArguments {
+                    arguments: None,
+                    unsettled,
+                };
+            };
+            let packet_place = place.item("commands", index, "command", &packet.name);
+            let encoded = encoded_arguments(packet, &set.types);
+            let mut arguments = command.arguments.clone();
+            for (name, limits) in &packet.arguments {
+                let at = packet_place.map_item("arguments", name, "argument");
+                let Some(argument) = arguments.iter_mut().find(|a| &a.name == name) else {
+                    unknown_argument(command, packet, name, &at, report);
+                    continue;
+                };
+                let encoded = encoded.contains(name.as_str());
+                match check_packet_argument(argument, limits, encoded, &at, report) {
+                    Limited::Narrowed(narrowed) => *argument = *narrowed,
+                    Limited::AsCataloged => {}
+                    Limited::Unsettled => {
+                        unsettled.insert(name.clone());
+                    }
+                }
+            }
+            PacketArguments {
+                arguments: Some(arguments),
+                unsettled,
+            }
+        })
+        .collect()
+}
+
+/// A command packet's arguments as it takes them ([`narrowed_arguments`]).
+pub(super) struct PacketArguments {
+    /// Its command's, each narrowed by the packet's limits; `None` when
+    /// the catalog lacks the command.
+    arguments: Option<Vec<Argument>>,
+    /// Those whose limits here have problems, reported: the fields that
+    /// encode them aren't checked against the catalog's range, which would
+    /// only echo them.
+    unsettled: BTreeSet<String>,
+}
+
+/// What a packet's limits make of one of its arguments.
+enum Limited {
+    Narrowed(Box<Argument>),
+    /// The argument as the catalog has it: its problems, reported there,
+    /// leave nothing to narrow.
+    AsCataloged,
+    /// The limits have problems, reported here.
+    Unsettled,
+}
+
+fn unknown_argument(
+    command: &Command,
+    packet: &CommandPacket,
+    name: &str,
+    place: &Place,
+    report: &mut Report,
+) {
+    let close = did_you_mean(name, command.arguments.iter().map(|a| &a.name));
+    report.error(
+        Code::UnknownArgument,
+        place,
+        format!("command {} has no argument {name}{close}", packet.canonical),
+    );
+}
+
+/// What a packet says of one of its command's arguments, in its own terms
+/// (its unit, its range, its default), then against the catalog's: the
+/// argument narrowed, when it's all valid.
+fn check_packet_argument(
+    argument: &Argument,
+    limits: &PacketArgument,
+    encoded: bool,
+    place: &Place,
+    report: &mut Report,
+) -> Limited {
+    let name = &argument.name;
+    let mut found = Report::default();
+    if !encoded {
+        found.error(
+            Code::UnmappedArgument,
+            place,
+            format!(
+                "no field or array of this packet encodes argument {name}, so it has nothing \
+                 here to limit"
+            ),
+        );
+    }
+    if limits.range.is_none() && limits.default.is_none() {
+        found.error(
+            Code::Empty,
+            place,
+            "a packet's argument gives a range, a default or both; omit it otherwise",
+        );
+    }
+    if let Some(unit) = &limits.unit {
+        let at = place.key("unit");
+        check_unit_code(unit, &at, &mut found);
+        let argument_name = format!("argument {name}");
+        let converts = argument.ty == ParamType::F64;
+        check_unit(
+            Some(unit),
+            argument.unit.as_deref(),
+            &argument_name,
+            converts,
+            &at,
+            &mut found,
+        );
+    }
+    let mut own = argument.clone();
+    own.range = limits.range.clone();
+    own.default = limits.default.clone();
+    if let Some(range) = &limits.range {
+        check_range(&own, range, &place.key("range"), &mut found);
+    }
+    check_argument_default(&own, place, &mut found);
+    let clean = found.is_empty();
+    report.absorb(found);
+    if !clean {
+        return Limited::Unsettled;
+    }
+    // An argument with problems of its own, reported on the catalog, isn't
+    // one to compare with.
+    let mut catalog = Report::default();
+    check_argument(argument, place, &mut catalog);
+    if !catalog.is_empty() {
+        return Limited::AsCataloged;
+    }
+    let unit = argument.unit.as_deref().unwrap_or_default();
+    let (code, key, message) = match argument.narrowed(limits) {
+        Ok(narrowed) => return check_narrowed_default(argument, narrowed, limits, place, report),
+        Err(NarrowError::Disjoint) => (
+            Code::ValueRange,
+            "range",
+            format!(
+                "argument {name} can be {} in the catalog and {} here, so no value is both",
+                range_text(argument.range.as_ref()),
+                range_text(limits.range.as_ref())
+            ),
+        ),
+        Err(NarrowError::EndNotFinite) => (
+            Code::ValueRange,
+            "range",
+            format!("in argument {name}'s unit, {unit:?}, an end here is past what a double holds"),
+        ),
+        Err(NarrowError::DefaultNotFinite) => (
+            Code::DefaultValue,
+            "default",
+            format!(
+                "in argument {name}'s unit, {unit:?}, the default here is past what a double \
+                 holds"
+            ),
+        ),
+        // The checks above refuse the rest first.
+        Err(problem) => (
+            Code::ValueRange,
+            "range",
+            format!("these limits can't narrow argument {name}: {problem}"),
+        ),
+    };
+    report.error(code, &place.key(key), message);
+    Limited::Unsettled
+}
+
+/// What a packet's limits leave of `argument`, `narrowed`, if the default
+/// it sends when a request leaves the argument out is one both ranges
+/// allow.
+fn check_narrowed_default(
+    argument: &Argument,
+    narrowed: Argument,
+    limits: &PacketArgument,
+    place: &Place,
+    report: &mut Report,
+) -> Limited {
+    let name = &argument.name;
+    let mut defaults = Report::default();
+    check_argument_default(&narrowed, place, &mut defaults);
+    if !defaults.is_empty() {
+        let (at, message) = match &limits.default {
+            Some(_) => (
+                place.key("default"),
+                format!(
+                    "the default here is outside argument {name}'s range in the catalog, {}",
+                    range_text(argument.range.as_ref())
+                ),
+            ),
+            None => (
+                place.key("range"),
+                format!(
+                    "argument {name}'s default in the catalog is outside the range here, {}; \
+                     give a default here",
+                    range_text(limits.range.as_ref())
+                ),
+            ),
+        };
+        report.error(Code::DefaultValue, &at, message);
+        return Limited::Unsettled;
+    }
+    Limited::Narrowed(Box::new(narrowed))
+}
+
+/// A range in words: `0 to 10`, `at least 0`, `any value`.
+fn range_text(range: Option<&ArgumentRange>) -> String {
+    let (min, max) = range.map_or((None, None), |range| {
+        (range.min.as_ref(), range.max.as_ref())
+    });
+    match (min, max) {
+        (Some(min), Some(max)) => format!("{} to {}", show_end(min), show_end(max)),
+        (Some(min), None) => format!("at least {}", show_end(min)),
+        (None, Some(max)) => format!("at most {}", show_end(max)),
+        (None, None) => "any value".to_string(),
+    }
+}
+
 /// Every command packet of a set: names, the command it encodes, link
-/// metadata, and its fields. Positions and references are checked with
-/// the set's layout, and what each field writes with [`check_writes`],
-/// which takes the writes this returns.
+/// metadata, and its fields, against its arguments as
+/// [`narrowed_arguments`] gives them. Positions and references are checked
+/// with the set's layout, and what each field writes with
+/// [`check_writes`], which takes the writes this returns.
 pub(super) fn check_packets<'a>(
     set: &'a Set,
     family: Option<&Family>,
     catalog: &'a Catalog,
+    narrowed: &'a [PacketArguments],
     place: &'a Place,
     report: &mut Report,
 ) -> Vec<Write<'a>> {
@@ -77,16 +315,20 @@ pub(super) fn check_packets<'a>(
         }
         let command = catalog.commands.get(&packet.canonical);
         if command.is_none() {
+            let close = report.suggestion("command", &packet.canonical, || {
+                did_you_mean(&packet.canonical, catalog.commands.keys())
+            });
             report.error(
                 Code::UnknownCommand,
                 &packet_place.key("canonical"),
-                format!("the catalog has no command {}", packet.canonical),
+                format!("the catalog has no command {}{close}", packet.canonical),
             );
         }
-        let arguments = command.map(|command| command.arguments.as_slice());
+        let taken = narrowed.get(index);
         let mut sources = Sources {
             packet,
-            arguments,
+            arguments: taken.and_then(|taken| taken.arguments.as_deref()),
+            unsettled: taken.map(|taken| &taken.unsettled),
             types: &set.types,
             set_place: place,
             computed: computed_fields(packet, &packet_place, report),
@@ -480,6 +722,9 @@ struct Sources<'a> {
     packet: &'a CommandPacket,
     /// `None` when the command is unknown (reported already).
     arguments: Option<&'a [Argument]>,
+    /// Arguments whose limits in this packet have problems (reported
+    /// already), whose fields aren't checked against their ranges.
+    unsettled: Option<&'a BTreeSet<String>>,
     types: &'a BTreeMap<String, StructType>,
     set_place: &'a Place,
     /// Fields whose value comes from the data: a length or a count.
@@ -1000,7 +1245,7 @@ impl<'a> Sources<'a> {
         // another packet's findings there don't count.
         let mut found = Report::default();
         self.check_argument(name, argument, encoder, in_array, at, &mut found);
-        if found.is_empty() {
+        if found.is_empty() && !self.unsettled(name) {
             self.writes.push(Write {
                 packet: self.packet,
                 field: encoder.field.clone(),
@@ -1048,7 +1293,14 @@ impl<'a> Sources<'a> {
             );
             return;
         }
-        check_argument_field(encoder, argument, report);
+        let ranged = !self.unsettled(name);
+        check_argument_field(encoder, argument, ranged, report);
+    }
+
+    /// Whether this packet's limits for the argument have problems.
+    fn unsettled(&self, name: &str) -> bool {
+        self.unsettled
+            .is_some_and(|unsettled| unsettled.contains(name))
     }
 }
 
@@ -1356,7 +1608,16 @@ struct Encoder<'a> {
 
 /// An argument's type fits the field that encodes it, through the
 /// field's conversion, in the field's unit.
-fn check_argument_field(encoder: &Encoder<'_>, argument: &Argument, report: &mut Report) {
+/// The field can encode the argument. `ranged` is false for an argument
+/// whose limits in this packet have problems (reported already): the
+/// checks that read its range (an inverse's direction, coverage) would only
+/// echo them, so they wait until the limits are fixed.
+fn check_argument_field(
+    encoder: &Encoder<'_>,
+    argument: &Argument,
+    ranged: bool,
+    report: &mut Report,
+) {
     let field = encoder.field;
     let states = matches!(field.conversion, Some(Conversion::States { .. }));
     let plain = field.conversion.is_none();
@@ -1413,7 +1674,7 @@ fn check_argument_field(encoder: &Encoder<'_>, argument: &Argument, report: &mut
     }
     // Coverage is checked at the range's ends, which bound the raw values
     // only once the inverse is known to be monotonic over the range.
-    let monotonic = readable_range(argument) && check_inverse(encoder, argument, report);
+    let monotonic = ranged && readable_range(argument) && check_inverse(encoder, argument, report);
     if let Some(Conversion::Linear { scale, .. }) = field.conversion
         && scale == 0.0
     {
@@ -1822,7 +2083,7 @@ fn check_coverage(encoder: &Encoder<'_>, argument: &Argument, report: &mut Repor
         &encoder.argument,
         format!(
             "argument {} {promise}, but {} holds raw {field_low} to {field_high}; give the \
-             argument a range it can hold",
+             argument, or this packet's arguments, a range it can hold",
             argument.name, encoder.what
         ),
     );

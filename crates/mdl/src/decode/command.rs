@@ -143,9 +143,15 @@ impl FamilySets {
             .get(&packet.canonical)
             .ok_or_else(|| invalid("a command the catalog has"))?;
         let binary = self.byte_order().is_some();
+        // Ranges and defaults as the packet takes them; names are the
+        // catalog's either way.
+        let narrowed = packet
+            .arguments_of(command)
+            .map_err(|_| invalid("argument limits validation accepts"))?;
         let mut arguments = Vec::with_capacity(command.arguments.len());
         let mut defaulted = Vec::new();
-        for argument in &command.arguments {
+        for (listed, argument) in command.arguments.iter().zip(narrowed.iter()) {
+            let name = listed.name.as_str();
             let refused = |problem| CommandDecodeError::Argument {
                 command: packet.canonical.clone(),
                 argument: argument.name.clone(),
@@ -185,13 +191,13 @@ impl FamilySets {
                     .map_err(refused)?
                 }
                 None => {
-                    defaulted.push(argument.name.as_str());
+                    defaulted.push(name);
                     default_of(argument)
                         .ok_or_else(|| invalid("a default for an argument the set leaves out"))?
                         .map_err(refused)?
                 }
             };
-            arguments.push((argument.name.as_str(), value));
+            arguments.push((name, value));
         }
         Ok(DecodedCommand {
             set: &loaded.set,

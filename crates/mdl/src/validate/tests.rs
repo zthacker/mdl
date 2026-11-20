@@ -462,7 +462,7 @@ fn every_problem_is_reported_in_document_order_with_its_context() {
             "catalog, param eps.mode: an enum param lists its states [empty]",
             "family vendor_j: only binary families have a byte_order [byte_order]",
             "set vendor_x_v2, packet HK, field bus_counts: param eps.bus_volts isn't in the \
-             catalog [unknown_canonical]",
+             catalog; did you mean eps.bus_voltage? [unknown_canonical]",
         ]
     );
 }
@@ -2527,6 +2527,129 @@ fn set_mode_packet(v: &mut Value) -> &mut Value {
     &mut set_x(v)["commands"][1]
 }
 
+/// Sets `set_mode_packet`'s own argument limits (IR 2.2).
+fn limit(v: &mut Value, arguments: Value) {
+    set_mode_packet(v)["arguments"] = arguments;
+}
+
+#[test]
+fn a_packet_narrows_the_arguments_it_encodes() {
+    let at = "/sets/0/commands/1/arguments/delay_s";
+    // Narrower than the catalog's range, with a default; in a unit that
+    // converts; wider, which narrows nothing.
+    for limits in [
+        json!({ "delay_s": { "range": { "min": 0, "max": 60 }, "default": 5 } }),
+        json!({ "delay_s": { "unit": "ms", "range": { "max": 60000 }, "default": 500 } }),
+        json!({ "delay_s": { "range": { "min": -10, "max": 7200 } } }),
+    ] {
+        assert_eq!(problems(|v| limit(v, limits.clone())), vec![], "{limits}");
+    }
+    assert_eq!(
+        messages(|v| limit(v, json!({ "delays": { "range": { "max": 1 } } }))),
+        ["command eps.set_mode has no argument delays; did you mean delay_s?"]
+    );
+    assert_one(Code::Empty, at, |v| limit(v, json!({ "delay_s": {} })));
+    assert_one(Code::UnitMismatch, &format!("{at}/unit"), |v| {
+        limit(
+            v,
+            json!({ "delay_s": { "unit": "m", "range": { "max": 1 } } }),
+        );
+    });
+    assert_one(
+        Code::ParamShape,
+        "/sets/0/commands/1/arguments/mode/range",
+        |v| limit(v, json!({ "mode": { "range": { "max": 1 } } })),
+    );
+    assert_one(Code::DefaultValue, &format!("{at}/default"), |v| {
+        limit(
+            v,
+            json!({ "delay_s": { "range": { "max": 10 }, "default": 20 } }),
+        );
+    });
+    // Values past a double once converted are refused where they're given.
+    assert_eq!(
+        messages(|v| limit(
+            v,
+            json!({ "delay_s": { "unit": "Ys", "range": { "max": 1e300 } } })
+        )),
+        ["in argument delay_s's unit, \"s\", an end here is past what a double holds"]
+    );
+    assert_one(Code::DefaultValue, &format!("{at}/default"), |v| {
+        limit(v, json!({ "delay_s": { "unit": "Ys", "default": 1e300 } }));
+    });
+    // Limits with problems leave the field unchecked against the catalog's
+    // range, which an 8-bit field couldn't hold: only the unit is reported.
+    // The field's own problems still are.
+    let bogus = |v: &mut Value| {
+        set_mode_packet(v)["entries"][2]["size_bits"] = json!(8);
+        limit(
+            v,
+            json!({ "delay_s": { "unit": "bogus", "range": { "max": 25 } } }),
+        );
+    };
+    assert_one(Code::UnknownUnit, &format!("{at}/unit"), bogus);
+    assert_eq!(
+        problems(|v| {
+            bogus(v);
+            set_mode_packet(v)["entries"][2]["unit"] = json!("m");
+        }),
+        vec![
+            (Code::UnknownUnit, format!("{at}/unit")),
+            (
+                Code::UnitMismatch,
+                "/sets/0/commands/1/entries/2/unit".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        messages(|v| limit(v, json!({ "delay_s": { "range": { "min": 4000 } } }))),
+        [
+            "argument delay_s can be 0 to 3600 in the catalog and at least 4000 here, so no value is both"
+        ]
+    );
+    assert_eq!(
+        messages(|v| limit(
+            v,
+            json!({ "delay_s": { "range": { "max": 7200 }, "default": 5000 } })
+        )),
+        ["the default here is outside argument delay_s's range in the catalog, 0 to 3600"]
+    );
+    assert_eq!(
+        messages(|v| limit(v, json!({ "delay_s": { "range": { "min": 10 } } }))),
+        [
+            "argument delay_s's default in the catalog is outside the range here, at least 10; \
+             give a default here"
+        ]
+    );
+    // A packet that doesn't encode an argument has nothing to limit.
+    assert_one(
+        Code::UnmappedArgument,
+        "/sets/2/commands/0/arguments/delay_s",
+        |v| v["sets"][2]["commands"][0]["arguments"] = json!({ "delay_s": { "default": 0 } }),
+    );
+}
+
+#[test]
+fn a_packet_narrowed_to_what_its_field_holds_encodes_the_argument() {
+    // An 8-bit field at 0.1 s a count holds 0 to 25.5 s, less than the
+    // catalog's 0 to 3600.
+    let narrow_field = |v: &mut Value| {
+        set_mode_packet(v)["entries"][2]["size_bits"] = json!(8);
+    };
+    assert_one(
+        Code::ValueRange,
+        "/sets/0/commands/1/entries/2/argument",
+        narrow_field,
+    );
+    assert_eq!(
+        problems(|v| {
+            narrow_field(v);
+            limit(v, json!({ "delay_s": { "range": { "max": 25 } } }));
+        }),
+        vec![]
+    );
+}
+
 #[test]
 fn catalog_commands_are_well_formed() {
     assert_one(
@@ -2751,6 +2874,14 @@ fn every_command_field_gets_its_value_from_one_place() {
     assert_one(Code::UnknownCommand, "/sets/0/commands/1/canonical", |v| {
         set_mode_packet(v)["canonical"] = json!("eps.reboot");
     });
+    assert_eq!(
+        messages(|v| set_mode_packet(v)["canonical"] = json!("eps.reboot")),
+        ["the catalog has no command eps.reboot"]
+    );
+    assert_eq!(
+        messages(|v| set_mode_packet(v)["canonical"] = json!("eps.set_mdoe")),
+        ["the catalog has no command eps.set_mdoe; did you mean eps.set_mode?"]
+    );
     assert_one(Code::ValueRange, &format!("{}/value", field(0)), |v| {
         set_mode_packet(v)["entries"][0]["value"] = json!(300);
     });
@@ -3579,8 +3710,9 @@ fn a_float_fields_range_ends_are_finite_raw_values() {
 
 #[test]
 fn a_json_integer_field_holds_64_bits() {
-    // vendor_j's delay as an int at 1e-15 s a count holds 3600 s as
-    // 3.6e18 counts; at 1e-16 s, 3.6e19 counts is past an i64.
+    // vendor_j's delay, which its packet keeps to 600 s, as an int at
+    // 1e-16 s a count holds 600 s as 6e18 counts; at 1e-17 s, 6e19 counts
+    // is past an i64.
     let delay = |scale: f64| {
         move |v: &mut Value| {
             v["sets"][1]["commands"][0]["entries"][2] = json!({
@@ -3589,11 +3721,11 @@ fn a_json_integer_field_holds_64_bits() {
                 "argument": "delay_s" });
         }
     };
-    assert_eq!(problems(delay(1e-15)), vec![]);
+    assert_eq!(problems(delay(1e-16)), vec![]);
     assert_one(
         Code::ValueRange,
         "/sets/1/commands/0/entries/2/argument",
-        delay(1e-16),
+        delay(1e-17),
     );
     // A constant, too: a JSON uint holds 0 to 2^64 - 1.
     let op = |value: Value| {

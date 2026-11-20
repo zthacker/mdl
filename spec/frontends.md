@@ -124,6 +124,16 @@ uses):
   earlier's as its first location, and its message names both values.
   Listing a curated catalog first makes its texts and limits win over an
   import's.
+- A program MAY close the catalog to all but some sources, its owners
+  (the core's `merge_owned`, which `morphc` uses for a build file's
+  catalog owners, or `check_owned_catalog` alone). Each catalog param and command a source that
+  isn't an owner defines, under a name no owner's source defines, is then
+  an error (`catalog_owner`) at its definition. A definition is an
+  owner's when its span is in an owner's source; one with no span is no
+  owner's, so a bundle built in memory with no source map can't own the
+  catalog. A definition restating an owner's name is left to the merge.
+  With no owners, nothing is reported. `merge_owned` reports these with
+  the merge's own problems and every part's warnings, in file order.
 - The merged bundle's IR version is the newest any part has.
 - Every part's spans index the same set of sources. Where two parts
   record a span for one JSON Pointer, the earlier part's is kept. The
@@ -168,6 +178,7 @@ Each minor version adds features and changes nothing before it:
 | --- | --- |
 | 2.0 | The IR. |
 | 2.1 | `signed` on an `int` field or scalar element: `sign_magnitude` or `ones_complement` (`decoding.md` §2.1). |
+| 2.2 | `arguments` on a command packet: what it accepts of the arguments it encodes (`encoding.md` §2.6). |
 
 - A bundle MUST state at least the version of every feature it uses, so a
   document that says 2.0 means what a 2.0 reader understands
@@ -176,7 +187,8 @@ Each minor version adds features and changes nothing before it:
   version its file states is an error there, whatever the other files
   state (`toml.md`).
 - An artifact MUST state exactly the lowest version that reads it: a set
-  that uses a 2.1 feature says 2.1, and every other artifact 2.0. What an
+  that uses a 2.1 feature says 2.1, one that uses a 2.2 feature 2.2,
+  and every other artifact 2.0. What an
   artifact uses decides its version, never the version of the build that
   writes it, and a feature's version never changes. A reader refuses an
   artifact that states less than it uses [`feature_version`] or more than
@@ -184,5 +196,6 @@ Each minor version adds features and changes nothing before it:
   (`canonical-json.md` §3), and a set's `def_version`, don't change when
   the IR grows.
 - A frontend that writes the version itself states the one its bundle
-  needs: the XTCE importer says 2.1 when it imports a sign-magnitude or
-  ones' complement integer, and 2.0 otherwise.
+  needs: the XTCE importer says 2.2 when a referring import gives a
+  command packet limits of its own, 2.1 when it imports a sign-magnitude
+  or ones' complement integer, and 2.0 otherwise.

@@ -259,7 +259,7 @@ fn whole_file_rejections_have_codes() {
     );
     // The version is checked before anything else in the file.
     assert_eq!(
-        code("mdl_version = \"2.2\"\nconfidence = 0.9"),
+        code("mdl_version = \"2.3\"\nconfidence = 0.9"),
         Some("unsupported_version")
     );
     assert_eq!(code("mdl_version = 2026-01-01"), Some("invalid_version"));

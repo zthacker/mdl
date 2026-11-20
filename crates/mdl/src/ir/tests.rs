@@ -77,7 +77,7 @@ fn absent_values_are_omitted_not_written_as_null() {
     );
     assert_eq!(
         serde_json::to_value(Bundle::new(Catalog::default())).unwrap(),
-        json!({ "mdl_version": "2.1", "catalog": {} })
+        json!({ "mdl_version": "2.2", "catalog": {} })
     );
     assert_eq!(
         serde_json::to_value(Count::remaining()).unwrap(),
@@ -99,7 +99,7 @@ fn readers_accept_null_for_absent_values_and_empty_collections() {
     assert!(field.invalid.is_empty());
 
     let bundle: Bundle = serde_json::from_value(json!({
-        "mdl_version": "2.1", "catalog": { "params": null }, "families": null, "sets": null
+        "mdl_version": "2.2", "catalog": { "params": null }, "families": null, "sets": null
     }))
     .unwrap();
     assert_eq!(bundle, Bundle::new(Catalog::default()));
@@ -775,4 +775,229 @@ fn range_ends_are_read_by_their_arguments_type() {
     assert_eq!(open.range_ends(), Some(RangeEnds::Integers(None, None)));
     let flag: Argument = serde_json::from_value(json!({ "name": "x", "type": "bool" })).unwrap();
     assert_eq!(flag.range_ends(), None);
+}
+
+fn argument(value: Value) -> Argument {
+    serde_json::from_value(value).unwrap()
+}
+
+fn limits(value: Value) -> PacketArgument {
+    serde_json::from_value(value).unwrap()
+}
+
+#[test]
+fn a_packet_narrows_an_argument_in_the_arguments_unit() {
+    let delay = argument(json!({
+        "name": "delay", "type": "f64", "unit": "s", "range": { "min": 0, "max": 3600 },
+        "default": 0, "list": { "max": 4 }
+    }));
+    // Minutes to seconds; the catalog's open end stays its own.
+    let narrowed = delay
+        .narrowed(&limits(
+            json!({ "unit": "min", "range": { "max": 1 }, "default": [0.5, 1] }),
+        ))
+        .unwrap();
+    assert_eq!(
+        narrowed.range_ends(),
+        Some(RangeEnds::Numbers(Some(0.0), Some(60.0)))
+    );
+    assert_eq!(
+        narrowed.default,
+        Some(Literal::List(vec![
+            Literal::Float(30.0),
+            Literal::Float(60.0)
+        ]))
+    );
+    assert_eq!(
+        (narrowed.name.as_str(), narrowed.unit.as_deref()),
+        ("delay", Some("s"))
+    );
+    // A wider range narrows nothing; without a default the catalog's stays.
+    let wider = delay
+        .narrowed(&limits(json!({ "range": { "min": -5, "max": 9000 } })))
+        .unwrap();
+    assert_eq!(wider.range_ends(), delay.range_ends());
+    assert_eq!(wider.default, delay.default);
+    // Integers past ±(2^53 - 1) are compared exactly.
+    let stamp =
+        argument(json!({ "name": "n", "type": "u64", "range": { "max": "18446744073709551615" } }));
+    let narrowed = stamp
+        .narrowed(&limits(json!({ "range": { "min": "9007199254740993" } })))
+        .unwrap();
+    assert_eq!(
+        narrowed.range_ends(),
+        Some(RangeEnds::Integers(
+            Some(9007199254740993),
+            Some(u64::MAX.into())
+        ))
+    );
+    // What it can't take, and why.
+    let count = argument(json!({ "name": "n", "type": "u64", "unit": "s" }));
+    let mode = argument(json!({ "name": "m", "type": "enum", "states": ["A"] }));
+    for (argument, packet, problem) in [
+        (
+            &count,
+            json!({ "unit": "ms", "range": { "max": 1 } }),
+            NarrowError::Unit,
+        ),
+        (
+            &delay,
+            json!({ "unit": "m", "range": { "max": 1 } }),
+            NarrowError::Unit,
+        ),
+        (
+            &mode,
+            json!({ "range": { "max": 1 } }),
+            NarrowError::NotNumeric,
+        ),
+        (&stamp, json!({ "range": { "max": 1.5 } }), NarrowError::End),
+        (
+            &delay,
+            json!({ "unit": "Ys", "range": { "max": 1e300 } }),
+            NarrowError::EndNotFinite,
+        ),
+        (
+            &delay,
+            json!({ "unit": "min", "default": "soon" }),
+            NarrowError::DefaultNotNumber,
+        ),
+        (
+            &delay,
+            json!({ "unit": "Ys", "default": 1e300 }),
+            NarrowError::DefaultNotFinite,
+        ),
+        (
+            &delay,
+            json!({ "range": { "min": 4000 } }),
+            NarrowError::Disjoint,
+        ),
+    ] {
+        assert_eq!(
+            argument.narrowed(&limits(packet.clone())),
+            Err(problem),
+            "{packet}"
+        );
+    }
+}
+
+#[test]
+fn a_packet_takes_the_commands_arguments_narrowed_or_borrowed() {
+    let command: Command = serde_json::from_value(json!({ "arguments": [
+        { "name": "a", "type": "u64", "range": { "max": 9 } },
+        { "name": "b", "type": "u64" }
+    ] }))
+    .unwrap();
+    let mut packet = CommandPacket::new("P", "c", Vec::new());
+    assert!(matches!(
+        packet.arguments_of(&command),
+        Ok(Cow::Borrowed(_))
+    ));
+    packet
+        .arguments
+        .insert("b".to_string(), limits(json!({ "range": { "max": 3 } })));
+    let arguments = packet.arguments_of(&command).unwrap();
+    assert_eq!(arguments[0], command.arguments[0]);
+    assert_eq!(
+        arguments[1].range_ends(),
+        Some(RangeEnds::Integers(None, Some(3)))
+    );
+    packet
+        .arguments
+        .insert("a".to_string(), limits(json!({ "range": { "min": 10 } })));
+    assert_eq!(
+        packet.arguments_of(&command),
+        Err(LimitsError::Narrow {
+            argument: "a".to_string(),
+            problem: NarrowError::Disjoint
+        })
+    );
+    packet
+        .arguments
+        .insert("z".to_string(), limits(json!({ "default": 1 })));
+    assert_eq!(
+        packet.arguments_of(&command),
+        Err(LimitsError::Narrow {
+            argument: "a".to_string(),
+            problem: NarrowError::Disjoint
+        })
+    );
+    packet.arguments.remove("a");
+    assert_eq!(
+        packet.arguments_of(&command),
+        Err(LimitsError::Unknown("z".to_string()))
+    );
+}
+
+#[test]
+fn a_set_needs_the_version_of_its_newest_feature() {
+    let mut field = Field::new("t", ScalarType::Int);
+    field.size_bits = Some(8);
+    field.signed = Some(Signed::SignMagnitude);
+    let mut set = Set::new("s", "f");
+    let mut packet = Packet::new("P");
+    packet.entries.push(Entry::Field(field));
+    set.packets.push(packet);
+    assert_eq!(
+        set.need().map(|need| need.version),
+        Some(IrVersion::new(2, 1))
+    );
+    let mut packet = CommandPacket::new("C", "c", Vec::new());
+    packet
+        .arguments
+        .insert("n".to_string(), limits(json!({ "default": 1 })));
+    set.commands.push(packet);
+    // The packet's signed field is found first, but the limits need more.
+    let features: Vec<&str> = set.needs().iter().map(|need| need.feature).collect();
+    assert_eq!(features, ["signed", "arguments"]);
+    let need = set.need().unwrap();
+    assert_eq!(
+        (need.pointer.as_str(), need.version),
+        ("/commands/0/arguments", IrVersion::new(2, 2))
+    );
+}
+
+mod narrowing {
+    use super::*;
+    use proptest::option;
+    use proptest::prelude::*;
+
+    type Ends = (Option<i64>, Option<i64>);
+
+    fn range((min, max): Ends) -> Option<ArgumentRange> {
+        (min.is_some() || max.is_some())
+            .then(|| ArgumentRange::new(min.map(Literal::Int), max.map(Literal::Int)))
+    }
+
+    fn allows((min, max): Ends, value: i64) -> bool {
+        min.is_none_or(|min| value >= min) && max.is_none_or(|max| value <= max)
+    }
+
+    proptest! {
+        #[test]
+        fn a_narrowed_range_allows_what_both_ranges_allow(
+            ours in (option::of(-20i64..20), option::of(-20i64..20)),
+            theirs in (option::of(-20i64..20), option::of(-20i64..20)),
+        ) {
+            let mut argument = Argument::new("n", ParamType::I64);
+            argument.range = range(ours);
+            let mut packet = PacketArgument::new();
+            packet.range = range(theirs);
+            let both = |value: i64| allows(ours, value) && allows(theirs, value);
+            match argument.narrowed(&packet) {
+                Err(problem) => {
+                    prop_assert_eq!(problem, NarrowError::Disjoint);
+                    prop_assert!(!(-25..25).any(both), "{ours:?} {theirs:?}");
+                }
+                Ok(narrowed) => {
+                    let Some(RangeEnds::Integers(min, max)) = narrowed.range_ends() else {
+                        panic!("an i64 argument has integer ends");
+                    };
+                    for value in -25i64..25 {
+                        let narrow = (min.and_then(|m| i64::try_from(m).ok()), max.and_then(|m| i64::try_from(m).ok()));
+                        prop_assert_eq!(allows(narrow, value), both(value), "{}", value);
+                    }
+                }
+            }
+        }
+    }
 }

@@ -174,7 +174,7 @@ fn check_command(
     }
 }
 
-fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
+pub(super) fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
     if matches!(argument.ty, ParamType::Vec3 | ParamType::Quat) {
         report.error(
             Code::ParamShape,
@@ -200,6 +200,13 @@ fn check_argument(argument: &Argument, place: &Place, report: &mut Report) {
     if let Some(list) = &argument.list {
         check_list(list, &place.key("list"), report);
     }
+    check_argument_default(argument, place, report);
+}
+
+/// An argument's default, if it has one (at the argument's `place`): a
+/// single value its type, states and range allow, or for a list argument
+/// as many as the list takes.
+pub(super) fn check_argument_default(argument: &Argument, place: &Place, report: &mut Report) {
     let at = place.key("default");
     match (&argument.default, argument.list) {
         (Some(Literal::List(values)), Some(list)) => {
@@ -299,7 +306,12 @@ fn check_list(list: &ListBounds, place: &Place, report: &mut Report) {
 
 /// A range's ends are values of the argument's type, written as a default
 /// is, in order.
-fn check_range(argument: &Argument, range: &ArgumentRange, place: &Place, report: &mut Report) {
+pub(super) fn check_range(
+    argument: &Argument,
+    range: &ArgumentRange,
+    place: &Place,
+    report: &mut Report,
+) {
     if !matches!(
         argument.ty,
         ParamType::F64 | ParamType::I64 | ParamType::U64
