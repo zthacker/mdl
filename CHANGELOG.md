@@ -24,6 +24,29 @@ them too.
   its own.
 - A set that uses neither key states the version it did before, and
   keeps its digest.
+- A build file's XTCE input can join a family another input defines
+  (`join = "vendor_x"`, naming its `set`, with `set_version` for a family
+  with a version locator): a vendor's second flight software as another
+  set of its family, which bindings or the version locator choose
+  between. Its documents define no family, and take the family's byte
+  order and alias. A new XTCE code, `xtce.options`, reports a join the
+  import can't follow, at the import.
+- An XTCE import that refers to a catalog owner's names now reads that
+  catalog. An enumerated argument whose labels are some of the catalog
+  argument's states gives the states its packet accepts, and an argument
+  with no initial value whose catalog argument has a default is required,
+  so the default the catalog keeps for other vendors is never sent with
+  this vendor's packet (IR 2.3). Limits in the catalog argument's own
+  unit no longer write it. A set rebuilt where any of these apply gets a
+  new `def_version`, and a request that left such an argument to the
+  catalog's default is refused (`missing_argument`) until it gives one.
+- A command packet's `unit` that is the argument's own is refused when
+  building (`explicit_default`), beside a range or a default too, where
+  0.1.0 accepted it. Limits without a unit are in the argument's own
+  already, so the two spellings meant the same packet and gave it two
+  digests. Delete the line and rebuild: `morphc build` points at each
+  one. XTCE imports no longer write it (above). A store 0.1.0 built with
+  it still opens: the runtime reads it as the packet without it.
 
 ### Decoding and encoding
 
@@ -34,6 +57,35 @@ them too.
   lists no states gets the same codes as before.
 - A required argument left out is `missing_argument`, as one without a
   default is, and its message says the set requires it.
+
+### Compatibility
+
+- Before 1.0, a release may refuse to build a definition only because
+  it spells something two ways where the IR means one, naming each such
+  rule in its release notes; a store an earlier release built with it
+  still opens ([spec/compatibility.md](spec/compatibility.md) §7). The
+  packet unit above is the first. From 1.0 on, a build refuses only what
+  an earlier release handled wrongly.
+- A frontend's output can change from one release to the next, so a set
+  rebuilt from unchanged files can get a new `def_version`; the release
+  notes say when (§2). The XTCE changes above are this release's.
+- Upgrade the services that read a store before rebuilding it with this
+  release: a rebuilt set that uses IR 2.3 (`states`, `required`) is
+  refused by 0.1.0 (`unsupported_version`), and this release opens every
+  store 0.1.0 built.
+
+### Tools and the runtime API
+
+- `morphc` reads an XTCE input that refers to the catalog or joins a
+  family after the inputs it's read with. One that joins a family no
+  input that read defines waits while an input has problems, rather than
+  report a family missing that the input with problems may define, and
+  one whose catalog doesn't merge waits too; morphc names each, and why.
+- Rust API: `mdl_xtce::read_with` gives an import what the rest of a
+  build defines, the catalog it refers to and the families it can join.
+  A referring import read without a catalog is refused (`xtce.options`).
+  `mdl::validate::closest` is public, for a frontend that suggests the
+  name meant.
 
 ### Releases
 

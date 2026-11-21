@@ -122,9 +122,11 @@ and the changelog says so.
 
 6. **Review the draft.**
    1. Click the **Code** tab, then **Releases** in the right-hand column.
-   2. Open **MDL X.Y.Z**, marked **Draft**. Read the notes, and check it
-      holds nineteen files: morphc's three archives and the six native
-      libraries, each with its `.sha256`, and `SHA256SUMS`.
+   2. Open **MDL X.Y.Z**, marked **Draft**. This draft is the release:
+      don't make one with **Draft a new release**, which has no files.
+      Read the notes, and check it holds nineteen files: morphc's three
+      archives and the six native libraries, each with its `.sha256`, and
+      `SHA256SUMS`.
    3. Optionally, download the archive for your platform and check it
       (this needs the `gh` CLI):
 
@@ -141,8 +143,9 @@ and the changelog says so.
 
 7. **Publish.** On the draft, click the pencil (**Edit**), check that
    "Set as the latest release" is ticked (unless it's a pre-release,
-   which can't be), and click **Publish release** at the bottom. This creates the tag `vX.Y.Z` on the release's commit and
-   makes the release public.
+   which can't be), and click **Publish release** at the bottom. This
+   creates the tag `vX.Y.Z` on the release's commit and makes the
+   release public.
 
 8. **Pull the tag** into your checkout, if you want it there:
    `git fetch --tags`.
