@@ -34,18 +34,19 @@ between.
   AlmaLinux 8 and checked to need no glibc newer than 2.28; the musl ones
   link musl dynamically and need `libgcc` (Alpine's package of that name).
   On each platform the binding's tests run on the packaged library,
-  loaded as a Hex user's project loads it, before it's released.
+  loaded as a Hex install would load it, before it's released.
 - **`SHA256SUMS`**, every archive's SHA-256 in one file.
 - **A build provenance attestation for each archive**: a signed statement,
   kept by GitHub, of the repository, commit and workflow run that built
   it, which `gh attestation verify` checks.
 
-After the release, the Elixir binding goes to Hex as the package `mdl`
-at the same version (step 9). It holds no native source, since
-that depends on this repository's `mdl` crate: it downloads its native
-library from the release, so only the six platforms above can install it
-from Hex, and any other uses the git dependency, which builds from source.
-The crates aren't published to crates.io yet (`publish = false`).
+The Elixir binding isn't on Hex yet, nor are the crates on crates.io
+(`publish = false`): Elixir users depend on this repository at the
+release's tag, which builds the native library from source. The binding
+goes to Hex, as the package `mdl` at the same version, with the crates on
+crates.io, so that its package can build from source too; step 9
+publishes it then. As `mix.exs` defines the package today, it holds no
+native source and downloads its native library from the release.
 
 ## Once, in the repository's settings
 
@@ -137,7 +138,8 @@ and the changelog says so.
 
 8. **Publish** the draft. This is the step that makes the release public.
 
-9. **Publish the Elixir package to Hex**, from a clean checkout of the
+9. **Publish the Elixir package to Hex**, once the binding goes there
+   (not yet; until then, skip this step). From a clean checkout of the
    tag, with your Hex account:
 
    ```sh

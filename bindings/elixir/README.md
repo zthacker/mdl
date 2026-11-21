@@ -9,28 +9,9 @@ semantics of its own, so it decodes and encodes exactly as `morphc` does.
 
 ## Installing
 
-From Hex, with Elixir 1.18 or later:
-
-```elixir
-def deps do
-  [
-    {:mdl, "~> 0.1"}
-  ]
-end
-```
-
-The package downloads a precompiled native library from the GitHub
-release of its version, checked against the checksums the package holds,
-so it needs no Rust. Libraries are built for Linux on x86_64 and aarch64,
-with glibc 2.28 or later or with musl, and for macOS 10.12 or later on
-Intel and 11.0 or later on Apple silicon. On Alpine they need `libgcc`,
-which the library uses to turn a panic into an exception; Alpine's Erlang
-needs it too, so a system that runs the BEAM has it. For a build without
-network access, put the release's archive for the platform in a directory
-named by `RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH`.
-
-On any other platform, or to build the native library yourself, depend on
-this repository instead, with Rustler to build it and Rust 1.91 or later:
+Depend on this repository, at a release's tag or a commit, with Rustler to
+build the native library. It needs Elixir 1.18 or later and Rust 1.91 or
+later wherever the app compiles:
 
 ```elixir
 def deps do
@@ -41,10 +22,19 @@ def deps do
 end
 ```
 
-A git checkout always builds from source. The Hex package holds no
-native source, so building from source means the git dependency: in a Hex
-install, `MDL_BUILD=1` (or rustler_precompiled's
-`RUSTLER_PRECOMPILED_FORCE_BUILD_ALL`) fails.
+On Alpine the library needs `libgcc`, which it uses to turn a panic into
+an exception; Alpine's Erlang needs it too, so a system that runs the
+BEAM has it.
+
+The binding isn't on Hex yet. Each release already builds precompiled
+native libraries, for Linux on x86_64 and aarch64 (glibc 2.28 or later,
+or musl) and macOS (10.12 or later on Intel, 11.0 or later on Apple
+silicon), and runs the binding's tests on each; a Hex package that
+downloads them, so that installing needs no Rust, is planned. The
+binding is ready for it: from a package holding rustler_precompiled's
+checksum file, it downloads its library (which
+`RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH` can serve offline) instead of
+building it.
 
 ## Using it
 
@@ -139,7 +129,7 @@ A checkout builds the native library from source, as above, unless a
 checksum file (`checksum-Elixir.MDL.Native.exs`, made only for publishing)
 is left in it; `just elixir` builds from source regardless. The release
 workflow builds each precompiled library, checks what it needs of the
-system, and runs these tests on it as a Hex install loads it, with
+system, and runs these tests on it as a Hex install would load it, with
 `scripts/nif.sh` (RELEASING.md).
 
 `mix test` builds `morphc` with the repository's workspace, builds its

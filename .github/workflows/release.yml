@@ -166,7 +166,7 @@ jobs:
   # The Elixir binding's native library for each platform it's precompiled
   # for, packaged as rustler_precompiled downloads it, checked for what it
   # needs of the system, and the binding's tests run on the packaged library
-  # there, loaded as a Hex user's project loads it (scripts/nif.sh). Linux
+  # there, loaded as a Hex install would load it (scripts/nif.sh). Linux
   # libraries build and test in images pinned by digest, through docker,
   # with Rust from a pinned rustup (scripts/install-rust.sh): glibc ones
   # build on AlmaLinux 8, so they load on glibc 2.28 and later, and test on

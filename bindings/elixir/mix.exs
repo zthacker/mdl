@@ -39,7 +39,7 @@ defmodule MDL.MixProject do
     [
       {:rustler_precompiled, "~> 0.10"},
       # Builds the native library from source in a git checkout
-      # (lib/mdl/native.ex). A Hex user downloads it instead.
+      # (lib/mdl/native.ex); from a Hex package it's downloaded instead.
       {:rustler, "~> 0.38", optional: true, runtime: false},
       {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ]

@@ -11,7 +11,7 @@
 #                                 private glibc symbol; for every target, only
 #                                 the system libraries listed here
 #   scripts/nif.sh test TARGET    run the binding's tests on the packaged
-#                                 library, loaded as a Hex user's project loads
+#                                 library, loaded as a Hex install would load
 #                                 it: from rustler_precompiled's cache, its
 #                                 checksum checked, nothing built
 set -euo pipefail

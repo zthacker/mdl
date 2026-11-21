@@ -63,23 +63,24 @@ result format 1, and builds on Rust 1.88 or later.
   open a store, decode, encode, describe the build, and look up bindings,
   with results whose shape and values are specified, and which of them a
   binding may give its language's own forms.
-- The Elixir binding (`bindings/elixir`, Hex package `mdl`): the runtime
-  API for Elixir 1.18 or later. Its results are structs with atom fields,
-  MDL's own enumerations are atoms, and every name from definitions or
-  messages is a string, so reloading stores never grows the atom table.
-  Every call that does MDL's work runs on a dirty scheduler. Built from
-  source rather than downloaded, it needs Rust 1.91 or later.
+- The Elixir binding (`bindings/elixir`): the runtime API for Elixir 1.18
+  or later, as a git dependency on this repository, which builds its
+  native library with Rust 1.91 or later. Its results are structs with
+  atom fields, MDL's own enumerations are atoms, and every name from
+  definitions or messages is a string, so reloading stores never grows
+  the atom table. Every call that does MDL's work runs on a dirty
+  scheduler.
 
 ### Releases
 
 - Prebuilt `morphc` for Linux on x86_64 and aarch64 (statically linked)
   and macOS on Apple silicon, with SHA-256 checksums and build provenance
   attestations ([RELEASING.md](RELEASING.md)).
-- Precompiled native libraries for the Elixir binding, which the Hex
-  package downloads, so it needs no Rust: Linux on x86_64 and aarch64 with
-  glibc 2.28 or later or with musl, and macOS on Apple silicon and Intel.
-  Each is tested with the binding's suite on its platform before release,
-  and has a checksum and an attestation too.
+- Precompiled native libraries for the Elixir binding, for Linux on
+  x86_64 and aarch64 with glibc 2.28 or later or with musl, and macOS on
+  Apple silicon and Intel, each tested with the binding's suite on its
+  platform, with a checksum and an attestation. A Hex package that
+  downloads them, so that installing needs no Rust, is planned.
 
 [Unreleased]: https://github.com/zthacker/mdl/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/zthacker/mdl/releases/tag/v0.1.0
