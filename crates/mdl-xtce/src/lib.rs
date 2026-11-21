@@ -1,5 +1,5 @@
 //! MDL's XTCE importer: OMG XTCE space system definitions (versions 1.0
-//! to 1.2) read as an MDL bundle, as `spec/xtce.md` in the MDL repository
+//! to 1.3) read as an MDL bundle, as `spec/xtce.md` in the MDL repository
 //! describes.
 //!
 //! XTCE describes whole packets. [`read`] makes each concrete sequence
@@ -91,8 +91,8 @@ pub enum Code {
     /// Text that isn't well-formed XML (with namespaces), or has a DTD.
     Syntax,
     /// A document that isn't XTCE: its root isn't a SpaceSystem in an
-    /// XTCE namespace, in none, or in a misspelling of XTCE 1.2's that MDL
-    /// reads. Also no documents at all.
+    /// XTCE namespace, in none, or in a misspelling of XTCE 1.2's or 1.3's
+    /// that MDL reads. Also no documents at all.
     Document,
     /// Something XTCE doesn't allow: a missing attribute, a value that
     /// isn't a number, a container that inherits from itself.
@@ -116,7 +116,7 @@ pub enum Code {
     /// warning naming the difference.
     Differs,
     /// A document read as XTCE whose root isn't in an XTCE namespace: in
-    /// none, or in a misspelling of XTCE 1.2's. A warning.
+    /// none, or in a misspelling of XTCE 1.2's or 1.3's. A warning.
     Namespace,
     /// Import options the import can't follow: a family named and joined,
     /// a joined family the build doesn't define or that a binary import

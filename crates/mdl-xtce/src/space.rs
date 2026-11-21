@@ -78,6 +78,14 @@ impl<'d> Space<'d> {
     }
 }
 
+/// Why a reference names nothing MDL reads: there's nothing by that name
+/// where it looks (`xtce.reference`), or it names an array's element,
+/// which MDL can't refer to (`xtce.unsupported`).
+pub(crate) struct Unresolved {
+    pub(crate) code: Code,
+    pub(crate) message: String,
+}
+
 /// An item a reference names.
 #[derive(Clone)]
 pub(crate) struct Found<'d> {
@@ -106,6 +114,8 @@ const SPACE_SYSTEM: Expect<'static> = Expect {
         "Header",
         "ServiceSet",
         "operationalStatus",
+        "systemType",
+        "assetType",
     ],
     text: false,
 };
@@ -405,24 +415,39 @@ impl<'d> Tree<'d> {
         names
     }
 
-    /// The item a reference from SpaceSystem `from` names, or a message
-    /// saying why there's none.
+    /// The item a reference from SpaceSystem `from` names, or why there's
+    /// none.
     pub(crate) fn resolve(
         &self,
         from: usize,
         reference: &'d str,
         kind: Kind,
-    ) -> Result<Found<'d>, String> {
-        let not_found = || {
-            format!(
+    ) -> Result<Found<'d>, Unresolved> {
+        let not_found = || Unresolved {
+            code: Code::Reference,
+            message: format!(
                 "{reference} names no {} that {} can see",
                 kind.noun(),
                 self.path(from)
-            )
+            ),
         };
+        // XTCE 1.3 lets a reference name an array's element (`A[2]`,
+        // `P.cells[0].v`), which MDL reads only as a whole array.
+        if reference.contains('[') {
+            return Err(Unresolved {
+                code: Code::Unsupported,
+                message: format!(
+                    "{reference} names an array's element, which isn't supported: MDL refers to \
+                     an array only as a whole"
+                ),
+            });
+        }
         let segments: Vec<&'d str> = reference.split('/').filter(|s| !s.is_empty()).collect();
         if segments.is_empty() {
-            return Err(format!("{reference:?} isn't a reference"));
+            return Err(Unresolved {
+                code: Code::Reference,
+                message: format!("{reference:?} isn't a reference"),
+            });
         }
         if reference.starts_with('/') {
             let (root, rest) = segments.split_first().ok_or_else(not_found)?;

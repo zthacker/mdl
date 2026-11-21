@@ -345,8 +345,9 @@ impl<'d> Import<'d, '_> {
                 .resolve(at_space, reference.value, Kind::MetaCommand)
             {
                 Ok(found) => found,
-                Err(message) => {
-                    self.report.error(Code::Reference, reference.span, message);
+                Err(unresolved) => {
+                    self.report
+                        .error(unresolved.code, reference.span, unresolved.message);
                     return None;
                 }
             };
@@ -415,9 +416,8 @@ impl<'d> Import<'d, '_> {
             };
             match declared.iter_mut().find(|d| d.xtce == name.value) {
                 None => {
-                    self.report.error(
-                        Code::Reference,
-                        name.span,
+                    let (code, message) = unmatched_argument(
+                        name.value,
                         format!(
                             "{} names no argument that meta-command {}/{} inherits",
                             name.value,
@@ -425,6 +425,7 @@ impl<'d> Import<'d, '_> {
                             meta.item_name().unwrap_or_default()
                         ),
                     );
+                    self.report.error(code, name.span, message);
                     complete = false;
                 }
                 Some(argument) => match argument.assigned {
@@ -514,8 +515,9 @@ impl<'d> Import<'d, '_> {
         let type_ref = el.required("argumentTypeRef", self.report)?;
         let found = match self.tree.resolve(space, type_ref.value, Kind::ArgumentType) {
             Ok(found) => found,
-            Err(message) => {
-                self.report.error(Code::Reference, type_ref.span, message);
+            Err(unresolved) => {
+                self.report
+                    .error(unresolved.code, type_ref.span, unresolved.message);
                 return None;
             }
         };
@@ -553,11 +555,11 @@ impl<'d> Import<'d, '_> {
                 match declared.iter().position(|o| o.xtce == dynamic.reference) {
                     Some(index) => uses.push((index, measure, dynamic.span)),
                     None => {
-                        self.report.error(
-                            Code::Reference,
-                            dynamic.span,
+                        let (code, message) = unmatched_argument(
+                            dynamic.reference,
                             format!("{} names no argument of this command", dynamic.reference),
                         );
+                        self.report.error(code, dynamic.span, message);
                         complete = false;
                         unread.push(dynamic.reference);
                     }
@@ -739,8 +741,9 @@ impl<'d> Import<'d, '_> {
             };
             let found = match self.tree.resolve(space, reference.value, Kind::Parameter) {
                 Ok(found) => found,
-                Err(message) => {
-                    self.report.error(Code::Reference, reference.span, message);
+                Err(unresolved) => {
+                    self.report
+                        .error(unresolved.code, reference.span, unresolved.message);
                     complete = false;
                     continue;
                 }
@@ -906,7 +909,7 @@ impl<'d> Import<'d, '_> {
             .resolve(owner.space, reference.value, Kind::CommandContainer)
         {
             Ok(found) => found.el,
-            Err(message) => {
+            Err(unresolved) => {
                 if self
                     .tree
                     .resolve(owner.space, reference.value, Kind::Container)
@@ -918,7 +921,8 @@ impl<'d> Import<'d, '_> {
                         "a command container built on a telemetry container isn't supported",
                     );
                 } else {
-                    self.report.error(Code::Reference, reference.span, message);
+                    self.report
+                        .error(unresolved.code, reference.span, unresolved.message);
                 }
                 return None;
             }
@@ -1010,12 +1014,15 @@ impl<'d> Import<'d, '_> {
             .iter()
             .position(|d| d.owner == owner.index && d.xtce == reference.value);
         let Some(index) = found else {
-            let message = format!(
-                "{} names no argument of meta-command {meta_path}; an ArgumentRefEntry names an \
-                 argument its own meta-command declares, as Yamcs reads it",
-                reference.value
+            let (code, message) = unmatched_argument(
+                reference.value,
+                format!(
+                    "{} names no argument of meta-command {meta_path}; an ArgumentRefEntry names \
+                     an argument its own meta-command declares, as Yamcs reads it",
+                    reference.value
+                ),
             );
-            self.report.error(Code::Reference, reference.span, message);
+            self.report.error(code, reference.span, message);
             return None;
         };
         if array_entry && !matches!(declared[index].shape, Some(Shape::Array(_)) | None) {
@@ -1512,8 +1519,9 @@ impl<'d> Import<'d, '_> {
             .resolve(owner.space, reference.value, Kind::Parameter)
         {
             Ok(found) => found,
-            Err(message) => {
-                self.report.error(Code::Reference, reference.span, message);
+            Err(unresolved) => {
+                self.report
+                    .error(unresolved.code, reference.span, unresolved.message);
                 return None;
             }
         };
@@ -1978,7 +1986,9 @@ impl<'d> Import<'d, '_> {
     /// An aggregate argument's members, each a catalog argument named
     /// `<argument>_<member>`. A member's default is what the argument's
     /// initial value (a JSON object) gives it, completed as Yamcs completes
-    /// a value. An aggregate type's initial value isn't one Yamcs reads.
+    /// a value: with the member's own initial value, else what its
+    /// aggregate type's gives it (XTCE 1.3, which Yamcs doesn't read before
+    /// it), else its type's.
     fn member_arguments(
         &mut self,
         argument: &Declared<'d>,
@@ -2146,10 +2156,25 @@ impl<'d> Import<'d, '_> {
         let mut complete = true;
         for leaf in leaves {
             let last = leaf.path.len().saturating_sub(1);
-            for (level, initial) in leaf.initials.iter().enumerate() {
-                let Some((text, span)) = *initial else {
-                    continue;
-                };
+            // Each member's own initial value and what its aggregate type
+            // gives it (XTCE 1.3), the one overriding the other, but both
+            // checked, so a value that would be wrong isn't kept.
+            let given = leaf
+                .initials
+                .iter()
+                .enumerate()
+                .filter_map(|(level, initial)| initial.map(|(text, span)| (level, text, span)))
+                .chain(
+                    leaf.from_types
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(level, given)| {
+                            given
+                                .as_ref()
+                                .map(|(text, span)| (level, text.as_str(), *span))
+                        }),
+                );
+            for (level, text, span) in given.collect::<Vec<_>>() {
                 let prefix = &leaf.path[..=level];
                 let shown = format!("{argument}.{}", prefix.join("."));
                 complete &= if level == last {
@@ -2492,6 +2517,24 @@ fn argument_integer(text: &str) -> Option<i128> {
     let magnitude = u64::from_str_radix(&digits, radix).ok()?;
     let value = i128::from(magnitude);
     Some(if negative { -value } else { value })
+}
+
+/// What to report of an argument reference that names no argument: one
+/// into an argument's member or element (XTCE 1.3's `Arg.member` or
+/// `Arg[2]`; XTCE names hold neither `.` nor `[`) isn't supported, and any
+/// other names nothing, as `nothing` says.
+fn unmatched_argument(reference: &str, nothing: String) -> (Code, String) {
+    if reference.contains(['.', '[']) {
+        (
+            Code::Unsupported,
+            format!(
+                "{reference} names a member or element of an argument, which isn't supported: \
+                 MDL refers to an argument as a whole"
+            ),
+        )
+    } else {
+        (Code::Reference, nothing)
+    }
 }
 
 #[cfg(test)]

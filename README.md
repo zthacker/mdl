@@ -8,9 +8,9 @@ content-addressed artifacts, and decodes telemetry and encodes commands
 with them.
 
 - **Any source.** Write definitions in TOML, import a vendor's XTCE (MDL
-  reads OMG XTCE 1.0 to 1.2 space system definitions, checked against
-  Yamcs's reading of them), or emit the IR as JSON from any tool, in any
-  language. Bundles from several frontends merge into one, with a curated
+  reads OMG XTCE 1.0 to 1.3 space system definitions, 1.0 to 1.2 checked
+  against Yamcs's reading of them), or emit the IR as JSON from any tool,
+  in any language. Bundles from several frontends merge into one, with a curated
   catalog taking precedence.
 - **Canonical by design.** Every mapped value is checked against the
   catalog for type, unit and frame, so four vendors' bus voltages all
@@ -253,7 +253,7 @@ erDiagram
         string version "optional: where the layout version is"
     }
     PACKET {
-        map identify "apid = 100"
+        map identify "msg_type = 7, or none"
     }
     PACKET_ARGUMENT {
         string unit "IR 2.2"
@@ -271,7 +271,7 @@ What definitions say:
 | Catalog | The canonical params and commands every source maps to: names, types, units, states, frames, limits. Names are a schema: deprecated, never removed. |
 | Family | One kind of source on one link: its encoding (binary or JSON), byte order, where each message says which asset sent it (its alias) and, optionally, which set it uses (its version). |
 | Set | One layout version of a family: its packets, struct types and command packets, and how each entry maps to the catalog. |
-| Packet | One kind of message in a set: its entries, and its identify keys, the values that tell it from the set's other packets (`apid = 100`). |
+| Packet | One kind of message in a set: its entries, and its identify keys, the values that tell it from the set's other packets (`msg_type = 7`). A key reads a field of the payload, a JSON Pointer, or metadata the link delivers, whichever the vendor's messages use; a packet with none is its set's catch-all. MDL assumes no framing. |
 | Entry | One thing a packet holds: a field (one value, at a bit offset or a JSON Pointer), an array, a struct, padding or a checksum. A field can have a conversion, a unit and the catalog param it maps to. |
 | Command packet | How a set encodes a catalog command: the fields its arguments are written to, and its constants. It may narrow an argument's range and default for its own asset, accept only some of an enum's states, or require an argument the catalog defaults, so one vendor's limits hold under a fleet's catalog. |
 | Alias, native id | Where a message says which asset sent it (bits, link metadata, a JSON Pointer, or one fixed value), and the id read there. |

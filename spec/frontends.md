@@ -13,7 +13,7 @@ the same thing produce the same artifacts.
 | --- | --- | --- |
 | JSON | `mdl::json` | a bundle written as the IR itself (§6) |
 | TOML | `mdl-toml` | the IR spelled in TOML, in any number of files (`toml.md`) |
-| XTCE | `mdl-xtce` | OMG XTCE 1.0 to 1.2 documents: the subset `xtce.md` describes |
+| XTCE | `mdl-xtce` | OMG XTCE 1.0 to 1.3 documents: the subset `xtce.md` describes |
 
 ## 1. What a frontend produces
 

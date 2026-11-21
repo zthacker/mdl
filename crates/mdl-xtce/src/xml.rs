@@ -18,6 +18,7 @@ use crate::report::Report;
 /// XTCE 1.0 and 1.1 share a namespace.
 pub(crate) const XTCE_1_1: &str = "http://www.omg.org/space/xtce";
 pub(crate) const XTCE_1_2: &str = "http://www.omg.org/spec/XTCE/20180204";
+pub(crate) const XTCE_1_3: &str = "http://www.omg.org/spec/XTCE/20250214";
 
 /// What documents written for Yamcs put in place of XTCE 1.2's namespace:
 /// its https spelling, and the schema's address. Yamcs reads elements by
@@ -27,6 +28,18 @@ const XTCE_1_2_MISSPELLED: [&str; 3] = [
     "http://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd",
     "https://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd",
 ];
+
+/// The same spellings of XTCE 1.3's namespace.
+const XTCE_1_3_MISSPELLED: [&str; 3] = [
+    "https://www.omg.org/spec/XTCE/20250214",
+    "http://www.omg.org/spec/XTCE/20250214/SpaceSystem.xsd",
+    "https://www.omg.org/spec/XTCE/20250214/SpaceSystem.xsd",
+];
+
+/// The namespaces MDL reads, for messages.
+fn namespaces() -> String {
+    format!("{XTCE_1_3} (XTCE 1.3), {XTCE_1_2} (XTCE 1.2) or {XTCE_1_1} (XTCE 1.0 and 1.1)")
+}
 const XINCLUDE: &str = "http://www.w3.org/2001/XInclude";
 
 /// The file's text as an XTCE document, or its problems reported.
@@ -67,21 +80,25 @@ pub(crate) fn parse<'a>(file: SourceFile<'a>, report: &mut Report) -> Option<Doc
     let name = root.tag_name();
     let span = El::new(root, file).span();
     let namespace = namespace_of(root);
-    let official = matches!(namespace, Some(XTCE_1_1 | XTCE_1_2));
+    let official = matches!(namespace, Some(XTCE_1_1 | XTCE_1_2 | XTCE_1_3));
     // Read as XTCE, with a warning: Yamcs reads them. Every element still
     // has to be in the root's namespace (`El::check`).
-    let tolerated = namespace.is_none_or(|namespace| XTCE_1_2_MISSPELLED.contains(&namespace));
+    let tolerated = namespace.is_none_or(|namespace| misspelling(namespace).is_some());
     if name.name() == "SpaceSystem" && !official && tolerated {
-        let found = match namespace {
-            Some(namespace) => format!("{namespace}, which isn't XTCE 1.2's namespace"),
-            None => "no namespace".to_string(),
-        };
+        let found =
+            match namespace.and_then(|namespace| misspelling(namespace).map(|v| (namespace, v))) {
+                Some((namespace, version)) => {
+                    format!("{namespace}, which isn't XTCE {version}'s namespace")
+                }
+                None => "no namespace".to_string(),
+            };
         report.warning(
             Code::Namespace,
             span,
             format!(
                 "this document's root is in {found}; MDL reads it as XTCE, as Yamcs does, but \
-                 its namespace should be {XTCE_1_2} (XTCE 1.2) or {XTCE_1_1} (XTCE 1.0 and 1.1)"
+                 its namespace should be {}",
+                namespaces()
             ),
         );
     } else if name.name() != "SpaceSystem" || !official {
@@ -93,8 +110,8 @@ pub(crate) fn parse<'a>(file: SourceFile<'a>, report: &mut Report) -> Option<Doc
             Code::Document,
             span,
             format!(
-                "this isn't an XTCE document: its root is {found}, not a SpaceSystem in \
-                 {XTCE_1_1} (XTCE 1.0 and 1.1) or {XTCE_1_2} (XTCE 1.2)"
+                "this isn't an XTCE document: its root is {found}, not a SpaceSystem in {}",
+                namespaces()
             ),
         );
         return None;
@@ -218,6 +235,14 @@ impl<'d> El<'d> {
             );
         }
         attr
+    }
+
+    /// Whether the element's document is XTCE 1.3: its root is in 1.3's
+    /// namespace, or a spelling of it MDL reads as 1.3's.
+    pub(crate) fn in_1_3(&self) -> bool {
+        let root = self.node.document().root_element();
+        namespace_of(root)
+            .is_some_and(|namespace| namespace == XTCE_1_3 || misspelling(namespace) == Some("1.3"))
     }
 
     /// Element children in the element's own namespace.
@@ -407,9 +432,21 @@ fn namespace_of<'a>(node: Node<'a, '_>) -> Option<&'a str> {
         .filter(|namespace| !namespace.is_empty())
 }
 
-/// An XTCE namespace, or one MDL reads as XTCE 1.2's.
+/// An XTCE namespace, or one MDL reads as XTCE 1.2's or 1.3's.
 fn is_xtce_namespace(namespace: &str) -> bool {
-    namespace == XTCE_1_1 || namespace == XTCE_1_2 || XTCE_1_2_MISSPELLED.contains(&namespace)
+    matches!(namespace, XTCE_1_1 | XTCE_1_2 | XTCE_1_3) || misspelling(namespace).is_some()
+}
+
+/// The XTCE version whose namespace `namespace` misspells as documents
+/// written for Yamcs do, if it does.
+fn misspelling(namespace: &str) -> Option<&'static str> {
+    if XTCE_1_2_MISSPELLED.contains(&namespace) {
+        Some("1.2")
+    } else if XTCE_1_3_MISSPELLED.contains(&namespace) {
+        Some("1.3")
+    } else {
+        None
+    }
 }
 
 fn is_document_namespace(namespace: &str) -> bool {
@@ -429,7 +466,7 @@ fn ignored(owner: &str, name: &str) -> String {
         "AncillaryDataSet" => "MDL has no ancillary data",
         "initialValue" => "MDL has no initial values",
         "changeThreshold" => "MDL has no change thresholds",
-        "DefaultAlarm" | "ContextAlarmList" => "alarms aren't imported",
+        "DefaultAlarm" | "ContextAlarmList" | "BinaryContextAlarmList" => "alarms aren't imported",
         "WatchRange" | "DistressRange" | "SevereRange" => {
             "MDL limits have two levels, yellow and red (XTCE's warning and critical)"
         }
@@ -451,6 +488,7 @@ fn ignored(owner: &str, name: &str) -> String {
         "StreamSet" => "framing streams is the link's job, before MDL",
         "ServiceSet" => "MDL has no services",
         "operationalStatus" => "MDL has no operational status",
+        "systemType" | "assetType" => "it describes the system, and decodes nothing",
         "oneStringValue" | "zeroStringValue" => "MDL booleans are true and false",
         "maxSizeInBits" => "MDL doesn't bound a variable string's size",
         "SizeRangeInCharacters" => "MDL doesn't bound text by its length in characters",

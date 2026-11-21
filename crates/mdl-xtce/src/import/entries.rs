@@ -182,8 +182,9 @@ impl<'d> Import<'d, '_> {
         let reference = entry.required("parameterRef", self.report)?;
         let found = match self.tree.resolve(space, reference.value, Kind::Parameter) {
             Ok(found) => found,
-            Err(message) => {
-                self.report.error(Code::Reference, reference.span, message);
+            Err(unresolved) => {
+                self.report
+                    .error(unresolved.code, reference.span, unresolved.message);
                 return None;
             }
         };
@@ -278,8 +279,9 @@ impl<'d> Import<'d, '_> {
         let reference = entry.required("containerRef", self.report)?;
         let found = match self.tree.resolve(space, reference.value, Kind::Container) {
             Ok(found) => found,
-            Err(message) => {
-                self.report.error(Code::Reference, reference.span, message);
+            Err(unresolved) => {
+                self.report
+                    .error(unresolved.code, reference.span, unresolved.message);
                 return None;
             }
         };
@@ -779,8 +781,9 @@ impl<'d> Import<'d, '_> {
             .resolve(dynamic.space, dynamic.reference, Kind::Parameter)
         {
             Ok(found) => found,
-            Err(message) => {
-                self.report.error(Code::Reference, dynamic.span, message);
+            Err(unresolved) => {
+                self.report
+                    .error(unresolved.code, dynamic.span, unresolved.message);
                 return None;
             }
         };

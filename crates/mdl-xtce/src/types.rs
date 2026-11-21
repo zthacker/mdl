@@ -1,6 +1,7 @@
 //! Parameter and argument types: what a field reads or writes, and what
 //! its catalog param or argument holds.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mdl::source::Span;
@@ -149,6 +150,19 @@ pub(crate) struct Member<'d> {
     pub(crate) shape: Shape<'d>,
     /// An argument type's member's initial value, as XTCE writes it.
     pub(crate) initial: Option<(&'d str, Span)>,
+    /// What the aggregate argument type's own initial value (XTCE 1.3, a
+    /// JSON object of its members) gives this member, as XTCE would write
+    /// it: a member's own initial value takes precedence.
+    pub(crate) from_type: Option<(String, Span)>,
+}
+
+/// A JSON value as XTCE writes an initial value: a string's text, or any
+/// other value's JSON (a number, a boolean, an aggregate's object).
+pub(crate) fn json_text(value: &Value) -> Cow<'_, str> {
+    match value {
+        Value::String(text) => Cow::Borrowed(text),
+        other => Cow::Owned(other.to_string()),
+    }
 }
 
 /// One value: how a field reads it, and what its param holds.
@@ -599,8 +613,8 @@ impl<'d> Types<'d> {
         let type_ref = el.required("arrayTypeRef", report)?;
         let element = match tree.resolve(space, type_ref.value, role.kind()) {
             Ok(found) => self.shape(tree, found.space, found.el, report)?,
-            Err(message) => {
-                report.error(Code::Reference, type_ref.span, message);
+            Err(unresolved) => {
+                report.error(unresolved.code, type_ref.span, unresolved.message);
                 return None;
             }
         };
@@ -657,14 +671,38 @@ impl<'d> Types<'d> {
             },
             report,
         );
-        if let (Role::Argument, Some(initial)) = (role, el.attr("initialValue")) {
-            report.warning(
-                Code::Ignored,
-                initial.span,
-                "an aggregate argument type's initialValue isn't read: XTCE 1.2 has none, and \
-                 Yamcs reads the argument's and its members' instead",
-            );
-        }
+        // XTCE 1.3 gives an aggregate argument type an initial value, a
+        // JSON object of its members; before it, Yamcs reads none, so MDL
+        // doesn't either.
+        let type_initial = match (role, el.attr("initialValue")) {
+            (Role::Argument, Some(initial)) if el.in_1_3() => {
+                match serde_json::from_str::<Value>(initial.value) {
+                    Ok(Value::Object(object)) => Some((object, initial.span)),
+                    _ => {
+                        report.error(
+                            Code::Invalid,
+                            initial.span,
+                            format!(
+                                "{:?} isn't a JSON object of {}'s members",
+                                initial.value,
+                                el.describe()
+                            ),
+                        );
+                        return None;
+                    }
+                }
+            }
+            (Role::Argument, Some(initial)) => {
+                report.warning(
+                    Code::Ignored,
+                    initial.span,
+                    "an aggregate argument type's initialValue isn't read before XTCE 1.3, \
+                     which first has one: Yamcs reads the argument's and its members' instead",
+                );
+                None
+            }
+            _ => None,
+        };
         let Some(list) = el.child("MemberList") else {
             report.error(
                 Code::Invalid,
@@ -713,20 +751,38 @@ impl<'d> Types<'d> {
             };
             let shape = match tree.resolve(space, type_ref.value, role.kind()) {
                 Ok(found) => self.shape(tree, found.space, found.el, report),
-                Err(message) => {
-                    report.error(Code::Reference, type_ref.span, message);
+                Err(unresolved) => {
+                    report.error(unresolved.code, type_ref.span, unresolved.message);
                     None
                 }
             };
+            let from_type = type_initial.as_ref().and_then(|(object, span)| {
+                object
+                    .get(name.value)
+                    .map(|value| (json_text(value).into_owned(), *span))
+            });
             match shape {
                 Some(shape) => members.push(Member {
                     name: name.value,
                     description: description(member),
                     shape,
                     initial: initial(member, role),
+                    from_type,
                 }),
                 None => complete = false,
             }
+        }
+        if let Some((object, span)) = &type_initial
+            && let Some(unknown) = object
+                .keys()
+                .find(|key| !members.iter().any(|member| member.name == key.as_str()))
+        {
+            report.error(
+                Code::Invalid,
+                *span,
+                format!("{} has no member {unknown}", el.describe()),
+            );
+            return None;
         }
         complete.then_some(Shape::Aggregate(members))
     }
@@ -1233,21 +1289,29 @@ fn relative_time<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scal
     );
     let unit = match encoding.attr("units") {
         None => Some(("s".to_string(), encoding.span())),
-        Some(attr) => match attr.value.trim() {
-            "seconds" => Some(("s".to_string(), attr.span)),
-            "picoSeconds" => Some(("ps".to_string(), attr.span)),
-            "days" => Some(("d".to_string(), attr.span)),
-            other => {
-                report.warning(
-                    Code::Ignored,
-                    attr.span,
-                    format!(
-                        "a duration in {other} isn't imported with a unit, since their lengths \
-                         vary; the value is unchanged"
-                    ),
-                );
-                None
-            }
+        Some(attr) => match time_unit(attr.value.trim()) {
+            Some(unit) => Some((unit.to_string(), attr.span)),
+            None => match attr.value.trim() {
+                other @ ("months" | "years") => {
+                    report.warning(
+                        Code::Ignored,
+                        attr.span,
+                        format!(
+                            "a duration in {other} isn't imported with a unit, since their \
+                             lengths vary; the value is unchanged"
+                        ),
+                    );
+                    None
+                }
+                other => {
+                    report.error(
+                        Code::Invalid,
+                        attr.span,
+                        format!("units is {other:?}, not an XTCE time unit"),
+                    );
+                    return None;
+                }
+            },
         },
     };
     let scale = match encoding.attr("scale") {
@@ -1325,14 +1389,32 @@ fn relative_time<'d>(el: El<'d>, role: Role, report: &mut Report) -> Option<Scal
     Some(scalar)
 }
 
+/// The MDL unit of an XTCE time unit (XTCE 1.2's or 1.3's spelling), or
+/// none for months and years, whose lengths vary.
+fn time_unit(xtce: &str) -> Option<&'static str> {
+    match xtce {
+        "seconds" => Some("s"),
+        "milliseconds" => Some("ms"),
+        "microseconds" => Some("us"),
+        "nanoseconds" => Some("ns"),
+        // XTCE 1.2 spells it picoSeconds, and 1.3 picoseconds.
+        "picoSeconds" | "picoseconds" => Some("ps"),
+        "minutes" => Some("min"),
+        "hours" => Some("h"),
+        "days" => Some("d"),
+        _ => None,
+    }
+}
+
 /// A number type's DefaultAlarm as MDL limits: the warning range's ends
 /// are yellow and the critical range's red. What MDL's limits don't hold
-/// is left out, each a warning, since alarms don't change values.
+/// is left out, each a warning, since alarms don't change values. A
+/// disabled alarm (XTCE 1.3) gives none: no alarm applies.
 fn limits(el: El<'_>, report: &mut Report) -> Option<Limits> {
     let alarm = el.child("DefaultAlarm")?;
     alarm.check(
         &Expect {
-            attrs: &["minViolations"],
+            attrs: &["minViolations", "disabled"],
             children: &["StaticAlarmRanges"],
             ignored: &[
                 "name",
@@ -1348,6 +1430,16 @@ fn limits(el: El<'_>, report: &mut Report) -> Option<Limits> {
         },
         report,
     );
+    if let Some(attr) = alarm.attr("disabled")
+        && xml::boolean(attr, report)?
+    {
+        report.warning(
+            Code::Ignored,
+            attr.span,
+            "a disabled alarm isn't imported as limits: no alarm applies to the value",
+        );
+        return None;
+    }
     if let Some(attr) = alarm.attr("minViolations")
         && attr.value.trim() != "1"
     {
@@ -2203,7 +2295,14 @@ fn terminator_byte(terminator: El<'_>, report: &mut Report) -> Option<(u8, Span)
 }
 
 fn binary<'d>(el: El<'d>, space: usize, role: Role, report: &mut Report) -> Option<Scalar<'d>> {
-    let lists = Lists::new(role, &["name", "baseType"], &[], &[]);
+    // XTCE 1.0 to 1.2 name a binary type's context alarms
+    // BinaryContextAlarmList, which 1.3 renames ContextAlarmList.
+    let lists = Lists::new(
+        role,
+        &["name", "baseType"],
+        &[],
+        &["BinaryContextAlarmList"],
+    );
     el.check(&lists.expect(), report);
     no_unit(el, report);
     let encoding = only_encoding(el, &["BinaryDataEncoding"], report)?;

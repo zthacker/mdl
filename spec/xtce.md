@@ -3,7 +3,7 @@
 Status: normative from IR v2 (`mdl_version` 2) on. The key words MUST,
 MUST NOT, SHOULD and MAY are to be interpreted as described in RFC 2119.
 
-The XTCE importer reads OMG XTCE documents (versions 1.0, 1.1 and 1.2)
+The XTCE importer reads OMG XTCE documents (versions 1.0 to 1.3)
 and produces a bundle (`frontends.md`). This document says which XTCE it
 reads, what each construct becomes, and what it reports. The reference
 implementation is the `mdl-xtce` crate.
@@ -22,13 +22,14 @@ it out would change a decoded or encoded value, a warning otherwise.
 An import reads one or more documents. Each MUST be well-formed XML, its
 namespaces too (no prefix bound to none, `xmlns:p=""`), without a DTD
 [`xtce.syntax`], whose root is a `SpaceSystem` in
-`http://www.omg.org/space/xtce` (XTCE 1.0 and 1.1) or
-`http://www.omg.org/spec/XTCE/20180204` (XTCE 1.2) [`xtce.document`]. A
+`http://www.omg.org/space/xtce` (XTCE 1.0 and 1.1),
+`http://www.omg.org/spec/XTCE/20180204` (XTCE 1.2) or
+`http://www.omg.org/spec/XTCE/20250214` (XTCE 1.3) [`xtce.document`]. A
 root SpaceSystem in no namespace, or in a name documents written for Yamcs
-give XTCE 1.2's namespace (`https://www.omg.org/spec/XTCE/20180204`, and
-`SpaceSystem.xsd` below it over `http` or `https`), is read as XTCE with a
-warning [`xtce.namespace`]: Yamcs reads elements by their local names, so
-such documents load there. Either way, every element is in its root's
+give XTCE 1.2's or 1.3's namespace (its `https` spelling, and
+`SpaceSystem.xsd` below it over `http` or `https`), is read as XTCE, as
+that version's where it's one, with a warning [`xtce.namespace`]: Yamcs
+reads elements by their local names, so such documents load there. Either way, every element is in its root's
 namespace. Each root is a top-level SpaceSystem; two with one name are an
 error at the later one, which isn't imported [`xtce.duplicate`].
 References may cross documents.
@@ -68,9 +69,12 @@ imports as it loads there:
 XTCE 1.2 looks for an unqualified name in the referring SpaceSystem only;
 a reference that resolves under that rule resolves the same way here. A
 parameter reference may go on into an aggregate's members, written as
-XTCE writes them (`Packet_ID.APID`) or as Yamcs does (`Packet_ID/APID`). A
-reference that names nothing is an error at the reference
-[`xtce.reference`].
+XTCE writes them (`Packet_ID.APID`) or as Yamcs does (`Packet_ID/APID`).
+XTCE 1.3 also lets a reference name an array's element (`Cells[2]`) and
+an argument reference go into an argument's members or elements
+(`Target.Id`); both are unsupported [`xtce.unsupported`], since MDL refers
+to arrays and arguments only whole. A reference that names nothing is an
+error at the reference [`xtce.reference`].
 
 ## 3. The bundle
 
@@ -162,7 +166,7 @@ another input's:
 | `BinaryParameterType` | `bytes`, a fixed size in whole bytes, or a size another parameter gives | `bytes` |
 | `AggregateParameterType` | one field per member, depth first | one per member |
 | `ArrayParameterType` | an array of one dimension: scalar elements, or a struct type of an aggregate's members | the elements' param, or one per member, each element a sample with its index |
-| `RelativeTimeParameterType` | its `Encoding`'s integer or float encoding; a `scale` or `offset` other than 1 and 0 is a `linear` conversion | `f64`, in `s` (`seconds`, the default), `ps` (`picoSeconds`) or `d` (`days`); a duration in `months` or `years` has no unit, since their lengths vary [`xtce.ignored`] |
+| `RelativeTimeParameterType` | its `Encoding`'s integer or float encoding; a `scale` or `offset` other than 1 and 0 is a `linear` conversion | `f64`, in `s` (`seconds`, the default), `ms` (`milliseconds`), `us` (`microseconds`), `ns` (`nanoseconds`), `ps` (`picoseconds`, or XTCE 1.2's `picoSeconds`), `min` (`minutes`), `h` (`hours`) or `d` (`days`); a duration in `months` or `years` has no unit, since their lengths vary [`xtce.ignored`], and any other `units` is an error [`xtce.invalid`] |
 
 The unit, for integer and float types, is the type's one `Unit` without a
 `power`, a `factor` or a `form` other than `calibrated`. Text that is a
@@ -226,7 +230,9 @@ limits don't say whether a value at the limit is in alarm), the watch,
 distress and severe levels (MDL has two), ranges in alarm inside them
 (`rangeForm="inside"`), change alarms, alarm conditions, custom alarms, a
 `minViolations` other than 1, `minConformance`, context alarms, and the
-alarms of other types, relative time types included.
+alarms of other types, relative time types included. A `DefaultAlarm`
+XTCE 1.3 marks `disabled` gives no limits, since no alarm applies
+[`xtce.ignored`].
 
 Sizes:
 
@@ -482,8 +488,11 @@ same kind are (§4), with these differences:
   name changed to fit MDL's field names is reported [`xtce.renamed`]. A
   member's default is what the argument's initial value gives it,
   completed as Defaults says. An aggregate argument type's own
-  `initialValue`, which XTCE 1.2 doesn't have and Yamcs doesn't read, is
-  left out [`xtce.ignored`]. An aggregate holding an array is unsupported.
+  `initialValue` (XTCE 1.3), a JSON object of its members, gives each
+  member it names a value beneath the member's own initial value, as
+  Defaults says; a document before XTCE 1.3 has none, Yamcs doesn't read
+  it there, and it's left out [`xtce.ignored`]. An aggregate holding an
+  array is unsupported.
 - **Arrays.** An array argument of one dimension is a list argument
   written by an array entry: of its elements, for a scalar element type;
   for an aggregate's, of records, a struct type named for the meta-command
@@ -576,14 +585,16 @@ same kind are (§4), with these differences:
   whose lengths vary (`PT1.5S`), in the argument's unit; for an aggregate,
   a JSON object of its members (`{"Id": 3}`); and for an array, a JSON
   array of its values, or of objects for records. The argument's own
-  initial value is used over its type's (an array type's being a Yamcs
-  extension XTCE 1.2 doesn't have). An aggregate's value, given or
+  initial value is used over its type's (an array type's is XTCE 1.3's,
+  and a Yamcs extension before it). An aggregate's value, given or
   initial, is completed as Yamcs completes it: from the first member it
   leaves out down, each member's own initial value (an aggregate member's
-  a JSON object of its members), outermost first, then the member's
-  type's. A member's value that should be an object of its members and
-  isn't, and a member an object names that the aggregate doesn't have,
-  are errors [`xtce.invalid`]. An initial value its encoding can't write
+  a JSON object of its members), else what its aggregate type's initial
+  value gives it (XTCE 1.3), outermost first, then the member's type's.
+  A member's value that should be an object of its members and isn't, and
+  a member an object names that the aggregate doesn't have, are errors
+  [`xtce.invalid`]; so is a value of the wrong type that a member's own
+  initial value overrides. An initial value its encoding can't write
   (text longer than its buffer, a size its size tag can't hold) is the
   document's to fix, and validation reports it (`encoding.md` §2.2), where
   Yamcs refuses only the commands that would send it.
@@ -675,8 +686,8 @@ is [`xtce.ignored`]:
   validity conditions included (they set a value's quality, not the
   value);
 - expected rates and idle patterns;
-- the document `Header`, algorithms, streams, services and operational
-  status;
+- the document `Header`, algorithms, streams, services, operational
+  status, and a SpaceSystem's system and asset types (XTCE 1.3);
 - a boolean type's labels other than `True` and `False`, and a variable
   string's `maxSizeInBits` (for a command's, §6.3 says what Yamcs does);
 - a meta-command's system name, transmission constraints, interlock,
@@ -685,7 +696,8 @@ is [`xtce.ignored`]:
   where it's defined), and a `CommandContainerSet` (§6);
 - what §6 lists of commands: an argument no entry writes, an argument
   that gives another's size, an argument type's alarms, an aggregate
-  argument type's `initialValue`, text size ranges and restriction
+  argument type's `initialValue` before XTCE 1.3, text size ranges and
+  restriction
   patterns, an enumeration label's later values, a command entry's time
   association, and restriction criteria Yamcs doesn't fill parameter
   entries from.

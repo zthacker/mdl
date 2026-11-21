@@ -15,8 +15,6 @@
 //! down, each member's own initial value (an aggregate member's a JSON
 //! object of its members), outermost first, then the type's.
 
-use std::borrow::Cow;
-
 use mdl::source::Span;
 use serde_json::{Value, json};
 
@@ -35,6 +33,9 @@ pub(super) struct Leaf<'d> {
     /// Each member's own initial value down the path, outermost first; an
     /// aggregate member's is a JSON object of its members.
     pub(super) initials: Vec<Option<(&'d str, Span)>>,
+    /// What each member's aggregate type gives it down the path (XTCE
+    /// 1.3), outermost first, which its own initial value overrides.
+    pub(super) from_types: Vec<Option<(String, Span)>>,
     pub(super) description: Option<(String, Span)>,
 }
 
@@ -54,6 +55,7 @@ pub(super) fn leaves<'d>(shape: &Shape<'d>) -> Option<Vec<Leaf<'d>>> {
             path: Vec::new(),
             scalar: (**scalar).clone(),
             initials: Vec::new(),
+            from_types: Vec::new(),
             description: None,
         }]),
         Shape::Aggregate(members) => {
@@ -62,6 +64,7 @@ pub(super) fn leaves<'d>(shape: &Shape<'d>) -> Option<Vec<Leaf<'d>>> {
                 for mut leaf in leaves(&member.shape)? {
                     leaf.path.insert(0, member.name);
                     leaf.initials.insert(0, member.initial);
+                    leaf.from_types.insert(0, member.from_type.clone());
                     leaf.description = leaf.description.or_else(|| member.description.clone());
                     out.push(leaf);
                 }
@@ -141,12 +144,7 @@ pub(super) fn member_field(base: &str, path: &[&str]) -> (String, bool) {
 
 /// A JSON value's text as Yamcs reads a member's: a string as it is,
 /// anything else as JSON writes it.
-pub(super) fn json_text(value: &Value) -> Cow<'_, str> {
-    match value {
-        Value::String(text) => Cow::Borrowed(text),
-        other => Cow::Owned(other.to_string()),
-    }
-}
+pub(super) use crate::types::json_text;
 
 /// The member names in a JSON value that no leaf names: Yamcs refuses
 /// them.
@@ -206,15 +204,24 @@ impl<'d> Import<'d, '_> {
                     .and_then(|object| object.get(*member))
                     .map(|value| (value.clone(), *span))
             });
-            let (value, span) = match (found, leaf.initials.get(level).copied().flatten()) {
+            // A member's own initial value, else what its aggregate type
+            // gives it (XTCE 1.3).
+            let here = leaf
+                .initials
+                .get(level)
+                .copied()
+                .flatten()
+                .map(|(text, span)| (text.to_string(), span))
+                .or_else(|| leaf.from_types.get(level).cloned().flatten());
+            let (value, span) = match (found, here) {
                 (Some(found), _) => found,
                 (None, Some((text, span))) if level == last => {
-                    return Ok(Some((text.to_string(), span)));
+                    return Ok(Some((text, span)));
                 }
                 (None, Some((text, span))) => {
                     let prefix = &leaf.path[..=level];
                     (
-                        self.member_initial(text, span, argument, prefix, leaves)?,
+                        self.member_initial(&text, span, argument, prefix, leaves)?,
                         span,
                     )
                 }

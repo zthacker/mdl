@@ -155,27 +155,40 @@ fn only_xtce_documents_are_read() {
         (
             "xtce.document".into(),
             "this isn't an XTCE document: its root is Catalog in no namespace, not a \
-             SpaceSystem in http://www.omg.org/space/xtce (XTCE 1.0 and 1.1) or \
-             http://www.omg.org/spec/XTCE/20180204 (XTCE 1.2)"
+             SpaceSystem in http://www.omg.org/spec/XTCE/20250214 (XTCE 1.3), \
+             http://www.omg.org/spec/XTCE/20180204 (XTCE 1.2) or http://www.omg.org/space/xtce \
+             (XTCE 1.0 and 1.1)"
                 .into()
         )
     );
     let older = r#"<xtce:SpaceSystem name="Sat" xmlns:xtce="http://www.omg.org/space/xtce"/>"#;
     assert_eq!(bundle(older)["families"][0]["name"], "sat");
+    // XTCE 1.3's namespace reads as 1.2's does, with no warning.
+    let body = telemetry(U8, &param("A", "U8"), &container("P", &entry("A")));
+    let newer = doc(&body).replace(XTCE, "http://www.omg.org/spec/XTCE/20250214");
+    let (_, result) = import_all(&[("sat.xml", &newer)]);
+    let parsed = result.unwrap();
+    assert!(parsed.warnings.is_empty(), "{:#?}", parsed.warnings);
+    assert_eq!(
+        serde_json::to_value(&parsed.bundle).unwrap(),
+        bundle(&doc(&body))
+    );
     let (_, result) = import_all(&[]);
     assert_eq!(result.unwrap_err()[0].code, "xtce.document");
 }
 
-/// A SpaceSystem in no namespace, or in a misspelling of XTCE 1.2's that
-/// documents written for Yamcs use, is read as XTCE with a warning, Yamcs
+/// A SpaceSystem in no namespace, or in a misspelling of XTCE 1.2's or
+/// 1.3's that documents written for Yamcs use, is read as XTCE with a
+/// warning, Yamcs
 /// reading elements by their local names. Every element still keeps to
 /// the root's namespace, and any other namespace isn't XTCE.
 #[test]
 fn documents_yamcs_reads_whatever_their_namespace_are_read_with_a_warning() {
     let body = telemetry(U8, &param("A", "U8"), &container("P", &entry("A")));
     let expected = bundle(&doc(&body));
-    let fix = "its namespace should be http://www.omg.org/spec/XTCE/20180204 (XTCE 1.2) or \
-               http://www.omg.org/space/xtce (XTCE 1.0 and 1.1)";
+    let fix = "its namespace should be http://www.omg.org/spec/XTCE/20250214 (XTCE 1.3), \
+               http://www.omg.org/spec/XTCE/20180204 (XTCE 1.2) or http://www.omg.org/space/xtce \
+               (XTCE 1.0 and 1.1)";
     for namespace in [
         None,
         // `xmlns=""` is no namespace too.
@@ -183,6 +196,9 @@ fn documents_yamcs_reads_whatever_their_namespace_are_read_with_a_warning() {
         Some("https://www.omg.org/spec/XTCE/20180204"),
         Some("http://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd"),
         Some("https://www.omg.org/spec/XTCE/20180204/SpaceSystem.xsd"),
+        Some("https://www.omg.org/spec/XTCE/20250214"),
+        Some("http://www.omg.org/spec/XTCE/20250214/SpaceSystem.xsd"),
+        Some("https://www.omg.org/spec/XTCE/20250214/SpaceSystem.xsd"),
     ] {
         let text = match namespace {
             None => format!(r#"<SpaceSystem name="Sat">{body}</SpaceSystem>"#),
@@ -198,6 +214,9 @@ fn documents_yamcs_reads_whatever_their_namespace_are_read_with_a_warning() {
         assert_eq!((code.as_str(), at.as_str()), ("xtce.namespace", "1:1"));
         let root = match namespace {
             None | Some("") => "no namespace".to_string(),
+            Some(namespace) if namespace.contains("20250214") => {
+                format!("{namespace}, which isn't XTCE 1.3's namespace")
+            }
             Some(namespace) => format!("{namespace}, which isn't XTCE 1.2's namespace"),
         };
         assert_eq!(
@@ -4510,4 +4529,294 @@ fn a_join_the_import_cant_follow_is_refused_with_every_reason() {
         .len(),
         3
     );
+}
+
+const XTCE_1_3: &str = "http://www.omg.org/spec/XTCE/20250214";
+
+/// One of these tests' documents, written in XTCE 1.2's namespace, as an
+/// XTCE 1.3 document.
+fn in_1_3(text: &str) -> String {
+    text.replace(XTCE, XTCE_1_3)
+}
+
+#[test]
+fn time_units_are_mdl_units_in_either_spelling() {
+    let relative = |units: &str| {
+        doc(&telemetry(
+            &format!(
+                r#"<RelativeTimeParameterType name="T"><Encoding units="{units}"><IntegerDataEncoding sizeInBits="16"/></Encoding></RelativeTimeParameterType>"#
+            ),
+            &param("X", "T"),
+            &container("P", &entry("X")),
+        ))
+    };
+    // XTCE 1.3's units, and 1.2's spelling of picoseconds.
+    for (xtce, mdl) in [
+        ("seconds", "s"),
+        ("milliseconds", "ms"),
+        ("microseconds", "us"),
+        ("nanoseconds", "ns"),
+        ("picoseconds", "ps"),
+        ("picoSeconds", "ps"),
+        ("minutes", "min"),
+        ("hours", "h"),
+        ("days", "d"),
+    ] {
+        let (packets, _) = valid(&in_1_3(&relative(xtce)));
+        assert_eq!(packets[0]["entries"][0]["unit"], mdl, "{xtce}");
+    }
+    let (code, _) = one_problem(&in_1_3(&relative("years")));
+    assert_eq!(code, "xtce.ignored");
+    assert_eq!(
+        one_error(&relative("fortnights")),
+        (
+            "xtce.invalid".to_string(),
+            "units is \"fortnights\", not an XTCE time unit".to_string()
+        )
+    );
+}
+
+#[test]
+fn a_disabled_alarm_gives_no_limits() {
+    let text = |disabled: &str| {
+        in_1_3(&doc(&telemetry(
+            &format!(
+                r#"<FloatParameterType name="T"><UnitSet><Unit>V</Unit></UnitSet><IntegerDataEncoding sizeInBits="16"/><DefaultAlarm disabled="{disabled}"><StaticAlarmRanges><WarningRange maxInclusive="32"/></StaticAlarmRanges></DefaultAlarm></FloatParameterType>"#
+            ),
+            &param("X", "T"),
+            &container("P", &entry("X")),
+        )))
+    };
+    let disabled = text("true");
+    let (sources, result) = import_all(&[("sat.xml", &disabled)]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let catalog = serde_json::to_value(&parsed.bundle.catalog).unwrap();
+    assert_eq!(catalog["params"]["sat.x"].get("limits"), None, "{catalog}");
+    let at = sources
+        .iter()
+        .next()
+        .unwrap()
+        .location(disabled.find("\"true\"").unwrap() + 1);
+    assert_eq!(
+        shown(&sources, &parsed.warnings),
+        [(
+            Severity::Warning,
+            "xtce.ignored".to_string(),
+            format!("{}:{}", at.line, at.column),
+            "a disabled alarm isn't imported as limits: no alarm applies to the value".to_string()
+        )]
+    );
+    // An alarm that isn't disabled is as one without the attribute.
+    let (sources, result) = import_all(&[("sat.xml", &text("false"))]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    assert!(parsed.warnings.is_empty());
+    let catalog = serde_json::to_value(&parsed.bundle.catalog).unwrap();
+    assert_eq!(
+        catalog["params"]["sat.x"]["limits"],
+        json!({ "yellow_high": 32.0 })
+    );
+}
+
+#[test]
+fn a_space_systems_type_is_left_out() {
+    let text = in_1_3(&doc(&telemetry(
+        U8,
+        &param("A", "U8"),
+        &container("P", &entry("A")),
+    )))
+    .replacen(
+        r#"<SpaceSystem name="Sat""#,
+        r#"<SpaceSystem name="Sat" systemType="asset" assetType="spacecraft""#,
+        1,
+    );
+    let (sources, result) = import_all(&[("sat.xml", &text)]);
+    let parsed = result.unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let found = shown(&sources, &parsed.warnings);
+    assert_eq!(found.len(), 2, "{found:#?}");
+    for ((_, code, _, message), attribute) in found.iter().zip(["systemType", "assetType"]) {
+        assert_eq!(code, "xtce.ignored");
+        assert!(
+            message.contains(attribute)
+                && message.ends_with("it describes the system, and decodes nothing"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
+fn a_reference_into_an_array_or_an_arguments_member_is_unsupported() {
+    let element = doc(&telemetry(
+        U8,
+        &param("A", "U8"),
+        &container("P", r#"<ParameterRefEntry parameterRef="A[2]"/>"#),
+    ));
+    let (code, message) = one_error(&in_1_3(&element));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("A[2] names an array's element, which isn't supported"),
+        "{message}"
+    );
+    let member = doc(&commands(
+        ARG_U8,
+        &go(&argument("A", "U8"), &argument_entry("A.x")),
+    ));
+    let (code, message) = one_error(&in_1_3(&member));
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.starts_with("A.x names a member or element of an argument, which isn't supported"),
+        "{message}"
+    );
+    // A name that's simply missing is still one that names nothing.
+    let missing = doc(&commands(
+        ARG_U8,
+        &go(&argument("A", "U8"), &argument_entry("B")),
+    ));
+    assert_eq!(one_error(&missing).0, "xtce.reference");
+}
+
+/// An aggregate argument type in XTCE 1.3, whose own initial value gives
+/// its members defaults beneath their own and the argument's.
+#[test]
+fn an_aggregate_argument_types_initial_value_gives_its_members_defaults() {
+    let types = |initial: &str| {
+        format!(
+            r#"<AggregateArgumentType name="Pos" initialValue='{initial}'><MemberList>
+              <Member name="x" typeRef="U8"/><Member name="y" typeRef="U8" initialValue="5"/><Member name="z" typeRef="U8"/>
+            </MemberList></AggregateArgumentType>"#
+        )
+    };
+    let text = |types: &str, argument: &str| {
+        doc(&commands(
+            &format!("{ARG_U8}{types}"),
+            &go(
+                &format!(r#"<Argument name="T" argumentTypeRef="Pos"{argument}/>"#),
+                &argument_entry("T"),
+            ),
+        ))
+    };
+    let defaults = |text: &str| {
+        let (bundle, codes) = validated_doc(text);
+        let defaults: Vec<(String, Value)> = bundle["catalog"]["commands"]["sat.go"]["arguments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["name"].as_str().unwrap().to_string(),
+                    a["default"].clone(),
+                )
+            })
+            .collect();
+        (defaults, codes)
+    };
+    let named = |values: [Value; 3]| -> Vec<(String, Value)> {
+        ["t_x", "t_y", "t_z"]
+            .iter()
+            .map(|name| name.to_string())
+            .zip(values)
+            .collect()
+    };
+    let spread = types(r#"{"x": 1, "y": 2, "z": 3}"#);
+    // The type gives x and z; y's own initial value takes precedence.
+    let (found, codes) = defaults(&in_1_3(&text(&spread, "")));
+    assert_eq!(found, named([json!(1), json!(5), json!(3)]));
+    assert!(codes.is_empty(), "{codes:?}");
+    // The argument's own initial value takes precedence over both.
+    let (found, _) = defaults(&in_1_3(&text(
+        &spread,
+        r#" initialValue='{"y": 9, "z": 8}'"#,
+    )));
+    assert_eq!(found, named([json!(1), json!(9), json!(8)]));
+    // Before XTCE 1.3 there's none, as Yamcs reads it: left out, named.
+    let (found, codes) = defaults(&text(&spread, ""));
+    assert_eq!(found, named([Value::Null, json!(5), Value::Null]));
+    assert_eq!(codes, ["xtce.ignored"]);
+    // A nested aggregate's type gives its members theirs.
+    let nested = r#"<AggregateArgumentType name="Inner" initialValue='{"a": 4}'><MemberList>
+          <Member name="a" typeRef="U8"/></MemberList></AggregateArgumentType>
+        <AggregateArgumentType name="Pos"><MemberList><Member name="inner" typeRef="Inner"/></MemberList></AggregateArgumentType>"#;
+    let (bundle, _) = validated_doc(&in_1_3(&text(nested, "")));
+    assert_eq!(
+        bundle["catalog"]["commands"]["sat.go"]["arguments"][0]["default"],
+        4
+    );
+    // What isn't an object of its members, names a member it lacks, or
+    // holds what isn't a value of its member's type is refused, at the
+    // type's attribute; a value outside the member's range is validation's
+    // to refuse, as any default is.
+    for (initial, expected) in [
+        ("[1]", "isn't a JSON object of"),
+        (r#"{"w": 1}"#, "has no member w"),
+        (r#"{"x": "many"}"#, "many"),
+        // Even where the member's own initial value overrides it.
+        (r#"{"y": "many"}"#, "many"),
+    ] {
+        let (code, message) = one_error(&in_1_3(&text(&types(initial), "")));
+        assert_eq!(code, "xtce.invalid", "{initial}: {message}");
+        assert!(message.contains(expected), "{initial}: {message}");
+    }
+}
+
+/// A referring import's member that its aggregate type gives a default
+/// isn't required: the vendor gave it a value.
+#[test]
+fn a_member_its_type_gives_a_default_isnt_required() {
+    let text = in_1_3(&doc(&commands(
+        &format!(
+            r#"{ARG_U8}<AggregateArgumentType name="Pos" initialValue='{{"x": 1}}'><MemberList>
+              <Member name="x" typeRef="U8"/><Member name="y" typeRef="U8"/>
+            </MemberList></AggregateArgumentType>"#
+        ),
+        &go(
+            r#"<Argument name="T" argumentTypeRef="Pos"/>"#,
+            &argument_entry("T"),
+        )
+        .replace(
+            r#"<MetaCommand name="Go">"#,
+            r#"<MetaCommand name="Go"><AliasSet><Alias nameSpace="MDL" alias="sat.go"/></AliasSet>"#,
+        ),
+    )));
+    let catalog = catalog_of(json!({ "commands": { "sat.go": { "arguments": [
+        { "name": "t_x", "type": "u64", "default": 0 },
+        { "name": "t_y", "type": "u64", "default": 0 }
+    ] } } }));
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text.as_str());
+    let parsed = read_with(
+        sources.iter(),
+        &Options::new().with_catalog(CatalogRole::Refer),
+        Context::new().with_catalog(&catalog),
+    )
+    .unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let json = serde_json::to_value(&parsed.bundle).unwrap();
+    assert_eq!(
+        json["sets"][0]["commands"][0]["arguments"],
+        json!({ "t_x": { "default": 1 }, "t_y": { "required": true } })
+    );
+}
+
+/// A binary type's context alarms are left out under either name: XTCE 1.0
+/// to 1.2's BinaryContextAlarmList and 1.3's ContextAlarmList.
+#[test]
+fn a_binary_types_context_alarms_are_left_out_in_either_version() {
+    let text = |list: &str| {
+        doc(&telemetry(
+            &format!(
+                r#"<BinaryParameterType name="Blob"><BinaryDataEncoding><SizeInBits><FixedValue>24</FixedValue></SizeInBits></BinaryDataEncoding><{list}/></BinaryParameterType>"#
+            ),
+            &param("B", "Blob"),
+            &container("P", &entry("B")),
+        ))
+    };
+    for (list, text) in [
+        ("BinaryContextAlarmList", text("BinaryContextAlarmList")),
+        ("ContextAlarmList", in_1_3(&text("ContextAlarmList"))),
+    ] {
+        let (code, message) = one_problem(&text);
+        assert_eq!(code, "xtce.ignored", "{list}: {message}");
+        assert!(
+            message.contains(list) && message.ends_with("alarms aren't imported"),
+            "{message}"
+        );
+    }
 }

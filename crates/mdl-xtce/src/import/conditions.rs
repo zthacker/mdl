@@ -453,8 +453,9 @@ impl<'d> Import<'d, '_> {
         let (reference, reference_span) = parts.reference;
         let found = match self.tree.resolve(space, reference, Kind::Parameter) {
             Ok(found) => found,
-            Err(message) => {
-                self.report.error(Code::Reference, reference_span, message);
+            Err(unresolved) => {
+                self.report
+                    .error(unresolved.code, reference_span, unresolved.message);
                 return None;
             }
         };

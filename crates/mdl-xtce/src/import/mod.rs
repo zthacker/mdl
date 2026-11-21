@@ -629,8 +629,9 @@ impl<'d, 'r> Import<'d, 'r> {
                 .resolve(at_space, reference.value, Kind::Container)
             {
                 Ok(found) => found,
-                Err(message) => {
-                    self.report.error(Code::Reference, reference.span, message);
+                Err(unresolved) => {
+                    self.report
+                        .error(unresolved.code, reference.span, unresolved.message);
                     return None;
                 }
             };
@@ -871,8 +872,9 @@ impl<'d, 'r> Import<'d, 'r> {
                 Ok(found) => self
                     .types
                     .shape(self.tree, found.space, found.el, self.report),
-                Err(message) => {
-                    self.report.error(Code::Reference, type_ref.span, message);
+                Err(unresolved) => {
+                    self.report
+                        .error(unresolved.code, type_ref.span, unresolved.message);
                     None
                 }
             },
