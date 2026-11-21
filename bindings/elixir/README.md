@@ -16,7 +16,7 @@ later wherever the app compiles:
 ```elixir
 def deps do
   [
-    {:mdl, github: "zthacker/mdl", subdir: "bindings/elixir", tag: "v0.1.0"},
+    {:mdl, github: "zthacker/mdl", subdir: "bindings/elixir", tag: "v0.2.0"},
     {:rustler, "~> 0.38", runtime: false}
   ]
 end

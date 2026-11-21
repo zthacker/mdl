@@ -8,6 +8,13 @@ them too.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-21
+
+Command limits for each vendor in a mixed fleet, and a vendor's next
+flight software imported from XTCE as another set of its family. It
+reads and writes MDL IR 2.3 (and reads 2.0 to 2.2), store format 1 and
+result format 1, and builds on Rust 1.88 or later.
+
 ### Definitions
 
 - MDL IR 2.3. A command packet can list the states of an enum argument
@@ -68,7 +75,8 @@ them too.
   an earlier release handled wrongly.
 - A frontend's output can change from one release to the next, so a set
   rebuilt from unchanged files can get a new `def_version`; the release
-  notes say when (§2). The XTCE changes above are this release's.
+  notes say when ([spec/compatibility.md](spec/compatibility.md) §2). The
+  XTCE changes above are this release's.
 - Upgrade the services that read a store before rebuilding it with this
   release: a rebuilt set that uses IR 2.3 (`states`, `required`) is
   refused by 0.1.0 (`unsupported_version`), and this release opens every
@@ -94,7 +102,7 @@ them too.
   workflow is a dry run of any branch, or, ticked, a release of `main`'s
   head. Pushing a tag no longer starts a release (RELEASING.md).
 
-## [0.1.0] - 2026-11-20
+## [0.1.0] - 2026-11-21
 
 The first release. It reads and writes MDL IR 2.2, store format 1 and
 result format 1, and builds on Rust 1.88 or later.
@@ -168,5 +176,6 @@ result format 1, and builds on Rust 1.88 or later.
   platform, with a checksum and an attestation. A Hex package that
   downloads them, so that installing needs no Rust, is planned.
 
-[Unreleased]: https://github.com/zthacker/mdl/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/zthacker/mdl/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/zthacker/mdl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/zthacker/mdl/releases/tag/v0.1.0

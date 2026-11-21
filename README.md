@@ -179,7 +179,7 @@ for Linux on x86_64 and aarch64 (statically linked, for any distribution)
 and macOS on Apple silicon:
 
 ```sh
-v=0.1.0 target=aarch64-apple-darwin  # or x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+v=0.2.0 target=aarch64-apple-darwin  # or x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
 url=https://github.com/zthacker/mdl/releases/download/v$v/morphc-$v-$target.tar.gz
 curl -fL -O "$url" -O "$url.sha256"
 shasum -a 256 -c "morphc-$v-$target.tar.gz.sha256"   # or sha256sum -c
@@ -202,7 +202,7 @@ lets it run.
 
 Or build it with Rust 1.88 or later, from the release's lockfile (the
 crates aren't on crates.io yet): `cargo install --locked --git
-https://github.com/zthacker/mdl --tag v0.1.0 morpheus-morphc`, or `cargo
+https://github.com/zthacker/mdl --tag v0.2.0 morpheus-morphc`, or `cargo
 install --locked --path crates/morphc` in a clone.
 
 Then, in a clone of this repository:
