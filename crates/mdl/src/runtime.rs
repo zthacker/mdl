@@ -30,7 +30,7 @@ use crate::read::{Loaded, read_artifact};
 use crate::route::{FamilySets, RouteError};
 use crate::store::{self, StoreError, Stored};
 use crate::time::Timestamp;
-use crate::validate::{Validated, validate};
+use crate::validate::{Validated, validate_stored};
 
 /// The version of the result format (`spec/api.md`), which
 /// `spec/compatibility.md` §4 says what changes.
@@ -625,7 +625,7 @@ fn validated(stored: &Stored) -> Result<Validated, ApiError> {
             bundle.sets.push(set.clone());
         }
     }
-    validate(bundle).map_err(|diagnostics| {
+    validate_stored(bundle).map_err(|diagnostics| {
         ApiError::of_diagnostics(
             "invalid_build",
             "the store's build doesn't validate",

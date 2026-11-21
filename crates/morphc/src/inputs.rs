@@ -6,7 +6,8 @@ use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, bail};
-use mdl::source::{Parsed, SourceDiagnostic, SourceFile, Sources};
+use mdl::ir::{Catalog, Family};
+use mdl::source::{Parsed, Severity, SourceDiagnostic, SourceFile, Sources};
 
 use mdl::store;
 
@@ -63,7 +64,8 @@ impl Input {
         self.path.as_os_str() == "-"
     }
 
-    fn name(&self) -> String {
+    /// How diagnostics name it.
+    pub fn name(&self) -> String {
         self.shown.clone()
     }
 }
@@ -269,15 +271,41 @@ pub fn read(inputs: &[Input]) -> anyhow::Result<Sources> {
     Ok(sources)
 }
 
+/// Why the definitions couldn't be read: every problem and warning, in
+/// file order, and the XTCE imports left unread, with why.
+pub struct Unread {
+    pub problems: Vec<SourceDiagnostic>,
+    pub skipped: Vec<(usize, Skip)>,
+}
+
+/// Why an XTCE import wasn't read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// It refers to the catalog, and what read doesn't merge into one.
+    Catalog,
+    /// It joins a family no input that read defines, and an input that
+    /// didn't read might.
+    Family,
+}
+
 /// One bundle per frontend in the order of its first file: the TOML files
 /// as one, each XTCE import's documents as one (with `imports[i]` as
-/// import `i`'s options), and each JSON bundle alone. On failure, every
-/// problem and every warning, in file order.
+/// import `i`'s options), and each JSON bundle alone.
+///
+/// An XTCE import that refers to the catalog or joins a family is read
+/// after what it's read with: one that refers to the catalog once the
+/// others are read, with the catalog of those that read (only an owner
+/// defines names, and an owner joins no family); one that joins a family
+/// after that, with every family read so far. One that joins a family no
+/// input that read defines waits while an input has problems, rather than
+/// report a family that input may define; one that refers to a catalog
+/// that doesn't merge waits too. Each that waits is in
+/// [`Unread::skipped`].
 pub fn parse(
     sources: &Sources,
     inputs: &[Input],
     imports: &[mdl_xtce::Options],
-) -> Result<Vec<Parsed>, Vec<SourceDiagnostic>> {
+) -> Result<Vec<Parsed>, Unread> {
     let files: Vec<(&Input, SourceFile<'_>)> = inputs.iter().zip(sources.iter()).collect();
     let toml = || {
         files
@@ -285,44 +313,156 @@ pub fn parse(
             .filter(|(input, _)| input.frontend == Frontend::Toml)
             .map(|(_, file)| *file)
     };
-    let import = |index: usize| {
+    let import_files = |index: usize| {
         files
             .iter()
             .filter(move |(input, _)| input.frontend == Frontend::Xtce && input.import == index)
             .map(|(_, file)| *file)
     };
-    let mut parts = Vec::new();
-    let mut problems = Vec::new();
-    let mut failed = false;
+    let options = |index: usize| imports.get(index).cloned().unwrap_or_default();
+    let mut read = Read::default();
     let mut toml_read = false;
-    let mut imports_read = BTreeSet::new();
-    for (input, file) in &files {
-        let result = match input.frontend {
+    let mut xtce = Vec::new();
+    let mut imports_seen = BTreeSet::new();
+    for (place, (input, file)) in files.iter().enumerate() {
+        match input.frontend {
             Frontend::Toml if !toml_read => {
                 toml_read = true;
-                mdl_toml::read(toml())
+                read.add(place, mdl_toml::read(toml()));
             }
-            Frontend::Xtce if imports_read.insert(input.import) => {
-                let options = imports.get(input.import).cloned().unwrap_or_default();
-                mdl_xtce::read(import(input.import), &options)
-            }
-            Frontend::Json => mdl::json::read(*file),
-            Frontend::Toml | Frontend::Xtce => continue,
-        };
-        match result {
-            Ok(parsed) => parts.push(parsed),
-            Err(diagnostics) => {
-                failed = true;
-                problems.extend(diagnostics);
-            }
+            Frontend::Json => read.add(place, mdl::json::read(*file)),
+            Frontend::Xtce if imports_seen.insert(input.import) => xtce.push((place, input.import)),
+            Frontend::Toml | Frontend::Xtce => {}
         }
     }
-    if !failed {
-        return Ok(parts);
+    // What an import waits for: nothing, the catalog, or a family.
+    let stage = |import: usize| {
+        let options = options(import);
+        match (options.join.is_some(), refers(&options)) {
+            (true, _) => 2,
+            (false, true) => 1,
+            (false, false) => 0,
+        }
+    };
+    let mut skipped = Vec::new();
+    let mut merged: Option<(usize, Option<Catalog>)> = None;
+    for waits in 0..=2 {
+        let due: Vec<(usize, usize)> = xtce
+            .iter()
+            .copied()
+            .filter(|(_, import)| stage(*import) == waits)
+            .collect();
+        if due.is_empty() {
+            continue;
+        }
+        // Whether an input read so far has problems: one may define the
+        // family a joining import looks for.
+        let failed_before = read.failed;
+        read.parts.sort_by_key(|(place, _)| *place);
+        // The catalog of what read, which a referring import's own
+        // problems don't depend on: what it writes with it is used only
+        // when everything reads. It's merged once for each set of parts
+        // (parts are only added), so a merge that fails is reported once.
+        let catalog = if due.iter().any(|(_, import)| refers(&options(*import))) {
+            match &merged {
+                Some((parts, catalog)) if *parts == read.parts.len() => catalog.clone(),
+                _ => {
+                    let catalog = read.catalog();
+                    merged = Some((read.parts.len(), catalog.clone()));
+                    catalog
+                }
+            }
+        } else {
+            None
+        };
+        let families: Vec<Family> = read
+            .parts
+            .iter()
+            .flat_map(|(_, parsed)| parsed.bundle.families.iter().cloned())
+            .collect();
+        let mut context = mdl_xtce::Context::new().with_families(&families);
+        if let Some(catalog) = &catalog {
+            context = context.with_catalog(catalog);
+        }
+        for (place, import) in due {
+            let options = options(import);
+            if refers(&options) && catalog.is_none() {
+                skipped.push((import, Skip::Catalog));
+                continue;
+            }
+            let missing = options
+                .join
+                .as_ref()
+                .is_some_and(|family| !families.iter().any(|known| known.name == *family));
+            if missing && failed_before {
+                skipped.push((import, Skip::Family));
+                continue;
+            }
+            read.add(
+                place,
+                mdl_xtce::read_with(import_files(import), &options, context),
+            );
+        }
     }
-    for part in &parts {
+    let Read {
+        mut parts,
+        mut problems,
+        failed,
+    } = read;
+    parts.sort_by_key(|(place, _)| *place);
+    if !failed {
+        return Ok(parts.into_iter().map(|(_, parsed)| parsed).collect());
+    }
+    for (_, part) in &parts {
         problems.extend(part.warnings.iter().cloned());
     }
     problems.sort_by_key(|d| d.span.map(|span| (span.source, span.start)));
-    Err(problems)
+    Err(Unread { problems, skipped })
+}
+
+/// The bundles read so far, each with the place of its first file, which
+/// orders the merge; and the problems of those that didn't read.
+#[derive(Default)]
+struct Read {
+    parts: Vec<(usize, Parsed)>,
+    problems: Vec<SourceDiagnostic>,
+    failed: bool,
+}
+
+impl Read {
+    /// The catalog of the parts read, merged in file order: an empty one
+    /// when none did, and none when they don't merge, whose errors are
+    /// then the problems' (the parts' warnings are reported with them).
+    fn catalog(&mut self) -> Option<Catalog> {
+        if self.parts.is_empty() {
+            return Some(Catalog::default());
+        }
+        self.parts.sort_by_key(|(place, _)| *place);
+        match mdl::source::merge(self.parts.iter().map(|(_, parsed)| parsed.clone())) {
+            Ok(merged) => Some(merged.bundle.catalog),
+            Err(diagnostics) => {
+                self.failed = true;
+                self.problems.extend(
+                    diagnostics
+                        .into_iter()
+                        .filter(|d| d.severity == Severity::Error),
+                );
+                None
+            }
+        }
+    }
+
+    fn add(&mut self, place: usize, result: Result<Parsed, Vec<SourceDiagnostic>>) {
+        match result {
+            Ok(parsed) => self.parts.push((place, parsed)),
+            Err(diagnostics) => {
+                self.failed = true;
+                self.problems.extend(diagnostics);
+            }
+        }
+    }
+}
+
+fn refers(options: &mdl_xtce::Options) -> bool {
+    options.catalog == mdl_xtce::CatalogRole::Refer
 }

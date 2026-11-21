@@ -36,7 +36,7 @@ use mdl::ir::{Artifact, Bundle, IrVersion, Locator};
 use mdl::read::{Loaded, read_artifact};
 use mdl::route::FamilySets;
 use mdl::source::{Parsed, SourceDiagnostic, SourceId, SourceMap, Sources, Span, merge_owned};
-use mdl::validate::{Validated, validate};
+use mdl::validate::{Validated, validate, validate_stored};
 use mdl::{runtime, store};
 
 use crate::inputs::{Frontend, Input};
@@ -394,8 +394,12 @@ fn definitions(
         .filter(|(input, _)| owners.get(input.import).copied().unwrap_or(false))
         .map(|(_, file)| file.id())
         .collect();
-    let parsed =
-        inputs::parse(sources, inputs, imports).and_then(|parts| merge_owned(parts, &owners));
+    let parsed = inputs::parse(sources, inputs, imports).and_then(|parts| {
+        merge_owned(parts, &owners).map_err(|problems| inputs::Unread {
+            problems,
+            skipped: Vec::new(),
+        })
+    });
     let Parsed {
         bundle,
         map,
@@ -403,7 +407,7 @@ fn definitions(
         ..
     } = match parsed {
         Ok(parsed) => parsed,
-        Err(problems) => {
+        Err(inputs::Unread { problems, skipped }) => {
             let xtce_imports: BTreeSet<usize> = inputs
                 .iter()
                 .filter(|input| input.frontend == Frontend::Xtce)
@@ -417,6 +421,27 @@ fn definitions(
                 );
             }
             report.add(problems);
+            for (skip, why) in [
+                (
+                    inputs::Skip::Family,
+                    "the family each joins is in no input that read, and an input that didn't \
+                     read may define it",
+                ),
+                (
+                    inputs::Skip::Catalog,
+                    "the catalog they refer to doesn't merge",
+                ),
+            ] {
+                let names: Vec<String> = skipped
+                    .iter()
+                    .filter(|(_, reason)| *reason == skip)
+                    .filter_map(|(import, _)| inputs.iter().find(|input| input.import == *import))
+                    .map(Input::name)
+                    .collect();
+                if !names.is_empty() {
+                    report.note(format!("not read yet, since {why}: {}", names.join(", ")));
+                }
+            }
             return None;
         }
     };
@@ -539,7 +564,7 @@ fn canonical(artifacts: &Artifacts) -> anyhow::Result<Validated> {
             bundle.sets.push(set.clone());
         }
     }
-    validate(bundle).map_err(|diagnostics| anyhow!("{diagnostics}"))
+    validate_stored(bundle).map_err(|diagnostics| anyhow!("{diagnostics}"))
 }
 
 /// The family's sets, assembled from the artifacts as a consumer

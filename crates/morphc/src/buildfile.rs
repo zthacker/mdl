@@ -19,7 +19,7 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
-use mdl::ir::Locator;
+use mdl::ir::{Locator, Scalar};
 use serde::Deserialize;
 
 /// The name morphc looks for when given no inputs, and leaves out when it
@@ -45,7 +45,9 @@ struct File {
 struct Entry {
     path: PathBuf,
     family: Option<String>,
+    join: Option<String>,
     set: Option<String>,
+    set_version: Option<Scalar>,
     alias: Option<Locator>,
     naming: Option<crate::Naming>,
     catalog: Option<Catalog>,
@@ -150,16 +152,28 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<Input>> {
                 )
                 .into());
             }
+            let shown = entry.path.display().to_string();
+            if let Some(problem) = join_problem(&entry) {
+                return Err(invalid(format!("input {shown} {problem}"), None).into());
+            }
             let has_options = entry.family.is_some()
+                || entry.join.is_some()
                 || entry.set.is_some()
+                || entry.set_version.is_some()
                 || entry.alias.is_some()
                 || entry.naming.is_some();
             let mut options = mdl_xtce::Options::new();
             if let Some(family) = entry.family {
                 options = options.with_family(family);
             }
+            if let Some(family) = entry.join {
+                options = options.with_join(family);
+            }
             if let Some(set) = entry.set {
                 options = options.with_set(set);
+            }
+            if let Some(version) = entry.set_version {
+                options = options.with_set_version(version);
             }
             if let Some(alias) = entry.alias {
                 options = options.with_alias(alias);
@@ -183,4 +197,32 @@ pub fn read(path: &Path) -> anyhow::Result<Vec<Input>> {
         }
     }
     Ok(inputs)
+}
+
+/// Why an input's `join` can't be followed, or `set_version` given, as
+/// the rest of the sentence that names the input.
+fn join_problem(entry: &Entry) -> Option<String> {
+    let Some(family) = &entry.join else {
+        return entry.set_version.as_ref().map(|_| {
+            "gives set_version, which is for a set that joins a family (join)".to_string()
+        });
+    };
+    if let Some(own) = &entry.family {
+        return Some(format!(
+            "names family {own} and joins family {family}; give one"
+        ));
+    }
+    if entry.catalog.is_some() {
+        return Some(format!(
+            "owns the catalog and joins family {family}: the inputs that refer to an owner's \
+             catalog are read with it, before any input that joins a family, so an owner \
+             can't join one"
+        ));
+    }
+    if entry.set.is_none() {
+        return Some(format!(
+            "joins family {family}, so it names the set it adds to it (set)"
+        ));
+    }
+    None
 }

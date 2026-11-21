@@ -3,7 +3,7 @@ use mdl::validate::validate;
 use proptest::prelude::*;
 use serde_json::{Value, json};
 
-use crate::{CatalogRole, Code, Options, read};
+use crate::{CatalogRole, Code, Context, Options, read, read_with};
 
 const XTCE: &str = "http://www.omg.org/spec/XTCE/20180204";
 
@@ -2189,8 +2189,22 @@ fn a_referring_import_maps_onto_a_catalog_it_doesnt_define() {
     let mut sources = Sources::new();
     sources.add("sat.xml", text.as_str());
     let options = Options::new().with_catalog(CatalogRole::Refer);
-    let parsed =
-        read(sources.iter(), &options).unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    // The owner's. Its command allows A more than A's 8-bit field holds,
+    // which the vendor's range keeps it to, and B any u64.
+    let owners = catalog_of(json!({
+        "params": {"eps.battery_temp": {"type": "u64"}},
+        "commands": {"sat.go": {"arguments": [
+            {"name": "a", "type": "u64", "unit": "s", "range": {"min": 0, "max": 1000}},
+            {"name": "b", "type": "u64"},
+            {"name": "c", "type": "f64", "range": {"min": 0, "max": 10}}
+        ]}}
+    }));
+    let parsed = read_with(
+        sources.iter(),
+        &options,
+        Context::new().with_catalog(&owners),
+    )
+    .unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
     // Where an offset in the document is, as `shown` puts it.
     let at = |offset: Option<usize>| {
         let location = sources.iter().next().unwrap().location(offset.unwrap());
@@ -2238,30 +2252,22 @@ fn a_referring_import_maps_onto_a_catalog_it_doesnt_define() {
     assert_eq!(commands[0]["canonical"], "sat.go");
     assert_eq!(commands[0]["entries"][2]["argument"], "a");
     // The vendor's range and initial value are the packet's own (IR 2.2),
-    // since the owner's command sets the catalog's. B's type states
-    // neither, and C's only a minimum: what an encoding holds isn't a limit
-    // the vendor stated.
+    // since the owner's command sets the catalog's, in A's unit, which is
+    // the catalog's, so it isn't written. B's type states neither, and C's
+    // only a minimum: what an encoding holds isn't a limit the vendor
+    // stated.
     assert_eq!(
         commands[0]["arguments"],
         json!({
-            "a": { "unit": "s", "range": { "min": 0, "max": 10 }, "default": 5 },
+            "a": { "range": { "min": 0, "max": 10 }, "default": 5 },
             "c": { "range": { "min": 1 } }
         })
     );
     assert_eq!(json["mdl_version"], "2.2");
     // Against the owner's catalog, the misspelt alias is a problem,
-    // reported where each parameter has it. The owner's command allows A
-    // more than its 8-bit field holds, which the vendor's range keeps it to;
-    // B it allows any u64, which nothing here narrows, so that's reported.
-    bundle.catalog = serde_json::from_value(json!({
-        "params": {"eps.battery_temp": {"type": "u64"}},
-        "commands": {"sat.go": {"arguments": [
-            {"name": "a", "type": "u64", "unit": "s", "range": {"min": 0, "max": 1000}},
-            {"name": "b", "type": "u64"},
-            {"name": "c", "type": "f64", "range": {"min": 0, "max": 10}}
-        ]}}
-    }))
-    .unwrap();
+    // reported where each parameter has it, and so is B, which nothing
+    // here narrows to what its field holds.
+    bundle.catalog = owners;
     let diagnostics = parsed.map.locate_all(&validate(bundle).unwrap_err());
     let typo = |offset| {
         (
@@ -3307,9 +3313,20 @@ fn referred_limits(ty: &str) -> Value {
     let mut sources = Sources::new();
     sources.add("sat.xml", text.as_str());
     let options = Options::new().with_catalog(CatalogRole::Refer);
-    let parsed =
-        read(sources.iter(), &options).unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let catalog = catalog_of(json!({
+        "commands": {"sat.go": {"arguments": [{"name": "a", "type": "f64"}]}}
+    }));
+    let parsed = read_with(
+        sources.iter(),
+        &options,
+        Context::new().with_catalog(&catalog),
+    )
+    .unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
     serde_json::to_value(&parsed.bundle).unwrap()["sets"][0]["commands"][0]["arguments"].clone()
+}
+
+fn catalog_of(value: Value) -> mdl::ir::Catalog {
+    serde_json::from_value(value).unwrap()
 }
 
 #[test]
@@ -4193,4 +4210,304 @@ proptest! {
         let damaged = format!("{}{}", &text[..start], &text[end..]);
         let _ = import_all(&[("demosat.xml", &damaged)]);
     }
+}
+
+/// `Go`'s arguments for the referring tests: an enumerated mode listing
+/// NOMINAL before SAFE, a delay in seconds with an initial value, a pulse
+/// in milliseconds without one, and a wait in seconds.
+const REFERRED_TYPES: &str = r#"<EnumeratedArgumentType name="Mode"><IntegerDataEncoding sizeInBits="8"/><EnumerationList><Enumeration value="1" label="NOMINAL"/><Enumeration value="0" label="SAFE"/></EnumerationList></EnumeratedArgumentType>
+<IntegerArgumentType name="Delay" signed="false" initialValue="5"><UnitSet><Unit>s</Unit></UnitSet><IntegerDataEncoding sizeInBits="8"/><ValidRangeSet><ValidRange minInclusive="0" maxInclusive="10"/></ValidRangeSet></IntegerArgumentType>
+<IntegerArgumentType name="Pulse" signed="false"><UnitSet><Unit>ms</Unit></UnitSet><IntegerDataEncoding sizeInBits="16"/><ValidRangeSet><ValidRange minInclusive="50" maxInclusive="1000"/></ValidRangeSet></IntegerArgumentType>
+<FloatArgumentType name="Wait"><UnitSet><Unit>s</Unit></UnitSet><FloatDataEncoding sizeInBits="32"/><ValidRangeSet><ValidRange minInclusive="0" maxInclusive="60"/></ValidRangeSet></FloatArgumentType>"#;
+
+/// A referring import of `Go` with [`REFERRED_TYPES`], against `catalog`
+/// (sat.go's arguments): its text, its packet's arguments, and the bundle
+/// with that catalog, as a build would validate it.
+fn referred(arguments: Value) -> (Sources, String, Value, mdl::ir::Bundle) {
+    let names = ["Mode", "Delay", "Pulse", "Wait"];
+    let declared: String = names.iter().map(|name| argument(name, name)).collect();
+    let written: String = names.iter().map(|name| argument_entry(name)).collect();
+    let text = doc(&commands(
+        &format!("{ARG_U8}{REFERRED_TYPES}"),
+        &go(&declared, &written).replace(
+            r#"<MetaCommand name="Go">"#,
+            r#"<MetaCommand name="Go"><AliasSet><Alias nameSpace="MDL" alias="sat.go"/></AliasSet>"#,
+        ),
+    ));
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text.as_str());
+    let catalog = catalog_of(json!({ "commands": { "sat.go": { "arguments": arguments } } }));
+    let options = Options::new().with_catalog(CatalogRole::Refer);
+    let parsed = read_with(
+        sources.iter(),
+        &options,
+        Context::new().with_catalog(&catalog),
+    )
+    .unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let json = serde_json::to_value(&parsed.bundle).unwrap();
+    let limits = json["sets"][0]["commands"][0]["arguments"].clone();
+    assert_eq!(json["catalog"], json!({}));
+    let mut bundle = parsed.bundle;
+    bundle.catalog = catalog;
+    (sources, text, limits, bundle)
+}
+
+#[test]
+fn a_referring_import_writes_what_the_vendor_says_beyond_the_catalog() {
+    let arguments = |mode_states: Value| {
+        json!([
+            { "name": "mode", "type": "enum", "states": mode_states },
+            { "name": "delay", "type": "u64", "unit": "s" },
+            { "name": "pulse", "type": "u64", "unit": "ms", "default": 200 },
+            { "name": "wait", "type": "f64", "unit": "min" }
+        ])
+    };
+    // The vendor's mode lacks DETUMBLE, so the packet accepts the others,
+    // in the catalog's order. Limits in the catalog argument's unit don't
+    // write it, and the wait's, in another, do. A pulse without an initial
+    // value is required, since the catalog's default is the other
+    // vendors'; the delay's initial value is the packet's default instead.
+    let (_, _, limits, bundle) = referred(arguments(json!(["SAFE", "NOMINAL", "DETUMBLE"])));
+    assert_eq!(
+        limits,
+        json!({
+            "mode": { "states": ["SAFE", "NOMINAL"] },
+            "delay": { "range": { "min": 0, "max": 10 }, "default": 5 },
+            "pulse": { "range": { "min": 50, "max": 1000 }, "required": true },
+            "wait": { "unit": "s", "range": { "min": 0, "max": 60 } }
+        })
+    );
+    assert_eq!(bundle.mdl_version.to_string(), "2.3");
+    assert!(validate(bundle).is_ok());
+    // Listing every state, the packet accepts every state, as without a
+    // list.
+    let (_, _, limits, bundle) = referred(arguments(json!(["SAFE", "NOMINAL"])));
+    assert_eq!(limits.get("mode"), None, "{limits}");
+    assert!(validate(bundle).is_ok());
+    // Listing one the catalog lacks, the field's own states say so, where
+    // the vendor lists it.
+    let (_, text, limits, bundle) = referred(arguments(json!(["SAFE", "DETUMBLE"])));
+    assert_eq!(limits.get("mode"), None, "{limits}");
+    let parsed_map = {
+        let mut again = Sources::new();
+        again.add("sat.xml", text.as_str());
+        let catalog = bundle.catalog.clone();
+        read_with(
+            again.iter(),
+            &Options::new().with_catalog(CatalogRole::Refer),
+            Context::new().with_catalog(&catalog),
+        )
+        .unwrap()
+        .map
+    };
+    let located = parsed_map.locate_all(&validate(bundle).unwrap_err());
+    let codes: Vec<&str> = located.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["canonical_type"]);
+    let span = located[0].span.unwrap();
+    assert_eq!(
+        Some(span.start),
+        text.find(r#"<Enumeration value="1" label="NOMINAL"/>"#)
+    );
+    // A catalog default the vendor gives no initial value requires the
+    // argument, beside the states it accepts; one the vendor gives an
+    // initial value is the packet's default instead.
+    let mut defaulted = arguments(json!(["SAFE", "NOMINAL", "DETUMBLE"]));
+    defaulted[0]["default"] = json!("SAFE");
+    defaulted[1]["default"] = json!(3);
+    let (_, _, limits, bundle) = referred(defaulted);
+    assert_eq!(
+        limits["mode"],
+        json!({ "states": ["SAFE", "NOMINAL"], "required": true })
+    );
+    assert_eq!(
+        limits["delay"],
+        json!({ "range": { "min": 0, "max": 10 }, "default": 5 })
+    );
+    assert!(validate(bundle).is_ok());
+    // Either IR 2.3 key alone states 2.3.
+    let mut states_only = arguments(json!(["SAFE", "NOMINAL", "DETUMBLE"]));
+    states_only[2].as_object_mut().unwrap().remove("default");
+    let (_, _, limits, bundle) = referred(states_only);
+    assert_eq!(
+        limits["pulse"],
+        json!({ "range": { "min": 50, "max": 1000 } })
+    );
+    assert_eq!(bundle.mdl_version.to_string(), "2.3");
+    let (_, _, limits, bundle) = referred(arguments(json!(["SAFE", "NOMINAL"])));
+    assert_eq!(limits["pulse"]["required"], true);
+    assert_eq!(bundle.mdl_version.to_string(), "2.3");
+}
+
+#[test]
+fn a_referring_import_is_given_the_catalog() {
+    let text = go_with("", "U8").replace(
+        r#"<MetaCommand name="Go">"#,
+        r#"<MetaCommand name="Go"><AliasSet><Alias nameSpace="MDL" alias="sat.go"/></AliasSet>"#,
+    );
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text.as_str());
+    let options = Options::new().with_catalog(CatalogRole::Refer);
+    let errors = shown(&sources, &read(sources.iter(), &options).unwrap_err());
+    assert_eq!(
+        errors,
+        [(
+            Severity::Error,
+            "xtce.options".to_string(),
+            "1:1".to_string(),
+            "the import refers to another input's catalog, but isn't given it".to_string()
+        )]
+    );
+}
+
+/// A housekeeping packet of one big-endian 16-bit voltage.
+fn housekeeping() -> String {
+    doc(&telemetry(
+        U16,
+        &param("Volts", "U16"),
+        &container("HK", &entry("Volts")),
+    ))
+}
+
+/// Importing `text` with `options`, beside `families`: the bundle as JSON,
+/// or each problem's message.
+fn joining(text: &str, options: &Options, families: Value) -> Result<Value, Vec<String>> {
+    let families: Vec<mdl::ir::Family> = serde_json::from_value(families).unwrap();
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text);
+    match read_with(
+        sources.iter(),
+        options,
+        Context::new().with_families(&families),
+    ) {
+        Ok(parsed) => Ok(serde_json::to_value(&parsed.bundle).unwrap()),
+        Err(diagnostics) => Err(shown(&sources, &diagnostics)
+            .into_iter()
+            .map(|(_, code, at, message)| {
+                // At the import's root SpaceSystem, which says which
+                // import it is.
+                assert_eq!((code.as_str(), at.as_str()), ("xtce.options", "1:1"));
+                message
+            })
+            .collect()),
+    }
+}
+
+fn vendor_x(byte_order: &str) -> Value {
+    json!([{
+        "name": "vendor_x", "encoding": "binary", "byte_order": byte_order,
+        "alias": { "kind": "fixed", "value": "X-1" }
+    }])
+}
+
+#[test]
+fn an_import_joins_a_family_another_input_defines() {
+    let text = housekeeping();
+    let options = Options::new().with_join("vendor_x").with_set("vendor_x_v2");
+    // The set is the family's, which the import doesn't write, and its
+    // fields take the family's byte order: a big-endian one in a
+    // little-endian family says so, and in a big-endian one needn't.
+    let little = joining(&text, &options, vendor_x("little")).unwrap();
+    assert_eq!(little["families"], json!(null), "{little}");
+    assert_eq!(little["sets"][0]["name"], "vendor_x_v2");
+    assert_eq!(little["sets"][0]["family"], "vendor_x");
+    let volts = &little["sets"][0]["packets"][0]["entries"][0];
+    assert_eq!(volts["byte_order"], "big", "{volts}");
+    let big = joining(&text, &options, vendor_x("big")).unwrap();
+    let volts = &big["sets"][0]["packets"][0]["entries"][0];
+    assert_eq!(volts.get("byte_order"), None, "{volts}");
+    // The family's alias may be restated.
+    let restated = options.clone().with_alias(mdl::ir::Locator::fixed("X-1"));
+    assert!(joining(&text, &restated, vendor_x("big")).is_ok());
+    // A family that reads each payload's layout version chooses the set
+    // by its version.
+    let mut versioned = vendor_x("big");
+    versioned[0]["version"] = json!({ "kind": "bits", "offset_bits": 0, "size_bits": 8 });
+    let with_version = options.clone().with_set_version(mdl::ir::Scalar::Int(2));
+    let joined = joining(&text, &with_version, versioned.clone()).unwrap();
+    assert_eq!(joined["sets"][0]["version"], 2, "{joined}");
+    // An import that defines its family is as before.
+    let own = joining(&text, &Options::new(), json!([])).unwrap();
+    assert_eq!(own["families"][0]["name"], "sat");
+}
+
+#[test]
+fn a_join_the_import_cant_follow_is_refused_with_every_reason() {
+    let text = housekeeping();
+    let options = || Options::new().with_join("vendor_x").with_set("vendor_x_v2");
+    let refused =
+        |options: Options, families: Value| joining(&text, &options, families).unwrap_err();
+    assert_eq!(
+        refused(
+            Options::new().with_join("vendor_xx").with_set("v2"),
+            vendor_x("big")
+        ),
+        ["set v2 joins family vendor_xx, which no other input defines; did you mean vendor_x?"]
+    );
+    assert_eq!(
+        refused(Options::new().with_join("vendor_x"), vendor_x("big")),
+        ["the import joins family vendor_x, so it names the set it adds to it"]
+    );
+    assert_eq!(
+        refused(options().with_family("other"), vendor_x("big")),
+        ["the import names family other and joins family vendor_x; give one"]
+    );
+    let mut json_family = vendor_x("big");
+    json_family[0]["encoding"] = json!("json");
+    json_family[0].as_object_mut().unwrap().remove("byte_order");
+    assert_eq!(
+        refused(options(), json_family),
+        [
+            "set vendor_x_v2 can't join family vendor_x: the family is JSON, and an XTCE import is binary"
+        ]
+    );
+    assert_eq!(
+        refused(
+            options().with_alias(mdl::ir::Locator::fixed("X-2")),
+            vendor_x("big")
+        ),
+        ["set vendor_x_v2 joins family vendor_x, whose alias is \
+             {\"kind\":\"fixed\",\"value\":\"X-1\"}, but the alias option is \
+             {\"kind\":\"fixed\",\"value\":\"X-2\"}; leave it out to take the family's"]
+    );
+    let mut versioned = vendor_x("big");
+    versioned[0]["version"] = json!({ "kind": "bits", "offset_bits": 0, "size_bits": 8 });
+    assert_eq!(
+        refused(options(), versioned),
+        [
+            "family vendor_x reads each payload's layout version, so set vendor_x_v2, joining it, \
+             gives set_version"
+        ]
+    );
+    assert_eq!(
+        refused(
+            options().with_set_version(mdl::ir::Scalar::Int(2)),
+            vendor_x("big")
+        ),
+        [
+            "family vendor_x has no version locator, so set vendor_x_v2, joining it, gives no \
+             set_version"
+        ]
+    );
+    assert_eq!(
+        refused(
+            Options::new().with_set_version(mdl::ir::Scalar::Int(2)),
+            json!([])
+        ),
+        [
+            "set_version is for a set that joins a family with a version locator, and the \
+             import joins none"
+        ]
+    );
+    // Every reason at once.
+    assert_eq!(
+        refused(
+            Options::new()
+                .with_join("vendor_x")
+                .with_family("other")
+                .with_alias(mdl::ir::Locator::fixed("X-2")),
+            vendor_x("big")
+        )
+        .len(),
+        3
+    );
 }

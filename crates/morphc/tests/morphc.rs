@@ -2960,3 +2960,398 @@ fn copy_dir_all(from: &Path, to: &Path) {
         }
     }
 }
+
+// ---- an XTCE import joining a family ----------------------------------------------------
+
+/// Vendor X's two flight software versions, an XTCE document each, as one
+/// family under an owner's catalog, with bindings that move X-1 from the
+/// first to the second in June; copied into a test's scratch directory.
+fn joined(test: &str) -> PathBuf {
+    let dir = scratch(test);
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/joined");
+    for entry in fs::read_dir(&fixture).unwrap() {
+        let entry = entry.unwrap();
+        copy_file(&entry.path(), &dir.join(entry.file_name()));
+    }
+    dir
+}
+
+#[test]
+fn an_xtce_import_joins_a_family_another_input_defines() {
+    let dir = joined("joined_family");
+    let build = morphc_in(&dir, &["build", "--all-warnings"], None);
+    assert_eq!(build.status.code(), Some(0), "{}", stderr(&build));
+    assert_eq!(
+        artifacts(&build),
+        [
+            "catalog",
+            "family vendor_x",
+            "set vendor_x_v1",
+            "set vendor_x_v2"
+        ]
+    );
+    assert!(
+        stdout(&build).ends_with("ok: 1 param, 2 commands, 1 family, 2 sets (MDL IR 2.3)\n"),
+        "{}",
+        stdout(&build)
+    );
+
+    // The bindings say which set decodes X-1's housekeeping, on either side
+    // of the switch: millivolts, then a status byte and centivolts.
+    let decode = |hex: &str, time: &str| {
+        let out = morphc_in(
+            &dir,
+            &[
+                "decode",
+                "--hex",
+                hex,
+                "--bindings",
+                "bindings.toml",
+                "--time",
+                time,
+            ],
+            None,
+        );
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        stdout(&out)
+    };
+    let march = decode("6ef4", "2026-03-01T00:00:00Z");
+    assert!(
+        march.starts_with("set vendor_x_v1  packet HK  asset X-1 (native id VendorX)\n"),
+        "{march}"
+    );
+    assert!(
+        march.contains("  eps.bus_voltage  28.404  V     BusVoltage\n"),
+        "{march}"
+    );
+    let july = decode("010b18", "2026-07-01T00:00:00Z");
+    assert!(
+        july.starts_with("set vendor_x_v2  packet HK  asset X-1 (native id VendorX)\n"),
+        "{july}"
+    );
+    assert!(july.contains("  eps.bus_voltage  28.40"), "{july}");
+
+    // What each version's packets accept is what its XTCE says beyond the
+    // owner's catalog: the first has no DETUMBLE mode, and gives the pulse
+    // no initial value, so the catalog's default isn't sent with it; both
+    // keep the pulse to 1000 ms, in the catalog's unit.
+    let encode = |set: &str, command: &str, arguments: &[&str]| {
+        let mut args = vec!["encode", "--set", set, "--command", command];
+        for argument in arguments {
+            args.extend(["--arg", argument]);
+        }
+        let out = morphc_in(&dir, &args, None);
+        (out.status.code(), stdout(&out))
+    };
+    let (code, text) = encode("vendor_x_v1", "sys.set_mode", &["mode=DETUMBLE"]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains(
+            "error[unsupported_state]: command sys.set_mode, argument mode: the set doesn't \
+             accept state \"DETUMBLE\"; it accepts \"SAFE\" and \"NOMINAL\""
+        ),
+        "{text}"
+    );
+    let (code, text) = encode("vendor_x_v2", "sys.set_mode", &["mode=DETUMBLE"]);
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("  payload 0102\n"), "{text}");
+    let (code, text) = encode("vendor_x_v1", "effector.fire", &["target_id=7"]);
+    assert_eq!(code, Some(1), "{text}");
+    assert!(
+        text.contains(
+            "error[missing_argument]: command effector.fire, argument pulse_ms: the set \
+             requires it, so the catalog's default, 200, isn't sent"
+        ),
+        "{text}"
+    );
+    let (code, text) = encode(
+        "vendor_x_v1",
+        "effector.fire",
+        &["target_id=7", "pulse_ms=500"],
+    );
+    assert_eq!(code, Some(0), "{text}");
+    assert!(text.contains("  payload 02000701f4\n"), "{text}");
+    let inspected = morphc_in(&dir, &["inspect", "command", "sys.set_mode"], None);
+    assert!(
+        stdout(&inspected).ends_with(
+            "\nencoded by\n  set vendor_x_v1  command SetMode  (mode)\n    limits  mode  \
+             states SAFE NOMINAL\n  set vendor_x_v2  command SetMode  (mode)\n"
+        ),
+        "{}",
+        stdout(&inspected)
+    );
+    let inspected = morphc_in(&dir, &["inspect", "command", "effector.fire"], None);
+    assert!(
+        stdout(&inspected)
+            .contains("  set vendor_x_v1  command Fire  (target_id, pulse_ms)\n    limits  pulse_ms  range 50..1000, required\n"),
+        "{}",
+        stdout(&inspected)
+    );
+
+    // Two inputs that each define the family are the conflict they were.
+    edit(
+        &dir.join("morphc.toml"),
+        "join = \"vendor_x\"",
+        "family = \"vendor_x\"",
+    );
+    let twice = morphc_in(&dir, &["build"], None);
+    assert_eq!(twice.status.code(), Some(1), "{}", stderr(&twice));
+    assert!(
+        stderr(&twice).contains(
+            "error[duplicate_name]: family vendor_x is defined twice\n --> vendor_x_v2.xml:4:1"
+        ),
+        "{}",
+        stderr(&twice)
+    );
+}
+
+#[test]
+fn a_join_the_build_cant_follow_is_refused() {
+    let dir = joined("joined_refused");
+    let build_file = dir.join("morphc.toml");
+    let original = fs::read_to_string(&build_file).unwrap();
+    let build_with = |from: &str, to: &str| {
+        assert!(original.contains(from), "{from:?}");
+        fs::write(&build_file, original.replace(from, to)).unwrap();
+        let out = morphc_in(&dir, &["build"], None);
+        (out.status.code(), stderr(&out))
+    };
+    let join = "join = \"vendor_x\"";
+
+    // What the import can't join is reported at it, naming its set.
+    let (code, err) = build_with(join, "join = \"vendor_y\"");
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains(
+            "error[xtce.options]: set vendor_x_v2 joins family vendor_y, which no other input \
+             defines; did you mean vendor_x?\n --> vendor_x_v2.xml:4:1"
+        ),
+        "{err}"
+    );
+    let (code, err) = build_with(
+        join,
+        "join = \"vendor_x\"\nalias = { kind = \"fixed\", value = \"X-2\" }",
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains(
+            "error[xtce.options]: set vendor_x_v2 joins family vendor_x, whose alias is \
+             {\"kind\":\"fixed\",\"value\":\"VendorX\"}, but the alias option is \
+             {\"kind\":\"fixed\",\"value\":\"X-2\"}; leave it out to take the family's"
+        ),
+        "{err}"
+    );
+    fs::write(
+        dir.join("drone.toml"),
+        "mdl_version = \"2.0\"\n\n[[families]]\nname = \"drone\"\nencoding = \"json\"\nalias = { \
+         kind = \"path\", pointer = \"/id\" }\n",
+    )
+    .unwrap();
+    let (code, err) = build_with(
+        "[[input]]\npath = \"vendor_x_v2.xml\"\njoin = \"vendor_x\"",
+        "[[input]]\npath = \"drone.toml\"\n\n[[input]]\npath = \"vendor_x_v2.xml\"\njoin = \"drone\"",
+    );
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains(
+            "error[xtce.options]: set vendor_x_v2 can't join family drone: the family is JSON, \
+             and an XTCE import is binary"
+        ),
+        "{err}"
+    );
+
+    // What no input could follow is the build file's.
+    for (from, to, problem) in [
+        (
+            join,
+            "join = \"vendor_x\"\nfamily = \"other\"",
+            "input vendor_x_v2.xml names family other and joins family vendor_x; give one",
+        ),
+        (
+            "set  = \"vendor_x_v2\"",
+            "",
+            "input vendor_x_v2.xml joins family vendor_x, so it names the set it adds to it \
+             (set)",
+        ),
+        (
+            "set    = \"vendor_x_v1\"",
+            "set    = \"vendor_x_v1\"\nset_version = 1",
+            "input vendor_x_v1.xml gives set_version, which is for a set that joins a family \
+             (join)",
+        ),
+        (
+            "catalog = \"owner\"",
+            "catalog = \"owner\"\njoin = \"vendor_x\"\nset = \"x\"",
+            "input catalog.toml owns the catalog and joins family vendor_x: the inputs that \
+             refer to an owner's catalog are read with it, before any input that joins a \
+             family, so an owner can't join one",
+        ),
+    ] {
+        let (code, err) = build_with(from, to);
+        assert_eq!(code, Some(2), "{err}");
+        assert!(
+            err.contains(&format!("error[morphc.build_file]: {problem}\n")),
+            "{err}"
+        );
+    }
+
+    // An import that joins a family the input with problems would have
+    // defined waits for it: it's named, not reported missing a family.
+    fs::write(&build_file, &original).unwrap();
+    let v1 = dir.join("vendor_x_v1.xml");
+    edit(
+        &v1,
+        "parameterTypeRef=\"Millivolts\"",
+        "parameterTypeRef=\"Milivolts\"",
+    );
+    let out = morphc_in(&dir, &["build"], None);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("error[xtce.reference]: Milivolts"), "{err}");
+    assert!(!err.contains("xtce.options"), "{err}");
+    assert!(
+        err.contains(
+            "note: not read yet, since the family each joins is in no input that read, and an \
+             input that didn't read may define it: vendor_x_v2.xml\n"
+        ),
+        "{err}"
+    );
+    // A referring import reads whatever else has problems, so its own are
+    // reported with theirs: the owner's catalog and the first version both.
+    let catalog = dir.join("catalog.toml");
+    edit(&catalog, "[catalog.params.", "[catalog.params");
+    let out = morphc_in(&dir, &["build"], None);
+    let err = stderr(&out);
+    assert!(err.contains("error[toml.syntax]"), "{err}");
+    assert!(err.contains("error[xtce.reference]: Milivolts"), "{err}");
+    edit(&catalog, "[catalog.params", "[catalog.params.");
+    // A catalog that doesn't merge is reported once, and each import that
+    // refers to it waits for it, named.
+    fs::write(
+        dir.join("conflict.json"),
+        "{\"mdl_version\": \"2.0\", \"catalog\": {\"commands\": {\"effector.fire\": \
+         {\"arguments\": [{\"name\": \"target_id\", \"type\": \"u64\"}]}}}}",
+    )
+    .unwrap();
+    edit(
+        &v1,
+        "parameterTypeRef=\"Milivolts\"",
+        "parameterTypeRef=\"Millivolts\"",
+    );
+    fs::write(
+        &build_file,
+        original.clone() + "\n[[input]]\npath = \"conflict.json\"\ncatalog = \"owner\"\n",
+    )
+    .unwrap();
+    let out = morphc_in(&dir, &["build"], None);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert_eq!(err.matches("error[duplicate_name]").count(), 1, "{err}");
+    assert!(
+        err.contains(
+            "note: not read yet, since the catalog they refer to doesn't merge: \
+             vendor_x_v1.xml, vendor_x_v2.xml\n"
+        ),
+        "{err}"
+    );
+    fs::write(&build_file, &original).unwrap();
+    edit(
+        &v1,
+        "parameterTypeRef=\"Millivolts\"",
+        "parameterTypeRef=\"Milivolts\"",
+    );
+    // One with problems that defines nothing it needs holds nothing back:
+    // the second version still reads, and its own problems are reported
+    // in the same run.
+    edit(
+        &v1,
+        "parameterTypeRef=\"Milivolts\"",
+        "parameterTypeRef=\"Millivolts\"",
+    );
+    fs::write(dir.join("vendor_y.xml"), "<SpaceSystem name=\"VendorY\"").unwrap();
+    fs::write(
+        &build_file,
+        original.replace(
+            join,
+            "join = \"vendor_x\"\nalias = { kind = \"fixed\", value = \"X-2\" }",
+        ) + "\n[[input]]\npath = \"vendor_y.xml\"\nfamily = \"vendor_y\"\n",
+    )
+    .unwrap();
+    let out = morphc_in(&dir, &["build"], None);
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let err = stderr(&out);
+    assert!(err.contains("error[xtce.syntax]"), "{err}");
+    assert!(
+        err.contains("error[xtce.options]: set vendor_x_v2 joins family vendor_x, whose alias"),
+        "{err}"
+    );
+    assert!(!err.contains("not read yet"), "{err}");
+}
+
+/// A store whose set an earlier release wrote with a spelling this release
+/// refuses to build (a packet's limits restating the argument's own unit,
+/// `spec/compatibility.md` §7) still decodes and encodes.
+#[test]
+fn a_store_with_a_spelling_builds_now_refuse_still_reads() {
+    let dir = joined("joined_spelling");
+    let out = morphc_in(&dir, &["build", "--out", "store"], None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    // What 0.1.0's importer wrote for vendor X's pulse: its unit, which is
+    // the catalog's.
+    let store_dir = dir.join("store");
+    let manifest_path = store_dir.join(store::MANIFEST);
+    let mut manifest: Value =
+        serde_json::from_str(&fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    let digest = manifest["sets"]["vendor_x_v1"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut set: Value = serde_json::from_str(
+        &fs::read_to_string(store_dir.join(format!("{digest}.json"))).unwrap(),
+    )
+    .unwrap();
+    let fire = set["set"]["commands"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|command| command["name"] == "Fire")
+        .unwrap();
+    fire["arguments"]["pulse_ms"]["unit"] = Value::from("ms");
+    let canonical = mdl::canonical::to_canonical_string(&set).unwrap();
+    let digest = Digest::of_canonical(&canonical);
+    fs::write(store_dir.join(format!("{digest}.json")), &canonical).unwrap();
+    manifest["sets"]["vendor_x_v1"] = Value::from(digest.to_string());
+    fs::write(&manifest_path, manifest.to_string()).unwrap();
+    let encode = |pulse: &str| {
+        morphc_in(
+            &dir,
+            &[
+                "encode",
+                "store",
+                "--set",
+                "vendor_x_v1",
+                "--command",
+                "effector.fire",
+                "--arg",
+                "target_id=7",
+                "--arg",
+                pulse,
+            ],
+            None,
+        )
+    };
+    let sent = encode("pulse_ms=500");
+    assert_eq!(sent.status.code(), Some(0), "{}", stderr(&sent));
+    assert!(
+        stdout(&sent).contains("  payload 02000701f4\n"),
+        "{}",
+        stdout(&sent)
+    );
+    let refused = encode("pulse_ms=1500");
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stdout(&refused).contains("error[out_of_range]"),
+        "{}",
+        stdout(&refused)
+    );
+}

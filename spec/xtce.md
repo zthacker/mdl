@@ -74,7 +74,8 @@ reference that names nothing is an error at the reference
 
 ## 3. The bundle
 
-An import produces one family and one set:
+An import produces one set, and the family it's in unless it joins
+another input's:
 
 - **Family.** Its name is the importer's option, or the first root
   SpaceSystem's name lowercased with `_` for each run of characters other
@@ -88,6 +89,17 @@ An import produces one family and one set:
   or a fixed value: the first root SpaceSystem's name. An alias read from
   metadata makes that name the family's one metadata name, since the
   family has to declare it and XTCE has nowhere to.
+- **Joining a family.** With the importer's `join` option, naming a
+  family another input defines (which `morphc` gives the import, [build
+  files](build-files.md) §2), the import defines no family. Its set is in
+  that one, as another layout version of it, and its fields take that
+  family's byte order, each in the other naming its own. The import names
+  its set, and gives it a version (the option `set_version`) exactly when
+  the family has a version locator. A family no other input defines (the
+  closest name suggested), a JSON one, an alias option other than the
+  family's alias, a missing set name or version, a version for a family
+  without a version locator, a `family` option beside `join`, or a
+  `set_version` without `join` is an error [`xtce.options`].
 - **Set.** Its name is the option, or the family's. It has one packet for
   each concrete sequence container, in document order, a struct type for
   each embedded container and each array element that isn't a scalar
@@ -112,7 +124,9 @@ An import produces one family and one set:
   mapped to the param of that name, a member's name adding its part as
   above, which validation checks the catalog has (`unknown_canonical`);
   any number of parameters may map to one name. A parameter without one
-  is a field with no catalog name. Meta-commands are as §6.1 says. What
+  is a field with no catalog name. Meta-commands are as §6.1 says. The
+  import is given that catalog [`xtce.options` if it isn't], which its
+  command packets read (§6.1). What
   validation compares with the catalog stays checked: a field's type,
   unit and states against its param, a command packet's arguments
   against its command's. Descriptions aren't carried, the catalog's
@@ -354,9 +368,23 @@ it otherwise.
   with an alias in the `MDL` namespace is a command packet encoding the
   command of that name, whose arguments the packet names as below, and
   isn't a catalog command; one without is left out [`xtce.ignored`].
-  Each argument's range and default (§6.2), in its unit, are then the
-  packet's own limits (`encoding.md` §2.6, IR 2.2), so the vendor's
-  limits hold whatever the owner's command allows. Its chain is the
+  The packet then carries what the vendor says of each argument beyond
+  the owner's command, as its own limits (`encoding.md` §2.6), so the
+  vendor's limits hold whatever the owner's command allows:
+  - the argument's range and default (§6.2, IR 2.2), in its unit where
+    that isn't the command argument's; in the command argument's own,
+    the unit isn't written, since limits are in it without one;
+  - for an enumerated argument whose labels are some of the command
+    argument's states and not all, the states it accepts, in the
+    catalog's order (IR 2.3). Labels that are all of them write nothing,
+    the packet accepting every state as it does without a list, and a
+    label the catalog lacks is reported by validation at the label
+    (`canonical_type`);
+  - for an argument with no initial value whose command argument has a
+    default, `required` (IR 2.3): Yamcs requires a value for it, and the
+    default is the other vendors'.
+
+  Its chain is the
   meta-commands it inherits from (`BaseMetaCommand`), root first, then
   itself; one that inherits from itself is an error [`xtce.invalid`].
 - **Arguments.** A command's arguments are those each meta-command in its
@@ -677,6 +705,7 @@ is [`xtce.ignored`]:
 | `xtce.renamed` | A warning: a name changed to fit MDL's rules. |
 | `xtce.differs` | A warning: a command MDL encodes otherwise than Yamcs (§6.3). |
 | `xtce.namespace` | A warning: a document read as XTCE whose root is in no namespace, or in a misspelling of XTCE 1.2's (§1). |
+| `xtce.options` | Import options the import can't follow: a joined family the build doesn't define or that's JSON, an alias or version that disagrees with it, a `family` option beside `join`, a `set_version` without `join`, a missing set name, or a referring import given no catalog (§3). Reported at the import's first root SpaceSystem, which says which import it is. |
 
 An element is reported at its tag, an attribute at its value, and text at
 the text. A problem in a definition many packets share is reported once.

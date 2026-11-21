@@ -42,7 +42,9 @@ Each `input` table has these keys and no others:
 | --- | --- | --- |
 | `path` | string | Required. A definition file or directory, as an input on morphc's command line. A relative path is taken from the directory the build file really lives in (after following links to it), so a link to a build file lists the same inputs as the file. Not `-`. |
 | `family` | string | The imported family's name (XTCE import option). |
-| `set` | string | The imported set's name. |
+| `join` | string | A family another input defines, which the input's XTCE documents add a set to, in place of `family` (§2). |
+| `set` | string | The imported set's name. Required with `join`. |
+| `set_version` | integer or string | The set's version, which a joined family with a version locator reads from each payload. Only with `join`. |
 | `alias` | table | Where an imported asset's own id is, written as a family's `alias` is in the IR: `{ kind = "fixed", value = "..." }`, `{ kind = "metadata", name = "..." }`, `{ kind = "path", pointer = "..." }` or `{ kind = "bits", offset_bits = ..., size_bits = ... }`. A `metadata` alias also declares its name in the family's `metadata`. |
 | `naming` | string | `short` or `qualified`: how names are made from XTCE names. |
 | `catalog` | string | `owner`: the input's definitions are the build's catalog (§3). Not an import option: any input may own the catalog. |
@@ -52,8 +54,12 @@ family named after the first root SpaceSystem, the set after the family,
 a fixed alias of the first root SpaceSystem's name, `short` naming.
 
 A reader MUST reject an unknown key, a missing `path`, a `catalog` other
-than `owner`, and an input with import options (`family`, `set`, `alias`,
-`naming`) but no XTCE document to apply them to.
+than `owner`, an input with import options (`family`, `join`, `set`,
+`set_version`, `alias`, `naming`) but no XTCE document to apply them to,
+and an input with `join` and `family`, with `join` but no `set`, with
+`set_version` but no `join`, or with `join` and `catalog`: the inputs
+that refer to an owner's catalog are read with it, before any input that
+joins a family, so an owner joins none.
 
 ## 2. Meaning
 
@@ -72,6 +78,21 @@ than `owner`, and an input with import options (`family`, `set`, `alias`,
   its first file's, so a TOML input listed after an XTCE or JSON input
   that follows an earlier TOML input still takes precedence over it; morphc
   says so when a build file lists inputs that way.
+- An input with `join` adds a set to a family another input defines,
+  whichever frontend defines it: a vendor's second flight software as another
+  set of the family its first defines, which bindings or the family's
+  version locator choose between. Its documents define no family. They
+  take the family's byte order and alias (an `alias` the input gives
+  must be the family's), and give the set `set_version` exactly when the
+  family has a version locator ([xtce](xtce.md) §3). Two inputs that each
+  define one family are still an error (`duplicate_name`).
+- An XTCE input that refers to the catalog (§3) is read after the inputs
+  that need nothing, with the catalog of those that read, and one that
+  joins a family after that, with every family read so far. One that
+  joins a family no input that read defines waits while an input has
+  problems, rather than report a family that input may define, and one
+  whose catalog doesn't merge waits too: `morphc` names each input it
+  didn't read, and why.
 - A build file holds only what decides the bundle. Where artifacts are
   written, which bindings resolve assets and how results are reported are
   the command's.
@@ -94,9 +115,12 @@ shows. A build with no owner is open, each input adding to the catalog.
   ([xtce](xtce.md) §3, §6.1): a parameter's alias in the `MDL` namespace
   names an owner's param, and a parameter without one is a field with no
   catalog name; a meta-command's alias names an owner's command, whose
-  packet keeps the vendor's argument ranges and initial values as its own
-  limits, and a meta-command without one is left out, with a warning that
-  names it [`xtce.ignored`].
+  packet keeps what the vendor says of its arguments beyond the owner's
+  as its own limits (ranges and initial values, the states an enumerated
+  argument accepts, and `required` where the vendor gives no initial
+  value and the owner's command a default, [xtce](xtce.md) §6.1), and a
+  meta-command without one is left out, with a warning that names it
+  [`xtce.ignored`].
 - A catalog param or command that a file other than an owner's defines,
   under a name no owner's file defines, is an error at that definition
   (`catalog_owner`) ([frontends](frontends.md) §5). A JSON or XTCE file

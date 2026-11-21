@@ -541,6 +541,58 @@ argument = "level"
     validate(parsed.bundle).unwrap();
 }
 
+/// A command packet's limits are in the argument's own unit when it names
+/// none, so naming that one is refused, where it's written.
+#[test]
+fn a_command_packets_limits_name_no_unit_for_the_arguments_own() {
+    let catalog = format!(
+        "{CATALOG}\n[catalog.commands.\"eps.wait\"]\narguments = [{{ name = \"delay\", type = \"f64\", unit = \"s\" }}]\n"
+    );
+    let command = r#"mdl_version = "2.2"
+
+[[sets]]
+name = "vendor_x_v1"
+family = "vendor_x"
+
+[[sets.commands]]
+name = "WAIT"
+canonical = "eps.wait"
+arguments.delay = { unit = "s", range = { max = 60 } }
+
+[[sets.commands.entries]]
+kind = "field"
+name = "delay"
+type = "float"
+size_bits = 32
+unit = "s"
+argument = "delay"
+"#;
+    let named = sources(&[
+        ("catalog.toml", &catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", command),
+    ]);
+    let parsed = read(named.iter()).unwrap();
+    let diagnostics = validate(parsed.bundle).unwrap_err();
+    let located = parsed.map.locate_all(&diagnostics);
+    let codes: Vec<&str> = located.iter().map(|d| d.code).collect();
+    assert_eq!(codes, ["explicit_default"]);
+    let span = located[0].span.unwrap();
+    assert_eq!(named.name(span.source), Some("set.toml"));
+    let written = command.find("unit = \"s\", range").unwrap() + "unit = ".len();
+    assert_eq!(
+        (span.start, &command[span.start..span.end]),
+        (written, "\"s\"")
+    );
+    let unnamed = command.replace("unit = \"s\", range", "range");
+    let sources = sources(&[
+        ("catalog.toml", &catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", &unnamed),
+    ]);
+    validate(read(sources.iter()).unwrap().bundle).unwrap();
+}
+
 #[test]
 fn syntax_errors_are_reported_for_every_file_in_order() {
     let found = errors(&[

@@ -1,0 +1,25 @@
+# The fleet's catalog, which the vendors' XTCE maps onto.
+
+mdl_version = "2.0"
+
+[catalog.params."eps.bus_voltage"]
+type = "f64"
+unit = "V"
+
+[catalog.commands."sys.set_mode"]
+[[catalog.commands."sys.set_mode".arguments]]
+name   = "mode"
+type   = "enum"
+states = ["SAFE", "NOMINAL", "DETUMBLE"]
+
+[catalog.commands."effector.fire"]
+[[catalog.commands."effector.fire".arguments]]
+name  = "target_id"
+type  = "u64"
+range = { min = 1, max = 65535 }
+[[catalog.commands."effector.fire".arguments]]
+name    = "pulse_ms"
+type    = "u64"
+unit    = "ms"
+range   = { min = 50, max = 2000 }
+default = 200

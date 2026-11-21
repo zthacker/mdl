@@ -62,7 +62,7 @@
 //! assert!(parsed.bundle.catalog.params.contains_key("sat.busvoltage"));
 //! ```
 
-use mdl::ir::Locator;
+use mdl::ir::{Catalog, Family, Locator, Scalar};
 use mdl::read::read_bundle_value;
 use mdl::source::{Parsed, SourceDiagnostic, SourceFile};
 
@@ -118,6 +118,11 @@ pub enum Code {
     /// A document read as XTCE whose root isn't in an XTCE namespace: in
     /// none, or in a misspelling of XTCE 1.2's. A warning.
     Namespace,
+    /// Import options the import can't follow: a family named and joined,
+    /// a joined family the build doesn't define or that a binary import
+    /// can't join, an alias or version that disagrees with it, or a
+    /// referring import given no catalog.
+    Options,
 }
 
 impl Code {
@@ -134,6 +139,7 @@ impl Code {
         Code::Renamed,
         Code::Differs,
         Code::Namespace,
+        Code::Options,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -149,6 +155,7 @@ impl Code {
             Code::Renamed => "xtce.renamed",
             Code::Differs => "xtce.differs",
             Code::Namespace => "xtce.namespace",
+            Code::Options => "xtce.options",
         }
     }
 }
@@ -183,7 +190,8 @@ pub enum CatalogRole {
     /// namespace maps to the param of that name, which validation checks
     /// the catalog has; one without maps to none. A meta-command with an
     /// alias encodes the command of that name; one without is left out,
-    /// with a warning that names it.
+    /// with a warning that names it. The import reads that catalog from
+    /// its [`Context`], which must give one.
     Refer,
 }
 
@@ -201,6 +209,38 @@ pub struct Options {
     pub alias: Option<Locator>,
     pub naming: Naming,
     pub catalog: CatalogRole,
+    /// A family another input defines, which the import's set is another
+    /// layout version of: the import defines no family, and its fields
+    /// take that family's byte order. Its [`Context`] gives the family.
+    pub join: Option<String>,
+    /// The set's version, which a joined family with a version locator
+    /// reads from each payload to choose the set.
+    pub set_version: Option<Scalar>,
+}
+
+/// What the rest of a build defines, which an import reads: the catalog a
+/// referring import maps onto, and the families one can join.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub struct Context<'b> {
+    pub catalog: Option<&'b Catalog>,
+    pub families: &'b [Family],
+}
+
+impl<'b> Context<'b> {
+    pub fn new() -> Self {
+        Context::default()
+    }
+
+    pub fn with_catalog(mut self, catalog: &'b Catalog) -> Self {
+        self.catalog = Some(catalog);
+        self
+    }
+
+    pub fn with_families(mut self, families: &'b [Family]) -> Self {
+        self.families = families;
+        self
+    }
 }
 
 impl Options {
@@ -232,6 +272,16 @@ impl Options {
         self.catalog = role;
         self
     }
+
+    pub fn with_join(mut self, family: impl Into<String>) -> Self {
+        self.join = Some(family.into());
+        self
+    }
+
+    pub fn with_set_version(mut self, version: Scalar) -> Self {
+        self.set_version = Some(version);
+        self
+    }
 }
 
 /// Read a bundle from XTCE documents, each holding a root SpaceSystem.
@@ -241,9 +291,22 @@ impl Options {
 /// decoded or encoded value, and where MDL encodes a command otherwise
 /// than Yamcs. On failure, every problem is reported, warnings
 /// included, in file order and then by position.
+///
+/// An import that refers to another input's catalog or joins another
+/// input's family is read with [`read_with`], which gives it them.
 pub fn read<'a>(
     files: impl IntoIterator<Item = SourceFile<'a>>,
     options: &Options,
+) -> Result<Parsed, Vec<SourceDiagnostic>> {
+    read_with(files, options, Context::default())
+}
+
+/// [`read`], with what the rest of the build defines: the catalog a
+/// referring import maps onto, and the family it joins.
+pub fn read_with<'a>(
+    files: impl IntoIterator<Item = SourceFile<'a>>,
+    options: &Options,
+    context: Context<'_>,
 ) -> Result<Parsed, Vec<SourceDiagnostic>> {
     let files: Vec<SourceFile<'a>> = files.into_iter().collect();
     if files.is_empty() {
@@ -262,7 +325,7 @@ pub fn read<'a>(
         .map(|(file, document)| El::new(document.root_element(), *file))
         .collect();
     let tree = Tree::build(&roots, &mut report);
-    let built = Import::new(&tree, &mut report, options).bundle(options);
+    let built = Import::new(&tree, &mut report, options, context).bundle(options);
     match built {
         Some((value, map)) if !report.has_errors() => match read_bundle_value(&value) {
             Ok(loaded) => {

@@ -814,12 +814,12 @@ impl Encoder {
 enum Limits {
     /// On the catalog's argument.
     Catalog,
-    /// On the packet that encodes it (IR 2.2), so encoding keeps to the
-    /// packet's; `unit` restates the argument's unit there. The catalog's
-    /// argument has no range or default, or with `wider` a range one
-    /// further out at each end the type allows, and that range's low end
-    /// as its default where the packet's replaces it.
-    Packet { unit: bool, wider: bool },
+    /// On the packet that encodes it (IR 2.2), in the argument's unit, so
+    /// encoding keeps to the packet's. The catalog's argument has no range
+    /// or default, or with `wider` a range one further out at each end the
+    /// type allows, and that range's low end as its default where the
+    /// packet's replaces it.
+    Packet { wider: bool },
 }
 
 fn encoder_of(ty: ArgType, shape: Shape) -> Encoder {

@@ -2570,6 +2570,94 @@ fn a_packet_narrows_the_arguments_it_encodes() {
             json!({ "delay_s": { "unit": "m", "range": { "max": 1 } } }),
         );
     });
+    // Without a unit, the limits are in the argument's own, so writing that
+    // one is refused wherever it's given, and the rest is still checked.
+    for limits in [
+        json!({ "delay_s": { "unit": "s", "range": { "max": 60 } } }),
+        json!({ "delay_s": { "unit": "s", "default": 5 } }),
+        json!({ "delay_s": { "unit": "s", "range": { "max": 60 }, "default": 5 } }),
+    ] {
+        assert_one(Code::ExplicitDefault, &format!("{at}/unit"), |v| {
+            limit(v, limits.clone());
+        });
+    }
+    assert_eq!(
+        messages(|v| limit(
+            v,
+            json!({ "delay_s": { "unit": "s", "range": { "max": 60 } } })
+        )),
+        [
+            "\"s\" is argument delay_s's own unit, the one its limits here are in without unit; omit it"
+        ]
+    );
+    assert_eq!(
+        problems(|v| limit(
+            v,
+            json!({ "delay_s": { "unit": "s", "range": { "max": 10 }, "default": 20 } })
+        )),
+        vec![
+            (Code::DefaultValue, format!("{at}/default")),
+            (Code::ExplicitDefault, format!("{at}/unit")),
+        ]
+    );
+    // A stored build that has it, from a release that accepted it, still
+    // validates, as a runtime opens it; what else is wrong with it is
+    // still refused.
+    let stored = |limits: Value| {
+        let mut value = fixture();
+        limit(&mut value, limits);
+        crate::validate::validate_stored(bundle(value))
+    };
+    assert!(stored(json!({ "delay_s": { "unit": "s", "range": { "max": 60 } } })).is_ok());
+    let refused =
+        stored(json!({ "delay_s": { "unit": "s", "range": { "max": 10 }, "default": 20 } }))
+            .unwrap_err();
+    let codes: Vec<(Code, &str)> = refused.iter().map(|d| (d.code, d.path.as_str())).collect();
+    assert_eq!(
+        codes,
+        [(Code::DefaultValue, format!("{at}/default").as_str())]
+    );
+    // It decides no later check: the catalog's default outside the range
+    // here, which only the narrowed argument shows, is reported beside it
+    // when building, and alone in a stored build.
+    let beside = json!({ "delay_s": { "unit": "s", "range": { "min": 10 } } });
+    assert_eq!(
+        problems(|v| limit(v, beside.clone())),
+        vec![
+            (Code::DefaultValue, format!("{at}/range")),
+            (Code::ExplicitDefault, format!("{at}/unit")),
+        ]
+    );
+    let codes: Vec<(Code, String)> = stored(beside)
+        .unwrap_err()
+        .iter()
+        .map(|d| (d.code, d.path.clone()))
+        .collect();
+    assert_eq!(codes, [(Code::DefaultValue, format!("{at}/range"))]);
+    // An integer argument's limits are in no unit but its own, so for one a
+    // packet writes no unit at all.
+    let slot = |limits: Value| {
+        move |v: &mut Value| {
+            command(v, "eps.load_table")["arguments"][1]["unit"] = json!("s");
+            load_table_packet(v)["entries"][1]["unit"] = json!("s");
+            load_table_packet(v)["arguments"] = limits;
+        }
+    };
+    let at_slot = "/sets/0/commands/0/arguments/slot/unit";
+    assert_eq!(
+        problems(slot(json!({ "slot": { "range": { "max": 60 } } }))),
+        vec![]
+    );
+    assert_one(
+        Code::ExplicitDefault,
+        at_slot,
+        slot(json!({ "slot": { "unit": "s", "range": { "max": 60 } } })),
+    );
+    assert_one(
+        Code::UnitMismatch,
+        at_slot,
+        slot(json!({ "slot": { "unit": "min", "range": { "max": 1 } } })),
+    );
     assert_one(
         Code::ParamShape,
         "/sets/0/commands/1/arguments/mode/range",
@@ -2708,10 +2796,10 @@ fn a_packet_requires_an_argument() {
         "/sets/2/commands/0/arguments/delay_s",
         |v| v["sets"][2]["commands"][0]["arguments"] = json!({ "delay_s": { "required": true } }),
     );
-    // A unit is what a packet's range and default are in: beside states or
-    // required alone, the argument's own is its default written out, and
-    // another (even one MDL doesn't know) has nothing to apply to. Alone,
-    // the argument is empty.
+    // A unit is what a packet's range and default are in: the argument's
+    // own is its default written out here too, and beside states or
+    // required alone another (even one MDL doesn't know) has nothing to
+    // apply to. Alone, either way, the argument is empty.
     assert_one(Code::ExplicitDefault, &format!("{at}/unit"), |v| {
         limit(v, json!({ "delay_s": { "unit": "s", "required": true } }));
     });
@@ -2743,6 +2831,9 @@ fn a_packet_requires_an_argument() {
     );
     assert_one(Code::Empty, at, |v| {
         limit(v, json!({ "delay_s": { "unit": "m" } }))
+    });
+    assert_one(Code::Empty, at, |v| {
+        limit(v, json!({ "delay_s": { "unit": "s" } }))
     });
     // A catalog default with a problem of its own is reported there, and
     // not again at vendor X's field, which never sends it: -1 is no raw

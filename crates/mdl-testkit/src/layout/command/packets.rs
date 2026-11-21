@@ -148,7 +148,6 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
             (
                 proptest::bool::weighted(0.3),
                 any::<bool>(),
-                any::<bool>(),
                 proptest::bool::weighted(0.3),
             ),
             8,
@@ -247,7 +246,7 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                 // A packet accepts fewer of an enum's states (IR 2.3) only
                 // for an argument it encodes, and requires one (IR 2.3)
                 // only if it encodes it.
-                for ((encoder, encoded), &(packet, unit, wider, require)) in
+                for ((encoder, encoded), &(packet, wider, require)) in
                     arguments.iter_mut().zip(limits.iter().cycle())
                 {
                     if !*encoded {
@@ -257,10 +256,7 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                         require_argument(encoder);
                     }
                     if packet && *encoded && encoder.has_limits() {
-                        encoder.limits = Limits::Packet {
-                            unit: unit && encoder.units.is_some(),
-                            wider,
-                        };
+                        encoder.limits = Limits::Packet { wider };
                     }
                 }
                 CommandSpec {

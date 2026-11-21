@@ -415,6 +415,37 @@ fn problems_opening_a_store_have_their_codes() {
     assert_eq!(shown["problems"][0]["code"], "unknown_canonical");
 }
 
+/// A spelling a release before 1.0 began refusing when building, which an
+/// earlier one wrote: a packet's limits restating the argument's own unit
+/// (`spec/compatibility.md` §7). The store still opens, and the limits
+/// still hold.
+#[test]
+fn a_store_an_earlier_release_built_with_a_refused_spelling_still_opens() {
+    let (dir, artifacts) = store_dir("refused_spelling");
+    replace_set(&dir, &artifacts, |set| {
+        set["mdl_version"] = json!("2.2");
+        set["set"]["commands"][0]["arguments"] =
+            json!({ "delay": { "unit": "s", "range": { "max": 60 } } });
+    });
+    let runtime = Runtime::open(&dir, None).unwrap();
+    let reset = |delay: u64| {
+        runtime.encode(
+            "sat",
+            &CommandRequest::new("sat_v1", "eps.reset").with_argument("delay", delay),
+        )
+    };
+    assert!(reset(60).is_ok());
+    assert_eq!(code(reset(61)), "out_of_range");
+    // A build of the same definitions refuses it.
+    let mut definitions = bundle();
+    definitions["mdl_version"] = json!("2.2");
+    definitions["sets"][0]["commands"][0]["arguments"] =
+        json!({ "delay": { "unit": "s", "range": { "max": 60 } } });
+    let refused = validate(read_bundle_value(&definitions).unwrap().value).unwrap_err();
+    let codes: Vec<&str> = refused.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(codes, ["explicit_default"]);
+}
+
 #[test]
 fn without_bindings_each_native_id_stands_for_an_asset() {
     let (dir, _) = store_dir("stand_ins");

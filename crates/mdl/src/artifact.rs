@@ -37,7 +37,7 @@ use crate::ir::{
     Set,
 };
 use crate::read::Loaded;
-use crate::validate::{Validated, validate};
+use crate::validate::{Validated, validate_stored};
 
 /// One artifact, written.
 #[derive(Debug, Clone, PartialEq)]
@@ -376,7 +376,7 @@ pub fn assemble(
     let mut bundle = Bundle::new(catalog_body.clone());
     bundle.families.push(family_body.clone());
     bundle.sets.push(body.clone());
-    validate(bundle).map_err(AssembleError::Invalid)
+    validate_stored(bundle).map_err(AssembleError::Invalid)
 }
 
 /// The lowest IR version that can read `artifact`, which it states: what

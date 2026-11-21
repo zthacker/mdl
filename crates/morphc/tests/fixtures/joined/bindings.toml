@@ -1,0 +1,17 @@
+# X-1 runs the first flight software until June, then the second.
+
+mdl_version = "2.0"
+
+[[binding]]
+family         = "vendor_x"
+native_id      = "VendorX"
+asset          = "X-1"
+set            = "vendor_x_v1"
+effective_from = "2026-01-01T00:00:00Z"
+
+[[binding]]
+family         = "vendor_x"
+native_id      = "VendorX"
+asset          = "X-1"
+set            = "vendor_x_v2"
+effective_from = "2026-06-01T00:00:00Z"

@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Vendor X's second flight software: a status byte ahead of the
+     voltage, now in centivolts, and a DETUMBLE mode. -->
+<SpaceSystem name="VendorX" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <IntegerParameterType name="Status" signed="false">
+        <IntegerDataEncoding sizeInBits="8"/>
+      </IntegerParameterType>
+      <FloatParameterType name="Centivolts">
+        <UnitSet><Unit>V</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="16">
+          <DefaultCalibrator><PolynomialCalibrator>
+            <Term coefficient="0" exponent="0"/><Term coefficient="0.01" exponent="1"/>
+          </PolynomialCalibrator></DefaultCalibrator>
+        </IntegerDataEncoding>
+      </FloatParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Status" parameterTypeRef="Status"/>
+      <Parameter name="BusVoltage" parameterTypeRef="Centivolts">
+        <AliasSet><Alias nameSpace="MDL" alias="eps.bus_voltage"/></AliasSet>
+      </Parameter>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer name="HK">
+        <EntryList>
+          <ParameterRefEntry parameterRef="Status"/>
+          <ParameterRefEntry parameterRef="BusVoltage"/>
+        </EntryList>
+      </SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+  <CommandMetaData>
+    <ArgumentTypeSet>
+      <EnumeratedArgumentType name="Mode">
+        <IntegerDataEncoding sizeInBits="8"/>
+        <EnumerationList>
+          <Enumeration value="0" label="SAFE"/>
+          <Enumeration value="1" label="NOMINAL"/>
+          <Enumeration value="2" label="DETUMBLE"/>
+        </EnumerationList>
+      </EnumeratedArgumentType>
+      <IntegerArgumentType name="Target" signed="false">
+        <IntegerDataEncoding sizeInBits="16"/>
+      </IntegerArgumentType>
+      <IntegerArgumentType name="Pulse" signed="false">
+        <UnitSet><Unit>ms</Unit></UnitSet>
+        <IntegerDataEncoding sizeInBits="16"/>
+        <ValidRangeSet><ValidRange minInclusive="50" maxInclusive="1000"/></ValidRangeSet>
+      </IntegerArgumentType>
+    </ArgumentTypeSet>
+    <MetaCommandSet>
+      <MetaCommand name="SetMode">
+        <AliasSet><Alias nameSpace="MDL" alias="sys.set_mode"/></AliasSet>
+        <ArgumentList><Argument name="mode" argumentTypeRef="Mode"/></ArgumentList>
+        <CommandContainer name="SetMode">
+          <EntryList>
+            <FixedValueEntry name="Opcode" binaryValue="01" sizeInBits="8"/>
+            <ArgumentRefEntry argumentRef="mode"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+      <MetaCommand name="Fire">
+        <AliasSet><Alias nameSpace="MDL" alias="effector.fire"/></AliasSet>
+        <ArgumentList>
+          <Argument name="target_id" argumentTypeRef="Target"/>
+          <Argument name="pulse_ms" argumentTypeRef="Pulse"/>
+        </ArgumentList>
+        <CommandContainer name="Fire">
+          <EntryList>
+            <FixedValueEntry name="Opcode" binaryValue="02" sizeInBits="8"/>
+            <ArgumentRefEntry argumentRef="target_id"/>
+            <ArgumentRefEntry argumentRef="pulse_ms"/>
+          </EntryList>
+        </CommandContainer>
+      </MetaCommand>
+    </MetaCommandSet>
+  </CommandMetaData>
+</SpaceSystem>

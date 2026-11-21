@@ -12,7 +12,8 @@ number covers, and so what an upgrade can and can't break.
 The IR's version is `major.minor` (`frontends.md` §7).
 
 - A minor version only adds: a key, a kind, an option. A document valid
-  at 2.*n* is valid at 2.*n*+1 and means the same there.
+  at 2.*n* is valid at 2.*n*+1 and means the same there, but for a
+  definition §7 says a later release refuses.
 - Anything that changes or removes what a document means is a new major
   version. A new major version comes with a way to carry documents across,
   and its readers say whether they read the old one.
@@ -34,6 +35,11 @@ The IR's version is `major.minor` (`frontends.md` §7).
   except a definition §7 says a later release refuses. A `def_version`
   kept with telemetry stays readable as long as the store keeps the
   artifact, and stores never remove one (`store.md` §2).
+- A frontend's output can change from one release to the next, an
+  importer reading more of what a vendor's XTCE says, say, so a set
+  rebuilt from unchanged files can get a new digest; the release notes
+  say when. An artifact already in a store keeps its identity, and a
+  `def_version` kept with telemetry still resolves.
 - An artifact never says which optional features it uses beyond its
   version; that would change its identity. A runtime that implements part
   of MDL works the features out from the artifact when it opens it, and
@@ -96,6 +102,14 @@ command meant), never for one it handled correctly: accuracy comes
 first, and a wrong value stopped at open is better than one stored. Such
 a refusal is `invalid_build` with the problem's own code among its
 problems, and the release notes name the rule and why.
+
+Before 1.0, a release may also refuse to build a definition only
+because it spells something two ways where the IR means one, such as a
+value written out that is already its default, so that one meaning keeps
+one digest. Its release notes name each such rule. A runtime still opens
+a store an earlier release built with such a spelling, which means what
+the IR's one spelling does. From 1.0 on, a build refuses only what the
+rule above does.
 
 So upgrading the runtime, or a binding, within a major IR version:
 

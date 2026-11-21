@@ -1,0 +1,16 @@
+# Vendor X's two flight software versions as one family: the second
+# joins the family the first defines, as a set of its own.
+
+[[input]]
+path    = "catalog.toml"
+catalog = "owner"
+
+[[input]]
+path   = "vendor_x_v1.xml"
+family = "vendor_x"
+set    = "vendor_x_v1"
+
+[[input]]
+path = "vendor_x_v2.xml"
+join = "vendor_x"
+set  = "vendor_x_v2"

@@ -18,8 +18,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mdl::ir::Locator;
-use mdl::source::{SourceId, SourceMap, Span};
+use mdl::ir::{ByteOrder, Encoding, Family, Locator};
+use mdl::source::{SourceDiagnostic, SourceId, SourceMap, Span};
+use mdl::validate::closest;
 use serde_json::Value;
 
 use crate::names::{catalog_part, identifier, qualified, token};
@@ -28,7 +29,7 @@ use crate::report::Report;
 use crate::space::{Kind, Tree};
 use crate::types::{Order, Raw, Scalar, Shape, Types, description};
 use crate::xml::{self, El, Expect};
-use crate::{CatalogRole, Code, Naming, Options};
+use crate::{CatalogRole, Code, Context, Naming, Options};
 
 mod arguments;
 mod commands;
@@ -263,6 +264,9 @@ pub(crate) struct Import<'d, 'r> {
     report: &'r mut Report,
     naming: Naming,
     catalog: CatalogRole,
+    /// The catalog a referring import maps onto, and the families it can
+    /// join.
+    context: Context<'r>,
     types: Types<'d>,
     /// Imported params, by catalog name; none when the import refers to
     /// another input's catalog.
@@ -287,12 +291,18 @@ pub(crate) struct Import<'d, 'r> {
 }
 
 impl<'d, 'r> Import<'d, 'r> {
-    pub(crate) fn new(tree: &'r Tree<'d>, report: &'r mut Report, options: &Options) -> Self {
+    pub(crate) fn new(
+        tree: &'r Tree<'d>,
+        report: &'r mut Report,
+        options: &Options,
+        context: Context<'r>,
+    ) -> Self {
         Import {
             tree,
             report,
             naming: options.naming,
             catalog: options.catalog,
+            context,
             types: Types::default(),
             params: BTreeMap::new(),
             names: BTreeMap::new(),
@@ -309,6 +319,19 @@ impl<'d, 'r> Import<'d, 'r> {
     /// The bundle, as JSON with its source map. `None` when there's nothing
     /// to build it from; every problem is reported.
     pub(crate) fn bundle(mut self, options: &Options) -> Option<(Value, SourceMap)> {
+        // A referring import's command packets take what the owner's
+        // catalog says of their arguments, so it isn't read without it.
+        let refer = match (self.catalog, self.context.catalog) {
+            (CatalogRole::Define, _) => None,
+            (CatalogRole::Refer, Some(catalog)) => Some(catalog),
+            (CatalogRole::Refer, None) => {
+                self.option_error(
+                    "the import refers to another input's catalog, but isn't given it".to_string(),
+                );
+                return None;
+            }
+        };
+        let joined = self.joined(options)?;
         let tree = self.tree;
         let embedded = self.embedded();
         let mut packets = Vec::new();
@@ -345,47 +368,77 @@ impl<'d, 'r> Import<'d, 'r> {
         self.report_unused();
         let root = tree.spaces.first()?;
         let root_span = root.el.span();
-        let family = match &options.family {
-            Some(name) => name.clone(),
-            None => match token(root.name) {
-                Some(name) => name,
-                None => {
-                    self.report.error(
-                        Code::Name,
-                        root_span,
-                        format!(
-                            "no family name can be made from SpaceSystem {}; name the family in \
-                             the import options",
-                            root.name
-                        ),
-                    );
-                    return None;
-                }
-            },
+        let (family, order) = match joined {
+            // Its fields take the family's byte order, those in the other
+            // stating their own.
+            Some(family) => {
+                let order = match family.byte_order {
+                    Some(ByteOrder::Little) => Order::Little,
+                    _ => Order::Big,
+                };
+                (family.name.clone(), order)
+            }
+            None => {
+                let name = match &options.family {
+                    Some(name) => name.clone(),
+                    None => match token(root.name) {
+                        Some(name) => name,
+                        None => {
+                            self.report.error(
+                                Code::Name,
+                                root_span,
+                                format!(
+                                    "no family name can be made from SpaceSystem {}; name the \
+                                     family in the import options",
+                                    root.name
+                                ),
+                            );
+                            return None;
+                        }
+                    },
+                };
+                (name, self.family_order(&packets, &commands))
+            }
         };
         let set = options.set.clone().unwrap_or_else(|| family.clone());
-        let alias = options
-            .alias
-            .clone()
-            .unwrap_or_else(|| Locator::fixed(root.name));
-        // A metadata alias reads a value the link provides, which its
-        // family declares; an XTCE document can't, so the import does.
-        let metadata = match &alias {
-            Locator::Metadata { name, .. } => Some(name.clone()),
-            _ => None,
+        // A joining import defines no family: its alias is the family's.
+        let (alias, metadata) = match joined {
+            Some(_) => (None, None),
+            None => {
+                let alias = options
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| Locator::fixed(root.name));
+                // A metadata alias reads a value the link provides, which
+                // its family declares; an XTCE document can't, so the
+                // import does.
+                let metadata = match &alias {
+                    Locator::Metadata { name, .. } => Some(name.clone()),
+                    _ => None,
+                };
+                match serde_json::to_value(alias) {
+                    Ok(alias) => (Some(alias), metadata),
+                    Err(err) => {
+                        self.report.error(
+                            Code::Invalid,
+                            root_span,
+                            format!("the alias option can't be written as JSON: {err}"),
+                        );
+                        return None;
+                    }
+                }
+            }
         };
-        let alias = match serde_json::to_value(alias) {
-            Ok(alias) => alias,
-            Err(err) => {
-                self.report.error(
-                    Code::Invalid,
-                    root_span,
-                    format!("the alias option can't be written as JSON: {err}"),
-                );
+        let set_version = match options.set_version.as_ref().map(serde_json::to_value) {
+            None => None,
+            Some(Ok(version)) => Some(version),
+            Some(Err(err)) => {
+                self.option_error(format!(
+                    "the set_version option can't be written as JSON: {err}"
+                ));
                 return None;
             }
         };
-        let order = self.family_order(&packets, &commands);
         Some(emit::bundle(emit::Bundle {
             root: root_span,
             params: &self.params,
@@ -394,11 +447,99 @@ impl<'d, 'r> Import<'d, 'r> {
             alias,
             metadata,
             set: &set,
+            set_version,
             packets: &packets,
             structs: &self.structs,
             commands: &commands,
-            catalog: self.catalog,
+            refer,
         }))
+    }
+
+    /// The family the import's options join, checked against them; `None`
+    /// after reporting each reason it can't be joined.
+    fn joined(&mut self, options: &Options) -> Option<Option<&'r Family>> {
+        let Some(name) = &options.join else {
+            if options.set_version.is_some() {
+                self.option_error(
+                    "set_version is for a set that joins a family with a version locator, and \
+                     the import joins none"
+                        .to_string(),
+                );
+                return None;
+            }
+            return Some(None);
+        };
+        let who = options
+            .set
+            .as_ref()
+            .map_or_else(|| "the import".to_string(), |set| format!("set {set}"));
+        let families = self.context.families;
+        let Some(family) = families.iter().find(|family| family.name == *name) else {
+            let close = closest(name, families.iter().map(|family| &family.name))
+                .map_or_else(String::new, |close| format!("; did you mean {close}?"));
+            self.option_error(format!(
+                "{who} joins family {name}, which no other input defines{close}"
+            ));
+            return None;
+        };
+        let mut problems = Vec::new();
+        if let Some(own) = &options.family {
+            problems.push(format!(
+                "the import names family {own} and joins family {name}; give one"
+            ));
+        }
+        if options.set.is_none() {
+            problems.push(format!(
+                "the import joins family {name}, so it names the set it adds to it"
+            ));
+        }
+        if family.encoding == Encoding::Json {
+            problems.push(format!(
+                "{who} can't join family {name}: the family is JSON, and an XTCE import is \
+                 binary"
+            ));
+        }
+        if let Some(alias) = options
+            .alias
+            .as_ref()
+            .filter(|alias| **alias != family.alias)
+        {
+            problems.push(format!(
+                "{who} joins family {name}, whose alias is {}, but the alias option is {}; \
+                 leave it out to take the family's",
+                locator_text(&family.alias),
+                locator_text(alias)
+            ));
+        }
+        match (&family.version, &options.set_version) {
+            (Some(_), None) => problems.push(format!(
+                "family {name} reads each payload's layout version, so {who}, joining it, \
+                 gives set_version"
+            )),
+            (None, Some(_)) => problems.push(format!(
+                "family {name} has no version locator, so {who}, joining it, gives no \
+                 set_version"
+            )),
+            _ => {}
+        }
+        if problems.is_empty() {
+            return Some(Some(family));
+        }
+        for problem in problems {
+            self.option_error(problem);
+        }
+        None
+    }
+
+    /// A problem with the import's options, which no document holds: it's
+    /// reported at the import's first root SpaceSystem, which says which
+    /// import it is.
+    fn option_error(&mut self, message: String) {
+        let mut diagnostic = SourceDiagnostic::error(Code::Options.as_str(), message);
+        if let Some(root) = self.tree.spaces.first() {
+            diagnostic = diagnostic.with_span(root.el.span());
+        }
+        self.report.push(diagnostic);
     }
 
     /// The containers a ContainerRefEntry embeds somewhere. They're
@@ -1192,6 +1333,11 @@ impl<'d, 'r> Import<'d, 'r> {
             Order::Big
         }
     }
+}
+
+/// A locator as the IR writes it, for messages.
+fn locator_text(locator: &Locator) -> String {
+    serde_json::to_string(locator).unwrap_or_default()
 }
 
 /// What an element is, for messages.

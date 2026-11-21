@@ -97,8 +97,8 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
     }
     match encoder.limits {
         Limits::Catalog => limits_json(encoder, &mut json),
-        Limits::Packet { wider: true, .. } => wider_json(encoder, &mut json),
-        Limits::Packet { wider: false, .. } => {}
+        Limits::Packet { wider: true } => wider_json(encoder, &mut json),
+        Limits::Packet { wider: false } => {}
     }
     // The default of an argument the packet requires (IR 2.3), which it
     // never sends, so it needn't be a value the packet takes: the wider
@@ -169,17 +169,14 @@ fn limits_json(encoder: &Encoder, json: &mut Map<String, Value>) {
 }
 
 /// The packet's own limits: each argument whose range and default are
-/// written there (IR 2.2), restating its unit where it says to, the states
-/// it accepts of an enum whose catalog lists more, and whether it requires
+/// written there (IR 2.2), in its own unit, so with no unit, the states it
+/// accepts of an enum whose catalog lists more, and whether it requires
 /// the argument (both IR 2.3).
 fn packet_arguments(layout: &Layout) -> Map<String, Value> {
     let mut arguments = Map::new();
     for (index, (encoder, _)) in layout.arguments.iter().enumerate() {
         let mut json = Map::new();
-        if let Limits::Packet { unit, .. } = encoder.limits {
-            if let (true, Some((own, _))) = (unit, encoder.units) {
-                json.insert("unit".into(), json!(own));
-            }
+        if let Limits::Packet { .. } = encoder.limits {
             limits_json(encoder, &mut json);
         }
         if let (ArgType::Enum(states), false) = (&encoder.ty, encoder.unaccepted.is_empty()) {

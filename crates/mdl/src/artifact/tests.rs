@@ -500,6 +500,25 @@ fn stored_artifacts_must_come_from_one_history() {
     }
 }
 
+/// A set an earlier release wrote with a spelling builds now refuse (a
+/// packet's limits restating the argument's own unit,
+/// `spec/compatibility.md` §7) still assembles, as a consumer loads it.
+#[test]
+fn assemble_reads_a_spelling_builds_now_refuse() {
+    let artifacts = built(&fixture());
+    let mut value: Value = serde_json::from_str(&artifacts.sets["vendor_j_v1"].canonical).unwrap();
+    value["set"]["commands"][0]["arguments"]["delay_s"] =
+        json!({ "unit": "s", "range": { "max": 600 }, "default": 0 });
+    let set = read_artifact(&serde_json::to_vec(&value).unwrap()).unwrap();
+    let validated = assemble(
+        &set,
+        &load(&artifacts.families["vendor_j"]),
+        &load(&artifacts.catalog),
+    )
+    .unwrap();
+    assert_eq!(validated.bundle().sets[0].name, "vendor_j_v1");
+}
+
 #[test]
 fn assemble_validates_artifacts_whose_pins_match() {
     let artifacts = built(&fixture());

@@ -3,13 +3,12 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 
-use mdl::ir::IrVersion;
+use mdl::ir::{Catalog, IrVersion, ParamType};
 use mdl::source::{SourceMap, Span};
 use serde_json::Value;
 
 use super::commands::{Argument, Command};
 use super::{Element, Entry, Packet, Param, StructType, TypeId};
-use crate::CatalogRole;
 use crate::out::{List, Object, integer_json};
 use crate::types::{ArgumentRange, Order, Scalar};
 
@@ -17,20 +16,26 @@ use crate::types::{ArgumentRange, Order, Scalar};
 pub(super) struct Bundle<'a, 'd> {
     pub(super) root: Span,
     pub(super) params: &'a BTreeMap<String, Param<'d>>,
+    /// The set's family, which the import defines or joins.
     pub(super) family: &'a str,
     pub(super) order: Order,
-    pub(super) alias: Value,
+    /// The family's alias, when the import defines the family; a joining
+    /// import writes no family.
+    pub(super) alias: Option<Value>,
     /// The metadata name a metadata alias reads, which the family
     /// declares.
     pub(super) metadata: Option<String>,
     pub(super) set: &'a str,
+    pub(super) set_version: Option<Value>,
     pub(super) packets: &'a [Packet<'d>],
     pub(super) structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
     pub(super) commands: &'a [Command<'d>],
-    /// Under [`CatalogRole::Refer`], command packets encode another
-    /// input's catalog commands, so none is written here; each packet
-    /// carries its arguments' ranges and initial values as its own limits.
-    pub(super) catalog: CatalogRole,
+    /// The owner's catalog, when the import refers to it
+    /// ([`CatalogRole::Refer`](crate::CatalogRole::Refer)): command
+    /// packets encode its commands, so none is written here, and each
+    /// packet carries what the vendor says of its arguments, beyond what
+    /// the catalog does, as its own limits.
+    pub(super) refer: Option<&'a Catalog>,
 }
 
 pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
@@ -38,8 +43,9 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
         order: parts.order,
         structs: parts.structs,
         signed: Cell::new(false),
-        refer: parts.catalog == CatalogRole::Refer,
+        refer: parts.refer,
         limited: Cell::new(false),
+        accepts: Cell::new(false),
     };
     let mut params = Object::default();
     for (name, param) in parts.params {
@@ -47,7 +53,7 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     }
     let mut catalog = Object::at(parts.root);
     catalog.put_object("params", params);
-    if !parts.commands.is_empty() && parts.catalog == CatalogRole::Define {
+    if !parts.commands.is_empty() && parts.refer.is_none() {
         let mut commands = Object::default();
         for command in parts.commands {
             commands.put_object(&command.canonical.0, command_object(command));
@@ -55,22 +61,27 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
         catalog.put_object("commands", commands);
     }
 
-    let mut family = Object::at(parts.root);
-    family.put("name", parts.family, None);
-    family.put("encoding", "binary", None);
-    family.put("byte_order", parts.order.as_str(), None);
-    family.put("alias", parts.alias, None);
-    if let Some(name) = parts.metadata {
-        let mut metadata = List::default();
-        metadata.push(name, None);
-        family.put_list("metadata", metadata);
-    }
     let mut families = List::default();
-    families.push_object(family);
+    if let Some(alias) = parts.alias {
+        let mut family = Object::at(parts.root);
+        family.put("name", parts.family, None);
+        family.put("encoding", "binary", None);
+        family.put("byte_order", parts.order.as_str(), None);
+        family.put("alias", alias, None);
+        if let Some(name) = parts.metadata {
+            let mut metadata = List::default();
+            metadata.push(name, None);
+            family.put_list("metadata", metadata);
+        }
+        families.push_object(family);
+    }
 
     let mut set = Object::at(parts.root);
     set.put("name", parts.set, None);
     set.put("family", parts.family, None);
+    if let Some(version) = parts.set_version {
+        set.put("version", version, None);
+    }
     if !parts.structs.is_empty() {
         let mut types = Object::default();
         for ty in parts.structs.values() {
@@ -96,7 +107,9 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
     sets.push_object(set);
 
     // The version the bundle needs, as a document states it.
-    let version = if writer.limited.get() {
+    let version = if writer.accepts.get() {
+        IrVersion::new(2, 3)
+    } else if writer.limited.get() {
         IrVersion::new(2, 2)
     } else if writer.signed.get() {
         IrVersion::new(2, 1)
@@ -220,37 +233,38 @@ fn range_object(range: &ArgumentRange, at: Span) -> Object {
     object
 }
 
-/// What a referring import's command packet accepts of its arguments, by
-/// name (IR 2.2): what each argument's type states of its range, and its
-/// initial value, in its unit, for those that state either. `None` when
-/// none does. A range worked out from the encoding isn't one: validation
-/// checks the catalog's against what each field holds anyway.
-fn packet_arguments(command: &Command<'_>) -> Option<Object> {
-    let mut arguments = Object::at(command.el.span());
-    let mut any = false;
-    for argument in &command.arguments {
-        let scalar = &argument.scalar;
-        let range = scalar
-            .stated
-            .as_ref()
-            .map(|range| range_object(range, scalar.el.span()));
-        if range.is_none() && argument.default.is_none() {
-            continue;
-        }
-        let mut object = Object::at(argument.el.span());
-        if let Some((unit, span)) = &scalar.unit {
-            object.put("unit", unit.as_str(), Some(*span));
-        }
-        if let Some(range) = range {
-            object.put_object("range", range);
-        }
-        if let Some((value, span)) = &argument.default {
-            object.put("default", value.clone(), Some(*span));
-        }
-        arguments.put_object(&argument.name.0, object);
-        any = true;
+/// The catalog argument's states a vendor's enumerated type lists, in the
+/// catalog's order, each where the vendor lists it, when they're some of
+/// its states and not all. Listing them all, the packet accepts every
+/// state, as it does without a list; listing one the catalog lacks, the
+/// field's own states say so, and validation reports it at the vendor's
+/// label.
+fn accepted_states<'s>(
+    scalar: &'s Scalar<'_>,
+    theirs: &mdl::ir::Argument,
+) -> Option<Vec<(&'s str, Span)>> {
+    if theirs.ty != ParamType::Enum || scalar.states.is_empty() {
+        return None;
     }
-    any.then_some(arguments)
+    if scalar
+        .states
+        .iter()
+        .any(|(label, _)| !theirs.states.contains(label))
+    {
+        return None;
+    }
+    let accepted: Vec<(&str, Span)> = theirs
+        .states
+        .iter()
+        .filter_map(|state| {
+            scalar
+                .states
+                .iter()
+                .find(|(label, _)| label == state)
+                .map(|(label, span)| (label.as_str(), *span))
+        })
+        .collect();
+    (accepted.len() < theirs.states.len()).then_some(accepted)
 }
 
 /// Writes entries, knowing the family's byte order and the struct types'
@@ -260,10 +274,13 @@ struct Writer<'a, 'd> {
     structs: &'a BTreeMap<TypeId<'d>, StructType<'d>>,
     /// Whether a scalar written spells `signed`, which IR 2.1 has.
     signed: Cell<bool>,
-    /// Whether command packets refer to another input's catalog commands.
-    refer: bool,
+    /// The catalog command packets refer to, when it's another input's.
+    refer: Option<&'a Catalog>,
     /// Whether a command packet has limits of its own, which IR 2.2 has.
     limited: Cell<bool>,
+    /// Whether one accepts some of an argument's states or requires an
+    /// argument, which IR 2.3 has.
+    accepts: Cell<bool>,
 }
 
 impl Writer<'_, '_> {
@@ -297,16 +314,87 @@ impl Writer<'_, '_> {
             command.canonical.0.as_str(),
             Some(command.canonical.1),
         );
-        if self.refer
-            && let Some(arguments) = packet_arguments(command)
+        if let Some(catalog) = self.refer
+            && let Some(arguments) = self.packet_arguments(command, catalog)
         {
             object.put_object("arguments", arguments);
-            self.limited.set(true);
         }
         if !command.entries.is_empty() {
             object.put_list("entries", self.entries(&command.entries));
         }
         object
+    }
+
+    /// What a referring import's command packet accepts of its
+    /// arguments, by name: what the vendor says beyond the owner's
+    /// catalog. An argument type's stated range and its initial value are
+    /// the packet's own range and default (IR 2.2), in the type's unit
+    /// where that isn't the catalog argument's; an enumerated type that
+    /// lists some of the catalog argument's states gives the states the
+    /// packet accepts; and an argument with no initial value is required
+    /// where the catalog's has a default, as Yamcs requires a value for it
+    /// (both IR 2.3). `None` when no argument needs any. A range worked
+    /// out from the encoding isn't one: validation checks the catalog's
+    /// against what each field holds anyway.
+    fn packet_arguments(&self, command: &Command<'_>, catalog: &Catalog) -> Option<Object> {
+        let cataloged = catalog.commands.get(&command.canonical.0);
+        let mut arguments = Object::at(command.el.span());
+        let mut any = false;
+        for argument in &command.arguments {
+            let theirs = cataloged.and_then(|cataloged| {
+                cataloged
+                    .arguments
+                    .iter()
+                    .find(|theirs| theirs.name == argument.name.0)
+            });
+            let scalar = &argument.scalar;
+            let range = scalar
+                .stated
+                .as_ref()
+                .map(|range| range_object(range, scalar.el.span()));
+            let values = range.is_some() || argument.default.is_some();
+            let states = theirs.and_then(|theirs| accepted_states(scalar, theirs));
+            let required =
+                argument.default.is_none() && theirs.is_some_and(|theirs| theirs.default.is_some());
+            if !values && states.is_none() && !required {
+                continue;
+            }
+            let mut object = Object::at(argument.el.span());
+            // Without a unit, a packet's limits are in the catalog
+            // argument's, so that one isn't written.
+            let own = theirs.and_then(|theirs| theirs.unit.as_deref());
+            if let Some((unit, span)) = scalar
+                .unit
+                .as_ref()
+                .filter(|(unit, _)| values && own != Some(unit.as_str()))
+            {
+                object.put("unit", unit.as_str(), Some(*span));
+            }
+            if let Some(range) = range {
+                object.put_object("range", range);
+            }
+            if let Some((value, span)) = &argument.default {
+                object.put("default", value.clone(), Some(*span));
+            }
+            if let Some(states) = states {
+                let mut list = List::default();
+                for (state, span) in states {
+                    list.push(state, Some(span));
+                }
+                object.put_list("states", list);
+                self.accepts.set(true);
+            }
+            if required {
+                object.put("required", true, Some(argument.el.span()));
+                self.accepts.set(true);
+            }
+            arguments.put_object(&argument.name.0, object);
+            any = true;
+        }
+        if any {
+            self.limited.set(true);
+        }
+        any.then_some(arguments)
     }
 
     fn entries(&self, entries: &[Entry<'_>]) -> List {

@@ -219,9 +219,25 @@ fn check_packet_argument(
     // state the catalog lacks, or is for an argument that isn't an enum: a
     // list out of order or with a repeat still says which they are.
     let states_sound = limits.states.is_none() || states_only(argument, limits).is_some();
-    if let Some(unit) = &limits.unit {
+    // Without a unit, a packet's limits are in the argument's own, so
+    // writing that one spells the same packet a second way, with a second
+    // digest: a build refuses it, and a stored build that has it, from a
+    // release that accepted it, still opens. Any other unit converts a
+    // range and a default; states and
+    // required have no unit, so beside neither it has nothing to apply to.
+    // Limits that give nothing at all are reported as empty, above.
+    if let (Some(unit), false) = (&limits.unit, empty) {
         let at = place.key("unit");
-        if values {
+        if argument.unit.as_deref() == Some(unit.as_str()) {
+            found.spelling(
+                Code::ExplicitDefault,
+                &at,
+                format!(
+                    "{unit:?} is argument {name}'s own unit, the one its limits here are in \
+                     without unit; omit it"
+                ),
+            );
+        } else if values {
             check_unit_code(unit, &at, &mut found);
             let argument_name = format!("argument {name}");
             let converts = argument.ty == ParamType::F64;
@@ -233,17 +249,9 @@ fn check_packet_argument(
                 &at,
                 &mut found,
             );
-        } else if !empty {
-            // States and required have no unit, so it's only checked for
-            // being here at all: the argument's own is its default written
-            // out, and any other has nothing to apply to.
-            let code = if argument.unit.as_deref() == Some(unit.as_str()) {
-                Code::ExplicitDefault
-            } else {
-                Code::CommandShape
-            };
+        } else {
             found.error(
-                code,
+                Code::CommandShape,
                 &at,
                 "a packet's unit is the one its range and default are in, and this argument \
                  gives neither; omit unit",

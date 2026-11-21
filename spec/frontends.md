@@ -108,7 +108,9 @@ uses):
 - The bundles merge in the order given, which is also their precedence.
   Families and sets are appended, so two with one name reach validation,
   which reports them (`duplicate_name`), as §4 says of one frontend's
-  files.
+  files. A part's sets may be in a family another part defines, as an
+  XTCE import that joins a family's is ([build files](build-files.md)
+  §2).
 - Catalog params and commands merge by name, so an imported parameter can
   map to a catalog's name. Two definitions of one param MUST agree on
   what decoding depends on: type, unit, states (in order, as the IR lists

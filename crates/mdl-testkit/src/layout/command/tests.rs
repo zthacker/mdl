@@ -1428,7 +1428,10 @@ fn faults_reach_every_code() {
     let strategy = commands();
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
-    for _ in 0..1500 {
+    // A state the packet doesn't accept, in a list or an array element, is
+    // planted in about one case in two hundred: enough cases that it's
+    // planted well over five times.
+    for _ in 0..3000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         let framed = case.bundle["families"][0].get("metadata").is_some();
         for refused in &case.refused {

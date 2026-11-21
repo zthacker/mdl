@@ -436,6 +436,12 @@ const SUGGESTED: usize = 100;
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     diagnostics: Vec<(Vec<Segment>, Diagnostic)>,
+    /// Spellings a build refuses that a stored build is still read with:
+    /// a second way of writing what the IR means one way, which a release
+    /// before 1.0 began refusing after an earlier one accepted it
+    /// (`compatibility.md` §7). They change no meaning, so no later check
+    /// depends on them.
+    spellings: Vec<(Vec<Segment>, Diagnostic)>,
     /// What's been reported: code, path, message and first definition.
     seen: BTreeSet<(Code, String, String, Option<String>)>,
     /// Each suggestion worked out, by the kind of name and the name, so a
@@ -463,10 +469,31 @@ impl Report {
     /// runs for each use of a shared part (a struct type two command
     /// packets use) finds the same problem each time.
     fn push(&mut self, code: Code, place: &Place, message: String, first: Option<String>) {
+        if let Some(found) = self.unseen(code, place, message, first) {
+            self.diagnostics.push(found);
+        }
+    }
+
+    /// A spelling a build refuses and a stored build is read with (see
+    /// `spellings`).
+    pub(crate) fn spelling(&mut self, code: Code, place: &Place, message: impl Into<String>) {
+        if let Some(found) = self.unseen(code, place, message.into(), None) {
+            self.spellings.push(found);
+        }
+    }
+
+    /// The diagnostic, unless the same one was reported already.
+    fn unseen(
+        &mut self,
+        code: Code,
+        place: &Place,
+        message: String,
+        first: Option<String>,
+    ) -> Option<(Vec<Segment>, Diagnostic)> {
         let path = pointer(&place.segments);
         let key = (code, path.clone(), message.clone(), first.clone());
         if !self.seen.insert(key) {
-            return;
+            return None;
         }
         let diagnostic = Diagnostic {
             code,
@@ -475,7 +502,7 @@ impl Report {
             message,
             first,
         };
-        self.diagnostics.push((place.segments.clone(), diagnostic));
+        Some((place.segments.clone(), diagnostic))
     }
 
     /// What `find` suggests for `name`, one of the catalog's `kind` names
@@ -501,7 +528,8 @@ impl Report {
         found
     }
 
-    /// Whether nothing has been reported.
+    /// Whether nothing has been reported but spellings, which decide no
+    /// later check.
     pub(crate) fn is_empty(&self) -> bool {
         self.diagnostics.is_empty()
     }
@@ -511,17 +539,25 @@ impl Report {
     /// whether a later check runs.
     pub(crate) fn absorb(&mut self, other: Report) {
         for (segments, diagnostic) in other.diagnostics {
-            let key = (
-                diagnostic.code,
-                diagnostic.path.clone(),
-                diagnostic.message.clone(),
-                diagnostic.first.clone(),
-            );
-            if self.seen.insert(key) {
+            if self.first_time(&diagnostic) {
                 self.diagnostics.push((segments, diagnostic));
             }
         }
+        for (segments, diagnostic) in other.spellings {
+            if self.first_time(&diagnostic) {
+                self.spellings.push((segments, diagnostic));
+            }
+        }
         self.suggestions.extend(other.suggestions);
+    }
+
+    fn first_time(&mut self, diagnostic: &Diagnostic) -> bool {
+        self.seen.insert((
+            diagnostic.code,
+            diagnostic.path.clone(),
+            diagnostic.message.clone(),
+            diagnostic.first.clone(),
+        ))
     }
 
     /// Whether anything at or under `place` was reported, so a later check
@@ -536,6 +572,14 @@ impl Report {
     /// The value if nothing went wrong, otherwise every diagnostic in
     /// document order, then by code.
     pub(crate) fn finish<T>(mut self, value: T) -> Result<T, Diagnostics> {
+        let spellings = std::mem::take(&mut self.spellings);
+        self.diagnostics.extend(spellings);
+        self.finish_stored(value)
+    }
+
+    /// [`finish`](Report::finish) for a stored build, which is read with
+    /// the spellings a build refuses.
+    pub(crate) fn finish_stored<T>(mut self, value: T) -> Result<T, Diagnostics> {
         if self.diagnostics.is_empty() {
             return Ok(value);
         }

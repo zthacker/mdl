@@ -161,10 +161,13 @@ accepts; and whether it's `required` (both IR 2.3).
   argument's are in its own unit.
 - Validation guarantees that each names an argument of the command
   [`unknown_argument`] that the packet encodes [`unmapped_argument`] and
-  gives a range, a default, states or `required` [`empty`], in a unit that
-  converts [`unit_mismatch`], given only beside a range or a default, the
-  values it's for [`explicit_default` where it's the argument's own unit,
-  `command_shape` otherwise]; that `required` is written only
+  gives a range, a default, states or `required` [`empty`], in a unit other
+  than the argument's own, which is what leaving it out means
+  [`explicit_default`, when building: a stored build an earlier release
+  wrote with it still opens, `compatibility.md` §7], that converts
+  [`unit_mismatch`], given only beside
+  a range or a default, the values it's for [`command_shape`]; that
+  `required` is written only
   as `true` [`explicit_default`] and never beside a default of the
   packet's own, which would never be sent [`required_default`]; that the
   two ranges share a value [`value_range`]; that states are given only

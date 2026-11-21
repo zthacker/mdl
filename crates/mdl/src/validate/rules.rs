@@ -12,7 +12,7 @@ pub(super) const MAX_SAFE_INTEGER: i64 = (1 << 53) - 1;
 /// of the name's length, at least one. Case is ignored, catalog names
 /// being lowercase. Of names as close, one in the same namespace (the part
 /// before the first `.`) comes first, then the first in order.
-fn closest<'a>(name: &str, names: impl Iterator<Item = &'a String>) -> Option<&'a str> {
+pub fn closest<'a>(name: &str, names: impl Iterator<Item = &'a String>) -> Option<&'a str> {
     let lower = name.to_lowercase();
     let wanted: Vec<char> = lower.chars().collect();
     let most = (wanted.len() / 4).max(1);

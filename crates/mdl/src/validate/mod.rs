@@ -46,6 +46,8 @@ mod mapping;
 pub(crate) mod rules;
 mod set;
 
+pub use rules::closest;
+
 pub(crate) use command::command_identities;
 pub(crate) use layout::static_offsets;
 pub(crate) use set::{KeyId, KeyValue, by_value, decoding_facts, exact, layout_of};
@@ -77,12 +79,29 @@ impl Validated {
     }
 }
 
-/// Check everything; a `Validated` bundle only if nothing is wrong.
+/// Check everything; a `Validated` bundle only if nothing is wrong. This
+/// is the validation a build makes, which also refuses each spelling a
+/// release before 1.0 began refusing ([`validate_stored`]).
 pub fn validate(bundle: Bundle) -> Result<Validated, Diagnostics> {
+    let report = check(&bundle);
+    report.finish(Validated { bundle })
+}
+
+/// A stored build's validation, as a runtime opens it: every check
+/// [`validate`] makes, but the spellings a release before 1.0 began
+/// refusing after an earlier one accepted them (`spec/compatibility.md`
+/// §7). Each means what the IR's one spelling does, so a store an earlier
+/// release built still opens.
+pub fn validate_stored(bundle: Bundle) -> Result<Validated, Diagnostics> {
+    let report = check(&bundle);
+    report.finish_stored(Validated { bundle })
+}
+
+fn check(bundle: &Bundle) -> Report {
     let mut report = Report::default();
     let root = Place::root("");
     catalog::check(&bundle.catalog, &root.section("catalog"), &mut report);
     let families = family::check_all(&bundle.families, &root, &mut report);
-    set::check_all(&bundle, &families, &root, &mut report);
-    report.finish(Validated { bundle })
+    set::check_all(bundle, &families, &root, &mut report);
+    report
 }
