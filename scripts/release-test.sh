@@ -30,10 +30,32 @@ EOF
 chmod +x "$scratch/bin/cargo"
 
 # HEAD_COMMIT and TAG_COMMIT, the checkout's and the tag's; DIRTY, what
-# `git status --porcelain` says, and IGNORED, what it says with --ignored.
+# `git status --porcelain` says, and IGNORED, what it says with --ignored;
+# VERSION_<rev>, the workspace's version at commit <rev> (noversion has a
+# Cargo.toml without one, and other commits none git can read); TAGS, the
+# tags that exist.
 cat > "$scratch/bin/git" <<'EOF'
 #!/usr/bin/env bash
 case "$1 $2" in
+    "show "*)
+        rev=${2%%:*}
+        var="VERSION_$rev"
+        if [ -n "${!var:-}" ]; then
+            printf '[workspace.package]\nversion = "%s"\n' "${!var}"
+        elif [ "$rev" = noversion ]; then
+            printf '[workspace]\nmembers = []\n'
+        else
+            echo "fatal: invalid object name '$rev'." >&2
+            exit 128
+        fi
+        ;;
+    "rev-parse -q")
+        [ "$3" = --verify ] || { echo "git $* wasn't expected" >&2; exit 1; }
+        case " ${TAGS:-} " in
+            *" ${4#refs/tags/} "*) echo c0ffee ;;
+            *) exit 1 ;;
+        esac
+        ;;
     "rev-parse HEAD") echo "${HEAD_COMMIT:-c0ffee}" ;;
     "rev-parse "*) echo "${TAG_COMMIT:-c0ffee}" ;;
     "status --porcelain")
@@ -192,6 +214,54 @@ run good notes v9.9.9
 expect "notes for a version with no section" 1 "CHANGELOG.md has no section for 9.9.9"
 run good
 expect "no command" 2 "usage: scripts/release.sh"
+
+# The version at a commit, and what the release workflow does with a run.
+VERSION_new=1.2.4 run good version new
+expect_notes "the version at a commit" "1.2.4"
+run good version gone
+expect "the version at a commit git can't read" 1 "git can't read Cargo.toml at gone"
+run good version noversion
+expect "the version at a commit without one" 1 \
+    "Cargo.toml at noversion has no [workspace.package] version"
+VERSION_old=1.2.3 VERSION_new=1.2.4 run good plan push old new
+expect_notes "a push that changes the version" "mode=release
+commit=new
+version=1.2.4"
+VERSION_old=1.2.4 VERSION_new=1.2.4 run good plan push old new
+expect_notes "a push that keeps the version" "mode=skip
+commit=new
+version=1.2.4"
+VERSION_new=1.2.4 run good plan push 0000000000000000000000000000000000000000 new
+expect "a push from a commit git can't read" 0 "whether the push changed the version can't be told"
+expect "a push from a commit git can't read, skipped" 0 "mode=skip"
+TAGS=v1.2.4 VERSION_old=1.2.3 VERSION_new=1.2.4 run good plan push old new
+expect "a push to a version already tagged" 1 "v1.2.4 is already tagged; a release needs a new version"
+run good plan push old gone
+expect "a push to a commit git can't read" 1 "git can't read Cargo.toml at gone"
+VERSION_new=1.2.4 run good plan dispatch new topic false
+expect_notes "a dry run on any branch" "mode=dry-run
+commit=new
+version=1.2.4"
+TAGS=v1.2.4 VERSION_new=1.2.4 run good plan dispatch new main false
+expect_notes "a dry run of a released version" "mode=dry-run
+commit=new
+version=1.2.4"
+VERSION_new=1.2.4 run good plan dispatch new main true
+expect_notes "a release run by hand on main" "mode=release
+commit=new
+version=1.2.4"
+VERSION_new=1.2.4 run good plan dispatch new topic true
+expect "a release run by hand on another branch" 1 "only main is released, and this run is on topic"
+TAGS="v1.2.3 v1.2.4" VERSION_new=1.2.4 run good plan dispatch new main true
+expect "a release by hand of a version already tagged" 1 "v1.2.4 is already tagged"
+VERSION_new=1.2.4 run good plan dispatch new main yes
+expect "a release that's neither true nor false" 1 "release is true or false, not yes"
+run good plan
+expect "a plan of nothing" 2 "usage: scripts/release.sh"
+run good plan push old
+expect "a push without its commits" 2 "usage: scripts/release.sh"
+run good plan dispatch new main
+expect "a run by hand without release" 2 "usage: scripts/release.sh"
 
 tree binding 1.2.3 <<< "$changelog"
 printf 'defmodule MDL.MixProject do\n  @version "1.2.2"\nend\n' \

@@ -1,10 +1,11 @@
 # Releasing MDL
 
-A release is a tag `vX.Y.Z` on `main` and the GitHub release that the
-release workflow ([`.github/workflows/release.yml`](.github/workflows/release.yml))
-drafts for it. A maintainer prepares the release commit, tags it and
-publishes the draft; the workflow checks, tests, builds and attests in
-between.
+A release is a GitHub release of a commit on `main`, and the tag `vX.Y.Z`
+on that commit. A maintainer pushes a commit that changes the workspace's
+version; the release workflow
+([`.github/workflows/release.yml`](.github/workflows/release.yml)) checks,
+tests, builds and attests that commit and drafts the release; the
+maintainer reads the draft over and publishes it, which creates the tag.
 
 ## What a release holds
 
@@ -56,9 +57,14 @@ native source and downloads its native library from the release.
   exists; a deleted release's tag name can't be used again. Drafts stay
   editable, which is why the workflow makes one and you publish it. It
   applies to releases published after it's turned on.
-- **A tag ruleset for `v*`** that lets only maintainers create, move or
-  delete release tags. The workflow refuses a tag whose commit isn't on
-  `main` either way, but anyone who can push a tag can start a run.
+- **A tag ruleset for `v*`** that lets only the repository's admins
+  create, move or delete release tags (Settings, Rules, Rulesets, New
+  ruleset, New tag ruleset: target the pattern `v*`, turn on "Restrict
+  creations", "Restrict updates" and "Restrict deletions", and add the
+  Repository admin role to the bypass list). Publishing a draft creates
+  its tag as whoever publishes it, so an admin's Publish goes through; in
+  an organization whose maintainers publish too, add the Maintain role to
+  the bypass list. It stops anyone else making a `v` tag by hand.
 
 ## The toolchain
 
@@ -84,59 +90,62 @@ and the changelog says so.
 
 2. **Write the changelog.** In `CHANGELOG.md`, move what's under
    `## [Unreleased]` into a new section headed `## [X.Y.Z] - YYYY-MM-DD`,
-   dated the day you'll tag, and leave `## [Unreleased]` above it, empty.
-   The section says which IR version, store format and result format the
-   release reads and writes (`morphc --version` prints them) and what
-   changed since the last release. At the end of the file, add the
-   version's link and start `[Unreleased]`'s comparison at the new tag.
+   dated the day you'll publish, and leave `## [Unreleased]` above it,
+   empty. The section says which IR version, store format and result
+   format the release reads and writes (`morphc --version` prints them)
+   and what changed since the last release. At the end of the file, add
+   the version's link and start `[Unreleased]`'s comparison at the new
+   tag.
 
 3. **Check.** Run `just check`. It ends with what the workflow checks
-   first, which `just release-check` runs alone: the tag (by default `v`
-   and the workspace's version) names the workspace's version, the
-   changelog has a dated section for it that says something, and the
-   lockfiles are current. `just release-notes` prints the notes the
-   release will have.
+   first, which `just release-check` runs alone: the tag (`v` and the
+   workspace's version) is the one the release will have, the changelog
+   has a dated section for it that says something, and the lockfiles are
+   current. `just release-notes` prints the notes the release will have.
 
-4. **Merge** the branch to `main` once CI passes.
+4. **Push the version to `main`**, by merging the branch once CI passes
+   or by pushing the commit. A push that changes the version is what
+   starts a release; any other push to `main` leaves releases alone.
+   From here until you publish, merge nothing else to `main`: if
+   something goes wrong, the release is made again from `main`'s head,
+   which should still be this commit.
 
-5. **Dry run.** Start the release workflow by hand on `main` (Actions,
-   release, Run workflow, or `gh workflow run release.yml --ref main`). It
-   runs the checks, tests and builds a tag would, the binding's tests on
-   each native library included, keeps the archives as the run's
-   artifacts and releases nothing. Download the archive for a platform you
-   have from the run's page and run `morphc --version`.
+5. **Watch the run.** On the repository's page on GitHub:
+   1. Click the **Actions** tab, then **release** in the list of
+      workflows on the left.
+   2. Click the newest run, named after your commit's message.
+   3. Wait until every job has a green check: plan, verify and test,
+      morphc for each of three platforms, the Elixir native library for
+      each of six, and draft the release. A job with a red cross failed:
+      click it, then its red step, for the log, and see "If something goes
+      wrong" below.
 
-6. **Tag** `main` and push the tag:
+6. **Review the draft.**
+   1. Click the **Code** tab, then **Releases** in the right-hand column.
+   2. Open **MDL X.Y.Z**, marked **Draft**. Read the notes, and check it
+      holds nineteen files: morphc's three archives and the six native
+      libraries, each with its `.sha256`, and `SHA256SUMS`.
+   3. Optionally, download the archive for your platform and check it
+      (this needs the `gh` CLI):
 
-   ```sh
-   git switch main
-   git pull
-   git tag -a vX.Y.Z -m "MDL X.Y.Z"
-   git push origin vX.Y.Z
-   ```
+      ```sh
+      shasum -a 256 -c morphc-X.Y.Z-<target>.tar.gz.sha256
+      gh attestation verify morphc-X.Y.Z-<target>.tar.gz --repo zthacker/mdl \
+        --signer-workflow zthacker/mdl/.github/workflows/release.yml
+      ```
 
-   The workflow checks that the tagged commit is on `main`, then tests and
-   builds it, attests the archives and makes a **draft** release. A tag
-   with a hyphen, such as
-   `v0.2.0-rc.1`, makes a pre-release; the workspace's version and the
-   changelog's heading are spelled the same way (`0.2.0-rc.1`).
+      The checksum comes from where the archive does, so it catches a
+      damaged download, not a replaced one. The attestation is what shows
+      the archive is the one this repository's release workflow built,
+      from the release's commit.
 
-7. **Review the draft** under the repository's Releases: the notes, and
-   nineteen files (morphc's three archives and the six native libraries,
-   each with its `.sha256`, and `SHA256SUMS`). Download the archive for
-   your platform from the draft and check it:
+7. **Publish.** On the draft, click the pencil (**Edit**), check that
+   "Set as the latest release" is ticked (unless it's a pre-release,
+   which can't be), and click **Publish release** at the bottom. This creates the tag `vX.Y.Z` on the release's commit and
+   makes the release public.
 
-   ```sh
-   shasum -a 256 -c morphc-X.Y.Z-<target>.tar.gz.sha256
-   gh attestation verify morphc-X.Y.Z-<target>.tar.gz --repo zthacker/mdl \
-     --signer-workflow zthacker/mdl/.github/workflows/release.yml
-   ```
-
-   The checksum comes from where the archive does, so it catches a damaged
-   download, not a replaced one. The attestation is what shows the archive
-   is the one this repository's release workflow built.
-
-8. **Publish** the draft. This is the step that makes the release public.
+8. **Pull the tag** into your checkout, if you want it there:
+   `git fetch --tags`.
 
 9. **Publish the Elixir package to Hex**, once the binding goes there
    (not yet; until then, skip this step). From a clean checkout of the
@@ -164,20 +173,34 @@ and the changelog says so.
    and it compiles the binding first, from source, so it needs Rust 1.91
    or later and Elixir 1.18 or later.
 
+## A dry run
+
+The release workflow can run by hand, without releasing anything: the same
+checks, tests and builds, the archives kept as the run's artifacts.
+
+1. Click the **Actions** tab, then **release** on the left.
+2. Click **Run workflow** (on the right, above the list of runs).
+3. Under "Use workflow from", pick the branch to try. Leave "Draft a
+   release" unticked.
+4. Click the green **Run workflow** button, then the run that appears, and
+   watch it as in step 5. The archives are under **Artifacts** at the
+   bottom of the run's page.
+
 ## If something goes wrong
 
-- **Before publishing**, fix what's wrong on `main`, then delete the draft
-  release (if one was made) and the tag, and tag again:
+- **Before publishing**, nothing public exists yet, and no tag either:
+  1. If a draft was made, delete it: open it under **Releases**, click the
+     trash can (**Delete**), and confirm.
+  2. Fix what's wrong on `main`. A fix that doesn't change the version
+     doesn't start a release by itself.
+  3. Release `main`'s head by hand: **Actions**, **release**, **Run
+     workflow**, "Use workflow from" **main**, tick **Draft a release**,
+     and click **Run workflow**. Then carry on from step 5.
 
-  ```sh
-  git push --delete origin vX.Y.Z
-  git tag -d vX.Y.Z
-  ```
-
-  Re-running a failed workflow run builds the same commit again, so it
-  helps only for a failure outside the repository (a runner, the
-  network). The release job can't make a draft where one exists for the
-  tag already.
+  For a failure outside the repository (a runner, the network), the
+  failed run's **Re-run failed jobs** button builds the same commit
+  again. The release job refuses to make a second draft of a version:
+  delete the first.
 - **After publishing**, never move or reuse a tag: people, lockfiles and
   attestations refer to it. Release a patch version instead. With release
   immutability on, GitHub enforces this.

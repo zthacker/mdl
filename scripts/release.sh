@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
 # Release checks and notes (RELEASING.md), shared by `just release-check`,
 # `just release-notes` and the release workflow, so the checks a maintainer
-# runs before tagging are the ones the workflow runs on the tag.
+# runs before releasing are the ones the workflow runs on the release.
 #
-#   scripts/release.sh version       the workspace's version
+#   scripts/release.sh version [REV] the workspace's version, or the
+#                                    version at commit REV
+#   scripts/release.sh plan push BEFORE AFTER
+#   scripts/release.sh plan dispatch COMMIT BRANCH RELEASE
+#                                    what the release workflow does with a
+#                                    run, as lines for its step outputs
+#                                    (see plan below)
 #   scripts/release.sh check [TAG]   TAG (v and the workspace's version by
 #                                    default) names the workspace's version,
 #                                    which the Elixir binding's mix.exs states,
@@ -24,13 +30,102 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+# The version under [workspace.package] in the Cargo.toml on stdin.
+workspace_version() {
+    sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p'
+}
+
+version=$(workspace_version < Cargo.toml)
 if [ -z "$version" ]; then
     echo "Cargo.toml's [workspace.package] has no version" >&2
     exit 1
 fi
 tag=${2:-v$version}
 native_ex=bindings/elixir/lib/mdl/native.ex
+
+usage() {
+    echo "usage: scripts/release.sh version [REV] | plan push BEFORE AFTER |" \
+        "plan dispatch COMMIT BRANCH RELEASE | check [TAG] | notes [TAG] | hex [TAG]" >&2
+    exit 2
+}
+
+# The workspace's version at commit $1: an error if git can't read its
+# Cargo.toml, or that has no version.
+version_at() {
+    local manifest found
+    if ! manifest=$(git show "$1:Cargo.toml" 2> /dev/null); then
+        echo "git can't read Cargo.toml at $1" >&2
+        return 1
+    fi
+    found=$(workspace_version <<< "$manifest")
+    if [ -z "$found" ]; then
+        echo "Cargo.toml at $1 has no [workspace.package] version" >&2
+        return 1
+    fi
+    echo "$found"
+}
+
+# What the release workflow does with a run, as `mode=`, `commit=` and
+# `version=` lines for its step outputs. The mode is release, dry-run or
+# skip.
+#
+#   plan push BEFORE AFTER          a push to main from BEFORE to AFTER:
+#                                   a release of AFTER's version if the push
+#                                   changes it, otherwise skip
+#   plan dispatch COMMIT BRANCH RELEASE
+#                                   run by hand on BRANCH, whose head is
+#                                   COMMIT: a dry run, or with RELEASE true,
+#                                   a release of COMMIT's version, which only
+#                                   main gets
+#
+# Only an untagged version is released. A release is always of the commit
+# the run is for, so its build provenance names the commit it was built
+# from.
+plan() {
+    local mode commit before
+    case "${2:-}" in
+        push)
+            [ $# -eq 4 ] || usage
+            commit=$4
+            version=$(version_at "$commit")
+            if ! before=$(version_at "$3"); then
+                echo "so nothing is released: whether the push changed the version can't be" \
+                    "told; if it did, run the release workflow on main with release checked" >&2
+                mode=skip
+            elif [ "$before" = "$version" ]; then
+                mode=skip
+            else
+                mode=release
+            fi
+            ;;
+        dispatch)
+            [ $# -eq 5 ] || usage
+            commit=$3
+            version=$(version_at "$commit")
+            case "$5" in
+                true)
+                    if [ "$4" != main ]; then
+                        echo "only main is released, and this run is on $4; leave release" \
+                            "unchecked for a dry run" >&2
+                        exit 1
+                    fi
+                    mode=release
+                    ;;
+                false) mode=dry-run ;;
+                *)
+                    echo "release is true or false, not $5" >&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *) usage ;;
+    esac
+    if [ "$mode" = release ] && git rev-parse -q --verify "refs/tags/v$version" > /dev/null; then
+        echo "v$version is already tagged; a release needs a new version" >&2
+        exit 1
+    fi
+    printf 'mode=%s\ncommit=%s\nversion=%s\n' "$mode" "$commit" "$version"
+}
 
 # The targets MDL.Native downloads a native library for, one a line.
 native_targets() {
@@ -208,12 +303,16 @@ hex() {
 }
 
 case "${1:-}" in
-    version) echo "$version" ;;
+    version)
+        if [ $# -ge 2 ]; then
+            version_at "$2"
+        else
+            echo "$version"
+        fi
+        ;;
+    plan) plan "$@" ;;
     check) check ;;
     notes) notes ;;
     hex) hex ;;
-    *)
-        echo "usage: scripts/release.sh version | check [TAG] | notes [TAG] | hex [TAG]" >&2
-        exit 2
-        ;;
+    *) usage ;;
 esac

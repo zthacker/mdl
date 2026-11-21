@@ -35,6 +35,13 @@ them too.
 - A required argument left out is `missing_argument`, as one without a
   default is, and its message says the set requires it.
 
+### Releases
+
+- A push to `main` that changes the workspace's version drafts its
+  release; publishing the draft creates the tag. Run by hand, the release
+  workflow is a dry run of any branch, or, ticked, a release of `main`'s
+  head. Pushing a tag no longer starts a release (RELEASING.md).
+
 ## [0.1.0] - 2026-11-20
 
 The first release. It reads and writes MDL IR 2.2, store format 1 and

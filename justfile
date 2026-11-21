@@ -19,8 +19,8 @@ check:
     cargo test -p morpheus-mdl --features serde_json/arbitrary_precision
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --quiet
     # the release scripts' tests, and that the workspace's version could be
-    # tagged: a version bump without its changelog section or lockfiles fails
-    # here, not at the tag
+    # released: a version bump without its changelog section or lockfiles
+    # fails here, not in the release workflow
     scripts/release-test.sh
     scripts/release.sh check
 
@@ -188,11 +188,11 @@ fmt:
 morphc *args:
     cargo run -q -p morpheus-morphc -- "$@"
 
-# Check the workspace is ready to tag (RELEASING.md): the tag, v and the
-# workspace's version by default, names the workspace's version,
+# Check the workspace is ready to release (RELEASING.md): the tag, v and
+# the workspace's version by default, names the workspace's version,
 # CHANGELOG.md has a dated section for it, the Elixir binding states the
 # same version, and the lockfiles are current. The release workflow runs the
-# same check on the tag.
+# same check on the commit it releases.
 [positional-arguments]
 release-check *tag:
     scripts/release.sh check "$@"
