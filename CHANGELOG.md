@@ -8,6 +8,33 @@ them too.
 
 ## [Unreleased]
 
+### Definitions
+
+- MDL IR 2.3. A command packet can list the states of an enum argument
+  it accepts (`states`), for an asset whose flight software lacks some
+  of the catalog's modes. The list holds catalog states, in the catalog's
+  order, each once, and the default the packet sends must be one of them.
+  A listed state the catalog's argument doesn't have is `unknown_state`,
+  now a validation code too, with the closest name suggested.
+- A command packet can require an argument (`required = true`, IR 2.3),
+  for a vendor that needs a value the catalog lets other vendors leave
+  out. The catalog's default is then never sent with that packet, and
+  isn't checked against it. A new validation code, `required_default`,
+  refuses a packet that requires an argument and gives it a default of
+  its own.
+- A set that uses neither key states the version it did before, and
+  keeps its digest.
+
+### Decoding and encoding
+
+- A new problem code, `unsupported_state`, for a catalog state the packet
+  doesn't accept, whether given to encode or held in a command payload.
+  Its message names the states the packet does accept. A name the
+  catalog doesn't have is still `unknown_state`, and a definition that
+  lists no states gets the same codes as before.
+- A required argument left out is `missing_argument`, as one without a
+  default is, and its message says the set requires it.
+
 ## [0.1.0] - 2026-11-20
 
 The first release. It reads and writes MDL IR 2.2, store format 1 and
