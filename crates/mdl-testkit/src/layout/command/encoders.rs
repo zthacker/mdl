@@ -9,7 +9,7 @@ use proptest::prelude::*;
 use proptest::sample::select;
 
 use super::values::{to_argument, unrounded, value};
-use super::{Arg, ArgType, Encoder, Len, Shape, TEXTS, Through, encoder_of};
+use super::{Arg, ArgType, Encoder, Len, Shape, TEXTS, Through, Unaccepted, encoder_of};
 use super::{Form, int_shape};
 use crate::layout::{Numeric, UNIT_GROUPS, scale, units};
 
@@ -513,7 +513,10 @@ fn calibration(first: i64, last: i64) -> BoxedStrategy<(Vec<f64>, bool)> {
 }
 
 /// An enum argument: through states into an integer field, or its states'
-/// names written into a string field.
+/// names written into a string field, the catalog listing them in an
+/// order of its own. Some of the catalog's states may be ones the packet
+/// doesn't accept (IR 2.3), never all of them; through states, its field
+/// gives those raw values too.
 fn enum_encoder() -> BoxedStrategy<Encoder> {
     let through_states = prop_oneof![(1_u32..=64).prop_map(Shape::Uint), int_shape(1_u32..=64)]
         .prop_flat_map(|shape| {
@@ -527,14 +530,23 @@ fn enum_encoder() -> BoxedStrategy<Encoder> {
         })
         .prop_flat_map(|(shape, raws)| {
             let names: Vec<String> = (0..raws.len()).map(|k| format!("S{k}")).collect();
-            (Just(shape), Just(raws), Just(names).prop_shuffle())
+            let unaccepted = unaccepted_count(raws.len());
+            (
+                Just(shape),
+                Just(raws),
+                Just(names.clone()).prop_shuffle(),
+                Just(names).prop_shuffle(),
+                unaccepted,
+            )
         })
-        .prop_map(|(shape, raws, shuffled)| {
-            let mut catalog = shuffled.clone();
-            catalog.sort();
-            let mut encoder = encoder_of(ArgType::Enum(catalog), shape);
-            encoder.through = Through::States(raws.into_iter().zip(shuffled).collect());
-            encoder
+        .prop_map(|(shape, raws, shuffled, catalog, unaccepted)| {
+            let mut states: Vec<(i128, String)> = raws.into_iter().zip(shuffled).collect();
+            let kept = states.split_off(unaccepted);
+            let refused = states
+                .into_iter()
+                .map(|(raw, name)| (name, Some(raw)))
+                .collect();
+            enum_of(shape, &catalog, Through::States(kept), refused)
         });
     let separators = select(&[0_u8, b' ', b'#', 0xFF][..]);
     let lengths = prop_oneof![
@@ -552,8 +564,67 @@ fn enum_encoder() -> BoxedStrategy<Encoder> {
                 .prop_map(|letters| letters.into_iter().map(char::from).collect::<String>());
             (Just(Shape::Text(text, len)), btree_set(name, 1..=3))
         })
-        .prop_map(|(shape, names)| encoder_of(ArgType::Enum(names.into_iter().collect()), shape));
+        .prop_flat_map(|(shape, names)| {
+            let unaccepted = unaccepted_count(names.len());
+            let names: Vec<String> = names.into_iter().collect();
+            (
+                Just(shape),
+                Just(names.clone()).prop_shuffle(),
+                Just(names).prop_shuffle(),
+                unaccepted,
+            )
+        })
+        .prop_map(|(shape, mut names, catalog, unaccepted)| {
+            names.truncate(unaccepted);
+            let refused = names.into_iter().map(|name| (name, None)).collect();
+            enum_of(shape, &catalog, Through::Plain, refused)
+        });
     prop_oneof![through_states, as_text].boxed()
+}
+
+/// How many of an enum's `states` the packet doesn't accept: none half the
+/// time, else from one to all but one.
+fn unaccepted_count(states: usize) -> BoxedStrategy<usize> {
+    if states < 2 {
+        return Just(0).boxed();
+    }
+    prop_oneof![Just(0), 1..states].boxed()
+}
+
+/// An enum encoder whose catalog lists `catalog`'s states in that order,
+/// of which the packet doesn't accept `refused` (each with its raw value
+/// through states): `ty` has the others, in the catalog's order.
+fn enum_of(
+    shape: Shape,
+    catalog: &[String],
+    through: Through,
+    refused: Vec<(String, Option<i128>)>,
+) -> Encoder {
+    let refused_raw = |name: &String| {
+        refused
+            .iter()
+            .find(|(refused, _)| refused == name)
+            .map(|(_, raw)| *raw)
+    };
+    let accepted: Vec<String> = catalog
+        .iter()
+        .filter(|name| refused_raw(name).is_none())
+        .cloned()
+        .collect();
+    let mut encoder = encoder_of(ArgType::Enum(accepted), shape);
+    encoder.through = through;
+    encoder.unaccepted = catalog
+        .iter()
+        .enumerate()
+        .filter_map(|(position, name)| {
+            refused_raw(name).map(|raw| Unaccepted {
+                name: name.clone(),
+                position,
+                raw,
+            })
+        })
+        .collect();
+    encoder
 }
 
 pub(super) fn length_field() -> BoxedStrategy<Len> {

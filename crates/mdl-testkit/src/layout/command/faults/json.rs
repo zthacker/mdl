@@ -763,18 +763,29 @@ fn refused_raws(encoder: &Encoder, shape: &Shape) -> Vec<(Canon, &'static str)> 
     };
     match (&encoder.ty, &encoder.through) {
         (ArgType::Enum(_), Through::States(states)) => {
-            let listed: Vec<i128> = states.iter().map(|(raw, _)| *raw).collect();
+            let unaccepted = encoder.unaccepted.iter().filter_map(|state| state.raw);
+            let listed: Vec<i128> = states
+                .iter()
+                .map(|(raw, _)| *raw)
+                .chain(unaccepted)
+                .collect();
             let unlisted = held
                 .clone()
                 .and_then(|range| range.take(64).find(|raw| !listed.contains(raw)));
             raws.extend(unlisted.and_then(integer).map(|raw| (raw, "unknown_state")));
+            if let Some(raw) = encoder.unaccepted.iter().find_map(|state| state.raw) {
+                raws.extend(integer(raw).map(|raw| (raw, "unsupported_state")));
+            }
         }
         (ArgType::Enum(states), _) => {
-            if let Some(text) = (0..)
-                .map(|k| format!("zz{k}"))
-                .find(|text| !states.contains(text))
-            {
+            let named = |text: &String| {
+                states.contains(text) || encoder.unaccepted.iter().any(|s| &s.name == text)
+            };
+            if let Some(text) = (0..).map(|k| format!("zz{k}")).find(|text| !named(text)) {
                 raws.push((Canon::Str(text), "unknown_state"));
+            }
+            if let Some(state) = encoder.unaccepted.first() {
+                raws.push((Canon::Str(state.name.clone()), "unsupported_state"));
             }
         }
         (ArgType::Bool, _) => raws.extend(integer(2).map(|raw| (raw, "out_of_range"))),

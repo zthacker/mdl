@@ -776,6 +776,22 @@ struct Encoder {
     limits: Limits,
     shape: Shape,
     through: Through,
+    /// An enum argument's states the catalog lists and the packet doesn't
+    /// accept (IR 2.3), in catalog order; `ty` has those it does, in the
+    /// same order. The packet then lists its own in `states`, and a field
+    /// through states gives these raw values too, so decoding one is
+    /// refused.
+    unaccepted: Vec<Unaccepted>,
+}
+
+/// A state the catalog lists that the packet doesn't accept: its position
+/// among the catalog's states, and for an argument through states, its raw
+/// value in the field's conversion.
+#[derive(Debug, Clone, PartialEq)]
+struct Unaccepted {
+    name: String,
+    position: usize,
+    raw: Option<i128>,
 }
 
 impl Encoder {
@@ -813,6 +829,7 @@ fn encoder_of(ty: ArgType, shape: Shape) -> Encoder {
         limits: Limits::Catalog,
         shape,
         through: Through::Plain,
+        unaccepted: Vec::new(),
     }
 }
 

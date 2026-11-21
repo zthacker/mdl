@@ -239,9 +239,14 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                 }
                 // Some arguments the packet encodes have their range and
                 // default in the packet (IR 2.2), and none in the catalog.
+                // A packet accepts fewer of an enum's states (IR 2.3) only
+                // for an argument it encodes.
                 for ((encoder, encoded), &(packet, unit, wider)) in
                     arguments.iter_mut().zip(limits.iter().cycle())
                 {
+                    if !*encoded {
+                        encoder.unaccepted.clear();
+                    }
                     if packet && *encoded && encoder.has_limits() {
                         encoder.limits = Limits::Packet {
                             unit: unit && encoder.units.is_some(),

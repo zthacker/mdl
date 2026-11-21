@@ -76,7 +76,17 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
         json.insert("unit".into(), json!(unit));
     }
     if let ArgType::Enum(states) = &encoder.ty {
-        json.insert("states".into(), json!(states));
+        // With those the packet doesn't accept, each at its position.
+        let mut accepted = states.iter();
+        let catalog: Vec<&String> = (0..states.len() + encoder.unaccepted.len())
+            .filter_map(|position| {
+                match encoder.unaccepted.iter().find(|s| s.position == position) {
+                    Some(state) => Some(&state.name),
+                    None => accepted.next(),
+                }
+            })
+            .collect();
+        json.insert("states".into(), json!(catalog));
     }
     if let Some(bounds) = encoder.list {
         let ends: Map<String, Value> = [("min", bounds.min), ("max", bounds.max)]
@@ -151,20 +161,25 @@ fn limits_json(encoder: &Encoder, json: &mut Map<String, Value>) {
     }
 }
 
-/// The packet's own limits (IR 2.2): each argument whose range and
-/// default are written there, restating its unit where it says to.
+/// The packet's own limits: each argument whose range and default are
+/// written there (IR 2.2), restating its unit where it says to, and the
+/// states it accepts of an enum whose catalog lists more (IR 2.3).
 fn packet_arguments(layout: &Layout) -> Map<String, Value> {
     let mut arguments = Map::new();
     for (index, (encoder, _)) in layout.arguments.iter().enumerate() {
-        let Limits::Packet { unit, .. } = encoder.limits else {
-            continue;
-        };
         let mut json = Map::new();
-        if let (true, Some((own, _))) = (unit, encoder.units) {
-            json.insert("unit".into(), json!(own));
+        if let Limits::Packet { unit, .. } = encoder.limits {
+            if let (true, Some((own, _))) = (unit, encoder.units) {
+                json.insert("unit".into(), json!(own));
+            }
+            limits_json(encoder, &mut json);
         }
-        limits_json(encoder, &mut json);
-        arguments.insert(format!("a{index}"), Value::Object(json));
+        if let (ArgType::Enum(states), false) = (&encoder.ty, encoder.unaccepted.is_empty()) {
+            json.insert("states".into(), json!(states));
+        }
+        if !json.is_empty() {
+            arguments.insert(format!("a{index}"), Value::Object(json));
+        }
     }
     arguments
 }
@@ -394,7 +409,20 @@ fn through_json(json: &mut Map<String, Value>, encoder: &Encoder) {
     match &encoder.through {
         Through::Plain => {}
         Through::States(states) => {
-            let states: Vec<Value> = states
+            // With the raw values of the states the packet doesn't accept,
+            // which decoding names and then refuses.
+            let mut listed: Vec<(i128, &str)> = states
+                .iter()
+                .map(|(raw, name)| (*raw, name.as_str()))
+                .collect();
+            listed.extend(
+                encoder
+                    .unaccepted
+                    .iter()
+                    .filter_map(|state| state.raw.map(|raw| (raw, state.name.as_str()))),
+            );
+            listed.sort();
+            let states: Vec<Value> = listed
                 .iter()
                 .map(|(raw, name)| json!({ "raw": integer_json(*raw), "name": name }))
                 .collect();

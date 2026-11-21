@@ -403,6 +403,13 @@ pub(super) fn command_spec() -> BoxedStrategy<CommandSpec> {
                         arguments[*member].0.default = list.map(as_literal);
                     }
                 }
+                // A packet accepts fewer of an enum's states (IR 2.3) only
+                // for an argument it encodes.
+                for (encoder, encoded) in &mut arguments {
+                    if !*encoded {
+                        encoder.unaccepted.clear();
+                    }
+                }
                 CommandSpec {
                     arguments,
                     items,

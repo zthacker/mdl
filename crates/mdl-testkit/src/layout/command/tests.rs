@@ -660,7 +660,7 @@ enum RefusedRoute {
 }
 
 impl RefusedRoute {
-    const ALL: [RefusedRoute; 23] = [
+    const ALL: [RefusedRoute; 24] = [
         RefusedRoute::TwoFaults,
         RefusedRoute::LengthField,
         RefusedRoute::RawRangeArgument,
@@ -670,6 +670,7 @@ impl RefusedRoute {
         RefusedRoute::ListValue("wrong_type"),
         RefusedRoute::ListValue("non_finite"),
         RefusedRoute::ListValue("unknown_state"),
+        RefusedRoute::ListValue("unsupported_state"),
         RefusedRoute::ListValue("out_of_range"),
         RefusedRoute::Element("raw_range"),
         RefusedRoute::Element("invalid_text"),
@@ -1261,6 +1262,7 @@ fn json_faults_reach_every_code() {
         "wrong_type",
         "non_finite",
         "unknown_state",
+        "unsupported_state",
         "out_of_range",
         "not_default",
         "raw_range",
@@ -1294,6 +1296,7 @@ fn json_faults_reach_every_code() {
             RefusedRoute::ListValue("wrong_type"),
             RefusedRoute::ListValue("non_finite"),
             RefusedRoute::ListValue("unknown_state"),
+            RefusedRoute::ListValue("unsupported_state"),
             RefusedRoute::ListValue("out_of_range"),
             RefusedRoute::BadCountRecords,
             RefusedRoute::OneValueForList,
@@ -1313,6 +1316,7 @@ fn json_faults_reach_every_code() {
             "out_of_range",
             "wrong_constant",
             "unknown_state",
+            "unsupported_state",
             "list_length",
         ]
         .map(Reached::Garbled),
@@ -1326,8 +1330,10 @@ fn json_faults_reach_every_code() {
     required.extend(
         [
             (GarbledKind::Raw, "unknown_state"),
+            (GarbledKind::Raw, "unsupported_state"),
             (GarbledKind::Raw, "out_of_range"),
             (GarbledKind::Element, "unknown_state"),
+            (GarbledKind::Element, "unsupported_state"),
             (GarbledKind::Element, "out_of_range"),
             (GarbledKind::Null, "wrong_type"),
             (GarbledKind::Constant, "wrong_constant"),
@@ -1403,7 +1409,7 @@ fn faults_reach_every_code() {
     let strategy = commands();
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
-    for _ in 0..1000 {
+    for _ in 0..1500 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         let framed = case.bundle["families"][0].get("metadata").is_some();
         for refused in &case.refused {
@@ -1434,6 +1440,7 @@ fn faults_reach_every_code() {
         "wrong_type",
         "non_finite",
         "unknown_state",
+        "unsupported_state",
         "out_of_range",
         "not_default",
         "raw_range",
@@ -1457,6 +1464,7 @@ fn faults_reach_every_code() {
             "bad_checksum",
             "wrong_constant",
             "unknown_state",
+            "unsupported_state",
             "out_of_range",
             "non_finite",
             "past_end",
@@ -1475,6 +1483,7 @@ fn faults_reach_every_code() {
     required.extend(
         [
             (GarbledKind::Element, "unknown_state"),
+            (GarbledKind::Element, "unsupported_state"),
             (GarbledKind::Element, "out_of_range"),
             (GarbledKind::Element, "non_finite"),
             (GarbledKind::Count, "bad_length"),

@@ -854,13 +854,22 @@ fn refused_raws(encoder: &Encoder, shape: &Shape) -> Vec<(u64, &'static str)> {
         range.contains(&n).then(|| shape.int_bits(n, bits))
     };
     match (&encoder.ty, &encoder.through) {
-        // A state's raw value the conversion doesn't list.
+        // A state's raw value the conversion doesn't list, and one it lists
+        // for a state the packet doesn't accept.
         (ArgType::Enum(_), Through::States(states)) => {
-            let listed: Vec<i128> = states.iter().map(|(raw, _)| *raw).collect();
+            let unaccepted = encoder.unaccepted.iter().filter_map(|state| state.raw);
+            let listed: Vec<i128> = states
+                .iter()
+                .map(|(raw, _)| *raw)
+                .chain(unaccepted)
+                .collect();
             if let Some(range) = held.clone()
                 && let Some(unlisted) = range.take(64).find(|raw| !listed.contains(raw))
             {
                 raws.extend(integer(unlisted).map(|raw| (raw, "unknown_state")));
+            }
+            if let Some(raw) = encoder.unaccepted.iter().find_map(|state| state.raw) {
+                raws.extend(integer(raw).map(|raw| (raw, "unsupported_state")));
             }
         }
         // 2, which no bool is.

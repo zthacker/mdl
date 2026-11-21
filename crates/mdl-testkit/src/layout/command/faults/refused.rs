@@ -1057,6 +1057,15 @@ fn argument_faults(encoder: &Encoder) -> Vec<(BoxedStrategy<Given>, &'static str
         }
         ArgType::Enum(_) => {
             faults.push((Just(Given::Text("NOPE".into())).boxed(), "unknown_state"));
+            // A state of the catalog's that the packet doesn't accept.
+            if !encoder.unaccepted.is_empty() {
+                let names: Vec<Given> = encoder
+                    .unaccepted
+                    .iter()
+                    .map(|state| Given::Text(state.name.clone()))
+                    .collect();
+                faults.push((select(names).boxed(), "unsupported_state"));
+            }
         }
         _ => {}
     }
