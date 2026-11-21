@@ -1,5 +1,5 @@
 {
-  "mdl_version": "2.2",
+  "mdl_version": "2.3",
   "catalog": {
     "params": {
       "eps.bus_current": {
@@ -56,7 +56,7 @@
       "eps.set_mode": {
         "description": "Switch the power system's mode",
         "arguments": [
-          { "name": "mode", "type": "enum", "states": ["SAFE", "NOMINAL"] },
+          { "name": "mode", "type": "enum", "states": ["SAFE", "NOMINAL", "PAYLOAD"] },
           {
             "name": "delay_s",
             "type": "f64",
@@ -379,6 +379,9 @@
           "name": "SET_MODE",
           "canonical": "eps.set_mode",
           "metadata": { "apid": 300 },
+          "arguments": {
+            "mode": { "states": ["SAFE", "NOMINAL"] }
+          },
           "entries": [
             { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 26 },
             {
@@ -569,6 +572,9 @@
         {
           "name": "SET_MODE",
           "canonical": "eps.set_mode",
+          "arguments": {
+            "mode": { "states": ["SAFE", "NOMINAL"] }
+          },
           "entries": [
             {
               "kind": "field",
@@ -577,7 +583,11 @@
               "size_bits": 8,
               "conversion": {
                 "kind": "states",
-                "states": [{ "raw": 0, "name": "SAFE" }, { "raw": 1, "name": "NOMINAL" }]
+                "states": [
+                  { "raw": 0, "name": "SAFE" },
+                  { "raw": 1, "name": "NOMINAL" },
+                  { "raw": 2, "name": "PAYLOAD" }
+                ]
               },
               "argument": "mode"
             },

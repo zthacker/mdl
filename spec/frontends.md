@@ -179,6 +179,7 @@ Each minor version adds features and changes nothing before it:
 | 2.0 | The IR. |
 | 2.1 | `signed` on an `int` field or scalar element: `sign_magnitude` or `ones_complement` (`decoding.md` §2.1). |
 | 2.2 | `arguments` on a command packet: what it accepts of the arguments it encodes (`encoding.md` §2.6). |
+| 2.3 | `states` on a command packet's argument: the enum states it accepts (`encoding.md` §2.6). |
 
 - A bundle MUST state at least the version of every feature it uses, so a
   document that says 2.0 means what a 2.0 reader understands
@@ -187,8 +188,8 @@ Each minor version adds features and changes nothing before it:
   version its file states is an error there, whatever the other files
   state (`toml.md`).
 - An artifact MUST state exactly the lowest version that reads it: a set
-  that uses a 2.1 feature says 2.1, one that uses a 2.2 feature 2.2,
-  and every other artifact 2.0. What an
+  that uses a 2.1 feature says 2.1, one that uses a 2.2 feature 2.2, one
+  that uses a 2.3 feature 2.3, and every other artifact 2.0. What an
   artifact uses decides its version, never the version of the build that
   writes it, and a feature's version never changes. A reader refuses an
   artifact that states less than it uses [`feature_version`] or more than

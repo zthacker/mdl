@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 
 use crate::encode::{
     ArgumentProblem, ArgumentValue, CommandRequest, allowed, allowed_count, compare, default_of,
-    raw_unchecked,
+    raw_unchecked, unsupported,
 };
 use crate::ir::{
     Argument, ArrayEntry, CommandPacket, Conversion, Digest, Element, Entry, Field, ParamType,
@@ -143,8 +143,8 @@ impl FamilySets {
             .get(&packet.canonical)
             .ok_or_else(|| invalid("a command the catalog has"))?;
         let binary = self.byte_order().is_some();
-        // Ranges and defaults as the packet takes them; names are the
-        // catalog's either way.
+        // Ranges, states and defaults as the packet takes them; names are
+        // the catalog's either way.
         let narrowed = packet
             .arguments_of(command)
             .map_err(|_| invalid("argument limits validation accepts"))?;
@@ -155,7 +155,7 @@ impl FamilySets {
             let refused = |problem| CommandDecodeError::Argument {
                 command: packet.canonical.clone(),
                 argument: argument.name.clone(),
-                problem,
+                problem: unsupported(problem, listed, argument),
             };
             let value = match encoder(packet, &loaded.set.types, &argument.name) {
                 Some(Encoder::Field(field)) => {

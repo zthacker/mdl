@@ -77,7 +77,7 @@ fn absent_values_are_omitted_not_written_as_null() {
     );
     assert_eq!(
         serde_json::to_value(Bundle::new(Catalog::default())).unwrap(),
-        json!({ "mdl_version": "2.2", "catalog": {} })
+        json!({ "mdl_version": IrVersion::CURRENT.to_string(), "catalog": {} })
     );
     assert_eq!(
         serde_json::to_value(Count::remaining()).unwrap(),
@@ -99,7 +99,8 @@ fn readers_accept_null_for_absent_values_and_empty_collections() {
     assert!(field.invalid.is_empty());
 
     let bundle: Bundle = serde_json::from_value(json!({
-        "mdl_version": "2.2", "catalog": { "params": null }, "families": null, "sets": null
+        "mdl_version": IrVersion::CURRENT.to_string(), "catalog": { "params": null },
+        "families": null, "sets": null
     }))
     .unwrap();
     assert_eq!(bundle, Bundle::new(Catalog::default()));
@@ -871,6 +872,9 @@ fn a_packet_narrows_an_argument_in_the_arguments_unit() {
             json!({ "range": { "min": 4000 } }),
             NarrowError::Disjoint,
         ),
+        (&delay, json!({ "states": ["A"] }), NarrowError::NotEnum),
+        (&mode, json!({ "states": [] }), NarrowError::NoStates),
+        (&mode, json!({ "states": ["B"] }), NarrowError::UnknownState),
     ] {
         assert_eq!(
             argument.narrowed(&limits(packet.clone())),
@@ -878,6 +882,34 @@ fn a_packet_narrows_an_argument_in_the_arguments_unit() {
             "{packet}"
         );
     }
+}
+
+#[test]
+fn a_packet_narrows_an_enum_to_the_states_it_accepts() {
+    let mode = argument(json!({
+        "name": "mode", "type": "enum", "states": ["SAFE", "NOMINAL", "DETUMBLE"],
+        "default": "SAFE"
+    }));
+    // In the catalog's order, whatever the packet's (which validation
+    // holds to the catalog's).
+    let narrowed = mode
+        .narrowed(&limits(json!({ "states": ["DETUMBLE", "SAFE"] })))
+        .unwrap();
+    assert_eq!(narrowed.states, ["SAFE", "DETUMBLE"]);
+    assert_eq!(narrowed.default, mode.default);
+    let narrowed = mode
+        .narrowed(&limits(
+            json!({ "states": ["NOMINAL", "DETUMBLE"], "default": "NOMINAL" }),
+        ))
+        .unwrap();
+    assert_eq!(narrowed.states, ["NOMINAL", "DETUMBLE"]);
+    assert_eq!(narrowed.default, Some(Literal::Str("NOMINAL".to_string())));
+    // Absent, every state is accepted; empty is refused, not read as that.
+    assert_eq!(
+        mode.narrowed(&limits(json!({}))).unwrap().states,
+        mode.states
+    );
+    assert_eq!(limits(json!({ "states": [] })).states, Some(Vec::new()));
 }
 
 #[test]
@@ -954,6 +986,19 @@ fn a_set_needs_the_version_of_its_newest_feature() {
         (need.pointer.as_str(), need.version),
         ("/commands/0/arguments", IrVersion::new(2, 2))
     );
+    // A packet's states (2.3), after the arguments that hold them.
+    let mut packet = CommandPacket::new("D", "d", Vec::new());
+    packet
+        .arguments
+        .insert("mode".to_string(), limits(json!({ "states": ["A"] })));
+    set.commands.push(packet);
+    let features: Vec<&str> = set.needs().iter().map(|need| need.feature).collect();
+    assert_eq!(features, ["signed", "arguments", "arguments", "states"]);
+    let need = set.need().unwrap();
+    assert_eq!(
+        (need.pointer.as_str(), need.version),
+        ("/commands/1/arguments/mode/states", IrVersion::new(2, 3))
+    );
 }
 
 mod narrowing {
@@ -973,6 +1018,28 @@ mod narrowing {
     }
 
     proptest! {
+        #[test]
+        fn a_narrowed_enum_takes_the_states_both_list(
+            accepted in proptest::collection::btree_set(0usize..5, 1..=5),
+            order in Just((0usize..5).collect::<Vec<_>>()).prop_shuffle(),
+        ) {
+            let states: Vec<String> = (0..5).map(|k| format!("S{k}")).collect();
+            let mut argument = Argument::new("e", ParamType::Enum);
+            argument.states = states.clone();
+            // The packet's list in any order: narrowing keeps the catalog's.
+            let mut packet = PacketArgument::new();
+            packet.states = Some(
+                order
+                    .iter()
+                    .filter(|k| accepted.contains(k))
+                    .map(|k| states[*k].clone())
+                    .collect(),
+            );
+            let narrowed = argument.narrowed(&packet).unwrap();
+            let expected: Vec<String> = accepted.iter().map(|k| states[*k].clone()).collect();
+            prop_assert_eq!(narrowed.states, expected);
+        }
+
         #[test]
         fn a_narrowed_range_allows_what_both_ranges_allow(
             ours in (option::of(-20i64..20), option::of(-20i64..20)),

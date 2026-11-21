@@ -26,8 +26,9 @@ pub mod shape;
 use serde_json::Value;
 
 /// The IR version a bundle's sets need, which it states as a document
-/// does: 2.2 if a command packet has `arguments` of its own (a map, where
-/// a catalog command's are a list), 2.1 if a `signed` key is anywhere in
+/// does: 2.3 if a command packet's argument lists the states it accepts,
+/// 2.2 if a command packet has `arguments` of its own (a map, where a
+/// catalog command's are a list), 2.1 if a `signed` key is anywhere in
 /// them, else 2.0.
 pub(crate) fn version_for(sets: &Value) -> &'static str {
     fn uses(value: &Value, key: &str, holds: fn(&Value) -> bool) -> bool {
@@ -39,7 +40,17 @@ pub(crate) fn version_for(sets: &Value) -> &'static str {
             _ => false,
         }
     }
-    if uses(sets, "arguments", Value::is_object) {
+    // A command packet's argument that lists the states it accepts.
+    let accepts_states = |arguments: &Value| {
+        arguments.as_object().is_some_and(|arguments| {
+            arguments
+                .values()
+                .any(|limits| limits.get("states").is_some())
+        })
+    };
+    if uses(sets, "arguments", accepts_states) {
+        "2.3"
+    } else if uses(sets, "arguments", Value::is_object) {
         "2.2"
     } else if uses(sets, "signed", |_| true) {
         "2.1"

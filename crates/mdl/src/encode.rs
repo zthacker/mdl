@@ -258,6 +258,16 @@ pub enum ArgumentProblem {
     NonFinite { given: String },
     #[error("{given:?} isn't one of its states")]
     UnknownState { given: String },
+    /// One of the catalog's states that the set's packet doesn't accept
+    /// (IR 2.3), with those it does, in the catalog's order.
+    #[error(
+        "the set doesn't accept state {given:?}; it accepts {}",
+        state_list(accepted)
+    )]
+    UnsupportedState {
+        given: String,
+        accepted: Vec<String>,
+    },
     /// Decoding: a raw value its field's states don't list.
     #[error("raw value {raw} names none of its states")]
     NoState { raw: String },
@@ -297,6 +307,7 @@ impl ArgumentProblem {
             ArgumentProblem::UnknownState { .. } | ArgumentProblem::NoState { .. } => {
                 "unknown_state"
             }
+            ArgumentProblem::UnsupportedState { .. } => "unsupported_state",
             ArgumentProblem::OutOfRange { .. }
             | ArgumentProblem::RawOutOfRange { .. }
             | ArgumentProblem::OutsideCalibration { .. } => "out_of_range",
@@ -351,6 +362,16 @@ impl FieldProblem {
             FieldProblem::TargetType { .. } => "target_type",
             FieldProblem::Layout(_) => "invalid_layout",
         }
+    }
+}
+
+/// States in words, quoted: `only "SAFE"`, `"SAFE" and "NOMINAL"`.
+fn state_list(states: &[String]) -> String {
+    let quoted: Vec<String> = states.iter().map(|state| format!("{state:?}")).collect();
+    match quoted.as_slice() {
+        [] => "none".to_string(),
+        [one] => format!("only {one}"),
+        [first @ .., last] => format!("{} and {last}", first.join(", ")),
     }
 }
 
@@ -466,8 +487,8 @@ fn check_arguments<'a>(
         }
     }
     let encoded = encoded_arguments(packet, types);
-    // Ranges and defaults as the packet takes them; names and units are
-    // the catalog's either way.
+    // Ranges, states and defaults as the packet takes them; names and
+    // units are the catalog's either way.
     let narrowed = packet
         .arguments_of(command)
         .map_err(|_| EncodeError::Field {
@@ -489,7 +510,7 @@ fn check_arguments<'a>(
         let value = match (given.get(argument.name.as_str()), &default) {
             (Some(value), _) => check_given(narrowed, value).map_err(|problem| {
                 let problem = in_set(problem, argument, value, &request.set);
-                error(&argument.name, problem)
+                error(&argument.name, unsupported(problem, argument, narrowed))
             })?,
             (None, Some(default)) => {
                 defaulted.push(argument.name.as_str());
@@ -750,6 +771,30 @@ fn check(argument: &Argument, value: &ArgumentValue) -> Result<Checked, Argument
         _ => {}
     }
     Ok(checked)
+}
+
+/// A state the catalog has that a set's packet doesn't accept is
+/// `unsupported_state`, naming those it does, not `unknown_state`, which is
+/// for a name the catalog doesn't have; a list's value is named by its
+/// index either way. `narrowed` is the argument as the packet takes it.
+pub(crate) fn unsupported(
+    problem: ArgumentProblem,
+    catalog: &Argument,
+    narrowed: &Argument,
+) -> ArgumentProblem {
+    match problem {
+        ArgumentProblem::UnknownState { given } if catalog.states.contains(&given) => {
+            ArgumentProblem::UnsupportedState {
+                given,
+                accepted: narrowed.states.clone(),
+            }
+        }
+        ArgumentProblem::Item { index, problem } => ArgumentProblem::Item {
+            index,
+            problem: Box::new(unsupported(*problem, catalog, narrowed)),
+        },
+        problem => problem,
+    }
 }
 
 /// A value outside the range a set's packet narrows the argument to, which

@@ -89,7 +89,7 @@ pub struct IrVersion {
 
 impl IrVersion {
     /// The newest version this build reads and writes.
-    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 2 };
+    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 3 };
 
     /// IR 2.0, which has every feature but those a [`Need`] names.
     pub const V2_0: IrVersion = IrVersion { major: 2, minor: 0 };
@@ -810,10 +810,10 @@ impl Argument {
     }
 
     /// The argument as one command packet takes it (IR 2.2): its range
-    /// narrowed to the values the packet's allows too, and the packet's
-    /// default in place of its own, both in the argument's unit. An error
-    /// when the packet's values aren't ones it can take, which validation
-    /// refuses.
+    /// narrowed to the values the packet's allows too, its states to those
+    /// the packet accepts (IR 2.3), and the packet's default in place of
+    /// its own, both in the argument's unit. An error when the packet's
+    /// values aren't ones it can take, which validation refuses.
     pub fn narrowed(&self, packet: &PacketArgument) -> Result<Argument, NarrowError> {
         let units = match (packet.unit.as_deref(), self.unit.as_deref()) {
             (None, _) => None,
@@ -874,6 +874,24 @@ impl Argument {
                 _ => return Err(NarrowError::End),
             });
         }
+        if let Some(states) = &packet.states {
+            if self.ty != ParamType::Enum {
+                return Err(NarrowError::NotEnum);
+            }
+            if states.is_empty() {
+                return Err(NarrowError::NoStates);
+            }
+            if states.iter().any(|state| !self.states.contains(state)) {
+                return Err(NarrowError::UnknownState);
+            }
+            // In the catalog's order, whatever the packet's.
+            narrowed.states = self
+                .states
+                .iter()
+                .filter(|state| states.contains(state))
+                .cloned()
+                .collect();
+        }
         if let Some(default) = &packet.default {
             let number = |value: &Literal| {
                 let x = value.as_number().ok_or(NarrowError::DefaultNotNumber)?;
@@ -920,6 +938,15 @@ pub enum NarrowError {
     /// The two ranges share no value.
     #[error("their range shares no value with the argument's")]
     Disjoint,
+    /// States on an argument that isn't an enum.
+    #[error("only an enum argument has states")]
+    NotEnum,
+    /// An empty list of states, which would accept nothing.
+    #[error("they list no state")]
+    NoStates,
+    /// A state the argument doesn't have.
+    #[error("a state isn't one of the argument's")]
+    UnknownState,
 }
 
 /// Why a command packet's limits can't narrow its command's arguments
@@ -1304,7 +1331,8 @@ impl Set {
 
     /// Every use of a feature newer than IR 2.0 in the set: in its struct
     /// types, by name, then its packets, then its command packets (each
-    /// one's `arguments` before its entries), each in entry order.
+    /// one's `arguments`, then the features of each of them by name, before
+    /// its entries), each in entry order.
     pub fn needs(&self) -> Vec<Need> {
         let mut needs = Vec::new();
         for (name, ty) in &self.types {
@@ -1321,6 +1349,16 @@ impl Set {
                     feature: "arguments",
                     version: IrVersion::new(2, 2),
                 });
+            }
+            for (name, limits) in &packet.arguments {
+                if limits.states.is_some() {
+                    let name = crate::diagnostics::escape_pointer_token(name);
+                    needs.push(Need {
+                        pointer: format!("/commands/{index}/arguments/{name}/states"),
+                        feature: "states",
+                        version: IrVersion::new(2, 3),
+                    });
+                }
             }
             signed_needs(&format!("/commands/{index}"), &packet.entries, &mut needs);
         }
@@ -1354,7 +1392,8 @@ fn signed_needs(container: &str, entries: &[Entry], needs: &mut Vec<Need>) {
 pub struct Need {
     /// A JSON Pointer to it within the set.
     pub pointer: String,
-    /// Its key: `signed` (2.1) or `arguments` (2.2).
+    /// Its key: `signed` (2.1), `arguments` (2.2) or a packet argument's
+    /// `states` (2.3).
     pub feature: &'static str,
     /// The lowest version that has it.
     pub version: IrVersion,
@@ -1627,6 +1666,12 @@ pub struct PacketArgument {
     /// Numeric arguments: the values the packet accepts, inclusive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub range: Option<ArgumentRange>,
+    /// Enum arguments: the catalog's states the packet accepts, in the
+    /// catalog's order (IR 2.3). Absent, it accepts every one. An empty
+    /// list is kept apart from an absent one, so that validation refuses
+    /// it rather than reading it as no limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub states: Option<Vec<String>>,
     /// The value used when a request leaves the argument out, in place of
     /// the catalog's: a list of values for a list argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]

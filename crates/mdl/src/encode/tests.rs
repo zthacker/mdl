@@ -277,11 +277,116 @@ fn errors_name_the_command_and_what_went_wrong() {
 /// half of one when left out (IR 2.2), in minutes.
 fn limited() -> Json {
     let mut bundle = fixture();
-    bundle["mdl_version"] = json!("2.2");
-    bundle["sets"][0]["commands"][1]["arguments"] = json!({
-        "delay_s": { "unit": "min", "range": { "max": 1 }, "default": 0.5 }
-    });
+    bundle["sets"][0]["commands"][1]["arguments"]["delay_s"] =
+        json!({ "unit": "min", "range": { "max": 1 }, "default": 0.5 });
     bundle
+}
+
+#[test]
+fn a_packet_sends_only_the_states_it_accepts() {
+    // eps.set_mode has PAYLOAD, which vendor X's and legacy_v1's packets
+    // don't accept (IR 2.3) and vendor J's string field writes.
+    let payload = |set: &str| set_mode(set).with_argument("mode", "PAYLOAD");
+    let refused = sets_of(&fixture(), "vendor_x")
+        .encode(&payload("vendor_x_v2"))
+        .unwrap_err();
+    assert_eq!(refused.code(), "unsupported_state");
+    assert_eq!(
+        refused.to_string(),
+        "command eps.set_mode, argument mode: the set doesn't accept state \"PAYLOAD\"; it \
+         accepts \"SAFE\" and \"NOMINAL\""
+    );
+    // A name the catalog doesn't have is still unknown.
+    let unknown = sets_of(&fixture(), "vendor_x")
+        .encode(&set_mode("vendor_x_v2").with_argument("mode", "SCIENCE"))
+        .unwrap_err();
+    assert_eq!(unknown.code(), "unknown_state");
+    let json = sets_of(&fixture(), "vendor_j");
+    let sent = json.encode(&payload("vendor_j_v1")).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&sent.payload),
+        r#"{"args":{"delay":0,"mode":"PAYLOAD"},"op":"set_mode"}"#
+    );
+    // legacy_v1's field gives PAYLOAD raw value 2, which decodes to the
+    // state and is then refused.
+    let legacy = sets_of(&fixture(), "legacy");
+    let mut command = vec![2];
+    command.extend_from_slice(b"box-1\0");
+    let parity = command.iter().fold(0u8, |acc, byte| acc ^ byte);
+    command.push(parity);
+    let sum = command.iter().map(|byte| u16::from(*byte)).sum::<u16>();
+    command.extend_from_slice(&sum.to_le_bytes());
+    let refused = legacy
+        .decode_command("legacy_v1", &binary(&command))
+        .unwrap_err();
+    assert_eq!(refused.code(), "unsupported_state");
+    assert_eq!(
+        refused.to_string(),
+        "command eps.set_mode, argument mode: the set doesn't accept state \"PAYLOAD\"; it \
+         accepts \"SAFE\" and \"NOMINAL\""
+    );
+    command[0] = 1;
+    let parity = command[..7].iter().fold(0u8, |acc, byte| acc ^ byte);
+    command[7] = parity;
+    let sum = command[..8]
+        .iter()
+        .map(|byte| u16::from(*byte))
+        .sum::<u16>();
+    command[8..].copy_from_slice(&sum.to_le_bytes());
+    assert!(
+        legacy
+            .decode_command("legacy_v1", &binary(&command))
+            .is_ok()
+    );
+}
+
+#[test]
+fn a_list_of_states_is_checked_value_by_value_against_those_accepted() {
+    let bundle = json!({
+        "mdl_version": "2.3",
+        "catalog": { "commands": { "lab.modes": { "arguments": [
+            { "name": "modes", "type": "enum", "states": ["A", "B", "C"],
+              "list": { "max": 3 }, "default": ["A"] }
+        ] } } },
+        "families": [{ "name": "lab", "encoding": "binary", "byte_order": "big",
+                       "alias": { "kind": "fixed", "value": "lab-1" } }],
+        "sets": [{ "name": "lab_v1", "family": "lab", "commands": [{
+            "name": "MODES", "canonical": "lab.modes",
+            "arguments": { "modes": { "states": ["A", "B"] } },
+            "entries": [
+                { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+                { "kind": "array", "name": "modes", "argument": "modes",
+                  "count": { "kind": "field", "field": "n" },
+                  "element": { "kind": "scalar", "type": "uint", "size_bits": 8,
+                               "conversion": { "kind": "states", "states": [
+                                   { "raw": 0, "name": "A" }, { "raw": 1, "name": "B" },
+                                   { "raw": 2, "name": "C" }
+                               ] } } }
+            ]
+        }] }]
+    });
+    let sets = sets_of(&bundle, "lab");
+    let modes = |values: &[&str]| {
+        CommandRequest::new("lab_v1", "lab.modes").with_argument(
+            "modes",
+            ArgumentValue::List(values.iter().map(|v| ArgumentValue::from(*v)).collect()),
+        )
+    };
+    assert_eq!(sets.encode(&modes(&["B", "A"])).unwrap().payload, [2, 1, 0]);
+    let refused = sets.encode(&modes(&["A", "C", "Z"])).unwrap_err();
+    assert_eq!(refused.code(), "unsupported_state");
+    assert_eq!(
+        refused.to_string(),
+        "command lab.modes, argument modes: value 1: the set doesn't accept state \"C\"; it \
+         accepts \"A\" and \"B\""
+    );
+    // The first value refused is the error, whichever its code.
+    assert_eq!(
+        sets.encode(&modes(&["Z", "C"])).unwrap_err().code(),
+        "unknown_state"
+    );
+    let decoded = sets.decode_command("lab_v1", &binary(&[2, 1, 2]));
+    assert_eq!(decode_code(decoded), "unsupported_state");
 }
 
 #[test]

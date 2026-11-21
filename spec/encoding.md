@@ -61,7 +61,7 @@ number.
 | `bool` | a bool |
 | `str` | text |
 | `bytes` | bytes |
-| `enum` | text naming one of its states [`unknown_state`] |
+| `enum` | text naming one of its states [`unknown_state`] that the packet accepts (§2.6) [`unsupported_state`] |
 
 Anything else is [`wrong_type`]. A double for an `f64` argument MUST be
 finite [`non_finite`].
@@ -123,7 +123,8 @@ sent: a list equal to it value by value, in order.
 A command packet MAY narrow what it accepts of the arguments it encodes
 (`arguments`, IR 2.2), as a vendor's packet under a fleet's catalog does:
 by argument name, a `range`, a `default` or both, in `unit`, the
-argument's when it's left out.
+argument's when it's left out, and for an enum argument the `states` it
+accepts (IR 2.3).
 
 - A value is checked against the catalog's range and the packet's, so
   it MUST lie within both [`out_of_range`], whose message names the
@@ -131,6 +132,17 @@ argument's when it's left out.
   allow the value, says that range is the set's and gives the catalog's.
   A packet range wider than the catalog's narrows nothing. A list
   argument's values are each checked.
+- An enum argument's `states` are those of the catalog's states the
+  packet accepts, as a vendor whose flight software lacks a mode does. A
+  state the catalog has and the packet doesn't accept is
+  [`unsupported_state`], whose message names the states it accepts; a
+  name the catalog doesn't have is [`unknown_state`], as without them. So
+  a consumer can tell a state no asset has from one this packet doesn't.
+  A list argument's values are each checked. Listing every state isn't
+  the same as leaving `states` out: it fixes what the packet accepts, so a
+  state a later catalog adds isn't accepted there and its field needn't
+  give it a raw value, where without `states` the packet accepts every
+  state its catalog has.
 - The packet's default is the argument's default with that packet; the
   catalog's is used only where the packet gives none.
 - A `unit` other than the argument's converts the range's ends and the
@@ -139,14 +151,20 @@ argument's when it's left out.
   argument's are in its own unit.
 - Validation guarantees that each names an argument of the command
   [`unknown_argument`] that the packet encodes [`unmapped_argument`] and
-  gives a range or a default [`empty`], in a unit that converts
+  gives a range, a default or states [`empty`], in a unit that converts
   [`unit_mismatch`]; that the two ranges share a value [`value_range`];
-  and that the default the packet sends is one both ranges allow
+  that states are given only for an enum argument [`param_shape`], at
+  least one [`empty`], each one of the argument's states
+  [`unknown_state`, suggesting the closest name] listed once
+  [`duplicate_name`] and in the catalog's order [`not_sorted`], so a set
+  of states has one spelling and a set one digest; and that the default
+  the packet sends is one both ranges allow and one of its states
   [`default_value`]. Its other guarantees (§2.2, §2.5, §3.1) hold for the
   argument as the packet narrows it, so a packet that keeps an argument to
   what its field holds encodes it, whatever the catalog allows.
-- Decoding a command (§7.4) tests a value against the narrowed range,
-  and an argument the packet leaves out decodes to its default as above.
+- Decoding a command (§7.4) tests a value against the narrowed range and
+  states, and an argument the packet leaves out decodes to its default as
+  above.
 
 ## 3. Raw values
 
@@ -168,7 +186,12 @@ An argument becomes its field's raw value:
 - **unconverted:** as it is (a bool into an integer field is 0 or 1; an
   enum into a string field is the state's name);
 - **`linear`:** `(value − offset) / scale`;
-- **`states`:** the raw value listed for the state's name;
+- **`states`:** the raw value listed for the state's name. Validation
+  guarantees that the conversion names only the argument's states, each
+  once, and lists a raw value for each state the packet accepts (§2.6),
+  every state of the argument where the packet doesn't say
+  [`canonical_type`]. It may list one for a state the packet doesn't
+  accept, which decoding a command names and then refuses (§7.4);
 - **`table`** with `linear` interpolation whose values only rise or only
   fall: the table read backwards, from value to raw: its points with raw
   and value swapped (and reversed, if the values fall), as a linear table
@@ -433,7 +456,8 @@ conversion, as `decoding.md` §7.3 ranks `non_finite` above
 then its field's raw value:
 
 - through a `states` conversion, the name of the state listing the raw
-  value [`unknown_state`];
+  value [`unknown_state`], which the packet MUST accept
+  [`unsupported_state`];
 - through any other conversion, as `decoding.md` §7.1 converts it; a raw
   value outside a table's or spline's points that doesn't extrapolate is
   [`out_of_range`]; an `f64` value then converts from the field's unit
@@ -501,7 +525,7 @@ integer's one decimal spelling is that integer).
 | Code | Where |
 | --- | --- |
 | `unknown_set`, `unknown_command` | the request (§1) |
-| `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `out_of_range`, `not_default`, `list_length` | an argument (§2, §7.4); the error names it, and a list's value by its index |
+| `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `unsupported_state`, `out_of_range`, `not_default`, `list_length` | an argument (§2, §7.4); the error names it, and a list's value by its index |
 | `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length`, `bad_count` | a field or array (§3); the error names it, and an array's element by its index |
 | `no_packet`, `wrong_constant`, and the routing and entry codes of `decoding.md` | decoding a command (§7) |
 | `invalid_layout` | a definition that didn't pass validation; never for a validated one |

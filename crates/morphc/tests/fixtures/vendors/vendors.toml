@@ -1,0 +1,120 @@
+# Two vendors under one catalog. Vendor B's flight software has no
+# DETUMBLE mode, so its MODE packet accepts SAFE and NOMINAL only
+# (IR 2.3), and its effector has no pulse length, so the catalog gives
+# pulse_ms a default that vendor B's FIRE can leave out (spec/encoding.md
+# §2.4).
+
+mdl_version = "2.3"
+
+[catalog.commands."sys.set_mode"]
+[[catalog.commands."sys.set_mode".arguments]]
+name   = "mode"
+type   = "enum"
+states = ["SAFE", "NOMINAL", "DETUMBLE"]
+
+[catalog.commands."effector.fire"]
+[[catalog.commands."effector.fire".arguments]]
+name  = "target_id"
+type  = "u64"
+range = { min = 1, max = 65535 }
+[[catalog.commands."effector.fire".arguments]]
+name  = "pulse_ms"
+type  = "u64"
+range = { min = 50, max = 2000 }
+default = 200
+
+# Vendor A: all three modes, and a pulse length.
+[[families]]
+name = "vendor_a"
+encoding = "binary"
+byte_order = "big"
+alias = { kind = "fixed", value = "A-1" }
+
+[[sets]]
+name = "vendor_a"
+family = "vendor_a"
+
+[[sets.commands]]
+name = "SET_MODE"
+canonical = "sys.set_mode"
+[[sets.commands.entries]]
+kind = "field"
+name = "opcode"
+type = "uint"
+size_bits = 8
+value = 1
+[[sets.commands.entries]]
+kind = "field"
+name = "mode"
+type = "uint"
+size_bits = 8
+argument = "mode"
+conversion = { kind = "states", states = [{ raw = 0, name = "SAFE" }, { raw = 1, name = "NOMINAL" }, { raw = 2, name = "DETUMBLE" }] }
+
+[[sets.commands]]
+name = "FIRE"
+canonical = "effector.fire"
+[[sets.commands.entries]]
+kind = "field"
+name = "opcode"
+type = "uint"
+size_bits = 8
+value = 2
+[[sets.commands.entries]]
+kind = "field"
+name = "target"
+type = "uint"
+size_bits = 16
+argument = "target_id"
+[[sets.commands.entries]]
+kind = "field"
+name = "pulse"
+type = "uint"
+size_bits = 16
+argument = "pulse_ms"
+
+# Vendor B: no DETUMBLE mode, and no pulse length.
+[[families]]
+name = "vendor_b"
+encoding = "binary"
+byte_order = "little"
+alias = { kind = "fixed", value = "B-1" }
+
+[[sets]]
+name = "vendor_b"
+family = "vendor_b"
+
+[[sets.commands]]
+name = "MODE"
+canonical = "sys.set_mode"
+[sets.commands.arguments.mode]
+states = ["SAFE", "NOMINAL"]
+[[sets.commands.entries]]
+kind = "field"
+name = "opcode"
+type = "uint"
+size_bits = 8
+value = 3
+[[sets.commands.entries]]
+kind = "field"
+name = "md"
+type = "uint"
+size_bits = 8
+argument = "mode"
+conversion = { kind = "states", states = [{ raw = 0, name = "SAFE" }, { raw = 1, name = "NOMINAL" }] }
+
+[[sets.commands]]
+name = "FIRE"
+canonical = "effector.fire"
+[[sets.commands.entries]]
+kind = "field"
+name = "opcode"
+type = "uint"
+size_bits = 8
+value = 4
+[[sets.commands.entries]]
+kind = "field"
+name = "tgt"
+type = "uint"
+size_bits = 16
+argument = "target_id"

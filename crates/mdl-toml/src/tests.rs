@@ -1,4 +1,4 @@
-use mdl::ir::{Argument, RangeEnds};
+use mdl::ir::{Argument, IrVersion, RangeEnds};
 use mdl::source::{Location, Sources};
 use mdl::validate::validate;
 use proptest::prelude::*;
@@ -295,13 +295,17 @@ fn every_file_states_a_version_of_one_major() {
 
 #[test]
 fn the_bundle_has_the_highest_version_and_the_reader_checks_it() {
-    let newer = "mdl_version = \"2.3\"\n";
-    let found = errors(&[("catalog.toml", CATALOG), ("newer.toml", newer)]);
+    let next = IrVersion::new(IrVersion::CURRENT.major, IrVersion::CURRENT.minor + 1);
+    let newer = format!("mdl_version = \"{next}\"\n");
+    let found = errors(&[("catalog.toml", CATALOG), ("newer.toml", &newer)]);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].0.code, "unsupported_version");
     assert_eq!(
         found[0].1,
-        Some(("newer.toml".to_string(), location(newer, "\"2.3\"")))
+        Some((
+            "newer.toml".to_string(),
+            location(&newer, &format!("\"{next}\""))
+        ))
     );
 }
 
@@ -360,6 +364,66 @@ fn a_feature_needs_the_version_that_has_it() {
     ]);
     let parsed = read(sources.iter()).unwrap();
     assert_eq!(parsed.bundle.mdl_version.to_string(), "2.1");
+}
+
+/// The states a command packet accepts of an enum argument (2.3) need
+/// the version that has them, where they're given.
+#[test]
+fn a_command_packets_states_need_2_3() {
+    let catalog = format!(
+        "{CATALOG}\n[catalog.commands.\"eps.mode\"]\narguments = [{{ name = \"mode\", type = \"enum\", states = [\"SAFE\", \"NOMINAL\", \"PAYLOAD\"] }}]\n"
+    );
+    let command = r#"mdl_version = "2.2"
+
+[[sets]]
+name = "vendor_x_v1"
+family = "vendor_x"
+
+[[sets.commands]]
+name = "MODE"
+canonical = "eps.mode"
+arguments.mode = { states = ["SAFE", "NOMINAL"] }
+
+[[sets.commands.entries]]
+kind = "field"
+name = "mode"
+type = "uint"
+size_bits = 8
+argument = "mode"
+conversion = { kind = "states", states = [{ raw = 0, name = "SAFE" }, { raw = 1, name = "NOMINAL" }] }
+"#;
+    let found = errors(&[
+        ("catalog.toml", &catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", command),
+    ]);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(
+        found[0].0.message,
+        "states needs MDL IR 2.3, and this document states 2.2; state mdl_version \"2.3\" to \
+         use it"
+    );
+    assert_eq!(
+        found[0].1,
+        Some((
+            "set.toml".to_string(),
+            location(command, "[\"SAFE\", \"NOMINAL\"] }")
+        ))
+    );
+    let stated = command.replace("\"2.2\"", "\"2.3\"");
+    let sources = sources(&[
+        ("catalog.toml", &catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", &stated),
+    ]);
+    let parsed = read(sources.iter()).unwrap();
+    assert_eq!(parsed.bundle.mdl_version.to_string(), "2.3");
+    let packet = &parsed.bundle.sets[0].commands[0];
+    assert_eq!(
+        serde_json::to_value(&packet.arguments).unwrap(),
+        json!({ "mode": { "states": ["SAFE", "NOMINAL"] } })
+    );
+    validate(parsed.bundle).unwrap();
 }
 
 /// A command packet's own argument limits (2.2) are spelled as the IR has

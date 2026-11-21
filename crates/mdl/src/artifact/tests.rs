@@ -120,10 +120,10 @@ fn small_bundle_digests_are_stable() {
 
 /// An artifact states the lowest IR version that reads it: a set using
 /// `signed` says 2.1, one whose command packet has limits of its own 2.2,
-/// and every other artifact keeps 2.0 and its digest
-/// (`small_bundle_digests_are_stable` pins some). A reader refuses an
-/// artifact stating less than it uses, or more than it needs, and a bundle
-/// stating less than a feature it uses.
+/// one whose packet accepts some of an enum's states 2.3, and every other
+/// artifact keeps 2.0 and its digest (`small_bundle_digests_are_stable`
+/// pins some). A reader refuses an artifact stating less than it uses, or
+/// more than it needs, and a bundle stating less than a feature it uses.
 #[test]
 fn artifacts_state_the_version_they_need() {
     let artifacts = built(&fixture());
@@ -133,7 +133,9 @@ fn artifacts_state_the_version_they_need() {
     };
     assert_eq!(version(&artifacts.sets["sink_v1"]), "2.1");
     assert_eq!(version(&artifacts.sets["vendor_j_v1"]), "2.2");
-    assert_eq!(version(&artifacts.sets["vendor_x_v2"]), "2.0");
+    assert_eq!(version(&artifacts.sets["vendor_x_v2"]), "2.3");
+    assert_eq!(version(&artifacts.sets["legacy_v1"]), "2.3");
+    assert_eq!(version(&artifacts.sets["legacy_v2"]), "2.0");
     assert_eq!(version(&artifacts.families["sink"]), "2.0");
     assert_eq!(version(&artifacts.catalog), "2.0");
 
@@ -154,7 +156,12 @@ fn artifacts_state_the_version_they_need() {
         (less.code(), less.path()),
         ("feature_version", "/set/commands/0/arguments")
     );
-    let more = restated(&artifacts.sets["vendor_x_v2"], "2.0", "2.1");
+    let less = restated(&artifacts.sets["vendor_x_v2"], "2.3", "2.2");
+    assert_eq!(
+        (less.code(), less.path()),
+        ("feature_version", "/set/commands/1/arguments/mode/states")
+    );
+    let more = restated(&artifacts.sets["legacy_v2"], "2.0", "2.1");
     assert_eq!(
         (more.code(), more.path()),
         ("not_normal_form", "/mdl_version")
@@ -171,6 +178,23 @@ fn artifacts_state_the_version_they_need() {
     // The first set that needs more than the bundle states, at its newest
     // feature.
     let mut older = fixture();
+    older["mdl_version"] = json!("2.2");
+    let refused = read_bundle(older.to_string().as_bytes()).unwrap_err();
+    assert_eq!(
+        (refused.code(), refused.path()),
+        (
+            "feature_version",
+            "/sets/0/commands/1/arguments/mode/states"
+        )
+    );
+    let mut remove_arguments = |set: usize, command: usize| {
+        older["sets"][set]["commands"][command]
+            .as_object_mut()
+            .unwrap()
+            .remove("arguments");
+    };
+    remove_arguments(0, 1);
+    remove_arguments(2, 0);
     older["mdl_version"] = json!("2.1");
     let refused = read_bundle(older.to_string().as_bytes()).unwrap_err();
     assert_eq!(

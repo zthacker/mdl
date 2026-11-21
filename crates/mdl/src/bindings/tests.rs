@@ -1,6 +1,7 @@
 use proptest::prelude::*;
 
 use super::*;
+use crate::ir::IrVersion;
 use crate::read::read_bundle;
 use crate::validate::validate;
 
@@ -258,8 +259,9 @@ fn whole_file_rejections_have_codes() {
         Some("wrong_shape")
     );
     // The version is checked before anything else in the file.
+    let next = IrVersion::new(IrVersion::CURRENT.major, IrVersion::CURRENT.minor + 1);
     assert_eq!(
-        code("mdl_version = \"2.3\"\nconfidence = 0.9"),
+        code(&format!("mdl_version = \"{next}\"\nconfidence = 0.9")),
         Some("unsupported_version")
     );
     assert_eq!(code("mdl_version = 2026-01-01"), Some("invalid_version"));

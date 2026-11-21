@@ -43,10 +43,12 @@ pub(super) fn narrowed_arguments(
         .enumerate()
         .map(|(index, packet)| {
             let mut unsettled = BTreeSet::new();
+            let mut unsettled_states = BTreeSet::new();
             let Some(command) = catalog.commands.get(&packet.canonical) else {
                 return PacketArguments {
                     arguments: None,
                     unsettled,
+                    unsettled_states,
                 };
             };
             let packet_place = place.item("commands", index, "command", &packet.name);
@@ -62,14 +64,24 @@ pub(super) fn narrowed_arguments(
                 match check_packet_argument(argument, limits, encoded, &at, report) {
                     Limited::Narrowed(narrowed) => *argument = *narrowed,
                     Limited::AsCataloged => {}
-                    Limited::Unsettled => {
+                    Limited::Unsettled {
+                        states,
+                        states_sound,
+                    } => {
+                        if let Some(narrowed) = states {
+                            *argument = *narrowed;
+                        }
                         unsettled.insert(name.clone());
+                        if !states_sound {
+                            unsettled_states.insert(name.clone());
+                        }
                     }
                 }
             }
             PacketArguments {
                 arguments: Some(arguments),
                 unsettled,
+                unsettled_states,
             }
         })
         .collect()
@@ -84,6 +96,11 @@ pub(super) struct PacketArguments {
     /// encode them aren't checked against the catalog's range, which would
     /// only echo them.
     unsettled: BTreeSet<String>,
+    /// Those whose states here don't say which they are (reported): their
+    /// fields aren't checked for a raw value for each state it accepts. A
+    /// field is checked for every other argument, whatever else its limits
+    /// get wrong.
+    unsettled_states: BTreeSet<String>,
 }
 
 /// What a packet's limits make of one of its arguments.
@@ -92,8 +109,35 @@ enum Limited {
     /// The argument as the catalog has it: its problems, reported there,
     /// leave nothing to narrow.
     AsCataloged,
-    /// The limits have problems, reported here.
-    Unsettled,
+    /// The limits have problems, reported here. `states` is the argument
+    /// with only the states it accepts narrowed, when it lists sound ones;
+    /// `states_sound` is false when its list doesn't say which they are.
+    Unsettled {
+        states: Option<Box<Argument>>,
+        states_sound: bool,
+    },
+}
+
+/// Limits with problems: the argument with the states the packet accepts,
+/// when those are sound, so its field is still checked for a raw value for
+/// each.
+fn unsettled(argument: &Argument, limits: &PacketArgument, states_sound: bool) -> Limited {
+    let states = match (&limits.states, states_sound) {
+        (Some(_), true) => states_only(argument, limits).map(Box::new),
+        _ => None,
+    };
+    Limited::Unsettled {
+        states,
+        states_sound,
+    }
+}
+
+/// `argument` with only the states `limits` accepts narrowed (IR 2.3): its
+/// range and default as the catalog has them.
+fn states_only(argument: &Argument, limits: &PacketArgument) -> Option<Argument> {
+    let mut states = PacketArgument::new();
+    states.states = limits.states.clone();
+    argument.narrowed(&states).ok()
 }
 
 fn unknown_argument(
@@ -133,13 +177,21 @@ fn check_packet_argument(
             ),
         );
     }
-    if limits.range.is_none() && limits.default.is_none() {
+    if limits.range.is_none() && limits.default.is_none() && limits.states.is_none() {
         found.error(
             Code::Empty,
             place,
-            "a packet's argument gives a range, a default or both; omit it otherwise",
+            "a packet's argument gives a range, a default or the states it accepts; omit it \
+             otherwise",
         );
     }
+    if let Some(states) = &limits.states {
+        check_packet_states(argument, states, place, &mut found);
+    }
+    // The states it accepts are known unless its list is empty, names a
+    // state the catalog lacks, or is for an argument that isn't an enum: a
+    // list out of order or with a repeat still says which they are.
+    let states_sound = limits.states.is_none() || states_only(argument, limits).is_some();
     if let Some(unit) = &limits.unit {
         let at = place.key("unit");
         check_unit_code(unit, &at, &mut found);
@@ -164,14 +216,18 @@ fn check_packet_argument(
     let clean = found.is_empty();
     report.absorb(found);
     if !clean {
-        return Limited::Unsettled;
+        return unsettled(argument, limits, states_sound);
     }
     // An argument with problems of its own, reported on the catalog, isn't
-    // one to compare with.
+    // one to compare with. The states the packet accepts, checked above
+    // against the catalog's, still say which its field must send.
     let mut catalog = Report::default();
     check_argument(argument, place, &mut catalog);
     if !catalog.is_empty() {
-        return Limited::AsCataloged;
+        return match (&limits.states, states_only(argument, limits)) {
+            (Some(_), Some(narrowed)) => Limited::Narrowed(Box::new(narrowed)),
+            _ => Limited::AsCataloged,
+        };
     }
     let unit = argument.unit.as_deref().unwrap_or_default();
     let (code, key, message) = match argument.narrowed(limits) {
@@ -206,12 +262,79 @@ fn check_packet_argument(
         ),
     };
     report.error(code, &place.key(key), message);
-    Limited::Unsettled
+    unsettled(argument, limits, true)
+}
+
+/// The states a packet accepts (IR 2.3): an enum argument's, at least
+/// one, each once, in the catalog's order. The list means a set, so one
+/// order keeps one set one digest.
+fn check_packet_states(argument: &Argument, states: &[String], place: &Place, report: &mut Report) {
+    let name = &argument.name;
+    let at = place.key("states");
+    if argument.ty != ParamType::Enum {
+        report.error(
+            Code::ParamShape,
+            &at,
+            format!("only an enum argument has states, and argument {name} isn't one"),
+        );
+        return;
+    }
+    if states.is_empty() {
+        report.error(
+            Code::Empty,
+            &at,
+            "a packet's states list at least one state; leave states out to accept every state \
+             the catalog lists",
+        );
+        return;
+    }
+    // An enum the catalog lists no states for is reported there; each of
+    // these would only echo it.
+    if argument.states.is_empty() {
+        return;
+    }
+    let mut seen = BTreeSet::new();
+    // The furthest catalog position listed so far.
+    let mut furthest: Option<usize> = None;
+    for (index, state) in states.iter().enumerate() {
+        let state_place = place.at("states", index);
+        let Some(position) = argument.states.iter().position(|known| known == state) else {
+            let close = did_you_mean(state, argument.states.iter());
+            report.error(
+                Code::UnknownState,
+                &state_place,
+                format!("argument {name} has no state {state:?}{close}"),
+            );
+            continue;
+        };
+        if !seen.insert(state) {
+            report.error(
+                Code::DuplicateName,
+                &state_place,
+                format!("state {state:?} is listed twice"),
+            );
+            continue;
+        }
+        if let Some(furthest) = furthest
+            && position < furthest
+            && let Some(later) = argument.states.get(furthest)
+        {
+            report.error(
+                Code::NotSorted,
+                &state_place,
+                format!(
+                    "states are listed in the catalog's order, where {state:?} comes before \
+                     {later:?}, so one set of states has one spelling"
+                ),
+            );
+        }
+        furthest = furthest.max(Some(position));
+    }
 }
 
 /// What a packet's limits leave of `argument`, `narrowed`, if the default
 /// it sends when a request leaves the argument out is one both ranges
-/// allow.
+/// allow, and one of the states it accepts.
 fn check_narrowed_default(
     argument: &Argument,
     narrowed: Argument,
@@ -220,6 +343,23 @@ fn check_narrowed_default(
     report: &mut Report,
 ) -> Limited {
     let name = &argument.name;
+    if let Some(state) = unaccepted_default(&narrowed) {
+        let (at, message) = match &limits.default {
+            Some(_) => (
+                place.key("default"),
+                format!("the default here, {state:?}, isn't one of the states this packet accepts"),
+            ),
+            None => (
+                place.key("states"),
+                format!(
+                    "argument {name}'s default in the catalog, {state:?}, isn't one of the states \
+                     here; give a default here"
+                ),
+            ),
+        };
+        report.error(Code::DefaultValue, &at, message);
+        return unsettled(argument, limits, true);
+    }
     let mut defaults = Report::default();
     check_argument_default(&narrowed, place, &mut defaults);
     if !defaults.is_empty() {
@@ -241,9 +381,26 @@ fn check_narrowed_default(
             ),
         };
         report.error(Code::DefaultValue, &at, message);
-        return Limited::Unsettled;
+        return unsettled(argument, limits, true);
     }
     Limited::Narrowed(Box::new(narrowed))
+}
+
+/// The first state of a narrowed enum argument's default, a single value
+/// or a list's, that isn't one of the states it's narrowed to. Its own and
+/// the catalog's defaults are catalog states by then.
+fn unaccepted_default(narrowed: &Argument) -> Option<&str> {
+    if narrowed.ty != ParamType::Enum {
+        return None;
+    }
+    let values = match narrowed.default.as_ref()? {
+        Literal::List(values) => values.as_slice(),
+        value => std::slice::from_ref(value),
+    };
+    values.iter().find_map(|value| match value {
+        Literal::Str(state) if !narrowed.states.contains(state) => Some(state.as_str()),
+        _ => None,
+    })
 }
 
 /// A range in words: `0 to 10`, `at least 0`, `any value`.
@@ -327,8 +484,10 @@ pub(super) fn check_packets<'a>(
         let taken = narrowed.get(index);
         let mut sources = Sources {
             packet,
+            command,
             arguments: taken.and_then(|taken| taken.arguments.as_deref()),
             unsettled: taken.map(|taken| &taken.unsettled),
+            unsettled_states: taken.map(|taken| &taken.unsettled_states),
             types: &set.types,
             set_place: place,
             computed: computed_fields(packet, &packet_place, report),
@@ -721,10 +880,16 @@ fn computed_fields<'p>(
 struct Sources<'a> {
     packet: &'a CommandPacket,
     /// `None` when the command is unknown (reported already).
+    command: Option<&'a Command>,
+    /// The command's arguments as this packet takes them; `None` when the
+    /// command is unknown.
     arguments: Option<&'a [Argument]>,
     /// Arguments whose limits in this packet have problems (reported
     /// already), whose fields aren't checked against their ranges.
     unsettled: Option<&'a BTreeSet<String>>,
+    /// Arguments whose states in this packet have problems (reported
+    /// already), whose fields aren't checked for a raw value for each.
+    unsettled_states: Option<&'a BTreeSet<String>>,
     types: &'a BTreeMap<String, StructType>,
     set_place: &'a Place,
     /// Fields whose value comes from the data: a length or a count.
@@ -1293,8 +1458,22 @@ impl<'a> Sources<'a> {
             );
             return;
         }
-        let ranged = !self.unsettled(name);
-        check_argument_field(encoder, argument, ranged, report);
+        let settled = !self.unsettled(name);
+        let states_known = !self
+            .unsettled_states
+            .is_some_and(|unsettled| unsettled.contains(name));
+        // The states the catalog lists, which a field may give raw values
+        // to although this packet accepts fewer of them.
+        let cataloged = self
+            .command
+            .and_then(|command| command.arguments.iter().find(|a| a.name == name))
+            .map_or(argument.states.as_slice(), |a| a.states.as_slice());
+        let checks = FieldChecks {
+            cataloged,
+            settled,
+            states_known,
+        };
+        check_argument_field(encoder, argument, &checks, report);
     }
 
     /// Whether this packet's limits for the argument have problems.
@@ -1608,14 +1787,27 @@ struct Encoder<'a> {
 
 /// An argument's type fits the field that encodes it, through the
 /// field's conversion, in the field's unit.
-/// The field can encode the argument. `ranged` is false for an argument
-/// whose limits in this packet have problems (reported already): the
-/// checks that read its range (an inverse's direction, coverage) would only
-/// echo them, so they wait until the limits are fixed.
+/// What [`check_argument_field`] checks a field against, besides the
+/// argument as the packet takes it.
+struct FieldChecks<'a> {
+    /// The catalog's states for an enum argument: a states conversion
+    /// names only those, and gives a raw value to each the packet accepts.
+    cataloged: &'a [String],
+    /// False for an argument whose limits in this packet have problems
+    /// (reported already): the checks that read its range (an inverse's
+    /// direction, coverage) would only echo them, so they wait until the
+    /// limits are fixed.
+    settled: bool,
+    /// False for an argument whose states in this packet have problems
+    /// (reported already), so the states it accepts aren't known.
+    states_known: bool,
+}
+
+/// The field can encode the argument, as `checks` says.
 fn check_argument_field(
     encoder: &Encoder<'_>,
     argument: &Argument,
-    ranged: bool,
+    checks: &FieldChecks<'_>,
     report: &mut Report,
 ) {
     let field = encoder.field;
@@ -1674,7 +1866,8 @@ fn check_argument_field(
     }
     // Coverage is checked at the range's ends, which bound the raw values
     // only once the inverse is known to be monotonic over the range.
-    let monotonic = ranged && readable_range(argument) && check_inverse(encoder, argument, report);
+    let monotonic =
+        checks.settled && readable_range(argument) && check_inverse(encoder, argument, report);
     if let Some(Conversion::Linear { scale, .. }) = field.conversion
         && scale == 0.0
     {
@@ -1691,7 +1884,7 @@ fn check_argument_field(
         let mut misspelled = false;
         for (index, state) in states.iter().enumerate() {
             let state_place = encoder.own.key("conversion").at("states", index);
-            if !argument.states.contains(&state.name) {
+            if !checks.cataloged.contains(&state.name) {
                 misspelled = true;
                 report.error(
                     Code::CanonicalType,
@@ -1715,14 +1908,19 @@ fn check_argument_field(
         }
         // A name that isn't a state is most likely a misspelling of a
         // missing one; report it alone.
-        for state in argument.states.iter().filter(|_| !misspelled) {
+        for state in argument
+            .states
+            .iter()
+            .filter(|_| !misspelled && checks.states_known)
+        {
             if !states.iter().any(|listed| &listed.name == state) {
                 report.error(
                     Code::CanonicalType,
                     &encoder.own.key("conversion"),
                     format!(
                         "argument {}'s state {state:?} has no raw value here, so it couldn't be \
-                         sent",
+                         sent; give it one, or list the states this packet accepts without it \
+                         (states, IR 2.3)",
                         argument.name
                     ),
                 );

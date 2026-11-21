@@ -181,6 +181,7 @@ pub const REQUIRED: &[&str] = &[
     "key:command_packet.arguments",
     "key:packet_argument.unit",
     "key:packet_argument.range",
+    "key:packet_argument.states",
     "key:packet_argument.default",
 ];
 

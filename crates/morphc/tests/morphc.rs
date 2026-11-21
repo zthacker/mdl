@@ -1019,6 +1019,92 @@ fn inspect_command_shows_a_wide_range_end_as_its_integer() {
     );
 }
 
+/// The two-vendor fixture: one catalog command, sys.set_mode, whose
+/// DETUMBLE mode vendor B's packet doesn't accept.
+fn vendors() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vendors")
+}
+
+#[test]
+fn a_packet_accepts_only_its_own_states() {
+    let set_mode = |set: &str, mode: &str| {
+        morphc_in(
+            &vendors(),
+            &[
+                "encode",
+                "vendors.toml",
+                "--set",
+                set,
+                "--command",
+                "sys.set_mode",
+                "--arg",
+                &format!("mode={mode}"),
+            ],
+            None,
+        )
+    };
+    // An encoding refused is the report, on stdout.
+    let refused = set_mode("vendor_b", "DETUMBLE");
+    assert!(!refused.status.success());
+    assert!(
+        stdout(&refused).contains(
+            "error[unsupported_state]: command sys.set_mode, argument mode: the set doesn't \
+             accept state \"DETUMBLE\"; it accepts \"SAFE\" and \"NOMINAL\""
+        ),
+        "{}",
+        stdout(&refused)
+    );
+    let unknown = set_mode("vendor_b", "BOGUS");
+    assert!(
+        stdout(&unknown).contains("error[unknown_state]"),
+        "{}",
+        stdout(&unknown)
+    );
+    let sent = set_mode("vendor_b", "NOMINAL");
+    assert!(
+        stdout(&sent).contains("  payload 0301\n"),
+        "{}",
+        stdout(&sent)
+    );
+    let sent = set_mode("vendor_a", "DETUMBLE");
+    assert!(
+        stdout(&sent).contains("  payload 0102\n"),
+        "{}",
+        stdout(&sent)
+    );
+    // Inspect shows what each packet accepts before anyone sends it.
+    let inspected = morphc_in(
+        &vendors(),
+        &["inspect", "command", "sys.set_mode", "vendors.toml"],
+        None,
+    );
+    assert!(
+        stdout(&inspected).ends_with(
+            "\nencoded by\n  set vendor_a  command SET_MODE  (mode)\n  set vendor_b  command MODE  \
+             (mode in md)\n    limits  mode  states SAFE NOMINAL\n"
+        ),
+        "{}",
+        stdout(&inspected)
+    );
+    let json = morphc_in(
+        &vendors(),
+        &[
+            "inspect",
+            "command",
+            "sys.set_mode",
+            "vendors.toml",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(
+        json["inspect"]["packets"][1]["limits"],
+        serde_json::json!({ "mode": { "states": ["SAFE", "NOMINAL"] } })
+    );
+}
+
 #[test]
 fn inspect_command_lists_every_packet_that_encodes_it() {
     let out = morphc_in(

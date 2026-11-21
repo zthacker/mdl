@@ -2527,9 +2527,24 @@ fn set_mode_packet(v: &mut Value) -> &mut Value {
     &mut set_x(v)["commands"][1]
 }
 
-/// Sets `set_mode_packet`'s own argument limits (IR 2.2).
+/// Sets `set_mode_packet`'s own limits for each argument `arguments`
+/// names (IR 2.2), keeping the states it accepts of `mode` (IR 2.3)
+/// unless they name it.
 fn limit(v: &mut Value, arguments: Value) {
-    set_mode_packet(v)["arguments"] = arguments;
+    let Value::Object(arguments) = arguments else {
+        panic!("limits are an object");
+    };
+    for (name, limits) in arguments {
+        set_mode_packet(v)["arguments"][name] = limits;
+    }
+}
+
+/// `set_mode_packet` without limits of its own: accepting every state of
+/// `mode`, which its field can't send.
+fn unlimited(v: &mut Value) {
+    if let Some(packet) = set_mode_packet(v).as_object_mut() {
+        packet.remove("arguments");
+    }
 }
 
 #[test]
@@ -2558,7 +2573,12 @@ fn a_packet_narrows_the_arguments_it_encodes() {
     assert_one(
         Code::ParamShape,
         "/sets/0/commands/1/arguments/mode/range",
-        |v| limit(v, json!({ "mode": { "range": { "max": 1 } } })),
+        |v| {
+            limit(
+                v,
+                json!({ "mode": { "states": ["SAFE", "NOMINAL"], "range": { "max": 1 } } }),
+            );
+        },
     );
     assert_one(Code::DefaultValue, &format!("{at}/default"), |v| {
         limit(
@@ -2626,6 +2646,155 @@ fn a_packet_narrows_the_arguments_it_encodes() {
         Code::UnmappedArgument,
         "/sets/2/commands/0/arguments/delay_s",
         |v| v["sets"][2]["commands"][0]["arguments"] = json!({ "delay_s": { "default": 0 } }),
+    );
+}
+
+#[test]
+fn a_packet_accepts_some_of_an_enums_states() {
+    let at = "/sets/0/commands/1/arguments/mode";
+    // The catalog's eps.set_mode has a PAYLOAD mode, which vendor X's field
+    // gives no raw value: it's refused unless the packet leaves PAYLOAD out
+    // of the states it accepts (IR 2.3), as the kitchen sink does.
+    assert_one(
+        Code::CanonicalType,
+        "/sets/0/commands/1/entries/1/conversion",
+        unlimited,
+    );
+    let accepted =
+        |states: Value| move |v: &mut Value| limit(v, json!({ "mode": { "states": states } }));
+    assert_eq!(problems(accepted(json!(["SAFE", "NOMINAL"]))), vec![]);
+    // A field may give a raw value to a state the packet doesn't accept,
+    // as legacy_v1's does to PAYLOAD.
+    assert_eq!(problems(accepted(json!(["SAFE"]))), vec![]);
+    // Every state it accepts needs one.
+    assert_eq!(
+        messages(|v| {
+            accepted(json!(["SAFE", "NOMINAL"]))(v);
+            set_mode_packet(v)["entries"][1]["conversion"]["states"] =
+                json!([{ "raw": 0, "name": "SAFE" }]);
+        }),
+        [
+            "argument mode's state \"NOMINAL\" has no raw value here, so it couldn't be sent; give \
+          it one, or list the states this packet accepts without it (states, IR 2.3)"
+        ]
+    );
+    // The list: of the catalog's states, at least one, each once, in the
+    // catalog's order.
+    assert_eq!(
+        messages(accepted(json!(["SAFE", "NOMNAL"]))),
+        ["argument mode has no state \"NOMNAL\"; did you mean NOMINAL?"]
+    );
+    assert_one(
+        Code::UnknownState,
+        &format!("{at}/states/1"),
+        accepted(json!(["SAFE", "NOMNAL"])),
+    );
+    assert_one(Code::Empty, &format!("{at}/states"), accepted(json!([])));
+    assert_one(
+        Code::DuplicateName,
+        &format!("{at}/states/1"),
+        accepted(json!(["SAFE", "SAFE"])),
+    );
+    assert_one(
+        Code::NotSorted,
+        &format!("{at}/states/1"),
+        accepted(json!(["NOMINAL", "SAFE"])),
+    );
+    // A list out of order still says which states it accepts, so the
+    // field is checked against them too: it has no raw value for PAYLOAD.
+    assert_eq!(
+        messages(accepted(json!(["PAYLOAD", "SAFE", "NOMINAL"]))),
+        [
+            "states are listed in the catalog's order, where \"SAFE\" comes before \
+             \"PAYLOAD\", so one set of states has one spelling",
+            "states are listed in the catalog's order, where \"NOMINAL\" comes before \
+             \"PAYLOAD\", so one set of states has one spelling",
+            "argument mode's state \"PAYLOAD\" has no raw value here, so it couldn't be sent; \
+             give it one, or list the states this packet accepts without it (states, IR 2.3)"
+        ]
+    );
+    // One that doesn't (a misspelt state) leaves the field unchecked
+    // against the catalog's, which would only echo it: vendor X's field has
+    // no raw value for PAYLOAD, and isn't asked for one.
+    assert_one(Code::UnknownState, &format!("{at}/states/1"), |v| {
+        accepted(json!(["SAFE", "NOMNAL"]))(v);
+        set_mode_packet(v)["entries"][1]["conversion"]["states"] =
+            json!([{ "raw": 0, "name": "SAFE" }]);
+    });
+    assert_one(
+        Code::ParamShape,
+        "/sets/0/commands/1/arguments/delay_s/states",
+        |v| limit(v, json!({ "delay_s": { "states": ["SAFE"] } })),
+    );
+    // Other problems in its limits leave the states it accepts known, so
+    // its field is still checked against them, and against every state
+    // without them (as IR 2.2 definitions were).
+    let bad_default = |v: &mut Value| {
+        limit(
+            v,
+            json!({ "mode": { "states": ["SAFE", "NOMINAL"], "default": "BOGUS" } }),
+        );
+        set_mode_packet(v)["entries"][1]["conversion"]["states"] =
+            json!([{ "raw": 0, "name": "SAFE" }]);
+    };
+    assert_eq!(
+        problems(bad_default),
+        vec![
+            (Code::DefaultValue, format!("{at}/default")),
+            (
+                Code::CanonicalType,
+                "/sets/0/commands/1/entries/1/conversion".to_string()
+            ),
+        ]
+    );
+    assert_eq!(
+        problems(|v| {
+            unlimited(v);
+            limit(v, json!({ "mode": { "default": "BOGUS" } }));
+        }),
+        vec![
+            (Code::DefaultValue, format!("{at}/default")),
+            (
+                Code::CanonicalType,
+                "/sets/0/commands/1/entries/1/conversion".to_string()
+            ),
+        ]
+    );
+    // A catalog enum with no states is reported there, and the states a
+    // packet accepts of it aren't each refused as well.
+    assert_eq!(
+        problems(|v| command(v, "eps.set_mode")["arguments"][0]["states"] = json!([])),
+        vec![(
+            Code::Empty,
+            "/catalog/commands/eps.set_mode/arguments/0/states".to_string()
+        )]
+    );
+    // The default the packet sends is one it accepts: its own, or the
+    // catalog's when it gives none.
+    assert_one(Code::DefaultValue, &format!("{at}/default"), |v| {
+        limit(
+            v,
+            json!({ "mode": { "states": ["SAFE"], "default": "NOMINAL" } }),
+        );
+    });
+    assert_eq!(
+        problems(|v| limit(
+            v,
+            json!({ "mode": { "states": ["SAFE"], "default": "SAFE" } })
+        )),
+        vec![]
+    );
+    let cataloged = |v: &mut Value| {
+        command(v, "eps.set_mode")["arguments"][0]["default"] = json!("SAFE");
+        limit(v, json!({ "mode": { "states": ["NOMINAL"] } }));
+    };
+    assert_one(Code::DefaultValue, &format!("{at}/states"), cataloged);
+    assert_eq!(
+        messages(cataloged),
+        [
+            "argument mode's default in the catalog, \"SAFE\", isn't one of the states here; \
+             give a default here"
+        ]
     );
 }
 
@@ -2857,6 +3026,7 @@ fn every_command_field_gets_its_value_from_one_place() {
         Code::UnmappedArgument,
         "/sets/0/commands/1/canonical",
         |v| {
+            unlimited(v);
             set_mode_packet(v)["entries"]
                 .as_array_mut()
                 .unwrap()
@@ -3038,25 +3208,60 @@ fn every_command_packet_encodes_one_way() {
     );
 }
 
+/// Vendor X's and legacy_v1's SET_MODE accepting every state of
+/// eps.set_mode's mode, not only SAFE and NOMINAL, as the kitchen sink has
+/// them.
+fn every_packet_accepts_every_mode(v: &mut Value) {
+    for set in [0, 2] {
+        if let Some(packet) = v["sets"][set]["commands"]
+            .as_array_mut()
+            .and_then(|commands| commands.iter_mut().find(|c| c["name"] == "SET_MODE"))
+            .and_then(Value::as_object_mut)
+        {
+            packet.remove("arguments");
+        }
+    }
+}
+
 #[test]
 fn a_set_encodes_every_value_the_catalog_allows() {
-    // Every set that encodes the command is told.
+    let science = |v: &mut Value| {
+        command(v, "eps.set_mode")["arguments"][0]["states"] =
+            json!(["SAFE", "NOMINAL", "PAYLOAD", "SCIENCE"]);
+    };
+    // Every set that encodes the command is told, once for each state its
+    // field can't send: vendor X's has neither PAYLOAD nor SCIENCE, and
+    // legacy_v1's has PAYLOAD.
     assert_eq!(
-        problems(|v| {
-            command(v, "eps.set_mode")["arguments"][0]["states"] =
-                json!(["SAFE", "NOMINAL", "SCIENCE"]);
+        messages(|v| {
+            every_packet_accepts_every_mode(v);
+            science(v);
         }),
-        vec![
-            (
-                Code::CanonicalType,
-                "/sets/0/commands/1/entries/1/conversion".to_string()
-            ),
-            (
-                Code::CanonicalType,
-                "/sets/2/commands/0/entries/0/conversion".to_string()
-            ),
+        [
+            "argument mode's state \"PAYLOAD\" has no raw value here, so it couldn't be sent; give \
+             it one, or list the states this packet accepts without it (states, IR 2.3)",
+            "argument mode's state \"SCIENCE\" has no raw value here, so it couldn't be sent; give \
+             it one, or list the states this packet accepts without it (states, IR 2.3)",
+            "argument mode's state \"SCIENCE\" has no raw value here, so it couldn't be sent; give \
+             it one, or list the states this packet accepts without it (states, IR 2.3)",
         ]
     );
+    assert_eq!(
+        problems(|v| {
+            every_packet_accepts_every_mode(v);
+            science(v);
+        })
+        .into_iter()
+        .map(|(_, path)| path)
+        .collect::<Vec<_>>(),
+        [
+            "/sets/0/commands/1/entries/1/conversion",
+            "/sets/0/commands/1/entries/1/conversion",
+            "/sets/2/commands/0/entries/0/conversion",
+        ]
+    );
+    // But not one whose packet doesn't accept the new state (IR 2.3).
+    assert_eq!(problems(science), vec![]);
     let slot = "/sets/0/commands/0/entries/1/argument";
     assert_one(Code::ValueRange, slot, |v| {
         command(v, "eps.load_table")["arguments"][1]["range"]["max"] = json!(1000);

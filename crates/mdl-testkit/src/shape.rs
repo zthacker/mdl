@@ -544,15 +544,22 @@ fn command_packet(given: f64) -> Gen {
         .boxed()
 }
 
-/// What a command packet accepts of one argument (IR 2.2).
+/// What a command packet accepts of one argument (IR 2.2), and the states
+/// it accepts (IR 2.3): an empty list too, which is written as one.
 fn packet_argument(given: f64) -> Gen {
     (
         maybe(given, text()),
         maybe(given, argument_range(given)),
+        maybe(given, list(text(), 0..3)),
         maybe(given, literal()),
     )
-        .prop_map(|(unit, range, default)| {
-            object([("unit", unit), ("range", range), ("default", default)])
+        .prop_map(|(unit, range, states, default)| {
+            object([
+                ("unit", unit),
+                ("range", range),
+                ("states", states),
+                ("default", default),
+            ])
         })
         .boxed()
 }

@@ -2,7 +2,7 @@
 # toml::to_string_pretty, so keys are in sorted order). tests/equivalence.rs
 # checks that both build identical artifacts.
 
-mdl_version = "2.2"
+mdl_version = "2.3"
 
 [catalog.commands."eps.load_table"]
 description = "Load a table into one of the power system's slots"
@@ -27,6 +27,7 @@ name = "mode"
 states = [
     "SAFE",
     "NOMINAL",
+    "PAYLOAD",
 ]
 type = "enum"
 
@@ -268,6 +269,12 @@ apid = 300
 [[sets.commands]]
 canonical = "eps.set_mode"
 name = "SET_MODE"
+
+[sets.commands.arguments.mode]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
 
 [[sets.commands.entries]]
 kind = "field"
@@ -648,6 +655,12 @@ name = "legacy_v1"
 canonical = "eps.set_mode"
 name = "SET_MODE"
 
+[sets.commands.arguments.mode]
+states = [
+    "SAFE",
+    "NOMINAL",
+]
+
 [[sets.commands.entries]]
 argument = "mode"
 kind = "field"
@@ -665,6 +678,10 @@ raw = 0
 [[sets.commands.entries.conversion.states]]
 name = "NOMINAL"
 raw = 1
+
+[[sets.commands.entries.conversion.states]]
+name = "PAYLOAD"
+raw = 2
 
 [[sets.commands.entries]]
 kind = "field"
