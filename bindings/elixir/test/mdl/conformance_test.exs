@@ -39,7 +39,11 @@ defmodule MDL.ConformanceTest do
     {"sink", "sink_v1", "sink.mark", %{"stamp" => 1_152_921_504_606_846_975},
      ["stamp=1152921504606846975"], nil},
     {"sink", "sink_v1", "sink.mark", %{"stamp" => 0}, ["stamp=0"], nil},
-    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "BOGUS"}, ["mode=BOGUS"], nil}
+    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "BOGUS"}, ["mode=BOGUS"], nil},
+    # A state of the catalog's that vendor X's packet doesn't accept, and
+    # vendor J's string field writes.
+    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "PAYLOAD"}, ["mode=PAYLOAD"], nil},
+    {"vendor_j", "vendor_j_v1", "eps.set_mode", %{"mode" => "PAYLOAD"}, ["mode=PAYLOAD"], nil}
   ]
 
   test "each command request encodes as morphc encodes it", context do

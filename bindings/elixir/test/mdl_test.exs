@@ -123,6 +123,22 @@ defmodule MDLTest do
       assert {:error, %MDL.Error{code: :store_unreadable}} = MDL.open("/nonexistent/store")
     end
 
+    # A state the catalog has that the set's packet doesn't accept, and
+    # one the catalog doesn't have.
+    test "a state a packet doesn't accept", context do
+      request = fn mode ->
+        %{set: "vendor_x_v2", command: "eps.set_mode", arguments: %{"mode" => mode}}
+      end
+
+      assert {:error, %MDL.Error{code: :unsupported_state, message: message}} =
+               MDL.encode(context.kitchen, "vendor_x", request.("PAYLOAD"))
+
+      assert message =~ ~s(it accepts "SAFE" and "NOMINAL")
+
+      assert {:error, %MDL.Error{code: :unknown_state}} =
+               MDL.encode(context.kitchen, "vendor_x", request.("SCIENCE"))
+    end
+
     # An artifact's identity is its canonical JSON's digest, so changing a
     # value (not its spacing) changes it.
     test "a damaged artifact" do
