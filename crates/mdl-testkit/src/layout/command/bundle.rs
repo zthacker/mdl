@@ -100,14 +100,20 @@ fn argument_json(index: usize, encoder: &Encoder) -> Value {
         Limits::Packet { wider: true, .. } => wider_json(encoder, &mut json),
         Limits::Packet { wider: false, .. } => {}
     }
+    // The default of an argument the packet requires (IR 2.3), which it
+    // never sends, so it needn't be a value the packet takes: the wider
+    // range's low end, where that's written.
+    if let (Some(default), false) = (&encoder.unsent_default, json.contains_key("default")) {
+        json.insert("default".into(), arg_json(default));
+    }
     Value::Object(json)
 }
 
 /// The catalog's side of limits a packet narrows: the encoder's range with
 /// each end pushed one further out where the type allows, so the packet's
 /// range is what's left of both, and that range's low end as the default,
-/// where the packet gives the one it sends (a list's defaults have lengths
-/// to agree on, so a list gets none).
+/// where the packet gives the one it sends or requires the argument (a
+/// list's defaults have lengths to agree on, so a list gets none).
 fn wider_json(encoder: &Encoder, json: &mut Map<String, Value>) {
     let (min, max) = match encoder.ty {
         ArgType::F64 => (
@@ -127,7 +133,8 @@ fn wider_json(encoder: &Encoder, json: &mut Map<String, Value>) {
         }
         _ => (None, None),
     };
-    if let (Some(low), Some(_), None) = (&min, &encoder.default, encoder.list) {
+    let defaulted = encoder.default.is_some() || encoder.unsent_default.is_some();
+    if let (Some(low), true, None) = (&min, defaulted, encoder.list) {
         json.insert("default".into(), low.clone());
     }
     let range: Map<String, Value> = [("min", min), ("max", max)]
@@ -162,8 +169,9 @@ fn limits_json(encoder: &Encoder, json: &mut Map<String, Value>) {
 }
 
 /// The packet's own limits: each argument whose range and default are
-/// written there (IR 2.2), restating its unit where it says to, and the
-/// states it accepts of an enum whose catalog lists more (IR 2.3).
+/// written there (IR 2.2), restating its unit where it says to, the states
+/// it accepts of an enum whose catalog lists more, and whether it requires
+/// the argument (both IR 2.3).
 fn packet_arguments(layout: &Layout) -> Map<String, Value> {
     let mut arguments = Map::new();
     for (index, (encoder, _)) in layout.arguments.iter().enumerate() {
@@ -176,6 +184,9 @@ fn packet_arguments(layout: &Layout) -> Map<String, Value> {
         }
         if let (ArgType::Enum(states), false) = (&encoder.ty, encoder.unaccepted.is_empty()) {
             json.insert("states".into(), json!(states));
+        }
+        if encoder.required {
+            json.insert("required".into(), json!(true));
         }
         if !json.is_empty() {
             arguments.insert(format!("a{index}"), Value::Object(json));

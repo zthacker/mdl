@@ -21,7 +21,7 @@ use proptest::strategy::Union;
 use super::Form;
 use super::canonical::{Canon, write};
 use super::encoders::{as_literal, defaulted, element_encoder, encoder, with_default};
-use super::packets::{group_defaults, left_out_list};
+use super::packets::{group_defaults, left_out_list, require_argument};
 use super::requests::{Packed, gathered, raws};
 use super::values::text_for;
 use super::{
@@ -356,9 +356,18 @@ pub(super) fn command_spec() -> BoxedStrategy<CommandSpec> {
         proptest::option::weighted(0.3, defaulted()),
         proptest::option::weighted(0.2, left_out_list()),
         vec(place(), 10),
+        // Whether the packet requires each argument it encodes (IR 2.3).
+        vec(proptest::bool::weighted(0.3), 10),
     )
         .prop_flat_map(
-            |((arguments, double, constants, target), drafts, left_out, left_out_list, places)| {
+            |(
+                (arguments, double, constants, target),
+                drafts,
+                left_out,
+                left_out_list,
+                places,
+                requires,
+            )| {
                 let mut arguments: Vec<(Encoder, bool)> = arguments
                     .into_iter()
                     .map(|(encoder, encoded)| {
@@ -392,11 +401,12 @@ pub(super) fn command_spec() -> BoxedStrategy<CommandSpec> {
                     Just(groups),
                     defaults,
                     Just(places),
+                    Just(requires),
                 )
             },
         )
         .prop_map(
-            |(mut arguments, items, arrays, mut groups, defaults, places)| {
+            |(mut arguments, items, arrays, mut groups, defaults, places, requires)| {
                 for (group, (count, lists)) in groups.iter_mut().zip(defaults) {
                     group.default = count;
                     for ((member, _), list) in group.members.iter().zip(lists) {
@@ -404,10 +414,16 @@ pub(super) fn command_spec() -> BoxedStrategy<CommandSpec> {
                     }
                 }
                 // A packet accepts fewer of an enum's states (IR 2.3) only
-                // for an argument it encodes.
-                for (encoder, encoded) in &mut arguments {
+                // for an argument it encodes, and requires one (IR 2.3)
+                // only if it encodes it.
+                for ((encoder, encoded), &require) in
+                    arguments.iter_mut().zip(requires.iter().cycle())
+                {
                     if !*encoded {
                         encoder.unaccepted.clear();
+                    }
+                    if require && *encoded {
+                        require_argument(encoder);
                     }
                 }
                 CommandSpec {

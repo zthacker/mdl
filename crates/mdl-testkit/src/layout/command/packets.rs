@@ -145,7 +145,12 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
         any::<bool>(),
         proptest::option::weighted(0.2, left_out_list()),
         vec(
-            (proptest::bool::weighted(0.3), any::<bool>(), any::<bool>()),
+            (
+                proptest::bool::weighted(0.3),
+                any::<bool>(),
+                any::<bool>(),
+                proptest::bool::weighted(0.3),
+            ),
             8,
         ),
     )
@@ -240,12 +245,16 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
                 // Some arguments the packet encodes have their range and
                 // default in the packet (IR 2.2), and none in the catalog.
                 // A packet accepts fewer of an enum's states (IR 2.3) only
-                // for an argument it encodes.
-                for ((encoder, encoded), &(packet, unit, wider)) in
+                // for an argument it encodes, and requires one (IR 2.3)
+                // only if it encodes it.
+                for ((encoder, encoded), &(packet, unit, wider, require)) in
                     arguments.iter_mut().zip(limits.iter().cycle())
                 {
                     if !*encoded {
                         encoder.unaccepted.clear();
+                    }
+                    if require && *encoded {
+                        require_argument(encoder);
                     }
                     if packet && *encoded && encoder.has_limits() {
                         encoder.limits = Limits::Packet {
@@ -267,6 +276,15 @@ pub(super) fn command_spec(little: bool) -> BoxedStrategy<CommandSpec> {
             },
         )
         .boxed()
+}
+
+/// The packet requires the argument (IR 2.3): no request sent with it
+/// takes the catalog's default, which only the catalog then has. A list in
+/// a group keeps the count the group's defaults give, which is the count
+/// any of its other defaulted lists gives.
+pub(super) fn require_argument(encoder: &mut Encoder) {
+    encoder.required = true;
+    encoder.unsent_default = encoder.default.take();
 }
 
 /// The arrays, their lists placed among the command's arguments, and the

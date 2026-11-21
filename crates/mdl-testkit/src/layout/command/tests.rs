@@ -657,10 +657,13 @@ enum RefusedRoute {
     CountAfterLengthField,
     /// An array's records compared before their fields are worked out.
     RecordsBeforeElement,
+    /// `missing_argument` for an argument the packet requires (IR 2.3)
+    /// and the catalog has a default for.
+    MissingRequired,
 }
 
 impl RefusedRoute {
-    const ALL: [RefusedRoute; 24] = [
+    const ALL: [RefusedRoute; 25] = [
         RefusedRoute::TwoFaults,
         RefusedRoute::LengthField,
         RefusedRoute::RawRangeArgument,
@@ -685,6 +688,7 @@ impl RefusedRoute {
         RefusedRoute::CountAfterLaterEntry,
         RefusedRoute::CountAfterLengthField,
         RefusedRoute::RecordsBeforeElement,
+        RefusedRoute::MissingRequired,
     ];
 }
 
@@ -1179,6 +1183,21 @@ fn note_refusal(case: &Commands, refused: &Refused, note: &mut dyn FnMut(Reached
         ("wrong_type", false, true) => note(route(RefusedRoute::ListForOneValue)),
         ("not_default", true, _) => note(route(RefusedRoute::NotDefaultList)),
         _ => {}
+    }
+    let cataloged = case.bundle["catalog"]["commands"][&refused.command]["arguments"]
+        .as_array()
+        .and_then(|arguments| arguments.iter().find(|argument| argument["name"] == at))
+        .is_some_and(|argument| argument.get("default").is_some());
+    let required = case.bundle["sets"][0]["commands"]
+        .as_array()
+        .and_then(|packets| {
+            packets
+                .iter()
+                .find(|packet| packet["canonical"] == refused.command.as_str())
+        })
+        .is_some_and(|packet| packet["arguments"][at.as_str()]["required"] == true);
+    if first.code == "missing_argument" && cataloged && required {
+        note(route(RefusedRoute::MissingRequired));
     }
 }
 

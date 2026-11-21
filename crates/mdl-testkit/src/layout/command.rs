@@ -782,6 +782,11 @@ struct Encoder {
     /// through states gives these raw values too, so decoding one is
     /// refused.
     unaccepted: Vec<Unaccepted>,
+    /// Whether the packet requires the argument (IR 2.3), so that every
+    /// request sent with it gives the argument: `default` is then none,
+    /// and the catalog's default, if it has one, is `unsent_default`.
+    required: bool,
+    unsent_default: Option<Arg>,
 }
 
 /// A state the catalog lists that the packet doesn't accept: its position
@@ -830,6 +835,8 @@ fn encoder_of(ty: ArgType, shape: Shape) -> Encoder {
         shape,
         through: Through::Plain,
         unaccepted: Vec::new(),
+        required: false,
+        unsent_default: None,
     }
 }
 
