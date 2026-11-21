@@ -8,6 +8,30 @@ them too.
 
 ## [Unreleased]
 
+### Definitions
+
+- XTCE 1.3 documents (`http://www.omg.org/spec/XTCE/20250214`) are read,
+  and the spellings of its namespace documents written for Yamcs use,
+  with a warning, as for 1.2's. What 1.3 changes that MDL reads:
+  - its time units: `milliseconds`, `microseconds`, `nanoseconds`,
+    `picoseconds`, `minutes` and `hours` are MDL's `ms`, `us`, `ns`, `ps`,
+    `min` and `h`, in any XTCE version; a `units` that's no XTCE time unit
+    is now an error, where it was a warning;
+  - an alarm marked `disabled` gives no limits;
+  - an aggregate argument type's `initialValue`, a JSON object of its
+    members, gives each member it names a default beneath the member's
+    own initial value; before 1.3 it's still left out, as Yamcs reads
+    those documents;
+  - a SpaceSystem's `systemType` and `assetType` are left out, with a
+    warning;
+  - a binary parameter type's context alarms, which 1.3 renames
+    `ContextAlarmList`, are left out with a warning under either name, as
+    all alarms but a number type's limits are; XTCE 1.0 to 1.2's
+    `BinaryContextAlarmList` was refused.
+- A reference to an array's element (`Cells[2]`), or into an argument's
+  members or elements, which XTCE 1.3 allows, is reported as unsupported
+  (`xtce.unsupported`) rather than as naming nothing.
+
 ## [0.2.0] - 2026-11-21
 
 Command limits for each vendor in a mixed fleet, and a vendor's next
