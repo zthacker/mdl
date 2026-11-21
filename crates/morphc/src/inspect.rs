@@ -1081,8 +1081,8 @@ fn argument_text(argument: &Argument) -> String {
     text
 }
 
-/// `    limits  delay_s  min, range ..10, default 0`, or
-/// `    limits  mode  states SAFE NOMINAL`.
+/// `    limits  delay_s  min, range ..10, default 0`,
+/// `    limits  mode  states SAFE NOMINAL`, or `    limits  pulse_ms  required`.
 fn limits_text((name, limits): (&String, &PacketArgument)) -> String {
     let mut parts = Vec::new();
     if let Some(unit) = &limits.unit {
@@ -1096,6 +1096,9 @@ fn limits_text((name, limits): (&String, &PacketArgument)) -> String {
     }
     if let Some(default) = &limits.default {
         parts.push(format!("default {}", ir(default)));
+    }
+    if limits.required == Some(true) {
+        parts.push("required".to_string());
     }
     format!("    limits  {name}  {}", parts.join(", "))
 }

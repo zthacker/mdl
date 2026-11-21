@@ -2,7 +2,8 @@
 # DETUMBLE mode, so its MODE packet accepts SAFE and NOMINAL only
 # (IR 2.3), and its effector has no pulse length, so the catalog gives
 # pulse_ms a default that vendor B's FIRE can leave out (spec/encoding.md
-# §2.4).
+# §2.4). Vendor A's FIRE requires pulse_ms (IR 2.3): a request for it
+# never gets vendor B's default.
 
 mdl_version = "2.3"
 
@@ -54,6 +55,8 @@ conversion = { kind = "states", states = [{ raw = 0, name = "SAFE" }, { raw = 1,
 [[sets.commands]]
 name = "FIRE"
 canonical = "effector.fire"
+[sets.commands.arguments.pulse_ms]
+required = true
 [[sets.commands.entries]]
 kind = "field"
 name = "opcode"

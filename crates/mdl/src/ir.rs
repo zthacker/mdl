@@ -812,8 +812,9 @@ impl Argument {
     /// The argument as one command packet takes it (IR 2.2): its range
     /// narrowed to the values the packet's allows too, its states to those
     /// the packet accepts (IR 2.3), and the packet's default in place of
-    /// its own, both in the argument's unit. An error when the packet's
-    /// values aren't ones it can take, which validation refuses.
+    /// its own, both in the argument's unit, or no default where the packet
+    /// requires the argument (IR 2.3). An error when the packet's values
+    /// aren't ones it can take, which validation refuses.
     pub fn narrowed(&self, packet: &PacketArgument) -> Result<Argument, NarrowError> {
         let units = match (packet.unit.as_deref(), self.unit.as_deref()) {
             (None, _) => None,
@@ -892,6 +893,13 @@ impl Argument {
                 .cloned()
                 .collect();
         }
+        if packet.required == Some(true) {
+            if packet.default.is_some() {
+                return Err(NarrowError::RequiredDefault);
+            }
+            // The packet never sends the catalog's.
+            narrowed.default = None;
+        }
         if let Some(default) = &packet.default {
             let number = |value: &Literal| {
                 let x = value.as_number().ok_or(NarrowError::DefaultNotNumber)?;
@@ -947,6 +955,10 @@ pub enum NarrowError {
     /// A state the argument doesn't have.
     #[error("a state isn't one of the argument's")]
     UnknownState,
+    /// A default for an argument the packet requires, which it would never
+    /// send.
+    #[error("they require the argument and give it a default")]
+    RequiredDefault,
 }
 
 /// Why a command packet's limits can't narrow its command's arguments
@@ -1351,13 +1363,19 @@ impl Set {
                 });
             }
             for (name, limits) in &packet.arguments {
-                if limits.states.is_some() {
-                    let name = crate::diagnostics::escape_pointer_token(name);
-                    needs.push(Need {
-                        pointer: format!("/commands/{index}/arguments/{name}/states"),
-                        feature: "states",
-                        version: IrVersion::new(2, 3),
-                    });
+                let name = crate::diagnostics::escape_pointer_token(name);
+                let features = [
+                    ("states", limits.states.is_some()),
+                    ("required", limits.required.is_some()),
+                ];
+                for (feature, used) in features {
+                    if used {
+                        needs.push(Need {
+                            pointer: format!("/commands/{index}/arguments/{name}/{feature}"),
+                            feature,
+                            version: IrVersion::new(2, 3),
+                        });
+                    }
                 }
             }
             signed_needs(&format!("/commands/{index}"), &packet.entries, &mut needs);
@@ -1392,8 +1410,8 @@ fn signed_needs(container: &str, entries: &[Entry], needs: &mut Vec<Need>) {
 pub struct Need {
     /// A JSON Pointer to it within the set.
     pub pointer: String,
-    /// Its key: `signed` (2.1), `arguments` (2.2) or a packet argument's
-    /// `states` (2.3).
+    /// Its key: `signed` (2.1), `arguments` (2.2), or a packet argument's
+    /// `states` or `required` (2.3).
     pub feature: &'static str,
     /// The lowest version that has it.
     pub version: IrVersion,
@@ -1676,6 +1694,11 @@ pub struct PacketArgument {
     /// the catalog's: a list of values for a list argument.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Literal>,
+    /// `true`: a request sent with this packet gives the argument, whatever
+    /// the catalog's default (IR 2.3). `false` is the default, which
+    /// validation refuses written out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
 }
 
 impl PacketArgument {

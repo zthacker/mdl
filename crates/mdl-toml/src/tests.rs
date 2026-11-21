@@ -426,6 +426,65 @@ conversion = { kind = "states", states = [{ raw = 0, name = "SAFE" }, { raw = 1,
     validate(parsed.bundle).unwrap();
 }
 
+/// An argument a command packet requires (2.3) needs the version that
+/// has it, where it's given.
+#[test]
+fn a_command_packets_required_argument_needs_2_3() {
+    let catalog = format!(
+        "{CATALOG}\n[catalog.commands.\"eps.pulse\"]\narguments = [{{ name = \"pulse_ms\", type = \"u64\", unit = \"ms\", range = {{ max = 60000 }}, default = 200 }}]\n"
+    );
+    let command = r#"mdl_version = "2.2"
+
+[[sets]]
+name = "vendor_a_v1"
+family = "vendor_x"
+
+[[sets.commands]]
+name = "PULSE"
+canonical = "eps.pulse"
+
+[sets.commands.arguments.pulse_ms]
+required = true
+
+[[sets.commands.entries]]
+kind = "field"
+name = "pulse"
+type = "uint"
+size_bits = 16
+unit = "ms"
+argument = "pulse_ms"
+"#;
+    let found = errors(&[
+        ("catalog.toml", &catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", command),
+    ]);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(
+        found[0].0.message,
+        "required needs MDL IR 2.3, and this document states 2.2; state mdl_version \"2.3\" to \
+         use it"
+    );
+    assert_eq!(
+        found[0].1,
+        Some(("set.toml".to_string(), location(command, "true\n")))
+    );
+    let stated = command.replace("\"2.2\"", "\"2.3\"");
+    let sources = sources(&[
+        ("catalog.toml", &catalog),
+        ("family.toml", FAMILY),
+        ("set.toml", &stated),
+    ]);
+    let parsed = read(sources.iter()).unwrap();
+    assert_eq!(parsed.bundle.mdl_version.to_string(), "2.3");
+    let packet = &parsed.bundle.sets[0].commands[0];
+    assert_eq!(
+        serde_json::to_value(&packet.arguments).unwrap(),
+        json!({ "pulse_ms": { "required": true } })
+    );
+    validate(parsed.bundle).unwrap();
+}
+
 /// A command packet's own argument limits (2.2) are spelled as the IR has
 /// them, and need the version that has them.
 #[test]

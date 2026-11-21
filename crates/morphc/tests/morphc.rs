@@ -1025,6 +1025,65 @@ fn vendors() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vendors")
 }
 
+/// Vendor A's FIRE requires pulse_ms (IR 2.3), so leaving it out is
+/// refused there, while vendor B's, which doesn't encode it, sends the
+/// catalog's default.
+#[test]
+fn a_packet_requires_its_own_arguments() {
+    let fire = |set: &str, arguments: &[&str]| {
+        let mut args = vec![
+            "encode",
+            "vendors.toml",
+            "--set",
+            set,
+            "--command",
+            "effector.fire",
+            "--arg",
+            "target_id=7",
+        ];
+        for argument in arguments {
+            args.extend(["--arg", argument]);
+        }
+        morphc_in(&vendors(), &args, None)
+    };
+    let refused = fire("vendor_a", &[]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        stdout(&refused).contains(
+            "error[missing_argument]: command effector.fire, argument pulse_ms: the set requires \
+             it, so the catalog's default, 200, isn't sent"
+        ),
+        "{}",
+        stdout(&refused)
+    );
+    let sent = fire("vendor_a", &["pulse_ms=500"]);
+    assert!(
+        stdout(&sent).contains("  payload 02000701f4\n"),
+        "{}",
+        stdout(&sent)
+    );
+    let defaulted = fire("vendor_b", &[]);
+    assert!(
+        stdout(&defaulted).contains("  payload 040700\n  defaulted pulse_ms\n"),
+        "{}",
+        stdout(&defaulted)
+    );
+    let inspected = morphc_in(
+        &vendors(),
+        &["inspect", "command", "effector.fire", "vendors.toml"],
+        None,
+    );
+    assert!(
+        stdout(&inspected).ends_with(
+            "\nencoded by\n  set vendor_a  command FIRE  (target_id in target, pulse_ms in \
+             pulse)\n    limits  pulse_ms  required\n  set vendor_b  command FIRE  (target_id \
+             in tgt)\n"
+        ),
+        "{}",
+        stdout(&inspected)
+    );
+}
+
 #[test]
 fn a_packet_accepts_only_its_own_states() {
     let set_mode = |set: &str, mode: &str| {
@@ -2218,6 +2277,8 @@ fn encode_writes_the_target_only_where_a_packet_carries_it() {
             "eps.set_mode",
             "--arg",
             "mode=SAFE",
+            "--arg",
+            "delay_s=0",
             "--target",
             "42",
         ],

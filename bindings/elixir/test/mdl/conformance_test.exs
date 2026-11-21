@@ -28,6 +28,10 @@ defmodule MDL.ConformanceTest do
   @requests [
     {"vendor_x", "vendor_x_v2", "eps.load_table",
      %{"table" => {:bytes, <<0xC0, 0xFF, 0xEE>>}, "slot" => 3}, ["table=c0ffee", "slot=3"], nil},
+    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "SAFE", "delay_s" => 1.5},
+     ["mode=SAFE", "delay_s=1.5"], nil},
+    # Vendor X's packet requires delay_s, so the catalog's default isn't
+    # sent with it.
     {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "SAFE"}, ["mode=SAFE"], nil},
     {"vendor_j", "vendor_j_v1", "eps.set_mode", %{"mode" => "NOMINAL", "delay_s" => 2.5},
      ["mode=NOMINAL", "delay_s=2.5"], nil},

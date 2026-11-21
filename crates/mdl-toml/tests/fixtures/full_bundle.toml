@@ -270,6 +270,9 @@ apid = 300
 canonical = "eps.set_mode"
 name = "SET_MODE"
 
+[sets.commands.arguments.delay_s]
+required = true
+
 [sets.commands.arguments.mode]
 states = [
     "SAFE",

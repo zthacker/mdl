@@ -120,7 +120,8 @@ fn small_bundle_digests_are_stable() {
 
 /// An artifact states the lowest IR version that reads it: a set using
 /// `signed` says 2.1, one whose command packet has limits of its own 2.2,
-/// one whose packet accepts some of an enum's states 2.3, and every other
+/// one whose packet accepts some of an enum's states or requires an
+/// argument 2.3, and every other
 /// artifact keeps 2.0 and its digest (`small_bundle_digests_are_stable`
 /// pins some). A reader refuses an artifact stating less than it uses, or
 /// more than it needs, and a bundle stating less than a feature it uses.
@@ -159,7 +160,15 @@ fn artifacts_state_the_version_they_need() {
     let less = restated(&artifacts.sets["vendor_x_v2"], "2.3", "2.2");
     assert_eq!(
         (less.code(), less.path()),
-        ("feature_version", "/set/commands/1/arguments/mode/states")
+        (
+            "feature_version",
+            "/set/commands/1/arguments/delay_s/required"
+        )
+    );
+    let less = restated(&artifacts.sets["legacy_v1"], "2.3", "2.2");
+    assert_eq!(
+        (less.code(), less.path()),
+        ("feature_version", "/set/commands/0/arguments/mode/states")
     );
     let more = restated(&artifacts.sets["legacy_v2"], "2.0", "2.1");
     assert_eq!(
@@ -184,7 +193,7 @@ fn artifacts_state_the_version_they_need() {
         (refused.code(), refused.path()),
         (
             "feature_version",
-            "/sets/0/commands/1/arguments/mode/states"
+            "/sets/0/commands/1/arguments/delay_s/required"
         )
     );
     let mut remove_arguments = |set: usize, command: usize| {

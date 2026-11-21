@@ -552,13 +552,15 @@ fn packet_argument(given: f64) -> Gen {
         maybe(given, argument_range(given)),
         maybe(given, list(text(), 0..3)),
         maybe(given, literal()),
+        maybe(given, boolean()),
     )
-        .prop_map(|(unit, range, states, default)| {
+        .prop_map(|(unit, range, states, default, required)| {
             object([
                 ("unit", unit),
                 ("range", range),
                 ("states", states),
                 ("default", default),
+                ("required", required),
             ])
         })
         .boxed()

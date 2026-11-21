@@ -875,6 +875,11 @@ fn a_packet_narrows_an_argument_in_the_arguments_unit() {
         (&delay, json!({ "states": ["A"] }), NarrowError::NotEnum),
         (&mode, json!({ "states": [] }), NarrowError::NoStates),
         (&mode, json!({ "states": ["B"] }), NarrowError::UnknownState),
+        (
+            &delay,
+            json!({ "required": true, "default": 1 }),
+            NarrowError::RequiredDefault,
+        ),
     ] {
         assert_eq!(
             argument.narrowed(&limits(packet.clone())),
@@ -910,6 +915,34 @@ fn a_packet_narrows_an_enum_to_the_states_it_accepts() {
         mode.states
     );
     assert_eq!(limits(json!({ "states": [] })).states, Some(Vec::new()));
+}
+
+#[test]
+fn a_packet_that_requires_an_argument_takes_no_default() {
+    let delay = argument(json!({
+        "name": "delay_s", "type": "f64", "unit": "s", "range": { "max": 3600 }, "default": 0
+    }));
+    // Its other limits still narrow the argument.
+    let narrowed = delay
+        .narrowed(&limits(json!({ "required": true, "range": { "max": 10 } })))
+        .unwrap();
+    assert_eq!(narrowed.default, None);
+    assert_eq!(
+        narrowed.range_ends(),
+        Some(RangeEnds::Numbers(None, Some(10.0)))
+    );
+    // False is the default, which validation refuses written out: it
+    // changes nothing.
+    let narrowed = delay
+        .narrowed(&limits(json!({ "required": false })))
+        .unwrap();
+    assert_eq!(narrowed, delay);
+    // Required with no default in the catalog: none either way.
+    let count = argument(json!({ "name": "n", "type": "u64" }));
+    let narrowed = count
+        .narrowed(&limits(json!({ "required": true })))
+        .unwrap();
+    assert_eq!(narrowed, count);
 }
 
 #[test]
@@ -999,6 +1032,34 @@ fn a_set_needs_the_version_of_its_newest_feature() {
         (need.pointer.as_str(), need.version),
         ("/commands/1/arguments/mode/states", IrVersion::new(2, 3))
     );
+    // Required (2.3), written either way: `false` is refused by
+    // validation, which reads the key only at 2.3. A name with `/` in it
+    // is escaped in the pointer.
+    for required in [true, false] {
+        let mut packet = CommandPacket::new("E", "e", Vec::new());
+        packet.arguments.insert(
+            "a/b".to_string(),
+            limits(json!({ "states": ["A"], "required": required })),
+        );
+        let mut set = Set::new("s", "f");
+        set.commands.push(packet);
+        let needs: Vec<(String, &str)> = set
+            .needs()
+            .into_iter()
+            .map(|need| (need.pointer, need.feature))
+            .collect();
+        assert_eq!(
+            needs,
+            [
+                ("/commands/0/arguments".to_string(), "arguments"),
+                ("/commands/0/arguments/a~1b/states".to_string(), "states"),
+                (
+                    "/commands/0/arguments/a~1b/required".to_string(),
+                    "required"
+                ),
+            ]
+        );
+    }
 }
 
 mod narrowing {

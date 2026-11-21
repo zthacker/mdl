@@ -77,6 +77,15 @@ pub(super) fn narrowed_arguments(
                         }
                     }
                 }
+                // A packet that requires an argument it encodes (IR 2.3)
+                // sends no default, whatever else its limits get wrong:
+                // where they have problems, a required list's catalog
+                // default isn't held to one length with the lists it
+                // shares a count with. One it doesn't encode is reported,
+                // and keeps the default the set would send.
+                if encoded && limits.required == Some(true) && limits.default.is_none() {
+                    argument.default = None;
+                }
             }
             PacketArguments {
                 arguments: Some(arguments),
@@ -177,13 +186,31 @@ fn check_packet_argument(
             ),
         );
     }
-    if limits.range.is_none() && limits.default.is_none() && limits.states.is_none() {
+    let values = limits.range.is_some() || limits.default.is_some();
+    let empty = !values && limits.states.is_none() && limits.required.is_none();
+    if empty {
         found.error(
             Code::Empty,
             place,
-            "a packet's argument gives a range, a default or the states it accepts; omit it \
-             otherwise",
+            "a packet's argument gives a range, a default, the states it accepts or required; \
+             omit it otherwise",
         );
+    }
+    match (limits.required, &limits.default) {
+        (Some(false), _) => found.error(
+            Code::ExplicitDefault,
+            &place.key("required"),
+            "required: false is the default; omit it",
+        ),
+        (Some(true), Some(_)) => found.error(
+            Code::RequiredDefault,
+            &place.key("default"),
+            format!(
+                "argument {name} is required here, so this default would never be sent; give a \
+                 default or require the argument, not both"
+            ),
+        ),
+        _ => {}
     }
     if let Some(states) = &limits.states {
         check_packet_states(argument, states, place, &mut found);
@@ -194,17 +221,34 @@ fn check_packet_argument(
     let states_sound = limits.states.is_none() || states_only(argument, limits).is_some();
     if let Some(unit) = &limits.unit {
         let at = place.key("unit");
-        check_unit_code(unit, &at, &mut found);
-        let argument_name = format!("argument {name}");
-        let converts = argument.ty == ParamType::F64;
-        check_unit(
-            Some(unit),
-            argument.unit.as_deref(),
-            &argument_name,
-            converts,
-            &at,
-            &mut found,
-        );
+        if values {
+            check_unit_code(unit, &at, &mut found);
+            let argument_name = format!("argument {name}");
+            let converts = argument.ty == ParamType::F64;
+            check_unit(
+                Some(unit),
+                argument.unit.as_deref(),
+                &argument_name,
+                converts,
+                &at,
+                &mut found,
+            );
+        } else if !empty {
+            // States and required have no unit, so it's only checked for
+            // being here at all: the argument's own is its default written
+            // out, and any other has nothing to apply to.
+            let code = if argument.unit.as_deref() == Some(unit.as_str()) {
+                Code::ExplicitDefault
+            } else {
+                Code::CommandShape
+            };
+            found.error(
+                code,
+                &at,
+                "a packet's unit is the one its range and default are in, and this argument \
+                 gives neither; omit unit",
+            );
+        }
     }
     let mut own = argument.clone();
     own.range = limits.range.clone();

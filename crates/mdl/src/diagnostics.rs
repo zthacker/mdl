@@ -134,6 +134,9 @@ pub enum Code {
     UnmappedArgument,
     /// A state a command packet accepts that isn't one of its argument's.
     UnknownState,
+    /// A default of a command packet's own for an argument it requires,
+    /// which it would never send.
+    RequiredDefault,
     /// An argument default that doesn't fit the argument, or that a
     /// command packet encoding the argument can't write.
     DefaultValue,
@@ -224,6 +227,7 @@ impl Code {
             Code::UnknownArgument => "unknown_argument",
             Code::UnmappedArgument => "unmapped_argument",
             Code::UnknownState => "unknown_state",
+            Code::RequiredDefault => "required_default",
             Code::DefaultValue => "default_value",
             Code::CommandOnly => "command_only",
             Code::CommandShape => "command_shape",

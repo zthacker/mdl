@@ -103,11 +103,52 @@ fn arguments_are_written_through_the_inverse_of_their_conversions() {
 #[test]
 fn a_left_out_argument_takes_its_default() {
     let sets = sets_of(&fixture(), "vendor_x");
-    let encoded = sets
-        .encode(&set_mode("vendor_x_v2").with_argument("mode", "SAFE"))
+    let table =
+        || CommandRequest::new("vendor_x_v2", "eps.load_table").with_argument("table", vec![0xAA]);
+    let left_out = sets.encode(&table()).unwrap();
+    let given = sets.encode(&table().with_argument("slot", 0_u64)).unwrap();
+    assert_eq!(left_out.payload, given.payload);
+    assert_eq!(left_out.defaulted, ["slot"]);
+    assert!(given.defaulted.is_empty());
+}
+
+/// A set whose packet requires an argument (IR 2.3) never sends the
+/// catalog's default for it; the sets that don't still do.
+#[test]
+fn a_set_that_requires_an_argument_sends_no_default() {
+    let mode = |set: &str| set_mode(set).with_argument("mode", "SAFE");
+    let vendor_x = sets_of(&fixture(), "vendor_x");
+    let refused = vendor_x.encode(&mode("vendor_x_v2")).unwrap_err();
+    assert_eq!(refused.code(), "missing_argument");
+    assert_eq!(
+        refused.to_string(),
+        "command eps.set_mode, argument delay_s: the set requires it, so the catalog's default, \
+         0, isn't sent"
+    );
+    let sent = vendor_x
+        .encode(&mode("vendor_x_v2").with_argument("delay_s", 0_u64))
         .unwrap();
-    assert_eq!(encoded.payload, [26, 0, 0, 0, 0x7D, 0x68]);
+    assert_eq!(sent.payload, [26, 0, 0, 0, 0x7D, 0x68]);
+    assert!(sent.defaulted.is_empty());
+    // Vendor J's packet sends its own default, and legacy's, which doesn't
+    // encode the argument, the catalog's.
+    let vendor_j = sets_of(&fixture(), "vendor_j");
+    let encoded = vendor_j.encode(&mode("vendor_j_v1")).unwrap();
     assert_eq!(encoded.defaulted, ["delay_s"]);
+    let legacy = sets_of(&fixture(), "legacy");
+    let request = mode("legacy_v1").with_target(NativeId::from_text("SAT-9"));
+    assert_eq!(legacy.encode(&request).unwrap().defaulted, ["delay_s"]);
+
+    // Required where the catalog has no default: the request needs it all
+    // the same.
+    let mut bundle = fixture();
+    bundle["sets"][0]["commands"][1]["arguments"]["mode"]["required"] = json!(true);
+    let vendor_x = sets_of(&bundle, "vendor_x");
+    let request = set_mode("vendor_x_v2").with_argument("delay_s", 0_u64);
+    assert_eq!(
+        vendor_x.encode(&request).unwrap_err().to_string(),
+        "command eps.set_mode, argument mode: it has no default, so the request needs it"
+    );
 }
 
 #[test]

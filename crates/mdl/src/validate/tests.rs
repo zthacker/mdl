@@ -2649,6 +2649,140 @@ fn a_packet_narrows_the_arguments_it_encodes() {
     );
 }
 
+/// A packet that requires an argument (IR 2.3) never sends a default for
+/// it: it gives none of its own, and the catalog's isn't checked against
+/// it.
+#[test]
+fn a_packet_requires_an_argument() {
+    let at = "/sets/0/commands/1/arguments/delay_s";
+    // The catalog's default, 0, is outside this range, and with the field's
+    // offset it would be a raw value of -100, which a uint can't hold. Only
+    // a packet that sends it has to take it.
+    let offset = |v: &mut Value| {
+        let delay = &mut set_mode_packet(v)["entries"][2];
+        delay["conversion"]["coefficients"] = json!([10, 0.1]);
+        delay["inverse"]["coefficients"] = json!([-100, 10]);
+    };
+    let range = json!({ "min": 10 });
+    assert_eq!(
+        problems(|v| {
+            offset(v);
+            limit(
+                v,
+                json!({ "delay_s": { "range": range, "required": true } }),
+            );
+        }),
+        vec![]
+    );
+    assert_one(Code::DefaultValue, &format!("{at}/range"), |v| {
+        offset(v);
+        limit(v, json!({ "delay_s": { "range": range } }));
+    });
+    // Its own default would never be sent.
+    assert_one(Code::RequiredDefault, &format!("{at}/default"), |v| {
+        limit(v, json!({ "delay_s": { "required": true, "default": 5 } }));
+    });
+    assert_eq!(
+        messages(|v| limit(v, json!({ "delay_s": { "required": true, "default": 5 } }))),
+        [
+            "argument delay_s is required here, so this default would never be sent; give a \
+             default or require the argument, not both"
+        ]
+    );
+    // False is the default.
+    assert_one(Code::ExplicitDefault, &format!("{at}/required"), |v| {
+        limit(v, json!({ "delay_s": { "required": false } }));
+    });
+    // An argument the catalog gives no default may be required too, which
+    // still means something if a later catalog gives it one.
+    assert_eq!(
+        problems(|v| limit(
+            v,
+            json!({ "mode": { "states": ["SAFE", "NOMINAL"], "required": true } })
+        )),
+        vec![]
+    );
+    // A packet that doesn't encode the argument has nothing to require.
+    assert_one(
+        Code::UnmappedArgument,
+        "/sets/2/commands/0/arguments/delay_s",
+        |v| v["sets"][2]["commands"][0]["arguments"] = json!({ "delay_s": { "required": true } }),
+    );
+    // A unit is what a packet's range and default are in: beside states or
+    // required alone, the argument's own is its default written out, and
+    // another (even one MDL doesn't know) has nothing to apply to. Alone,
+    // the argument is empty.
+    assert_one(Code::ExplicitDefault, &format!("{at}/unit"), |v| {
+        limit(v, json!({ "delay_s": { "unit": "s", "required": true } }));
+    });
+    assert_one(Code::CommandShape, &format!("{at}/unit"), |v| {
+        limit(
+            v,
+            json!({ "delay_s": { "unit": "furlongz", "required": true } }),
+        );
+    });
+    assert_one(Code::CommandShape, &format!("{at}/unit"), |v| {
+        limit(v, json!({ "delay_s": { "unit": "ms", "required": true } }));
+    });
+    assert_eq!(
+        messages(|v| limit(v, json!({ "delay_s": { "unit": "ms", "required": true } }))),
+        [
+            "a packet's unit is the one its range and default are in, and this argument gives \
+             neither; omit unit"
+        ]
+    );
+    assert_one(
+        Code::CommandShape,
+        "/sets/0/commands/1/arguments/mode/unit",
+        |v| {
+            limit(
+                v,
+                json!({ "mode": { "unit": "s", "states": ["SAFE", "NOMINAL"] } }),
+            )
+        },
+    );
+    assert_one(Code::Empty, at, |v| {
+        limit(v, json!({ "delay_s": { "unit": "m" } }))
+    });
+    // A catalog default with a problem of its own is reported there, and
+    // not again at vendor X's field, which never sends it: -1 is no raw
+    // value a uint holds.
+    assert_one(
+        Code::DefaultValue,
+        "/catalog/commands/eps.set_mode/arguments/1/default",
+        |v| command(v, "eps.set_mode")["arguments"][1]["default"] = json!(-1),
+    );
+    // Lists that share a count have defaults of one length (§2.5), but for
+    // a list the packet requires, whose default it never sends; so too
+    // where that list's limits have another problem.
+    let disagreeing = |v: &mut Value| {
+        with_lists(v);
+        let arguments = &mut v["catalog"]["commands"]["nav.burst"]["arguments"];
+        arguments[0]["default"] = json!([1, 2]);
+        arguments[1]["default"] = json!([1, 2, 3]);
+    };
+    assert_one(
+        Code::DefaultValue,
+        &format!("{BURST}/entries/3"),
+        disagreeing,
+    );
+    assert_eq!(
+        problems(|v| {
+            disagreeing(v);
+            burst(v)["arguments"] = json!({ "weights": { "required": true } });
+        }),
+        vec![]
+    );
+    assert_one(
+        Code::CommandShape,
+        &format!("{BURST}/arguments/weights/unit"),
+        |v| {
+            disagreeing(v);
+            burst(v)["arguments"] = json!({ "weights": { "required": true, "unit": "s" } });
+        },
+    );
+}
+
 #[test]
 fn a_packet_accepts_some_of_an_enums_states() {
     let at = "/sets/0/commands/1/arguments/mode";

@@ -38,7 +38,8 @@ checksums; this document uses those definitions and doesn't repeat them.
 - Each given argument MUST be one of the command's
   [`unknown_argument`], given once [`duplicate_argument`].
 - An argument left out takes its default, the packet's where it gives
-  one (§2.6); one without a default is [`missing_argument`]. The result
+  one (§2.6); one without a default is [`missing_argument`], as is one
+  the packet requires (§2.6), whatever the catalog's default. The result
   lists the defaulted arguments.
 - Arguments are checked in two passes, and the first problem is the
   error. First the given names, in the order given [`unknown_argument`,
@@ -73,7 +74,8 @@ double past it, as canonical JSON reads it, so an `f64` default of 1e21
 is written as a number and an integer argument's wide default as a string.
 
 Validation guarantees that a default encodes in every command packet that
-encodes its argument: it becomes a raw value its field holds (§3.1 to
+encodes its argument and doesn't require it (§2.6): it becomes a raw value
+its field holds (§3.1 to
 §3.4), and a length its length field holds (§3.5); each value of a list
 default does so in the array's element, or in its record's field. So a
 request that leaves an argument out never fails on the argument's default.
@@ -123,8 +125,8 @@ sent: a list equal to it value by value, in order.
 A command packet MAY narrow what it accepts of the arguments it encodes
 (`arguments`, IR 2.2), as a vendor's packet under a fleet's catalog does:
 by argument name, a `range`, a `default` or both, in `unit`, the
-argument's when it's left out, and for an enum argument the `states` it
-accepts (IR 2.3).
+argument's when it's left out; for an enum argument, the `states` it
+accepts; and whether it's `required` (both IR 2.3).
 
 - A value is checked against the catalog's range and the packet's, so
   it MUST lie within both [`out_of_range`], whose message names the
@@ -145,23 +147,38 @@ accepts (IR 2.3).
   state its catalog has.
 - The packet's default is the argument's default with that packet; the
   catalog's is used only where the packet gives none.
+- `required: true` means every request sent with the packet gives the
+  argument, as a vendor's packet needs a value the fleet's catalog lets
+  other vendors leave out. Left out, it's [`missing_argument`], whose
+  message says the set requires it, even where the catalog has a
+  default: that default isn't sent with the packet. `false` is the
+  default. An argument the catalog gives no default may be required too:
+  that changes nothing now, and keeps the packet's meaning if a later
+  catalog gives it one.
 - A `unit` other than the argument's converts the range's ends and the
   default into the argument's unit (`units.md` §4) before anything is
   compared, which only an `f64` argument's limits can need: an integer
   argument's are in its own unit.
 - Validation guarantees that each names an argument of the command
   [`unknown_argument`] that the packet encodes [`unmapped_argument`] and
-  gives a range, a default or states [`empty`], in a unit that converts
-  [`unit_mismatch`]; that the two ranges share a value [`value_range`];
-  that states are given only for an enum argument [`param_shape`], at
-  least one [`empty`], each one of the argument's states
-  [`unknown_state`, suggesting the closest name] listed once
-  [`duplicate_name`] and in the catalog's order [`not_sorted`], so a set
-  of states has one spelling and a set one digest; and that the default
+  gives a range, a default, states or `required` [`empty`], in a unit that
+  converts [`unit_mismatch`], given only beside a range or a default, the
+  values it's for [`explicit_default` where it's the argument's own unit,
+  `command_shape` otherwise]; that `required` is written only
+  as `true` [`explicit_default`] and never beside a default of the
+  packet's own, which would never be sent [`required_default`]; that the
+  two ranges share a value [`value_range`]; that states are given only
+  for an enum argument [`param_shape`], at least one [`empty`], each one
+  of the argument's states [`unknown_state`, suggesting the closest name]
+  listed once [`duplicate_name`] and in the catalog's order
+  [`not_sorted`], so a set of states has one spelling and a set one
+  digest; and that the default
   the packet sends is one both ranges allow and one of its states
-  [`default_value`]. Its other guarantees (§2.2, §2.5, §3.1) hold for the
-  argument as the packet narrows it, so a packet that keeps an argument to
-  what its field holds encodes it, whatever the catalog allows.
+  [`default_value`]. A packet that requires an argument sends no default,
+  so the catalog's isn't checked against it. Its other guarantees (§2.2,
+  §2.5, §3.1) hold for the argument as the packet narrows it, so a packet
+  that keeps an argument to what its field holds encodes it, whatever the
+  catalog allows.
 - Decoding a command (§7.4) tests a value against the narrowed range and
   states, and an argument the packet leaves out decodes to its default as
   above.

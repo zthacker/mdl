@@ -380,6 +380,7 @@
           "canonical": "eps.set_mode",
           "metadata": { "apid": 300 },
           "arguments": {
+            "delay_s": { "required": true },
             "mode": { "states": ["SAFE", "NOMINAL"] }
           },
           "entries": [

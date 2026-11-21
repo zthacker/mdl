@@ -183,6 +183,7 @@ pub const REQUIRED: &[&str] = &[
     "key:packet_argument.range",
     "key:packet_argument.states",
     "key:packet_argument.default",
+    "key:packet_argument.required",
 ];
 
 /// The features `value`, a bundle, uses.

@@ -127,7 +127,11 @@ defmodule MDLTest do
     # one the catalog doesn't have.
     test "a state a packet doesn't accept", context do
       request = fn mode ->
-        %{set: "vendor_x_v2", command: "eps.set_mode", arguments: %{"mode" => mode}}
+        %{
+          set: "vendor_x_v2",
+          command: "eps.set_mode",
+          arguments: %{"mode" => mode, "delay_s" => 0}
+        }
       end
 
       assert {:error, %MDL.Error{code: :unsupported_state, message: message}} =
@@ -137,6 +141,20 @@ defmodule MDLTest do
 
       assert {:error, %MDL.Error{code: :unknown_state}} =
                MDL.encode(context.kitchen, "vendor_x", request.("SCIENCE"))
+    end
+
+    # Vendor X's packet requires delay_s, so the catalog's default isn't
+    # sent with it.
+    test "an argument a packet requires", context do
+      request = %{set: "vendor_x_v2", command: "eps.set_mode", arguments: %{"mode" => "SAFE"}}
+
+      assert {:error, %MDL.Error{code: :missing_argument, message: message}} =
+               MDL.encode(context.kitchen, "vendor_x", request)
+
+      assert message =~ "the set requires it, so the catalog's default, 0, isn't sent"
+
+      given = put_in(request, [:arguments, "delay_s"], 0)
+      assert {:ok, %MDL.Encoded{defaulted: []}} = MDL.encode(context.kitchen, "vendor_x", given)
     end
 
     # An artifact's identity is its canonical JSON's digest, so changing a

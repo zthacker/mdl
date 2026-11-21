@@ -249,6 +249,10 @@ pub enum ArgumentProblem {
     Duplicate,
     #[error("it has no default, so the request needs it")]
     Missing,
+    /// An argument the set's packet requires (IR 2.3), left out: the
+    /// catalog's default, which the packet never sends, as text.
+    #[error("the set requires it, so the catalog's default, {default}, isn't sent")]
+    Required { default: String },
     #[error("{given} isn't {expected}")]
     WrongType {
         given: String,
@@ -301,7 +305,7 @@ impl ArgumentProblem {
         match self {
             ArgumentProblem::Unknown => "unknown_argument",
             ArgumentProblem::Duplicate => "duplicate_argument",
-            ArgumentProblem::Missing => "missing_argument",
+            ArgumentProblem::Missing | ArgumentProblem::Required { .. } => "missing_argument",
             ArgumentProblem::WrongType { .. } => "wrong_type",
             ArgumentProblem::NonFinite { .. } => "non_finite",
             ArgumentProblem::UnknownState { .. } | ArgumentProblem::NoState { .. } => {
@@ -516,7 +520,19 @@ fn check_arguments<'a>(
                 defaulted.push(argument.name.as_str());
                 default.clone()
             }
-            (None, None) => return Err(error(&argument.name, ArgumentProblem::Missing)),
+            (None, None) => {
+                let required = packet
+                    .arguments
+                    .get(&argument.name)
+                    .is_some_and(|limits| limits.required == Some(true));
+                let problem = match &argument.default {
+                    Some(default) if required => ArgumentProblem::Required {
+                        default: show_literal(default),
+                    },
+                    _ => ArgumentProblem::Missing,
+                };
+                return Err(error(&argument.name, problem));
+            }
         };
         // A set from before the argument was added doesn't encode it, so
         // only its default can be sent with that set.
