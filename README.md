@@ -227,6 +227,43 @@ or later and [`just`](https://github.com/casey/just).
 
 ## Concepts
 
+How definitions fit together: one catalog per build; each family has a set
+for each layout version; a set's packets and command packets hold entries,
+and each entry maps to a catalog param or takes a command argument's value.
+
+```mermaid
+erDiagram
+    CATALOG ||--o{ PARAM : names
+    CATALOG ||--o{ COMMAND : names
+    COMMAND ||--o{ ARGUMENT : takes
+    FAMILY ||--|{ SET : "one per layout version"
+    SET ||--o{ PACKET : "telemetry layouts"
+    SET ||--o{ COMMAND_PACKET : "command layouts"
+    PACKET ||--|{ ENTRY : holds
+    COMMAND_PACKET ||--|{ ENTRY : holds
+    ENTRY }o--o| PARAM : "maps to"
+    ENTRY }o--o| ARGUMENT : "takes its value from"
+    COMMAND_PACKET }o--|| COMMAND : encodes
+    COMMAND_PACKET ||--o{ PACKET_ARGUMENT : "its own limits"
+    PACKET_ARGUMENT }o--|| ARGUMENT : narrows
+    FAMILY {
+        string encoding "binary or json"
+        string byte_order "big or little"
+        string alias "where the sender's id is"
+        string version "optional: where the layout version is"
+    }
+    PACKET {
+        map identify "apid = 100"
+    }
+    PACKET_ARGUMENT {
+        string unit "IR 2.2"
+        range range "IR 2.2"
+        string default "IR 2.2"
+        list states "IR 2.3"
+        bool required "IR 2.3"
+    }
+```
+
 What definitions say:
 
 | Term | Meaning |
@@ -248,6 +285,21 @@ What building makes:
 | Artifact | A catalog, family or set written as canonical JSON, named by its digest ([spec](spec/canonical-json.md)). |
 | Store | A directory of artifacts and a manifest naming the latest build ([spec](spec/store.md)). |
 | `def_version` | A set artifact's digest, stamped on everything it decodes or encodes. |
+
+The bundle exists only in the compiler, for one build. A store keeps every
+artifact any build wrote; its manifest names the latest build, and each set
+pins the family and catalog it was built against, so a `def_version` on
+stored telemetry always resolves. A service opens the store and holds the
+loaded build in memory, validated by its own release's rules.
+
+```mermaid
+erDiagram
+    MANIFEST ||--|| CATALOG_ARTIFACT : "the latest catalog"
+    MANIFEST ||--|{ FAMILY_ARTIFACT : "each family, name to digest"
+    MANIFEST ||--|{ SET_ARTIFACT : "each set, name to digest"
+    SET_ARTIFACT }o--|| FAMILY_ARTIFACT : pins
+    SET_ARTIFACT }o--|| CATALOG_ARTIFACT : "pins, maybe an older one"
+```
 
 What comes out of decoding:
 
