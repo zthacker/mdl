@@ -41,13 +41,14 @@ maintainer reads the draft over and publishes it, which creates the tag.
   kept by GitHub, of the repository, commit and workflow run that built
   it, which `gh attestation verify` checks.
 
-The Elixir binding isn't on Hex yet, nor are the crates on crates.io
-(`publish = false`): Elixir users depend on this repository at the
-release's tag, which builds the native library from source. The binding
-goes to Hex, as the package `mdl` at the same version, with the crates on
-crates.io, so that its package can build from source too; step 9
-publishes it then. As `mix.exs` defines the package today, it holds no
-native source and downloads its native library from the release.
+The Elixir binding is on Hex as the package `mdl`, at the release's
+version, from 0.2.0 on; step 9 publishes each version once its GitHub
+release is out. The package holds no native source: it downloads the
+release's native library for its platform. On a platform the release
+doesn't build for, Elixir users depend on this repository at the
+release's tag, which builds the library from source. The crates aren't
+on crates.io (`publish = false`); once they are, the package can carry
+its native source and build from it too.
 
 ## Once, in the repository's settings
 
@@ -87,6 +88,12 @@ and the changelog says so.
    cargo update --workspace --manifest-path fuzz/Cargo.toml
    cargo update --workspace --manifest-path bindings/elixir/native/mdl_nif/Cargo.toml
    ```
+
+   Then update the READMEs where they name the version: the download
+   and `cargo install` lines in `README.md`, `morphc --version`'s output
+   in `crates/morphc/README.md`, and both dependency lines in
+   `bindings/elixir/README.md` (Hex's requirement changes only for a
+   new minor or major version).
 
 2. **Write the changelog.** In `CHANGELOG.md`, move what's under
    `## [Unreleased]` into a new section headed `## [X.Y.Z] - YYYY-MM-DD`,
@@ -150,13 +157,14 @@ and the changelog says so.
 8. **Pull the tag** into your checkout, if you want it there:
    `git fetch --tags`.
 
-9. **Publish the Elixir package to Hex**, once the binding goes there
-   (not yet; until then, skip this step). From a clean checkout of the
-   tag, with your Hex account:
+9. **Publish the Elixir package to Hex**, from a clean checkout of the
+   tag, logged in to Hex (`mix hex.user auth`, once) as one of the
+   package's owners (`mix hex.owner list mdl` names them):
 
    ```sh
    git switch --detach vX.Y.Z
    scripts/release.sh hex vX.Y.Z
+   git switch main
    ```
 
    It refuses unless the checkout is the tag with no changes, since Hex
@@ -168,13 +176,19 @@ and the changelog says so.
    libraries `MDL.Native` downloads, each with the SHA-256 the release's
    `SHA256SUMS` gives, then runs `mix hex.publish`, which lists the
    package's files (the checksum file among them) and asks before
-   publishing. The checksum file is removed afterwards, whatever happens:
-   in a checkout, its presence makes the binding download its library
-   instead of building it.
+   publishing, then for a one-time code if the account has two-factor
+   authentication. It publishes the package, then its docs. The checksum
+   file is removed afterwards, whatever happens: in a checkout, its
+   presence makes the binding download its library instead of building
+   it.
 
    The download needs the release published and the repository public,
    and it compiles the binding first, from source, so it needs Rust 1.91
    or later and Elixir 1.18 or later.
+
+   Then check the package's page, `https://hex.pm/packages/mdl/X.Y.Z`,
+   and its docs, `https://hexdocs.pm/mdl/X.Y.Z` (they can take a minute
+   to appear).
 
 ## A dry run
 

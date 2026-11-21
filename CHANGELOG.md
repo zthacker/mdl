@@ -32,6 +32,15 @@ them too.
   members or elements, which XTCE 1.3 allows, is reported as unsupported
   (`xtce.unsupported`) rather than as naming nothing.
 
+### Releases
+
+- The Elixir binding is on Hex as `mdl`, from 0.2.0 on, and each
+  release is published there after its GitHub release (RELEASING.md).
+  The package downloads the native library the release built for its
+  platform, Linux on x86_64 and aarch64, and macOS, so installing it
+  needs no Rust; on other platforms the binding is still a git
+  dependency on this repository.
+
 ## [0.2.0] - 2026-11-21
 
 Command limits for each vendor in a mixed fleet, and a vendor's next

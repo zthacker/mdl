@@ -9,9 +9,34 @@ semantics of its own, so it decodes and encodes exactly as `morphc` does.
 
 ## Installing
 
-Depend on this repository, at a release's tag or a commit, with Rustler to
-build the native library. It needs Elixir 1.18 or later and Rust 1.91 or
-later wherever the app compiles:
+The binding is on Hex as [`mdl`](https://hex.pm/packages/mdl). It needs
+Elixir 1.18 or later:
+
+```elixir
+def deps do
+  [
+    {:mdl, "~> 0.2.0"}
+  ]
+end
+```
+
+The package holds no native source, so installing needs no Rust. When
+the app compiles, it downloads the release's archive of the native
+library for the platform, and uses it only if the archive's SHA-256 is
+one the package lists. Each release builds it for Linux on x86_64 and
+aarch64 (glibc 2.28 or later, or musl) and macOS (10.12 or later on
+Intel, 11.0 or later on Apple silicon), and runs the binding's tests on
+each. For a build without network access, put the archive, under the
+release's name for it (`libmdl_nif-vX.Y.Z-nif-2.15-<target>.so.tar.gz`),
+in a directory that `RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH` names.
+
+On Alpine the library needs `libgcc`, which it uses to turn a panic into
+an exception; Alpine's Erlang needs it too, so a system that runs the
+BEAM has it.
+
+On any other platform, or for a commit between releases, depend on this
+repository instead, at a release's tag or a commit, with Rustler to
+build the native library from source:
 
 ```elixir
 def deps do
@@ -22,19 +47,8 @@ def deps do
 end
 ```
 
-On Alpine the library needs `libgcc`, which it uses to turn a panic into
-an exception; Alpine's Erlang needs it too, so a system that runs the
-BEAM has it.
-
-The binding isn't on Hex yet. Each release already builds precompiled
-native libraries, for Linux on x86_64 and aarch64 (glibc 2.28 or later,
-or musl) and macOS (10.12 or later on Intel, 11.0 or later on Apple
-silicon), and runs the binding's tests on each; a Hex package that
-downloads them, so that installing needs no Rust, is planned. The
-binding is ready for it: from a package holding rustler_precompiled's
-checksum file, it downloads its library (which
-`RUSTLER_PRECOMPILED_GLOBAL_CACHE_PATH` can serve offline) instead of
-building it.
+That needs Rust 1.91 or later wherever the app compiles. Nothing tests
+the binding on platforms other than those above.
 
 ## Using it
 

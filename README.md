@@ -428,9 +428,10 @@ Every binding calls the runtime through one API
 ([spec/api.md](spec/api.md)), so a language decodes and encodes exactly as
 `morphc` and the library do. [`bindings/elixir`](bindings/elixir/README.md)
 is the Elixir binding: open a store, decode, encode, describe and look up
-bindings from Elixir, with results as Elixir values. It's a git
-dependency on this repository for now; a Hex package, whose native library
-comes precompiled with each release, is planned.
+bindings from Elixir, with results as Elixir values. It's on Hex as
+[`mdl`](https://hex.pm/packages/mdl), and downloads its native library
+precompiled by the release for Linux on x86_64 and aarch64, and macOS,
+so installing it needs no Rust.
 
 ## Contributing
 
