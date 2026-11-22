@@ -201,8 +201,11 @@ Encodings:
   wider than eight bits; within a byte it doesn't apply. A
   `ByteOrderList` names every byte of the value [`xtce.invalid`]. A
   little-endian value wider than a byte is whole bytes, as `decoding.md`
-  §2.1 reads it. Any other byte order, `bitOrder="leastSignificantBitFirst"`,
-  and `ErrorDetectCorrect` are unsupported.
+  §2.1 reads it. Any other byte order, and
+  `bitOrder="leastSignificantBitFirst"`, are unsupported. So is an
+  `ErrorDetectCorrect` in a value's encoding: XTCE doesn't say whether the
+  value holds the check or is covered by it, and 1.3 deprecates it for a
+  container's (§5).
 - A `DefaultCalibrator` is the field's conversion. A
   `PolynomialCalibrator` is `linear` up to degree 1, else `poly` (degree
   at most 32); terms with one exponent add up. A `SplineCalibrator` of
@@ -283,9 +286,9 @@ that inherits from itself is an error [`xtce.invalid`].
   across entries). A parameter, or member, is mapped at most once in a
   packet, counting the struct types of its struct entries, since MDL maps
   a param from one entry per packet. Segment, stream and indirect
-  entries, a container's own `BinaryEncoding`, and a `TimeAssociation` on
-  an entry or a parameter (it times the value by another parameter, and
-  an MDL sample takes its packet's time) are unsupported.
+  entries, and a `TimeAssociation` on an entry or a parameter (it times
+  the value by another parameter, and an MDL sample takes its packet's
+  time), are unsupported.
 - **Embedded containers.** A `ContainerRefEntry` is a struct entry, named
   for the container, of a struct type holding the container's entries.
   Positions in it are from its own start, and its conditions, sizes and
@@ -318,6 +321,65 @@ that inherits from itself is an error [`xtce.invalid`].
   only when the entry is. A negative `previousEntry`, `containerEnd`,
   `nextEntry` and a location worked out from other values are
   unsupported.
+- **Sizes.** A container's `BinaryEncoding` with a `SizeInBits` of a
+  `FixedValue` is padding after the container's entries, up to that many
+  bits from where they're placed from: the start of the packet, as for
+  `containerStart`, so a header's size says where the next container's
+  entries start and a packet's is the whole packet; for an embedded
+  container, its own start, as Yamcs reads it. Yamcs reads a container's
+  size only there, so padding a container that isn't embedded is a
+  warning [`xtce.differs`]: what follows it, or the packet's length, isn't
+  what Yamcs reads or writes. Entries that take more than the size are an
+  error [`xtce.invalid`], and so is a size that isn't a positive number of
+  bits. A size after an entry a condition can leave out, or one whose size
+  another value gives, is unsupported: the padding would have no fixed
+  size. So is a size after entries placed out of order (the last one
+  listed not reaching furthest), since MDL places the padding after the
+  last one listed, and so are a size another value gives or a lookup
+  list chooses, and transform algorithms. Before XTCE 1.3 a
+  container's `BinaryEncoding` is a value's, so it has a `SizeInBits`
+  [`xtce.invalid`], and a `byteOrder` or `bitOrder` other than its
+  default is unsupported (each value's encoding gives its own); 1.3's
+  has neither.
+- **Checks.** An XTCE 1.3 `ErrorDetectCorrect` in a container's
+  `BinaryEncoding` holds checks over the bytes of each packet built on
+  the container. A check naming the parameter that holds its value
+  (`parameterRef`) makes that parameter's field a checksum entry
+  (`decoding.md` §5.6), which decoding verifies and encoding works out;
+  the parameter gives no sample, and isn't a catalog param unless a field
+  in another packet maps it. One naming none, as before 1.3 none can,
+  has nothing to be checked against, and is left out [`xtce.ignored`].
+  - A `CRC` is MDL's `crc`: `width` (whole bytes, 8 to 64 bits, else
+    unsupported), `Polynomial` as `poly`, `InitRemainder` as `init` and
+    `FinalXOR` as `xor_out` (`hexBinary`, hexadecimal digits without
+    `0x`, each fitting the width, the polynomial without its top bit
+    [`xtce.invalid`]; 0 when left out),
+    `reflectData` as `reflect_in` and `reflectRemainder` as
+    `reflect_out`. These are the names of Michael Barr's CRC code, whose
+    model is the CRC catalogue's that MDL uses. `direction` of
+    `leastSignificantBitFirst` is unsupported: XTCE doesn't say how it
+    differs from the reflections.
+  - A `Checksum` named `sum8` is MDL's 8-bit `sum`, with a
+    `hashSizeInBits` of 8 or none. `sum16`, `sum24` and `sum32` are
+    unsupported, since XTCE doesn't say whether they add bytes or words,
+    as are the others XTCE names (`fletcher16` isn't MDL's `iso8473`,
+    whose check bytes differ) and an `InputAlgorithm`.
+  - An `XOR` is MDL's `xor`. A `Parity` is unsupported: it's one bit.
+  - A check covers the bytes from `bitsFromReference` bits after the
+    start of the packet (whole bytes, else unsupported) up to its own
+    value. XTCE doesn't say where a check's bytes end, so its parameter
+    is a field at the packet's top level that only other checks follow
+    in bits (each covering those before it, as MDL's do); anything else
+    after it is unsupported. Entries follow one another in the order
+    they're listed; where some are placed from the start of the packet,
+    each has to be at a fixed place to tell, and a check in a packet where
+    one isn't is unsupported. A packet built on the container that
+    doesn't hold the parameter has nothing to check it against, so it's
+    imported without the check [`xtce.ignored`]. `reference="end"`, a
+    check on an embedded container, a member of an aggregate, and a
+    parameter that isn't an unsigned integer of the check's width whose
+    raw value is its value, in the family's byte order, always present,
+    are unsupported.
 - **Conditions.** An `IncludeCondition` holding a `Comparison` or a
   `ComparisonList` is the entry's `when`: a `compare`, or `all` of them.
   A `BooleanExpression` is the same nested: `ANDedConditions` is `all`,
@@ -421,7 +483,9 @@ it otherwise.
   container's restriction criteria give its parameter entries their
   values; Yamcs reads no other criteria, so those of an abstract
   meta-command's container are left out [`xtce.ignored`]. Yamcs doesn't
-  read a `CommandContainerSet`, so it's left out too.
+  read a `CommandContainerSet`, so it's left out too. A
+  `CommandContainer`'s size and checks are a telemetry container's (§5):
+  encoding writes the padding as zeros, and works out each check.
 - **Arguments in entries.** An `ArgumentRefEntry`, or an
   `ArrayArgumentRefEntry`, names an argument its own meta-command declares,
   as Yamcs reads it [`xtce.reference`], and an argument is in one entry of
@@ -442,9 +506,10 @@ it otherwise.
   [`xtce.invalid`]. A value for a float, bytes or array argument, however
   it's spelled, is unsupported: MDL constants are single integers and
   text, and Yamcs writes a float through its own arithmetic (§6.3).
-- **Parameters in entries.** A `ParameterRefEntry` is a constant field
-  for the parameter, or one for each member of an aggregate, named as a
-  telemetry field is (§3). It holds the value the sent command's criteria
+- **Parameters in entries.** A `ParameterRefEntry` naming the parameter
+  that holds one of the command's checks is that check (§5). Any other is
+  a constant field for the parameter, or one for each member of an
+  aggregate, named as a telemetry field is (§3). It holds the value the sent command's criteria
   give the parameter or member, as Yamcs fills it: an `==` comparison in a
   `ComparisonList` on the sent command's container's `BaseContainer`, read
   as a comparison's value is (§5). A comparison with another operator, and
@@ -715,7 +780,7 @@ is [`xtce.ignored`]:
 | `xtce.unsupported` | Something MDL can't represent whose absence would change a decoded or encoded value. |
 | `xtce.ignored` | A warning: something left out that doesn't change decoded or encoded values. |
 | `xtce.renamed` | A warning: a name changed to fit MDL's rules. |
-| `xtce.differs` | A warning: a command MDL encodes otherwise than Yamcs (§6.3). |
+| `xtce.differs` | A warning: a command MDL encodes otherwise than Yamcs (§6.3), or a container size MDL pads to and Yamcs doesn't read (§5). |
 | `xtce.namespace` | A warning: a document read as XTCE whose root is in no namespace, or in a misspelling of XTCE 1.2's (§1). |
 | `xtce.options` | Import options the import can't follow: a joined family the build doesn't define or that's JSON, an alias or version that disagrees with it, a `family` option beside `join`, a `set_version` without `join`, a missing set name, or a referring import given no catalog (§3). Reported at the import's first root SpaceSystem, which says which import it is. |
 

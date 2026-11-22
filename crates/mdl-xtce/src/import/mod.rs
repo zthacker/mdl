@@ -15,6 +15,10 @@
 //!
 //! A concrete MetaCommand is a catalog command and a command packet
 //! (`commands`).
+//!
+//! A container's own BinaryEncoding gives it a size, which pads its
+//! entries, and checks over the packet's bytes, which turn the parameters
+//! holding them into checksum entries (`encoding`).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +39,7 @@ mod arguments;
 mod commands;
 mod conditions;
 mod emit;
+mod encoding;
 mod entries;
 
 /// A parameter, or a member of an aggregate one: its SpaceSystem, its
@@ -111,6 +116,7 @@ enum Entry<'d> {
         span: Span,
         when: Option<Object>,
     },
+    Checksum(Box<ChecksumField<'d>>),
 }
 
 impl Entry<'_> {
@@ -120,6 +126,7 @@ impl Entry<'_> {
             Entry::Field(field) => Some(field.span),
             Entry::Array(array) => Some(array.span),
             Entry::Struct(inner) => Some(inner.span),
+            Entry::Checksum(checksum) => Some(checksum.span),
             Entry::Padding { .. } => None,
         }
     }
@@ -129,6 +136,7 @@ impl Entry<'_> {
             Entry::Field(field) => Some(&field.name),
             Entry::Array(array) => Some(&array.name),
             Entry::Struct(inner) => Some(&inner.name),
+            Entry::Checksum(checksum) => Some(&checksum.name),
             Entry::Padding { .. } => None,
         }
     }
@@ -138,6 +146,7 @@ impl Entry<'_> {
             Entry::Field(field) => field.offset,
             Entry::Array(array) => array.offset,
             Entry::Struct(inner) => inner.offset,
+            Entry::Checksum(checksum) => checksum.offset,
             Entry::Padding { .. } => None,
         }
     }
@@ -148,6 +157,7 @@ impl Entry<'_> {
             Entry::Array(array) => array.when.is_some(),
             Entry::Struct(inner) => inner.when.is_some(),
             Entry::Padding { when, .. } => when.is_some(),
+            Entry::Checksum(_) => false,
         }
     }
 }
@@ -200,6 +210,24 @@ struct StructField<'d> {
     when: Option<Object>,
 }
 
+/// A parameter holding a check over the packet's bytes, which decoding
+/// verifies and encoding works out.
+#[derive(Clone)]
+struct ChecksumField<'d> {
+    name: String,
+    key: ParamKey<'d>,
+    /// The XTCE entry.
+    span: Span,
+    /// The parameter's encoding: its size and byte order.
+    scalar: Scalar<'d>,
+    offset: Option<(u32, Span)>,
+    /// The check's element.
+    check: Span,
+    /// MDL's algorithm, as the IR writes it.
+    algorithm: Value,
+    from_bits: Option<(u32, Span)>,
+}
+
 /// Where a struct type comes from.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum TypeId<'d> {
@@ -233,6 +261,9 @@ struct Part<'d> {
     fields: Fields<'d>,
     /// What its BaseContainer's restriction criteria require.
     identify: Vec<(String, i64, Span)>,
+    /// Its BinaryEncoding: its size, from the start of the packet, and the
+    /// checks over the packets built on it.
+    encoding: encoding::ContainerEncoding<'d>,
 }
 
 struct Packet<'d> {
@@ -278,6 +309,9 @@ pub(crate) struct Import<'d, 'r> {
     shapes: BTreeMap<ElId, Option<Shape<'d>>>,
     /// Parameters some entry or comparison names.
     seen: BTreeSet<(usize, &'d str)>,
+    /// Parameters some packet holds a check in, whose params are kept only
+    /// if a field maps them too.
+    checked: BTreeSet<ParamKey<'d>>,
     parts: BTreeMap<ElId, Option<Part<'d>>>,
     /// Struct types, by where each comes from.
     structs: BTreeMap<TypeId<'d>, StructType<'d>>,
@@ -308,6 +342,7 @@ impl<'d, 'r> Import<'d, 'r> {
             names: BTreeMap::new(),
             shapes: BTreeMap::new(),
             seen: BTreeSet::new(),
+            checked: BTreeSet::new(),
             parts: BTreeMap::new(),
             structs: BTreeMap::new(),
             broken: BTreeSet::new(),
@@ -366,6 +401,7 @@ impl<'d, 'r> Import<'d, 'r> {
         let commands = self.commands();
         self.name_types();
         self.report_unused();
+        self.drop_check_params(&packets, &commands);
         let root = tree.spaces.first()?;
         let root_span = root.el.span();
         let (family, order) = match joined {
@@ -400,6 +436,7 @@ impl<'d, 'r> Import<'d, 'r> {
                 (name, self.family_order(&packets, &commands))
             }
         };
+        self.check_orders(order, &packets, &commands)?;
         let set = options.set.clone().unwrap_or_else(|| family.clone());
         // A joining import defines no family: its alias is the family's.
         let (alias, metadata) = match joined {
@@ -573,6 +610,7 @@ impl<'d, 'r> Import<'d, 'r> {
         let mut entries = Vec::new();
         let mut above = Earlier::default();
         let mut identify: BTreeMap<String, (i64, Span)> = BTreeMap::new();
+        let mut checks = Vec::new();
         let mut complete = true;
         for (container_space, container) in chain {
             // After a failure, the rest are still converted for their own
@@ -602,12 +640,25 @@ impl<'d, 'r> Import<'d, 'r> {
             }
             entries.extend(part.entries);
             above.fields.extend(part.fields);
+            // A container's size counts from the start of the packet, as
+            // its entries' locations do; where the entries above are
+            // missing, it can't be worked out.
+            if complete
+                && self
+                    .pad_to(&mut entries, part.encoding.size, false)
+                    .is_none()
+            {
+                complete = false;
+            }
+            checks.extend(part.encoding.checks);
         }
         if !complete {
             return None;
         }
         self.check_absent_locations(&entries)?;
         self.check_entries(&entries, "packet")?;
+        let name = el.item_name()?;
+        self.apply_checks(&mut entries, &checks, &format!("container {name}"))?;
         Some(Packet {
             name: el.item_name()?.to_string(),
             space,
@@ -685,14 +736,7 @@ impl<'d, 'r> Import<'d, 'r> {
 
     fn convert_part(&mut self, space: usize, el: El<'d>, above: &Earlier<'d>) -> Option<Part<'d>> {
         el.check(&CONTAINER, self.report);
-        if let Some(size) = el.child("BinaryEncoding") {
-            self.report.error(
-                Code::Unsupported,
-                size.span(),
-                "a container's own size (BinaryEncoding) isn't supported yet",
-            );
-            return None;
-        }
+        let encoding = self.container_encoding(space, el, false)?;
         let identify = match el.child("BaseContainer") {
             Some(base) => self.restriction(space, base, above)?,
             None => Vec::new(),
@@ -710,6 +754,7 @@ impl<'d, 'r> Import<'d, 'r> {
             entries,
             fields,
             identify,
+            encoding,
         })
     }
 
@@ -786,7 +831,8 @@ impl<'d, 'r> Import<'d, 'r> {
                         .collect()
                 })
                 .unwrap_or_default(),
-            Entry::Padding { .. } => Vec::new(),
+            // A checksum maps no param.
+            Entry::Padding { .. } | Entry::Checksum(_) => Vec::new(),
         }
     }
 
@@ -1326,6 +1372,7 @@ impl<'d, 'r> Import<'d, 'r> {
                     Element::Scalar(scalar) => scalar.order.map(|(order, _)| order),
                     Element::Struct(_) => None,
                 },
+                Entry::Checksum(checksum) => checksum.scalar.order.map(|(order, _)| order),
                 Entry::Struct(_) | Entry::Padding { .. } => None,
             })
             .peekable();

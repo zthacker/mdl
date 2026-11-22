@@ -495,6 +495,23 @@ impl Writer<'_, '_> {
                 }
                 object
             }
+            Entry::Checksum(checksum) => {
+                let mut object = Object::at(checksum.span);
+                object.put("kind", "checksum", None);
+                object.put("name", checksum.name.as_str(), None);
+                if let Some((bits, span)) = checksum.offset {
+                    object.put("offset_bits", bits, Some(span));
+                }
+                if let Some((bits, span)) = checksum.from_bits {
+                    object.put("from_bits", bits, Some(span));
+                }
+                object.put(
+                    "algorithm",
+                    checksum.algorithm.clone(),
+                    Some(checksum.check),
+                );
+                object
+            }
         }
     }
 

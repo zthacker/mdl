@@ -1,3 +1,10 @@
+use mdl::artifact::{Written, build};
+use mdl::bindings::Bindings;
+use mdl::decode::Value as Raw;
+use mdl::encode::CommandRequest;
+use mdl::message::{Message, Payload};
+use mdl::read::read_artifact;
+use mdl::route::FamilySets;
 use mdl::source::{Parsed, Severity, SourceDiagnostic, Sources};
 use mdl::validate::validate;
 use proptest::prelude::*;
@@ -127,6 +134,30 @@ fn bundle(text: &str) -> Value {
 
 fn first_packet(text: &str) -> Value {
     bundle(text)["sets"][0]["packets"][0].clone()
+}
+
+/// The bundle, as JSON, from a document that imports, and its warnings as
+/// (code, message).
+fn warned(text: &str) -> (Value, Vec<(String, String)>) {
+    let (sources, result) = import_all(&[("sat.xml", text)]);
+    match result {
+        Ok(parsed) => {
+            let warnings = shown(&sources, &parsed.warnings)
+                .into_iter()
+                .map(|(_, code, _, message)| (code, message))
+                .collect();
+            (serde_json::to_value(&parsed.bundle).unwrap(), warnings)
+        }
+        Err(diagnostics) => panic!("{:#?}", shown(&sources, &diagnostics)),
+    }
+}
+
+/// Each warning's code, and whether its message holds `wanted`.
+fn codes(warnings: &[(String, String)], wanted: &str) -> Vec<(String, bool)> {
+    warnings
+        .iter()
+        .map(|(code, message)| (code.clone(), message.contains(wanted)))
+        .collect()
 }
 
 #[test]
@@ -4819,4 +4850,825 @@ fn a_binary_types_context_alarms_are_left_out_in_either_version() {
             "{message}"
         );
     }
+}
+
+/// A sequence container with a BinaryEncoding holding `encoding` (none
+/// when it's empty), these entries, and a BaseContainer (or nothing).
+fn encoded(name: &str, encoding: &str, entries: &str, base: &str) -> String {
+    let encoding = if encoding.is_empty() {
+        String::new()
+    } else {
+        format!("<BinaryEncoding>{encoding}</BinaryEncoding>")
+    };
+    format!(
+        r#"<SequenceContainer name="{name}">{encoding}<EntryList>{entries}</EntryList>{base}</SequenceContainer>"#
+    )
+}
+
+fn size(bits: i64) -> String {
+    format!("<SizeInBits><FixedValue>{bits}</FixedValue></SizeInBits>")
+}
+
+/// An abstract header of an 8-bit `Id`, sized `header` bits, and a packet
+/// `Hk` built on it holding a 16-bit `Value`, sized `packet` bits.
+fn sized_packet(header: &str, packet: &str) -> String {
+    let header = encoded("Header", header, &entry("Id"), "")
+        .replace(r#"name="Header""#, r#"name="Header" abstract="true""#);
+    let hk = encoded(
+        "Hk",
+        packet,
+        &entry("Value"),
+        r#"<BaseContainer containerRef="Header"/>"#,
+    );
+    doc(&telemetry(
+        &format!("{U8}{U16}"),
+        &format!("{}{}", param("Id", "U8"), param("Value", "U16")),
+        &format!("{header}{hk}"),
+    ))
+}
+
+/// A container's size counts from the start of the packet, as its
+/// entries' locations do, so a header's says where the next container's
+/// entries start and a packet's is the whole packet. XTCE 1.0 to 1.2 give
+/// a container a BinaryDataEncoding, and 1.3 a type of its own.
+#[test]
+fn a_containers_size_pads_it_from_the_start_of_the_packet() {
+    let text = sized_packet(&size(16), &size(48));
+    let padded = json!([
+        { "kind": "field", "name": "Id", "type": "uint", "size_bits": 8, "canonical": "sat.id" },
+        { "kind": "padding", "size_bits": 8 },
+        { "kind": "field", "name": "Value", "type": "uint", "size_bits": 16, "canonical": "sat.value" },
+        { "kind": "padding", "size_bits": 16 },
+    ]);
+    // Yamcs reads a size only where a container is embedded, so padding
+    // in an inheritance chain differs from what it reads.
+    for text in [text.clone(), in_1_3(&text)] {
+        let (json, warnings) = warned(&text);
+        assert_eq!(json["sets"][0]["packets"][0]["entries"], padded);
+        assert_eq!(
+            codes(&warnings, "which Yamcs leaves out"),
+            [
+                ("xtce.differs".to_string(), true),
+                ("xtce.differs".to_string(), true)
+            ]
+        );
+    }
+    // A size the entries fill adds nothing.
+    let filled = sized_packet(&size(8), &size(24));
+    assert_eq!(
+        first_packet(&filled)["entries"].as_array().map(Vec::len),
+        Some(2)
+    );
+    // Entries placed from the start count where they end.
+    let placed = doc(&telemetry(
+        U8,
+        &param("Id", "U8"),
+        &encoded("P", &size(32), &entry_at("Id", 16), ""),
+    ));
+    let (json, warnings) = warned(&placed);
+    assert_eq!(
+        json["sets"][0]["packets"][0]["entries"][1],
+        json!({ "kind": "padding", "size_bits": 8 })
+    );
+    assert_eq!(warnings.len(), 1);
+}
+
+/// An embedded container's size counts from its own start, as Yamcs
+/// reads it, so its struct type ends with the padding.
+#[test]
+fn an_embedded_containers_size_pads_its_struct_type() {
+    let inner = encoded("Inner", &size(24), &entry("Id"), "")
+        .replace(r#"name="Inner""#, r#"name="Inner" abstract="true""#);
+    let text = doc(&telemetry(
+        &format!("{U8}{U16}"),
+        &format!("{}{}", param("Id", "U8"), param("Value", "U16")),
+        &format!(
+            "{inner}{}",
+            container(
+                "P",
+                &format!(
+                    r#"{}<ContainerRefEntry containerRef="Inner"/>"#,
+                    entry("Value")
+                )
+            )
+        ),
+    ));
+    let json = bundle(&text);
+    assert_eq!(
+        json["sets"][0]["types"]["Inner"]["entries"],
+        json!([
+            { "kind": "field", "name": "Id", "type": "uint", "size_bits": 8, "canonical": "sat.id" },
+            { "kind": "padding", "size_bits": 16 },
+        ])
+    );
+}
+
+/// A command container's size pads the command packet, which encoding
+/// writes as zeros.
+#[test]
+fn a_command_containers_size_pads_the_command() {
+    let text = doc(&commands(
+        ARG_U8,
+        &format!(
+            r#"<MetaCommand name="Go"><ArgumentList>{}</ArgumentList>
+                 <CommandContainer name="Go"><BinaryEncoding>{}</BinaryEncoding><EntryList>
+                   <FixedValueEntry name="Op" binaryValue="07" sizeInBits="8"/>{}
+                 </EntryList></CommandContainer></MetaCommand>"#,
+            argument("A", "U8"),
+            size(32),
+            argument_entry("A")
+        ),
+    ));
+    let (sets, warnings) = family_sets_warned(&text);
+    let encoded = sets
+        .encode(&CommandRequest::new("sat", "sat.go").with_argument("a", 5_u64))
+        .unwrap();
+    assert_eq!(encoded.payload, [7, 5, 0, 0]);
+    // Yamcs sizes a command by its entries.
+    assert_eq!(
+        codes(&warnings, "adds 16 bits of padding"),
+        [("xtce.differs".to_string(), true)]
+    );
+}
+
+#[test]
+fn container_sizes_mdl_cant_pad_to_are_refused() {
+    let refused = |header: &str, packet: &str| one_error(&sized_packet(header, packet));
+    let (code, message) = refused(&size(4), "");
+    assert_eq!(code, "xtce.invalid", "{message}");
+    assert!(
+        message.contains("take 8 bits, more than its SizeInBits of 4"),
+        "{message}"
+    );
+    let (code, message) = refused(&size(0), "");
+    assert_eq!(code, "xtce.invalid", "{message}");
+    // XTCE 1.0 to 1.2 require a size.
+    let (code, message) = one_error(&sized_packet(&size(16), "").replace(&size(16), ""));
+    assert_eq!(code, "xtce.invalid", "{message}");
+    assert!(message.contains("has a SizeInBits"), "{message}");
+    for (encoding, wanted) in [
+        (
+            r#"<SizeInBits><DynamicValue><ParameterInstanceRef parameterRef="Id"/></DynamicValue></SizeInBits>"#,
+            "another value gives",
+        ),
+        (
+            r#"<SizeInBits><DiscreteLookupList><DiscreteLookup value="16"><Comparison parameterRef="Id" value="1"/></DiscreteLookup></DiscreteLookupList></SizeInBits>"#,
+            "lookup list",
+        ),
+        (
+            &format!(
+                r#"{}<FromBinaryTransformAlgorithm name="X"><AlgorithmText language="java">x</AlgorithmText></FromBinaryTransformAlgorithm>"#,
+                size(16)
+            ),
+            "FromBinaryTransformAlgorithm",
+        ),
+    ] {
+        let (code, message) = refused(encoding, "");
+        assert_eq!(code, "xtce.unsupported", "{message}");
+        assert!(message.contains(wanted), "{message}");
+    }
+    // Before 1.3 a container's encoding has a value's byte and bit order,
+    // which mean nothing but their defaults; 1.3's has neither.
+    let ordered = |order: &str| {
+        sized_packet(&size(16), "").replace(
+            "<BinaryEncoding><SizeInBits><FixedValue>16",
+            &format!("<BinaryEncoding {order}><SizeInBits><FixedValue>16"),
+        )
+    };
+    let (json, _) = warned(&ordered(
+        r#"byteOrder="mostSignificantByteFirst" bitOrder="mostSignificantBitFirst""#,
+    ));
+    assert_eq!(
+        json["sets"][0]["packets"][0]["entries"][1],
+        json!({ "kind": "padding", "size_bits": 8 })
+    );
+    let (code, message) = one_error(&ordered(r#"byteOrder="leastSignificantByteFirst""#));
+    assert_eq!(code, "xtce.unsupported", "{message}");
+    let (code, _) = one_error(&ordered(r#"bitOrder="sideways""#));
+    assert_eq!(code, "xtce.invalid");
+    let (code, message) = one_error(&in_1_3(&ordered(r#"byteOrder="mostSignificantByteFirst""#)));
+    assert_eq!(code, "xtce.unsupported", "{message}");
+    assert!(message.contains("attribute byteOrder"), "{message}");
+    // A size after an entry a condition can leave out has no fixed place.
+    let conditional = doc(&telemetry(
+        &format!("{U8}{U16}"),
+        &format!("{}{}", param("Id", "U8"), param("Value", "U16")),
+        &encoded(
+            "P",
+            &size(32),
+            &format!(
+                r#"{}<ParameterRefEntry parameterRef="Value"><IncludeCondition><Comparison parameterRef="Id" value="1"/></IncludeCondition></ParameterRefEntry>"#,
+                entry("Id")
+            ),
+            "",
+        ),
+    ));
+    let (code, message) = one_error(&conditional);
+    assert_eq!(code, "xtce.unsupported", "{message}");
+    assert!(message.contains("whose end varies"), "{message}");
+}
+
+const U32: &str = r#"<IntegerParameterType name="U32" signed="false"><IntegerDataEncoding sizeInBits="32"/></IntegerParameterType>"#;
+const NINE: &str = r#"<BinaryParameterType name="Nine"><BinaryDataEncoding><SizeInBits><FixedValue>72</FixedValue></SizeInBits></BinaryDataEncoding></BinaryParameterType>"#;
+
+/// An XTCE 1.3 packet `P` of nine bytes of `Data` and then `held`, whose
+/// container's ErrorDetectCorrect holds `checks`; the parameters are those
+/// of `held`, each of type `U8`, `U16` or `U32` as its name ends.
+fn checked(checks: &str, held: &[&str]) -> String {
+    let params: String = held
+        .iter()
+        .map(|name| {
+            let ty = if name.ends_with("32") {
+                "U32"
+            } else if name.ends_with("16") {
+                "U16"
+            } else {
+                "U8"
+            };
+            param(name, ty)
+        })
+        .collect();
+    let entries: String = held.iter().map(|name| entry(name)).collect();
+    in_1_3(&doc(&telemetry(
+        &format!("{U8}{U16}{U32}{NINE}"),
+        &format!("{}{params}", param("Data", "Nine")),
+        &encoded(
+            "P",
+            &format!("<ErrorDetectCorrect>{checks}</ErrorDetectCorrect>"),
+            &format!("{}{entries}", entry("Data")),
+            "",
+        ),
+    )))
+}
+
+/// A document imported without a warning, validated and built, its one
+/// family's sets ready to decode and encode with.
+fn family_sets(text: &str) -> FamilySets {
+    let (sets, warnings) = family_sets_warned(text);
+    assert!(warnings.is_empty(), "{warnings:#?}");
+    sets
+}
+
+/// A document imported, validated and built, and its warnings as (code,
+/// message).
+fn family_sets_warned(text: &str) -> (FamilySets, Vec<(String, String)>) {
+    let (sources, result) = import_all(&[("sat.xml", text)]);
+    let parsed = result.unwrap_or_else(|d| panic!("{:#?}", shown(&sources, &d)));
+    let warnings = shown(&sources, &parsed.warnings)
+        .into_iter()
+        .map(|(_, code, _, message)| (code, message))
+        .collect();
+    let validated = validate(parsed.bundle)
+        .unwrap_or_else(|d| panic!("{:#?}", shown(&sources, &parsed.map.locate_all(&d))));
+    let artifacts = build(&validated).unwrap();
+    let load = |written: &Written| read_artifact(written.canonical.as_bytes()).unwrap();
+    let sets: Vec<_> = artifacts.sets.values().map(load).collect();
+    let family = artifacts.families.values().next().unwrap();
+    let sets = FamilySets::new(&load(family), &sets, &[load(&artifacts.catalog)]).unwrap();
+    (sets, warnings)
+}
+
+/// Decoding `payload` from the document's one asset: each entry's raw
+/// unsigned value by name, or the error's code.
+fn raw_values(sets: &FamilySets, payload: &[u8]) -> Result<Vec<(String, u64)>, &'static str> {
+    let bindings = Bindings::from_toml(
+        r#"
+mdl_version = "2.0"
+
+[[binding]]
+family = "sat"
+native_id = "Sat"
+asset = "SAT-1"
+set = "sat"
+effective_from = "2026-01-01T00:00:00Z"
+"#,
+    )
+    .unwrap();
+    let ground = "2026-06-01T12:00:00Z".parse().unwrap();
+    let decoded = sets
+        .decode(&Message::new(Payload::Binary(payload), ground), &bindings)
+        .map_err(|e| e.code())?;
+    Ok(decoded
+        .record
+        .iter()
+        .filter_map(|(name, value)| match value {
+            Raw::Uint(n) => Some((name.to_string(), *n)),
+            _ => None,
+        })
+        .collect())
+}
+
+/// The CRC catalogue's check input.
+const CHECK: &[u8] = b"123456789";
+
+/// `CHECK` and then each value, big-endian in `bytes` bytes.
+fn check_payload(values: &[(u64, usize)]) -> Vec<u8> {
+    let mut payload = CHECK.to_vec();
+    for (value, bytes) in values {
+        payload.extend_from_slice(&value.to_be_bytes()[8 - bytes..]);
+    }
+    payload
+}
+
+/// A check naming the parameter holding its value (XTCE 1.3) makes that
+/// field a checksum entry, verified on decoding, with MDL's parameters for
+/// it; the parameter leaves the catalog, since no field maps it. Each CRC
+/// gives the CRC catalogue's check value for its input.
+#[test]
+fn a_check_makes_the_parameter_holding_it_a_checksum() {
+    // CRC-16/IBM-3740: unreflected, from 0xFFFF.
+    let text = checked(
+        r#"<CRC width="16" parameterRef="Crc16"><Polynomial>1021</Polynomial><InitRemainder>FFFF</InitRemainder></CRC>"#,
+        &["Crc16"],
+    );
+    let json = bundle(&text);
+    assert_eq!(
+        json["sets"][0]["packets"][0]["entries"][1],
+        json!({
+            "kind": "checksum",
+            "name": "Crc16",
+            "algorithm": {
+                "kind": "crc", "width": 16, "poly": 4129, "init": 65535,
+                "reflect_in": false, "reflect_out": false, "xor_out": 0
+            }
+        })
+    );
+    assert_eq!(
+        json["catalog"]["params"]
+            .as_object()
+            .map(|params| params.keys().cloned().collect::<Vec<_>>()),
+        Some(vec!["sat.data".to_string()])
+    );
+    let sets = family_sets(&text);
+    assert_eq!(
+        raw_values(&sets, &check_payload(&[(0x29B1, 2)])),
+        Ok(vec![("Crc16".to_string(), 0x29B1)])
+    );
+    let mut damaged = check_payload(&[(0x29B1, 2)]);
+    damaged[4] ^= 0x10;
+    assert_eq!(raw_values(&sets, &damaged), Err("bad_checksum"));
+    // Each reflection is its own.
+    let one_way = bundle(&checked(
+        r#"<CRC width="16" reflectData="true" parameterRef="Crc16"><Polynomial>1021</Polynomial></CRC>"#,
+        &["Crc16"],
+    ));
+    let algorithm = &one_way["sets"][0]["packets"][0]["entries"][1]["algorithm"];
+    assert_eq!(
+        (&algorithm["reflect_in"], &algorithm["reflect_out"]),
+        (&json!(true), &json!(false))
+    );
+    // A little-endian check counts toward the family's byte order, which
+    // it's then in.
+    let little = r#"<IntegerParameterType name="L16" signed="false"><IntegerDataEncoding sizeInBits="16" byteOrder="leastSignificantByteFirst"/></IntegerParameterType>"#;
+    let text = in_1_3(&doc(&telemetry(
+        &format!("{NINE}{little}"),
+        &format!("{}{}", param("Data", "Nine"), param("Crc", "L16")),
+        &encoded(
+            "P",
+            r#"<ErrorDetectCorrect><CRC width="16" parameterRef="Crc"><Polynomial>1021</Polynomial><InitRemainder>FFFF</InitRemainder></CRC></ErrorDetectCorrect>"#,
+            &format!("{}{}", entry("Data"), entry("Crc")),
+            "",
+        ),
+    )));
+    assert_eq!(bundle(&text)["families"][0]["byte_order"], json!("little"));
+    let mut payload = CHECK.to_vec();
+    payload.extend_from_slice(&0x29B1_u16.to_le_bytes());
+    assert_eq!(
+        raw_values(&family_sets(&text), &payload),
+        Ok(vec![("Crc".to_string(), 0x29B1)])
+    );
+
+    // CRC-16/ARC reflects each byte in and the result; CRC-32/ISO-HDLC
+    // also ends with a FinalXOR.
+    for (check, width, value) in [
+        (
+            r#"<CRC width="16" reflectData="true" reflectRemainder="true" parameterRef="Crc16"><Polynomial>8005</Polynomial></CRC>"#,
+            "Crc16",
+            0xBB3D,
+        ),
+        (
+            r#"<CRC width="32" reflectData="true" reflectRemainder="true" parameterRef="Crc32"><Polynomial>04C11DB7</Polynomial><InitRemainder>FFFFFFFF</InitRemainder><FinalXOR>FFFFFFFF</FinalXOR></CRC>"#,
+            "Crc32",
+            0xCBF4_3926,
+        ),
+    ] {
+        let bytes = if width == "Crc32" { 4 } else { 2 };
+        let sets = family_sets(&checked(check, &[width]));
+        assert_eq!(
+            raw_values(&sets, &check_payload(&[(value, bytes)])),
+            Ok(vec![(width.to_string(), value)]),
+            "{check}"
+        );
+    }
+}
+
+/// `sum8` adds the bytes modulo 256 and XOR exclusive-ors them; a check
+/// covers the bytes from `bitsFromReference` up to its own value, and two
+/// checks may end a packet, the second covering the first.
+#[test]
+fn sums_xors_and_two_checks_end_a_packet() {
+    let sum: u64 = CHECK.iter().map(|b| u64::from(*b)).sum::<u64>() % 256;
+    let xor = CHECK.iter().fold(0_u8, |x, b| x ^ b);
+    assert_eq!((sum, xor), (0xDD, 0x31));
+    let text = checked(
+        r#"<Checksum name="sum8" parameterRef="Sum8"/><XOR bitsFromReference="8" parameterRef="Xor8"/>"#,
+        &["Sum8", "Xor8"],
+    );
+    let entries = &bundle(&text)["sets"][0]["packets"][0]["entries"];
+    assert_eq!(
+        entries[1]["algorithm"],
+        json!({ "kind": "sum", "width": 8 })
+    );
+    assert_eq!(entries[2]["algorithm"], json!({ "kind": "xor" }));
+    assert_eq!(entries[2]["from_bits"], json!(8));
+    let sets = family_sets(&text);
+    // The XOR covers the bytes after the first, and the sum before it.
+    let xor_after = CHECK[1..].iter().fold(sum as u8, |x, b| x ^ b);
+    assert_eq!(
+        raw_values(
+            &sets,
+            &check_payload(&[(sum, 1), (u64::from(xor_after), 1)])
+        ),
+        Ok(vec![
+            ("Sum8".to_string(), sum),
+            ("Xor8".to_string(), u64::from(xor_after))
+        ])
+    );
+    assert_eq!(
+        raw_values(&sets, &check_payload(&[(sum, 1), (u64::from(xor), 1)])),
+        Err("bad_checksum")
+    );
+}
+
+/// A command container's check is worked out when encoding.
+#[test]
+fn a_command_containers_check_is_written_when_encoding() {
+    let text = in_1_3(&doc(&format!(
+        "{}{}",
+        telemetry(U16, &param("Crc16", "U16"), ""),
+        commands(
+            ARG_U8,
+            &format!(
+                r#"<MetaCommand name="Go"><ArgumentList>{}</ArgumentList>
+                     <CommandContainer name="Go"><BinaryEncoding><ErrorDetectCorrect>
+                       <CRC width="16" parameterRef="Crc16"><Polynomial>1021</Polynomial><InitRemainder>FFFF</InitRemainder></CRC>
+                     </ErrorDetectCorrect></BinaryEncoding><EntryList>
+                       <FixedValueEntry name="Op" binaryValue="3132333435363738" sizeInBits="64"/>{}
+                       <ParameterRefEntry parameterRef="Crc16"/>
+                     </EntryList></CommandContainer></MetaCommand>"#,
+                argument("A", "U8"),
+                argument_entry("A")
+            ),
+        )
+    )));
+    let sets = family_sets(&text);
+    let encoded = sets
+        .encode(&CommandRequest::new("sat", "sat.go").with_argument("a", 0x39_u64))
+        .unwrap();
+    assert_eq!(encoded.payload, check_payload(&[(0x29B1, 2)]));
+}
+
+/// A check that names no parameter holding its value has nothing to be
+/// checked against, so it's left out: always so before XTCE 1.3.
+#[test]
+fn a_check_naming_no_parameter_is_left_out() {
+    let crc = r#"<CRC width="16"><Polynomial>1021</Polynomial></CRC>"#;
+    let older = sized_packet(
+        &format!("<ErrorDetectCorrect>{crc}</ErrorDetectCorrect>{}", size(8)),
+        "",
+    );
+    let newer = in_1_3(&sized_packet(
+        &format!("<ErrorDetectCorrect>{crc}</ErrorDetectCorrect>"),
+        "",
+    ));
+    for text in [older, newer] {
+        let (code, message) = one_problem(&text);
+        assert_eq!(code, "xtce.ignored", "{message}");
+        assert!(message.contains("names no parameter"), "{message}");
+    }
+}
+
+#[test]
+fn checks_mdl_cant_compute_are_refused() {
+    let crc = |attrs: &str, poly: &str| {
+        format!(r#"<CRC {attrs} parameterRef="Crc16"><Polynomial>{poly}</Polynomial></CRC>"#)
+    };
+    for (check, code, wanted) in [
+        (
+            r#"<Parity type="Even" parameterRef="Crc16"/>"#.to_string(),
+            "xtce.unsupported",
+            "one bit",
+        ),
+        (
+            r#"<Checksum name="sum16" parameterRef="Crc16"/>"#.to_string(),
+            "xtce.unsupported",
+            "bytes or words",
+        ),
+        (
+            r#"<Checksum name="fletcher16" parameterRef="Crc16"/>"#.to_string(),
+            "xtce.unsupported",
+            "ISO 8473-1",
+        ),
+        (
+            r#"<Checksum name="sum8" hashSizeInBits="16" parameterRef="Crc16"/>"#.to_string(),
+            "xtce.unsupported",
+            "which of them",
+        ),
+        (
+            r#"<Checksum name="custom" parameterRef="Crc16"><InputAlgorithm name="X"/></Checksum>"#
+                .to_string(),
+            "xtce.unsupported",
+            "InputAlgorithm",
+        ),
+        (
+            r#"<Checksum name="sum9" parameterRef="Crc16"/>"#.to_string(),
+            "xtce.invalid",
+            "isn't one XTCE names",
+        ),
+        (crc(r#"width="12""#, "80F"), "xtce.unsupported", "12 bits"),
+        (
+            crc(r#"width="16" direction="leastSignificantBitFirst""#, "1021"),
+            "xtce.unsupported",
+            "least significant bit first",
+        ),
+        (
+            crc(r#"width="16" reference="end""#, "1021"),
+            "xtce.unsupported",
+            "container's end",
+        ),
+        (
+            crc(r#"width="16" bitsFromReference="4""#, "1021"),
+            "xtce.unsupported",
+            "whole bytes",
+        ),
+        (crc(r#"width="16""#, "011021"), "xtce.invalid", "top bit"),
+        (
+            crc(r#"width="16""#, "10G1"),
+            "xtce.invalid",
+            "isn't hexadecimal digits",
+        ),
+        (
+            crc(r#"width="16""#, "0x1021"),
+            "xtce.invalid",
+            "hexadecimal digits without 0x",
+        ),
+        (
+            crc(r#"width="16""#, "1021").replace("Crc16", "Nothing"),
+            "xtce.reference",
+            "Nothing",
+        ),
+    ] {
+        let (got, message) = one_error(&checked(&check, &["Crc16"]));
+        assert_eq!(got, code, "{check}: {message}");
+        assert!(message.contains(wanted), "{check}: {message}");
+    }
+    // An embedded container's bytes aren't a packet's.
+    let inner = encoded(
+        "Inner",
+        r#"<ErrorDetectCorrect><XOR parameterRef="X"/></ErrorDetectCorrect>"#,
+        &entry("X"),
+        "",
+    )
+    .replace(r#"name="Inner""#, r#"name="Inner" abstract="true""#);
+    let text = in_1_3(&doc(&telemetry(
+        U8,
+        &param("X", "U8"),
+        &format!(
+            r#"{inner}{}"#,
+            container("P", r#"<ContainerRefEntry containerRef="Inner"/>"#)
+        ),
+    )));
+    let (code, message) = one_error(&text);
+    assert_eq!(code, "xtce.unsupported", "{message}");
+    assert!(message.contains("embedded container"), "{message}");
+}
+
+/// The parameter holding a check is a field at the packet's top level, an
+/// unsigned integer of the check's width whose raw value is its value, in
+/// the family's byte order, and only other checks follow it.
+#[test]
+fn a_checks_parameter_is_a_field_mdl_can_check() {
+    let xor = r#"<XOR parameterRef="X"/>"#;
+    let refused = |text: &str, code: &str, wanted: &str| {
+        let (got, message) = one_error(text);
+        assert_eq!(got, code, "{message}");
+        assert!(message.contains(wanted), "{message}");
+    };
+    let with = |types: &str, params: &str, entries: &str| {
+        in_1_3(&doc(&telemetry(
+            &format!("{U8}{U16}{types}"),
+            &format!("{}{params}", param("Id", "U8")),
+            &encoded(
+                "P",
+                &format!("<ErrorDetectCorrect>{xor}</ErrorDetectCorrect>"),
+                entries,
+                "",
+            ),
+        )))
+    };
+    // Something other than a check follows it.
+    refused(
+        &with(
+            "",
+            &param("X", "U8"),
+            &format!("{}{}", entry("X"), entry("Id")),
+        ),
+        "xtce.unsupported",
+        "entry Id follows it",
+    );
+    // Too wide, signed, enumerated, or on a condition.
+    refused(
+        &with(
+            "",
+            &param("X", "U16"),
+            &format!("{}{}", entry("Id"), entry("X")),
+        ),
+        "xtce.unsupported",
+        "it's 16 bits, and the check's value is 8",
+    );
+    let signed = r#"<IntegerParameterType name="S8" signed="true"><IntegerDataEncoding sizeInBits="8" encoding="twosComplement"/></IntegerParameterType>"#;
+    refused(
+        &with(
+            signed,
+            &param("X", "S8"),
+            &format!("{}{}", entry("Id"), entry("X")),
+        ),
+        "xtce.unsupported",
+        "a signed integer",
+    );
+    let labeled = r#"<EnumeratedParameterType name="Labeled"><IntegerDataEncoding sizeInBits="8"/><EnumerationList><Enumeration value="0" label="OFF"/><Enumeration value="1" label="ON"/></EnumerationList></EnumeratedParameterType>"#;
+    refused(
+        &with(
+            labeled,
+            &param("X", "Labeled"),
+            &format!("{}{}", entry("Id"), entry("X")),
+        ),
+        "xtce.unsupported",
+        "its values are labels",
+    );
+    refused(
+        &with(
+            "",
+            &param("X", "U8"),
+            &format!(
+                r#"{}<ParameterRefEntry parameterRef="X"><IncludeCondition><Comparison parameterRef="Id" value="1"/></IncludeCondition></ParameterRefEntry>"#,
+                entry("Id")
+            ),
+        ),
+        "xtce.unsupported",
+        "on a condition",
+    );
+    // A little-endian check in a big-endian family.
+    let little = r#"<IntegerParameterType name="L16" signed="false"><IntegerDataEncoding sizeInBits="16" byteOrder="leastSignificantByteFirst"/></IntegerParameterType>"#;
+    let text = in_1_3(&doc(&telemetry(
+        &format!("{U16}{little}"),
+        &format!("{}{}", param("Id", "U16"), param("C", "L16")),
+        &encoded(
+            "P",
+            r#"<ErrorDetectCorrect><CRC width="16" parameterRef="C"><Polynomial>1021</Polynomial></CRC></ErrorDetectCorrect>"#,
+            &format!("{}{}", entry("Id"), entry("C")),
+            "",
+        ),
+    )));
+    refused(&text, "xtce.unsupported", "little-endian");
+    // Two checks held by one parameter.
+    refused(
+        &with(
+            "",
+            &param("X", "U8"),
+            &format!("{}{}", entry("Id"), entry("X")),
+        )
+        .replace(xor, &format!("{xor}{xor}")),
+        "xtce.invalid",
+        "two checks are held by",
+    );
+}
+
+/// A check on a container covers each packet built on it; one that
+/// doesn't hold the check's parameter has nothing to check it against, so
+/// it's imported without the check.
+#[test]
+fn a_packet_without_the_checks_parameter_is_imported_without_the_check() {
+    let base = encoded(
+        "Base",
+        r#"<ErrorDetectCorrect><XOR parameterRef="X"/></ErrorDetectCorrect>"#,
+        &entry("Id"),
+        "",
+    );
+    let child = container("Child", &entry("X")).replace(
+        "</SequenceContainer>",
+        r#"<BaseContainer containerRef="Base"><RestrictionCriteria><Comparison parameterRef="Id" value="1"/></RestrictionCriteria></BaseContainer></SequenceContainer>"#,
+    );
+    let text = in_1_3(&doc(&telemetry(
+        U8,
+        &format!("{}{}", param("Id", "U8"), param("X", "U8")),
+        &format!("{base}{child}"),
+    )));
+    let (json, warnings) = warned(&text);
+    let packets = &json["sets"][0]["packets"];
+    assert_eq!(packets[0]["name"], json!("Base"));
+    assert_eq!(packets[0]["entries"].as_array().map(Vec::len), Some(1));
+    assert_eq!(packets[1]["entries"][1]["kind"], json!("checksum"));
+    assert_eq!(
+        codes(&warnings, "container Base doesn't hold /Sat/X"),
+        [("xtce.ignored".to_string(), true)]
+    );
+}
+
+/// Where entries are placed from the start of the packet, only other
+/// checks follow a check in bits, whatever order they're listed in.
+#[test]
+fn a_check_is_last_by_where_entries_are_placed() {
+    let text = |entries: &str| {
+        in_1_3(&doc(&telemetry(
+            U8,
+            &format!(
+                "{}{}{}",
+                param("A", "U8"),
+                param("B", "U8"),
+                param("X", "U8")
+            ),
+            &encoded(
+                "P",
+                r#"<ErrorDetectCorrect><XOR parameterRef="X"/></ErrorDetectCorrect>"#,
+                entries,
+                "",
+            ),
+        )))
+    };
+    // Listed last, but placed first: it would cover nothing.
+    let (code, message) = one_error(&text(&format!(
+        "{}{}{}",
+        entry_at("A", 8),
+        entry_at("B", 16),
+        entry_at("X", 0)
+    )));
+    assert_eq!(code, "xtce.unsupported", "{message}");
+    assert!(message.contains("entry A follows it"), "{message}");
+    // Listed first, but placed last: it covers the bytes before it.
+    let sets = family_sets(&text(&format!(
+        "{}{}{}",
+        entry_at("X", 16),
+        entry_at("A", 0),
+        entry_at("B", 8)
+    )));
+    assert_eq!(
+        raw_values(&sets, &[0x0F, 0xF0, 0xFF]),
+        Ok(vec![
+            ("X".to_string(), 0xFF),
+            ("A".to_string(), 0x0F),
+            ("B".to_string(), 0xF0)
+        ])
+    );
+    assert_eq!(raw_values(&sets, &[0x0F, 0xF0, 0x00]), Err("bad_checksum"));
+    // Placed from the start, but not all at fixed places.
+    let (code, message) = one_error(&text(&format!(
+        r#"{}<ParameterRefEntry parameterRef="B"><IncludeCondition><Comparison parameterRef="A" value="1"/></IncludeCondition></ParameterRefEntry>{}"#,
+        entry_at("A", 0),
+        entry("X")
+    )));
+    assert_eq!(code, "xtce.unsupported", "{message}");
+    assert!(message.contains("not all at fixed places"), "{message}");
+}
+
+/// A size follows the last entry listed, as MDL places it, so that one
+/// reaches furthest.
+#[test]
+fn a_size_after_entries_placed_out_of_order_is_refused() {
+    for (a, size) in [(40, 64), (56, 64)] {
+        let text = doc(&telemetry(
+            U8,
+            &format!("{}{}", param("A", "U8"), param("B", "U8")),
+            &encoded(
+                "P",
+                &self::size(size),
+                &format!("{}{}", entry_at("A", a), entry_at("B", 0)),
+                "",
+            ),
+        ));
+        let (code, message) = one_error(&text);
+        assert_eq!(code, "xtce.unsupported", "{message}");
+        assert!(message.contains("placed out of order"), "{message}");
+    }
+}
+
+/// XTCE 1.3 deprecates error detection in a value's encoding for a
+/// container's, and doesn't say what the old one covers.
+#[test]
+fn error_detection_in_a_values_encoding_is_refused() {
+    let text = doc(&telemetry(
+        r#"<IntegerParameterType name="C" signed="false"><IntegerDataEncoding sizeInBits="16"><ErrorDetectCorrect><CRC width="16"><Polynomial>1021</Polynomial></CRC></ErrorDetectCorrect></IntegerDataEncoding></IntegerParameterType>"#,
+        &param("X", "C"),
+        &container("P", &entry("X")),
+    ));
+    assert_eq!(
+        one_error(&text),
+        (
+            "xtce.unsupported".to_string(),
+            "error detection in a value's encoding isn't supported: XTCE doesn't say whether the \
+             value holds the check or is covered by it, and 1.3 deprecates it for a container's \
+             ErrorDetectCorrect naming the parameter that holds it (parameterRef), which MDL reads"
+                .to_string()
+        )
+    );
 }

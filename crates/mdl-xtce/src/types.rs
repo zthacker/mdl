@@ -2835,7 +2835,10 @@ fn unsupported_children(el: El<'_>, report: &mut Report) -> Option<()> {
         report.error(
             Code::Unsupported,
             check.span(),
-            "error detection on a single value isn't supported",
+            "error detection in a value's encoding isn't supported: XTCE doesn't say whether the \
+             value holds the check or is covered by it, and 1.3 deprecates it for a container's \
+             ErrorDetectCorrect naming the parameter that holds it (parameterRef), which MDL \
+             reads",
         );
         return None;
     }

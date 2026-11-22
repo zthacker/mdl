@@ -23,6 +23,7 @@ use super::arguments::{
     Leaf, Measure, SizeField, json_text, leaves, member_field, member_name, size_references,
     unknown_member,
 };
+use super::encoding::{Check, ContainerEncoding};
 use super::entries::{Location, from_field};
 use super::{ArrayField, Element, Entry, Field, Import, ParamKey, StructType, TypeId, id};
 use crate::calibration::duration_seconds;
@@ -239,6 +240,23 @@ impl<'d> Import<'d, '_> {
             .collect();
         let (values, read_whole) = self.criteria_values(&chain);
         complete &= read_whole;
+        // Each container's BinaryEncoding, read ahead of the entries: the
+        // parameter holding a check is then written as the check, which
+        // the encoder works out, not as a constant.
+        let mut encodings = Vec::new();
+        for (at_space, meta) in &chain {
+            let encoding = match meta.child("CommandContainer") {
+                Some(container) => self.container_encoding(*at_space, container, false),
+                None => Some(ContainerEncoding::default()),
+            };
+            complete &= encoding.is_some();
+            encodings.push(encoding.unwrap_or_default());
+        }
+        let checked: BTreeSet<(usize, &'d str)> = encodings
+            .iter()
+            .flat_map(|encoding| &encoding.checks)
+            .map(|check| check.parameter)
+            .collect();
         let mut entries = Vec::new();
         let mut unnamed = 0;
         for index in 0..chain.len() {
@@ -258,10 +276,17 @@ impl<'d> Import<'d, '_> {
                 read_whole,
                 unnamed: &mut unnamed,
                 sizes: &mut sizes,
+                checked: &checked,
             };
             match self.command_entries(&owner, container, &mut declared, read) {
                 Some(added) => entries.extend(added),
                 None => complete = false,
+            }
+            // A container's size counts from the start of the packet, as
+            // its entries' locations do.
+            let size = encodings.get(index).and_then(|encoding| encoding.size);
+            if complete && self.pad_to(&mut entries, size, false).is_none() {
+                complete = false;
             }
         }
         complete &= self.check_measured(&declared).is_some();
@@ -269,6 +294,12 @@ impl<'d> Import<'d, '_> {
             return None;
         }
         self.check_entries(&entries, "command packet")?;
+        let checks: Vec<Check<'d>> = encodings
+            .into_iter()
+            .flat_map(|encoding| encoding.checks)
+            .collect();
+        let shown = format!("meta-command {}", el.item_name().unwrap_or_default());
+        self.apply_checks(&mut entries, &checks, &shown)?;
         // Referring, the catalog command is the owner's, and its
         // arguments' ranges and initial values are the packet's own limits.
         let arguments = self.catalog_arguments(&chain, &declared)?;
@@ -792,16 +823,9 @@ impl<'d> Import<'d, '_> {
             read_whole,
             unnamed,
             sizes,
+            checked,
         } = read;
         container.check(&COMMAND_CONTAINER, self.report);
-        if let Some(size) = container.child("BinaryEncoding") {
-            self.report.error(
-                Code::Unsupported,
-                size.span(),
-                "a container's own size (BinaryEncoding) isn't supported yet",
-            );
-            return None;
-        }
         self.command_base(owner, chain, container)?;
         let Some(list) = container.child("EntryList") else {
             self.report.error(
@@ -828,7 +852,9 @@ impl<'d> Import<'d, '_> {
                     self.argument_entry(owner, entry, declared, sizes)
                 }
                 "FixedValueEntry" => self.fixed_entry(entry, unnamed),
-                "ParameterRefEntry" => self.parameter_entry_value(owner, entry, values, read_whole),
+                "ParameterRefEntry" => {
+                    self.parameter_entry_value(owner, entry, values, read_whole, checked)
+                }
                 "ArrayParameterRefEntry" => {
                     self.report.error(
                         Code::Unsupported,
@@ -1495,13 +1521,15 @@ impl<'d> Import<'d, '_> {
 
     /// A ParameterRefEntry: a constant field for the parameter, or one for
     /// each member of an aggregate, each holding the value the sent
-    /// command's criteria give it.
+    /// command's criteria give it. A parameter holding a check (one of
+    /// `checked`) is a field the check becomes.
     fn parameter_entry_value(
         &mut self,
         owner: &Owner<'d>,
         entry: El<'d>,
         values: &Values<'d>,
         read_whole: bool,
+        checked: &BTreeSet<(usize, &'d str)>,
     ) -> Option<Vec<Entry<'d>>> {
         entry.check(
             &Expect {
@@ -1536,6 +1564,10 @@ impl<'d> Import<'d, '_> {
             return None;
         }
         let shape = self.parameter_shape(found.space, found.el)?;
+        if checked.contains(&(found.space, name)) {
+            let key = (found.space, name, Vec::new());
+            return self.check_field(entry, &location, found.el, key, shape);
+        }
         let mut scalars = Vec::new();
         if !flatten((found.space, name, Vec::new()), &shape, &mut scalars) {
             self.report.error(
@@ -1587,6 +1619,50 @@ impl<'d> Import<'d, '_> {
                 when: None,
             })));
         }
+        Some(out)
+    }
+
+    /// The field of a parameter holding a check, which the check makes a
+    /// checksum entry (`encoding`), raw as the parameter's encoding gives
+    /// it.
+    fn check_field(
+        &mut self,
+        entry: El<'d>,
+        location: &CommandPlace,
+        el: El<'d>,
+        key: ParamKey<'d>,
+        shape: Shape<'d>,
+    ) -> Option<Vec<Entry<'d>>> {
+        let Shape::Scalar(scalar) = shape else {
+            self.report.error(
+                Code::Unsupported,
+                entry.span(),
+                format!(
+                    "{} holds a check's value, and is an aggregate or an array: an MDL checksum \
+                     is one field",
+                    self.describe(&key)
+                ),
+            );
+            return None;
+        };
+        let mut out = Vec::new();
+        out.extend(location.padding());
+        let length = match &scalar.length {
+            Some(crate::types::Length::Written(length, span)) => Some((length.clone(), *span)),
+            _ => None,
+        };
+        out.push(Entry::Field(Box::new(Field {
+            name: self.field_name(&key, el),
+            key: Some(key),
+            span: entry.span(),
+            scalar: *scalar,
+            length,
+            canonical: None,
+            argument: None,
+            value: None,
+            offset: location.offset(),
+            when: None,
+        })));
         Some(out)
     }
 
@@ -2363,6 +2439,8 @@ struct Read<'a, 'd> {
     read_whole: bool,
     unnamed: &'a mut usize,
     sizes: &'a mut Vec<(&'d str, SizeField)>,
+    /// The parameters holding the command's checks.
+    checked: &'a BTreeSet<(usize, &'d str)>,
 }
 
 /// An argument an entry writes: its XTCE name, field name, catalog name,
@@ -2401,6 +2479,7 @@ fn place(entry: &mut Entry<'_>, offset: Option<(u32, Span)>) {
         Entry::Field(field) => field.offset = offset,
         Entry::Array(array) => array.offset = offset,
         Entry::Struct(inner) => inner.offset = offset,
+        Entry::Checksum(checksum) => checksum.offset = offset,
         Entry::Padding { .. } => {}
     }
 }

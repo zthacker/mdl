@@ -387,14 +387,7 @@ impl<'d> Import<'d, '_> {
             );
             return None;
         }
-        if let Some(size) = el.child("BinaryEncoding") {
-            self.report.error(
-                Code::Unsupported,
-                size.span(),
-                "a container's own size (BinaryEncoding) isn't supported yet",
-            );
-            return None;
-        }
+        let encoding = self.container_encoding(space, el, true)?;
         let Some(list) = el.child("EntryList") else {
             self.report.error(
                 Code::Invalid,
@@ -403,7 +396,7 @@ impl<'d> Import<'d, '_> {
             );
             return None;
         };
-        let (entries, _) = self.entries(space, list, Earlier::default())?;
+        let (mut entries, _) = self.entries(space, list, Earlier::default())?;
         self.check_absent_locations(&entries)?;
         self.check_entries(&entries, "embedded container")?;
         if entries.is_empty() {
@@ -415,6 +408,8 @@ impl<'d> Import<'d, '_> {
             );
             return None;
         }
+        // Its size counts from its own start, as its entries' locations do.
+        self.pad_to(&mut entries, encoding.size, true)?;
         Some(entries)
     }
 
@@ -936,6 +931,7 @@ fn clear_offset(entry: &mut Entry<'_>) {
         Entry::Field(field) => field.offset = None,
         Entry::Array(array) => array.offset = None,
         Entry::Struct(inner) => inner.offset = None,
+        Entry::Checksum(checksum) => checksum.offset = None,
         Entry::Padding { .. } => {}
     }
 }
