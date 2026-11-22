@@ -87,10 +87,16 @@ them too.
   them, each worked out by hand and citing the sections it follows, for
   values, layouts, checksums, routing, bindings, JSON payloads,
   conversions and qualities, composites and event time, with the warnings
-  opening with the bindings gives. A binding of the runtime API must pass
-  them through its own API ([spec/conformance.md](spec/conformance.md), a
-  new specification); the runtime and the Elixir binding run them in
-  their tests.
+  opening with the bindings gives; and 268 more, in
+  `conformance/decoding/oracle/`, generated from random binary and JSON
+  layouts by the testkit's oracle, damaged messages among them, each with
+  the result or error the oracle works out from the spec, in code
+  separate from MDL's decoder ([spec/conformance.md](spec/conformance.md)
+  §2.3 says what that does and doesn't check; `just conformance` writes
+  them). A binding of the runtime API must
+  pass them through its own API
+  ([spec/conformance.md](spec/conformance.md), a new specification); the
+  runtime and the Elixir binding run them in their tests.
 - The specification now says what the runtime has always given for a
   composite sample that isn't `good`: each member is its raw value as a
   float, unconverted, so a composite's value is always its frame and
