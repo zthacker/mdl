@@ -387,7 +387,8 @@ enum Holder {
     Packet,
     CommandPacket,
     /// A map whose keys are names (params, commands, struct types,
-    /// identify keys, metadata), holding values of the given holder.
+    /// identify keys, metadata, the arguments a packet limits), holding
+    /// values of the given holder.
     Names(NamesOf),
     Other,
 }
@@ -401,7 +402,8 @@ enum NamesOf {
 /// Every tagged object's `kind` is a string. serde would also read a
 /// variant's index (`"kind": 0` as the first kind), which isn't IR JSON and
 /// which no other reader takes. Maps keyed by names people choose are
-/// skipped: a param, struct type or identify key may be called `kind`.
+/// skipped: a param, struct type, identify key, metadata name or argument
+/// a packet limits may be called `kind`.
 /// Recurses as deep as the document, which is bounded before this runs.
 fn check_tags(value: &Value, holder: Holder, path: &mut String) -> Result<(), ReadError> {
     let members = match value {
@@ -442,6 +444,8 @@ fn check_tags(value: &Value, holder: Holder, path: &mut String) -> Result<(), Re
             (Holder::Packet, "identify") | (Holder::CommandPacket, "metadata") => {
                 Holder::Names(NamesOf::Scalars)
             }
+            // A packet's own limits, by argument name (IR 2.2).
+            (Holder::CommandPacket, "arguments") => Holder::Names(NamesOf::Objects),
             _ => Holder::Other,
         };
         let parent = path.len();
@@ -981,13 +985,15 @@ mod tests {
                 .starts_with("/x/kind: a kind is a string")
         );
         // Names people choose may be `kind`: a param, a struct type, an
-        // identify key, a metadata name.
+        // identify key, a metadata name, an argument a packet limits.
         let bytes = bundle_with(|v| {
+            v["mdl_version"] = json!("2.3");
             v["catalog"]["params"]["kind"] = json!({ "type": "f64" });
             v["sets"][0]["types"] = json!({ "kind": { "entries": [] } });
             v["sets"][0]["packets"][0]["identify"] = json!({ "kind": 1 });
             v["sets"][0]["commands"] = json!([{ "name": "C", "canonical": "a.b",
-                                                "metadata": { "kind": 2 } }]);
+                                                "metadata": { "kind": 2 },
+                                                "arguments": { "kind": { "required": true } } }]);
         });
         assert!(
             read_bundle(&bytes).is_ok(),
