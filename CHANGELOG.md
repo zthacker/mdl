@@ -70,6 +70,16 @@ them too.
   with one fails at the checksum, located in its source file: give it a
   `from_bits` before its earliest start, or put an entry before it.
 
+### Tools and the runtime API
+
+- Decoding cases, in `conformance/decoding/`: language-neutral JSON files
+  of definitions, messages and the results the spec gives for them, each
+  worked out by hand and citing the sections it follows, for values,
+  layouts and checksums. A binding of the runtime API must pass them
+  through its own API ([spec/conformance.md](spec/conformance.md), a new
+  specification); the runtime and the Elixir binding run them in their
+  tests.
+
 ### Releases
 
 - The Elixir binding is on Hex as `mdl`, from 0.2.0 on, and each
