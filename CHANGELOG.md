@@ -101,7 +101,9 @@ them too.
   argument's value tagged with its kind, and the encoded command or error
   the spec gives, worked out by hand, for argument types and resolution,
   ranges and lists, a packet's own limits, raw values, binary and JSON
-  payloads. A binding of the runtime API must pass both through its own
+  payloads; and 274 more, in `conformance/encoding/oracle/`, generated
+  from random command layouts by the testkit's oracle, refused requests
+  among them. A binding of the runtime API must pass both through its own
   API ([spec/conformance.md](spec/conformance.md), a new specification);
   the runtime and the Elixir binding run them in their tests.
 - The specification now says what the runtime has always given for a
