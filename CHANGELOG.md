@@ -70,6 +70,12 @@ them too.
   that can't be read is `unreadable_locator`, and the rest are still
   `missing_set`. Looking up such a family's binding or asset without
   bindings is still `missing_set`.
+- The specification now gives the order of a command payload's checks,
+  as MDL has always run them, so the first failure is the same error in
+  every implementation: the set, the payload's encoding, identification,
+  every entry read, then the constants in entry order, then the arguments
+  in the catalog's order, wherever the packet writes them
+  ([spec/encoding.md](spec/encoding.md) §7.5).
 
 ### Compatibility
 
@@ -106,6 +112,35 @@ them too.
   among them. A binding of the runtime API must pass both through its own
   API ([spec/conformance.md](spec/conformance.md), a new specification);
   the runtime and the Elixir binding run them in their tests.
+- The runtime decodes command payloads: `decode_command` takes a family,
+  the set that decodes the payload and the message, its payload and
+  metadata, and gives the catalog command and every argument's value, the
+  arguments the set leaves to their defaults, the target and the
+  payload's record, or the error that stopped it
+  ([spec/api.md](spec/api.md) §2.7, §3.5). It's what a simulated asset
+  does with a command it receives, and what command history records. In
+  Elixir, `MDL.decode_command/3` gives an `%MDL.DecodedCommand{}`. The
+  result format is still 1: the operation and its result are new.
+- Command decoding cases, in `conformance/decoding_commands/`: payloads
+  with their metadata, and the command or error the spec gives for them,
+  worked out by hand, for which packet a payload and its metadata are,
+  constants, arguments through their conversions and the catalog's
+  limits, defaults, targets, checksums, lists, binary and JSON payloads;
+  and 274 more, in
+  `conformance/decoding_commands/oracle/`, from the encoding cases'
+  generated layouts, each request's payload decoded back and garbled
+  payloads among them ([spec/conformance.md](spec/conformance.md) §4). A
+  binding must pass them too; the runtime and the Elixir binding run
+  them in their tests.
+- `morphc decode --command --format json` writes each command as the
+  runtime API's `decode_command` gives it, so the document's format
+  version is 3: a command gained `family` and `record`, its `arguments`
+  are an object of each argument's value, by name, where they were a list
+  of names, values and `defaulted` flags, `defaulted` lists the arguments
+  that took their defaults, and an integer `target` is written as
+  integers are, where it was always text. The other commands' results are
+  unchanged, so a consumer of them need only accept version 3. What
+  morphc prints for people is unchanged.
 - The specification now says what the runtime has always given for a
   composite sample that isn't `good`: each member is its raw value as a
   float, unconverted, so a composite's value is always its frame and
