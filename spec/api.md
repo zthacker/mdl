@@ -137,7 +137,9 @@ native id's text, and the decoded message says so (`stand_in`). Such an
 asset is decoded by the family's set when the family has one set, or by
 the set the family's version locator chooses (`decoding.md` §3). In a
 family with several sets and no version locator, an asset's set comes
-from its binding, so without bindings its messages are `missing_set`.
+from its binding, so without bindings its messages are `missing_set` once
+routing reaches the set: a payload or an alias that can't be read is that
+error first, as `decoding.md` §3.3 orders the checks.
 
 ### 2.3 decode_many
 
@@ -201,7 +203,7 @@ An object with these keys:
 | Key | Value |
 | --- | --- |
 | `family` | text |
-| `native_id` | integer or text: what the family's alias locator read |
+| `native_id` | integer or text: the native id the family's alias locator read, read as §1 reads one, so the string `"7"` at a `path` locator's pointer is the integer 7 |
 | `asset` | text: the asset the native id is at the ground time |
 | `stand_in` | boolean: true when there are no bindings, and the native id stands for an asset of its own (§2.2) |
 | `set` | text: the set that decoded it |
@@ -250,9 +252,10 @@ entry a condition leaves out isn't there, and padding has no value.
 
 **Engineering value** (`decoding.md` §7.5): an object with `path`, `value`
 and `quality`, for each field and scalar element, mapped or not, in the
-record's order. A value is the field's raw value through its conversion,
-in the field's unit (not the param's, which a sample's is), and spelled as
-a sample's: a float, an integer, a boolean, text, bytes or a state's name,
+record's order; a JSON array's `null` element, which is no reading, has
+none. A value is the field's raw value through its conversion, in the
+field's unit (not the param's, which a sample's is), and spelled as a
+sample's: a float, an integer, a boolean, text, bytes or a state's name,
 or the raw value when the quality isn't `good`.
 
 ### 3.2 An encoded command

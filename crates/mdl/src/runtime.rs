@@ -450,8 +450,10 @@ impl Runtime {
                 DecodedMessage::of(&decoded, sets, message.ground_time, false)
             }
             None => {
-                let stand_in = assembled.stand_in.as_ref().map_err(Clone::clone)?;
-                let decoded = sets.decode(message, stand_in)?;
+                let decoded = match &assembled.stand_in {
+                    Ok(stand_in) => sets.decode(message, stand_in)?,
+                    Err(no_set) => return Err(refused_without_set(sets, message, no_set)),
+                };
                 DecodedMessage::of(&decoded, sets, message.ground_time, true)
             }
         };
@@ -662,6 +664,18 @@ impl StandIn {
                 ),
             )),
         }
+    }
+}
+
+/// Why a message of a family with several sets and no version locator
+/// doesn't decode without bindings. It routes as any other message, so a
+/// payload or an alias that can't be read is that error (`decoding.md`
+/// §3.3), and a stand-in, which names no set, is refused at the set:
+/// `no_set`, which says to open the store with bindings.
+fn refused_without_set(sets: &FamilySets, message: &Message<'_>, no_set: &ApiError) -> ApiError {
+    match sets.decode(message, &StandIn { set: None }) {
+        Err(error) if error.code() != "missing_set" => ApiError::from(error),
+        _ => no_set.clone(),
     }
 }
 

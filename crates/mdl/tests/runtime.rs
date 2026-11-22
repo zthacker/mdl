@@ -842,6 +842,7 @@ effective_from = "2026-07-01T00:00:00Z"
     let by_name = bare.asset("sat", "1", ground()).unwrap().unwrap();
     assert_eq!(by_name.native_id.as_int(), Some(1));
     assert_eq!(code(bare.binding("pair", &p1, ground())), "missing_set");
+    assert_eq!(code(bare.asset("pair", "p1", ground())), "missing_set");
 
     // Rows the build doesn't fit: the lookups refuse them as decoding a
     // message does, with the same codes.
