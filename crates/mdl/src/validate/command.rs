@@ -229,7 +229,7 @@ fn check_packet_argument(
     if let (Some(unit), false) = (&limits.unit, empty) {
         let at = place.key("unit");
         if argument.unit.as_deref() == Some(unit.as_str()) {
-            found.spelling(
+            found.build_refusal(
                 Code::ExplicitDefault,
                 &at,
                 format!(

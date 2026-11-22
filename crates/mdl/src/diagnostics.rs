@@ -432,18 +432,26 @@ impl Place {
 /// How many misspelt names one validation suggests a name for.
 const SUGGESTED: usize = 100;
 
+/// What's been reported, each diagnostic once: code, path, message and
+/// first definition.
+type Seen = BTreeSet<(Code, String, String, Option<String>)>;
+
 /// Collects diagnostics during one validation.
 #[derive(Debug, Default)]
 pub(crate) struct Report {
     diagnostics: Vec<(Vec<Segment>, Diagnostic)>,
-    /// Spellings a build refuses that a stored build is still read with:
-    /// a second way of writing what the IR means one way, which a release
-    /// before 1.0 began refusing after an earlier one accepted it
-    /// (`compatibility.md` §7). They change no meaning, so no later check
-    /// depends on them.
-    spellings: Vec<(Vec<Segment>, Diagnostic)>,
-    /// What's been reported: code, path, message and first definition.
-    seen: BTreeSet<(Code, String, String, Option<String>)>,
+    /// What a build refuses that a stored build is still read with: what
+    /// a release before 1.0 began refusing after an earlier one built it
+    /// (`compatibility.md` §7), a second way of writing what the IR means
+    /// one way or a definition that can fail to do what it's for. A stored
+    /// build is read as it was written, so no later check depends on them.
+    build_refusals: Vec<(Vec<Segment>, Diagnostic)>,
+    /// The errors reported.
+    seen: Seen,
+    /// The build refusals reported, apart from the errors, so a refusal
+    /// never hides an error that says the same, which would let a stored
+    /// build open.
+    refusals_seen: Seen,
     /// Each suggestion worked out, by the kind of name and the name, so a
     /// misspelt name used many times is searched for once.
     suggestions: BTreeMap<(&'static str, String), String>,
@@ -469,40 +477,18 @@ impl Report {
     /// runs for each use of a shared part (a struct type two command
     /// packets use) finds the same problem each time.
     fn push(&mut self, code: Code, place: &Place, message: String, first: Option<String>) {
-        if let Some(found) = self.unseen(code, place, message, first) {
+        if let Some(found) = unseen(&mut self.seen, code, place, message, first) {
             self.diagnostics.push(found);
         }
     }
 
-    /// A spelling a build refuses and a stored build is read with (see
-    /// `spellings`).
-    pub(crate) fn spelling(&mut self, code: Code, place: &Place, message: impl Into<String>) {
-        if let Some(found) = self.unseen(code, place, message.into(), None) {
-            self.spellings.push(found);
+    /// Something a build refuses and a stored build is read with (see
+    /// `build_refusals`).
+    pub(crate) fn build_refusal(&mut self, code: Code, place: &Place, message: impl Into<String>) {
+        let found = unseen(&mut self.refusals_seen, code, place, message.into(), None);
+        if let Some(found) = found {
+            self.build_refusals.push(found);
         }
-    }
-
-    /// The diagnostic, unless the same one was reported already.
-    fn unseen(
-        &mut self,
-        code: Code,
-        place: &Place,
-        message: String,
-        first: Option<String>,
-    ) -> Option<(Vec<Segment>, Diagnostic)> {
-        let path = pointer(&place.segments);
-        let key = (code, path.clone(), message.clone(), first.clone());
-        if !self.seen.insert(key) {
-            return None;
-        }
-        let diagnostic = Diagnostic {
-            code,
-            path,
-            context: place.context.clone(),
-            message,
-            first,
-        };
-        Some((place.segments.clone(), diagnostic))
     }
 
     /// What `find` suggests for `name`, one of the catalog's `kind` names
@@ -528,8 +514,8 @@ impl Report {
         found
     }
 
-    /// Whether nothing has been reported but spellings, which decide no
-    /// later check.
+    /// Whether nothing has been reported but build refusals, which decide
+    /// no later check.
     pub(crate) fn is_empty(&self) -> bool {
         self.diagnostics.is_empty()
     }
@@ -539,25 +525,16 @@ impl Report {
     /// whether a later check runs.
     pub(crate) fn absorb(&mut self, other: Report) {
         for (segments, diagnostic) in other.diagnostics {
-            if self.first_time(&diagnostic) {
+            if self.seen.insert(key(&diagnostic)) {
                 self.diagnostics.push((segments, diagnostic));
             }
         }
-        for (segments, diagnostic) in other.spellings {
-            if self.first_time(&diagnostic) {
-                self.spellings.push((segments, diagnostic));
+        for (segments, diagnostic) in other.build_refusals {
+            if self.refusals_seen.insert(key(&diagnostic)) {
+                self.build_refusals.push((segments, diagnostic));
             }
         }
         self.suggestions.extend(other.suggestions);
-    }
-
-    fn first_time(&mut self, diagnostic: &Diagnostic) -> bool {
-        self.seen.insert((
-            diagnostic.code,
-            diagnostic.path.clone(),
-            diagnostic.message.clone(),
-            diagnostic.first.clone(),
-        ))
     }
 
     /// Whether anything at or under `place` was reported, so a later check
@@ -572,13 +549,18 @@ impl Report {
     /// The value if nothing went wrong, otherwise every diagnostic in
     /// document order, then by code.
     pub(crate) fn finish<T>(mut self, value: T) -> Result<T, Diagnostics> {
-        let spellings = std::mem::take(&mut self.spellings);
-        self.diagnostics.extend(spellings);
+        let refusals = std::mem::take(&mut self.build_refusals);
+        for (segments, diagnostic) in refusals {
+            // An error that says the same is reported already.
+            if !self.seen.contains(&key(&diagnostic)) {
+                self.diagnostics.push((segments, diagnostic));
+            }
+        }
         self.finish_stored(value)
     }
 
     /// [`finish`](Report::finish) for a stored build, which is read with
-    /// the spellings a build refuses.
+    /// what a build refuses ([`build_refusal`](Report::build_refusal)).
     pub(crate) fn finish_stored<T>(mut self, value: T) -> Result<T, Diagnostics> {
         if self.diagnostics.is_empty() {
             return Ok(value);
@@ -592,9 +574,62 @@ impl Report {
     }
 }
 
+/// The diagnostic, unless `seen` holds the same one already.
+fn unseen(
+    seen: &mut Seen,
+    code: Code,
+    place: &Place,
+    message: String,
+    first: Option<String>,
+) -> Option<(Vec<Segment>, Diagnostic)> {
+    let diagnostic = Diagnostic {
+        code,
+        path: pointer(&place.segments),
+        context: place.context.clone(),
+        message,
+        first,
+    };
+    seen.insert(key(&diagnostic))
+        .then(|| (place.segments.clone(), diagnostic))
+}
+
+/// What tells one diagnostic from another for reporting it once.
+fn key(diagnostic: &Diagnostic) -> (Code, String, String, Option<String>) {
+    (
+        diagnostic.code,
+        diagnostic.path.clone(),
+        diagnostic.message.clone(),
+        diagnostic.first.clone(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A build refusal and an error that say the same are one problem in
+    /// a build, and the error stands in a stored build, however each was
+    /// reported.
+    #[test]
+    fn a_build_refusal_hides_no_error_that_says_the_same() {
+        let place = Place::root("");
+        let mut direct = Report::default();
+        direct.build_refusal(Code::Checksum, &place, "the same");
+        direct.error(Code::Checksum, &place, "the same");
+        let mut absorbed = Report::default();
+        absorbed.build_refusal(Code::Checksum, &place, "the same");
+        let mut error = Report::default();
+        error.error(Code::Checksum, &place, "the same");
+        absorbed.absorb(error);
+        for report in [direct, absorbed] {
+            let stored = report.finish_stored(());
+            assert_eq!(stored.map_err(|d| d.iter().count()), Err(1));
+        }
+        let mut built = Report::default();
+        built.build_refusal(Code::Checksum, &place, "the same");
+        built.error(Code::Checksum, &place, "the same");
+        assert_eq!(built.finish(()).map_err(|d| d.iter().count()), Err(1));
+    }
 
     #[test]
     fn a_name_is_searched_for_once_and_only_the_first_names_are() {
