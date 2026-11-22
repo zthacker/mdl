@@ -149,6 +149,8 @@ system, and runs these tests on it as a Hex install would load it, with
 `mix test` builds `morphc` with the repository's workspace, builds its
 test stores from the repository's definitions, and checks the binding's
 results against `morphc`'s for the same messages and commands
-([test/fixtures](test/fixtures/README.md)). `mix format` formats the
-Elixir; the native library is in `native/mdl_nif`, its own Cargo
-workspace (`cargo clippy` and `cargo fmt` there).
+([test/fixtures](test/fixtures/README.md)), and against the decoding
+cases in `conformance/decoding`, whose results are worked out from the
+spec ([spec/conformance.md](../../spec/conformance.md)). `mix format`
+formats the Elixir; the native library is in `native/mdl_nif`, its own
+Cargo workspace (`cargo clippy` and `cargo fmt` there).

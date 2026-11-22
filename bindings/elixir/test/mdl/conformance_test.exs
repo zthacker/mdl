@@ -1,96 +1,126 @@
 defmodule MDL.ConformanceTest do
-  # The binding's results against morphc's for the same inputs. morphc
-  # writes the runtime's results as JSON (spec/api.md), which
-  # MDL.Test.Expected reads as the Elixir values the binding must return.
-  # Compared with ===, so an integer and a float of one value differ.
+  # The language-neutral decoding cases in conformance/decoding
+  # (spec/conformance.md section 2), through the binding's own API. morphc
+  # builds each file's definitions. Each expected result, worked out from
+  # the spec by hand, is read by MDL.Test.Expected as the Elixir values
+  # the binding must return, and compared with === with each float as its
+  # bits, so an integer and a float of one value differ, and so do 0.0 and
+  # -0.0 on every OTP release.
   use ExUnit.Case, async: true
 
   alias MDL.Test.{Expected, Fixtures}
 
-  setup_all do
-    %{bundle: Fixtures.kitchen_bundle(), store: Fixtures.store(:kitchen)}
+  @dir Path.expand("../../../../conformance/decoding", __DIR__)
+  @files @dir |> Path.join("*.json") |> Path.wildcard() |> Enum.sort()
+
+  test "there are decoding cases to run" do
+    assert @files != [], "no case files in #{@dir}"
   end
 
-  test "each kitchen sink message decodes as morphc decodes it, with bindings", context do
-    {:ok, mdl} = MDL.open(context.store, bindings: Fixtures.clean_bindings())
-    assert_decodes_as_morphc(mdl, context, Fixtures.store(:clean_bindings))
-  end
+  for path <- @files do
+    @external_resource path
 
-  # Without bindings morphc decodes only a family it can choose a set for,
-  # one with a single set or a version locator; the runtime refuses the
-  # others' messages one by one (missing_set, tested in MDLTest).
-  test "each kitchen sink message decodes as morphc decodes it, without bindings", context do
-    {:ok, mdl} = MDL.open(context.store)
-    assert_decodes_as_morphc(mdl, context, nil, &chooses_set?(&1, context.bundle))
-  end
-
-  # family, set, command, the binding's arguments, morphc's, the target
-  @requests [
-    {"vendor_x", "vendor_x_v2", "eps.load_table",
-     %{"table" => {:bytes, <<0xC0, 0xFF, 0xEE>>}, "slot" => 3}, ["table=c0ffee", "slot=3"], nil},
-    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "SAFE", "delay_s" => 1.5},
-     ["mode=SAFE", "delay_s=1.5"], nil},
-    # Vendor X's packet requires delay_s, so the catalog's default isn't
-    # sent with it.
-    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "SAFE"}, ["mode=SAFE"], nil},
-    {"vendor_j", "vendor_j_v1", "eps.set_mode", %{"mode" => "NOMINAL", "delay_s" => 2.5},
-     ["mode=NOMINAL", "delay_s=2.5"], nil},
-    {"legacy", "legacy_v1", "eps.set_mode", %{"mode" => "SAFE", "delay_s" => 10.0},
-     ["mode=SAFE", "delay_s=10.0"], nil},
-    {"sink", "sink_v1", "sink.configure",
-     %{"enable" => false, "gain" => 2.0, "label" => "OK", "taps" => [1.0, 2.0]},
-     ["enable=false", "gain=2.0", "label=OK", "taps=[1.0, 2.0]"], 7},
-    {"sink", "sink_v1", "sink.mark", %{"stamp" => 1_152_921_504_606_846_975},
-     ["stamp=1152921504606846975"], nil},
-    {"sink", "sink_v1", "sink.mark", %{"stamp" => 0}, ["stamp=0"], nil},
-    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "BOGUS"}, ["mode=BOGUS"], nil},
-    # A state of the catalog's that vendor X's packet doesn't accept, and
-    # vendor J's string field writes.
-    {"vendor_x", "vendor_x_v2", "eps.set_mode", %{"mode" => "PAYLOAD"}, ["mode=PAYLOAD"], nil},
-    {"vendor_j", "vendor_j_v1", "eps.set_mode", %{"mode" => "PAYLOAD"}, ["mode=PAYLOAD"], nil}
-  ]
-
-  test "each command request encodes as morphc encodes it", context do
-    {:ok, mdl} = MDL.open(context.store)
-
-    for {family, set, command, arguments, morphc_args, target} <- @requests do
-      request = %{set: set, command: command, arguments: arguments, native_id: target}
-      actual = MDL.encode(mdl, family, request)
-
-      expected =
-        case Fixtures.morphc_encode(context.store, set, command, morphc_args, target) do
-          {:ok, json} -> {:ok, Expected.encoded(json, context.bundle)}
-          {:error, json} -> {:error, Expected.error(json)}
-        end
-
-      assert actual === expected, "#{set} #{command} #{inspect(arguments)}"
+    test "the decoding cases of #{Path.basename(path)}" do
+      run(unquote(path))
     end
   end
 
-  defp assert_decodes_as_morphc(mdl, context, bindings, family? \\ fn _ -> true end) do
-    for {family, fixtures} <- Enum.group_by(Fixtures.messages(), & &1["family"]),
-        family?.(family) do
-      expected =
-        context.store
-        |> Fixtures.morphc_decode(family, fixtures, bindings)
-        |> Enum.map(&expect(&1, context.bundle))
+  defp run(path) do
+    file = path |> File.read!() |> JSON.decode!()
+    definitions = file["definitions"]
+    store = Fixtures.build_definitions!(definitions, Path.basename(path, ".json"))
 
-      messages = Enum.map(fixtures, &Fixtures.message/1)
-
-      for {fixture, message, expected} <- Enum.zip([fixtures, messages, expected]) do
-        assert MDL.decode(mdl, family, message) === expected, fixture["name"]
+    options =
+      case file["bindings"] do
+        nil -> []
+        lines -> [bindings: Enum.join(lines, "\n") <> "\n"]
       end
 
-      assert MDL.decode_many(mdl, family, messages) === expected
+    {:ok, mdl} = MDL.open(store, options)
+    {:ok, description} = MDL.describe(mdl)
+    versions = Map.new(description["sets"], &{&1["name"], &1["def_version"]})
+    cases = file["cases"]
+
+    singly =
+      for kase <- cases do
+        actual = MDL.decode(mdl, kase["family"], message(kase["message"]))
+        failure(kase, actual, definitions, versions, "")
+      end
+
+    # Each family's messages again, in the file's order, in one call.
+    together =
+      Enum.flat_map(group_in_order(cases), fn {family, of_family} ->
+        results = MDL.decode_many(mdl, family, Enum.map(of_family, &message(&1["message"])))
+
+        if length(results) == length(of_family) do
+          Enum.zip_with(of_family, results, fn kase, actual ->
+            failure(kase, actual, definitions, versions, " (decode_many)")
+          end)
+        else
+          [
+            "decode_many gave #{length(results)} results for #{length(of_family)} messages of #{family}"
+          ]
+        end
+      end)
+
+    failures = Enum.reject(singly ++ together, &is_nil/1)
+    assert failures == [], Enum.join(failures, "\n\n")
+  end
+
+  # A case's message as MDL.decode/3 takes it: lowercase hex, spaces
+  # between bytes allowed, or a JSON family's document as its text.
+  defp message(message) do
+    payload =
+      case message do
+        %{"hex" => hex} ->
+          hex |> String.split(" ", trim: true) |> Enum.map_join(&Base.decode16!(&1, case: :lower))
+
+        %{"json" => text} ->
+          text
+      end
+
+    %{
+      payload: payload,
+      metadata:
+        Map.new(message["metadata"], fn {name, value} ->
+          {name, Expected.integer_or_text(value)}
+        end),
+      ground_time: Fixtures.nanos(message["ground_time"])
+    }
+  end
+
+  # nil when the binding's result is the case's (spec/conformance.md
+  # section 2.1), else what differs. A decoded message's def_version is
+  # the digest describe gives for its set; an error's code is compared,
+  # and its problems must be none.
+  defp failure(kase, actual, definitions, versions, how) do
+    case {kase, actual} do
+      {%{"decoded" => decoded}, {:ok, _}} ->
+        expected =
+          decoded
+          |> Map.put("def_version", Map.fetch!(versions, decoded["set"]))
+          |> Expected.decoded(definitions)
+
+        if Expected.exact(actual) === Expected.exact({:ok, expected}),
+          do: nil,
+          else:
+            "#{kase["name"]}#{how}: expected #{inspect({:ok, expected})}, got #{inspect(actual)}"
+
+      {%{"error" => code}, {:error, %MDL.Error{code: got, problems: []}}} ->
+        if Atom.to_string(got) == code,
+          do: nil,
+          else: "#{kase["name"]}#{how}: expected the error #{code}, got #{inspect(actual)}"
+
+      {%{"error" => code}, _} ->
+        "#{kase["name"]}#{how}: expected the error #{code}, got #{inspect(actual)}"
+
+      {%{"decoded" => _}, _} ->
+        "#{kase["name"]}#{how}: expected a decoded message, got #{inspect(actual)}"
     end
   end
 
-  defp chooses_set?(family, bundle) do
-    declared = Enum.find(bundle["families"], &(&1["name"] == family))
-    sets = Enum.count(bundle["sets"], &(&1["family"] == family))
-    Map.has_key?(declared, "version") or sets == 1
+  defp group_in_order(cases) do
+    families = cases |> Enum.map(& &1["family"]) |> Enum.uniq()
+    Enum.map(families, fn family -> {family, Enum.filter(cases, &(&1["family"] == family))} end)
   end
-
-  defp expect({:ok, json}, bundle), do: {:ok, Expected.decoded(json, bundle)}
-  defp expect({:error, json}, _bundle), do: {:error, Expected.error(json)}
 end

@@ -48,6 +48,19 @@ defmodule MDL.Test.Fixtures do
 
   def store(name), do: Map.fetch!(:persistent_term.get(__MODULE__), name)
 
+  @doc """
+  A store morphc builds from a conformance file's definitions, an IR
+  bundle (spec/conformance.md section 2), written to a file named `name`
+  for morphc to read.
+  """
+  def build_definitions!(definitions, name) do
+    dir = Path.join(work(), "conformance")
+    File.mkdir_p!(dir)
+    input = Path.join(dir, name <> ".json")
+    File.write!(input, JSON.encode!(definitions))
+    build!(Map.fetch!(:persistent_term.get(__MODULE__), :morphc), [input], Path.join(dir, name))
+  end
+
   def root, do: @root
 
   def kitchen_bundle, do: @kitchen_bundle |> File.read!() |> JSON.decode!()

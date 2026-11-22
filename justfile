@@ -150,10 +150,11 @@ fuzz-lock:
 
 # The Elixir binding's checks (bindings/elixir; Elixir 1.18 and Rust 1.91 or
 # later): its Hex dependencies as locked, formatting, no warnings, its tests,
-# which check its results against morphc's, and its native library's
-# formatting and clippy. CI runs it on the oldest and newest Elixir. It
-# builds the native library from source even if a checksum file is left in
-# the checkout, which would otherwise load the published one (RELEASING.md).
+# which check its results against morphc's and the conformance cases, and
+# its native library's formatting and clippy. CI runs it on the oldest and
+# newest Elixir. It builds the native library from source even if a
+# checksum file is left in the checkout, which would otherwise load the
+# published one (RELEASING.md).
 elixir:
     cd bindings/elixir && mix deps.get --check-locked
     cd bindings/elixir && mix format --check-formatted

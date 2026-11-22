@@ -21,3 +21,7 @@ message with no time, which decoding refuses) and `legacy-time-invalid`
 integer past 2^63 in the record). Each has its family, its
 ground time, its metadata, and its payload in hex or, for a JSON family,
 as the document's text.
+
+The conformance test (`test/mdl/conformance_test.exs`) builds a store of
+its own from each file of `conformance/decoding`, writing the file's
+definitions where `morphc` reads them (spec/conformance.md).
