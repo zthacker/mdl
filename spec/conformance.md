@@ -1,0 +1,103 @@
+# Conformance
+
+Status: normative. The key words MUST, MUST NOT, SHOULD and MAY are to be
+interpreted as described in RFC 2119.
+
+The other specifications say what MDL does in prose. The conformance
+suites say some of it again as examples a program checks: language-neutral
+JSON files under `conformance/`, each worked out from the specifications.
+An implementation conforms when it passes every file of each suite that
+covers what it implements. A binding of the runtime API
+([api.md](api.md)) runs them through its own API, so they check its
+inputs and its language's values as well as the runtime beneath it.
+
+## 1. Suites
+
+| Directory | What it checks | Specified in |
+| --- | --- | --- |
+| `conformance/canonical/` | canonical JSON: number text, canonical form, the input rules | [canonical-json.md](canonical-json.md) §4 |
+| `conformance/decoding/` | decoding messages through the runtime API | §2 |
+
+## 2. Decoding cases
+
+Each file in `conformance/decoding/` is a JSON object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `about` | text: what the file covers, for people |
+| `definitions` | one IR bundle, as the JSON frontend reads it ([frontends.md](frontends.md) §6) |
+| `bindings` | optional: a bindings file ([bindings.md](bindings.md)), as a list of its lines; the file is each line followed by a line feed |
+| `cases` | a list of cases |
+
+A case is an object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `name` | text, unique in its file |
+| `spec` | a list of the sections its expected result follows from, each a file and a section number (`"decoding.md §5.6"`) |
+| `note` | text: how the expected result follows from them, for people |
+| `family` | text: the family that sent the message |
+| `message` | an object: the payload, as `hex` (lowercase hex digits, two a byte, with spaces between bytes allowed) or as `json` (a JSON family's document, as its text); `metadata`, an object of values, each an integer or text read as [api.md](api.md) §1 reads them (a string in an integer's one decimal spelling within −2^63 to 2^64 − 1 is that integer); and `ground_time`, an instant (api.md §1) |
+| `decoded` | the decoded message (api.md §3.1), in its JSON, without `def_version` |
+| `error` | text: the error's code |
+
+Every key is required but `bindings`; a case has one of `decoded` and
+`error`, and a message one of `hex` and `json`. A file, case or message
+with a key this section doesn't list, or without one it requires, is
+malformed, so a misspelt key fails rather than being skipped.
+
+### 2.1 Running a file
+
+A runner:
+
+1. builds the definitions into a store, as `morphc build` builds one
+   from a JSON input that holds them ([frontends.md](frontends.md) §6,
+   [store.md](store.md)): a runner that can't call MDL's library writes
+   them to a `.json` file and runs `morphc build` on it. A file whose
+   definitions don't build fails as a whole;
+2. opens the store (api.md §2.1) with the file's bindings, if it has any;
+3. decodes each case's message (api.md §2.2) from its family, with the
+   payload's bytes, its metadata and its ground time, and compares the
+   result with the case's (§2.2);
+4. decodes each family's messages again, in the file's order, with one
+   `decode_many` (api.md §2.3), whose results MUST compare equal to the
+   cases' in the same way.
+
+A decoded message's `def_version` MUST be the digest that `describe`
+(api.md §2.5) gives for its set. No person works out a SHA-256, so a case
+leaves it out; `conformance/canonical/` checks the text it's computed
+from. An error compares equal when its code is the case's and its list of
+problems is empty. Its message is for people, and isn't compared.
+
+### 2.2 Comparing results
+
+A result and a case's compare as JSON values, in api.md §1's spellings:
+
+- objects have the same keys, in any order, with values that compare
+  equal under each;
+- arrays have the same length, and elements that compare equal in order;
+- strings, booleans and `null` compare equal when they're identical;
+- a number with a fraction or an exponent is a float, and any other is an
+  integer. An integer compares equal only to an integer of the same value,
+  and a float only to a float that reads as the same binary64, bit for bit,
+  so `-0.0` isn't `0.0`.
+
+A binding compares its language's values with the ones the case's JSON
+stands for, under api.md §1 and the forms it documents, as strictly: an
+integer never equals a float, and its NaN equals NaN.
+
+### 2.3 Expected results
+
+Every expected result is worked out from the specifications by hand, and
+its `note` shows how: no expected result is an implementation's output. A
+case cites the narrowest sections its result depends on. When a case and
+an implementation disagree, the specifications settle it: the case is
+wrong, or the implementation has a bug.
+
+### 2.4 Runners
+
+This repository runs the cases in two places: the runtime's runner,
+`crates/mdl/tests/conformance_decoding.rs`, which also checks that each
+section a case cites is a heading of its file, and the Elixir binding's,
+`bindings/elixir/test/mdl/conformance_test.exs`, which builds each file's
+definitions with `morphc`.

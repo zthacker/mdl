@@ -6,9 +6,11 @@ MUST NOT, SHOULD and MAY are to be interpreted as described in RFC 2119.
 Decoding turns one message into who sent it, which packet it is, every
 value the packet defines, its canonical samples and its event time. Two
 implementations given the same artifacts, bindings and message MUST
-produce the same result, or the same error code. Decoding is a pure
-function of those inputs: decoding a message again later gives the same
-result, which is what makes replaying raw data safe.
+produce the same result, or the same error code; the decoding cases of
+[conformance.md](conformance.md) §2 are examples of this document that
+every implementation runs. Decoding is a pure function of those inputs:
+decoding a message again later gives the same result, which is what
+makes replaying raw data safe.
 
 A message decodes completely or not at all. Any failure in this document
 rejects the whole message with the code in brackets; nothing partial is

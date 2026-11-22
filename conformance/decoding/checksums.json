@@ -1,0 +1,366 @@
+{
+  "about": "Checksums: each algorithm against the values decoding.md works out, the range a checksum covers, its byte order, and when its failure is the message's error.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {},
+    "families": [
+      {
+        "name": "chk",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "unit-1" }
+      },
+      {
+        "name": "chk_le",
+        "encoding": "binary",
+        "byte_order": "little",
+        "alias": { "kind": "fixed", "value": "unit-2" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "chk_v1",
+        "family": "chk",
+        "packets": [
+          {
+            "name": "CRC16",
+            "identify": { "id": 1 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "string", "length": { "kind": "fixed", "bytes": 9 }, "text": "ascii" },
+              {
+                "kind": "checksum",
+                "name": "crc",
+                "from_bits": 8,
+                "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535, "reflect_in": false, "reflect_out": false, "xor_out": 0 }
+              }
+            ]
+          },
+          {
+            "name": "RIELLO",
+            "identify": { "id": 2 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "string", "length": { "kind": "fixed", "bytes": 9 }, "text": "ascii" },
+              {
+                "kind": "checksum",
+                "name": "crc",
+                "from_bits": 8,
+                "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 45738, "reflect_in": true, "reflect_out": true, "xor_out": 0 }
+              }
+            ]
+          },
+          {
+            "name": "ISO",
+            "identify": { "id": 3 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 4 } },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "iso8473" } }
+            ]
+          },
+          {
+            "name": "ISO_ZERO",
+            "identify": { "id": 4 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 2 } },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "iso8473" } }
+            ]
+          },
+          {
+            "name": "SUM8",
+            "identify": { "id": 5 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 3 } },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "sum", "width": 8 } }
+            ]
+          },
+          {
+            "name": "XOR",
+            "identify": { "id": 6 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 3 } },
+              { "kind": "checksum", "name": "check", "algorithm": { "kind": "xor" } }
+            ]
+          },
+          {
+            "name": "ORDER",
+            "identify": { "id": 7 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "text", "type": "string", "length": { "kind": "fixed", "bytes": 2 }, "text": "ascii" },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "xor" } }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "chk_le_v1",
+        "family": "chk_le",
+        "packets": [
+          {
+            "name": "SUM16",
+            "identify": { "id": 1 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 3 } },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "sum", "width": 16 } }
+            ]
+          },
+          {
+            "name": "ISO",
+            "identify": { "id": 2 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 4 } },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "iso8473" } }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "crc-16-ibm-3740",
+      "spec": ["decoding.md §5.6", "decoding.md §6", "decoding.md §7.5"],
+      "note": "poly 4129 is 0x1021 and init 65535 is 0xffff, unreflected with xor_out 0: CRC-16/IBM-3740. It covers from bit 8, the bytes 31 to 39, which are 123456789, so it is 0x29b1, stored big-endian as the family's order: 29 b1. The checksum's raw value, 10673, is in the record; it is no field, so it has no engineering value.",
+      "family": "chk",
+      "message": { "hex": "01 31 32 33 34 35 36 37 38 39 29 b1", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "CRC16",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 1, "data": "123456789", "crc": 10673 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "data", "value": "123456789", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "crc-16-ibm-3740-over-damaged-bytes",
+      "spec": ["decoding.md §5.6"],
+      "note": "The covered bytes are 123456780, whose CRC isn't 0x29b1, the stored value, so the message is bad_checksum.",
+      "family": "chk",
+      "message": { "hex": "01 31 32 33 34 35 36 37 38 30 29 b1", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "bad_checksum"
+    },
+    {
+      "name": "a-checksum-past-the-end",
+      "spec": ["decoding.md §5.6"],
+      "note": "The checksum reaches past the packet's end, which isn't a problem yet: the entries are read in order, and data, 9 bytes from bit 8, is the first past the end of 3 bytes, so the message is past_end.",
+      "family": "chk",
+      "message": { "hex": "01 31 32", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "past_end"
+    },
+    {
+      "name": "crc-16-riello",
+      "spec": ["decoding.md §5.6"],
+      "note": "init 45738 is 0xb2aa, reflected in and out: CRC-16/RIELLO, which is 0x63d0 for 123456789, stored as 63 d0. The register starts at init as written, not reflected. 0x63d0 is 25552.",
+      "family": "chk",
+      "message": { "hex": "02 31 32 33 34 35 36 37 38 39 63 d0", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "RIELLO",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 2, "data": "123456789", "crc": 25552 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "data", "value": "123456789", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "iso-8473",
+      "spec": ["decoding.md §5.6"],
+      "note": "For the bytes ab cd ef 01 the ISO 8473 check bytes are 9c f8, the first stored first, so as a 16-bit value it is 0x9cf8 = 40184.",
+      "family": "chk",
+      "message": { "hex": "03 ab cd ef 01 9c f8", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "ISO",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 3, "data": "abcdef01", "check": 40184 },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "data", "value": "abcdef01", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "iso-8473-computing-ffff",
+      "spec": ["decoding.md §5.6"],
+      "note": "For 00 00, C0 and C1 stay 0, so each check byte would be 0 and is written as 255: ff ff, 65535.",
+      "family": "chk",
+      "message": { "hex": "04 00 00 ff ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "ISO_ZERO",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 4, "data": "0000", "check": 65535 },
+        "engineering": [
+          { "path": "id", "value": 4, "quality": "good" },
+          { "path": "data", "value": "0000", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "iso-8473-accepting-0000-where-it-computes-ffff",
+      "spec": ["decoding.md §5.6"],
+      "note": "The decoding procedure accepts check bytes 00 00 for 00 00: neither is alone in being 0, and C0 and C1 are both 0 after the covered bytes and both check bytes. So 0x0000 is accepted where the computed value is 0xffff, and the record holds the stored 0.",
+      "family": "chk",
+      "message": { "hex": "04 00 00 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "ISO_ZERO",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 4, "data": "0000", "check": 0 },
+        "engineering": [
+          { "path": "id", "value": 4, "quality": "good" },
+          { "path": "data", "value": "0000", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "iso-8473-with-one-check-byte-0",
+      "spec": ["decoding.md §5.6"],
+      "note": "Check bytes 00 ff have exactly one byte 0, which the decoding procedure refuses: bad_checksum.",
+      "family": "chk",
+      "message": { "hex": "04 00 00 00 ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "bad_checksum"
+    },
+    {
+      "name": "an-8-bit-sum-wraps",
+      "spec": ["decoding.md §5.6"],
+      "note": "ff + ff + ff is 765, and modulo 2^8 that is 253, fd.",
+      "family": "chk",
+      "message": { "hex": "05 ff ff ff fd", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "SUM8",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 5, "data": "ffffff", "check": 253 },
+        "engineering": [
+          { "path": "id", "value": 5, "quality": "good" },
+          { "path": "data", "value": "ffffff", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "xor-from-the-packet-start",
+      "spec": ["decoding.md §5.6"],
+      "note": "Without from_bits the checksum covers from bit 0, so the id byte too: 06 ^ 0f ^ f0 ^ aa = 0x53 = 83.",
+      "family": "chk",
+      "message": { "hex": "06 0f f0 aa 53", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk",
+        "native_id": "unit-1",
+        "asset": "unit-1",
+        "stand_in": true,
+        "set": "chk_v1",
+        "packet": "XOR",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 6, "data": "0ff0aa", "check": 83 },
+        "engineering": [
+          { "path": "id", "value": 6, "quality": "good" },
+          { "path": "data", "value": "0ff0aa", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-checksum-ahead-of-a-damaged-entry",
+      "spec": ["decoding.md §5.2", "decoding.md §5.6"],
+      "note": "The checksum is at the static position bit 24, so it is verified before any entry is extracted. 41 ^ c1 is 0x80 and 00 is stored, so the message is bad_checksum, not the invalid_text c1 would give as ASCII.",
+      "family": "chk",
+      "message": { "hex": "07 41 c1 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "bad_checksum"
+    },
+    {
+      "name": "a-damaged-entry-behind-a-good-checksum",
+      "spec": ["decoding.md §2.2", "decoding.md §5.6"],
+      "note": "41 ^ c1 is 0x80, which is stored, so the checksum is good, and the entries are then read: text is 41 c1, and c1 isn't ASCII, so the message is invalid_text.",
+      "family": "chk",
+      "message": { "hex": "07 41 c1 80", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_text"
+    },
+    {
+      "name": "a-sum-in-the-familys-byte-order",
+      "spec": ["decoding.md §5.6"],
+      "note": "ff + ff + ff is 765 = 0x02fd, which modulo 2^16 is itself, stored in the little-endian family's order: fd 02.",
+      "family": "chk_le",
+      "message": { "hex": "01 ff ff ff fd 02", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk_le",
+        "native_id": "unit-2",
+        "asset": "unit-2",
+        "stand_in": true,
+        "set": "chk_le_v1",
+        "packet": "SUM16",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 1, "data": "ffffff", "check": 765 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "data", "value": "ffffff", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "iso-8473-whatever-the-familys-byte-order",
+      "spec": ["decoding.md §5.6"],
+      "note": "The ISO 8473 check bytes are stored first then second whatever the family's byte order, so in the little-endian family 9c f8 is still 0x9cf8 = 40184.",
+      "family": "chk_le",
+      "message": { "hex": "02 ab cd ef 01 9c f8", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "chk_le",
+        "native_id": "unit-2",
+        "asset": "unit-2",
+        "stand_in": true,
+        "set": "chk_le_v1",
+        "packet": "ISO",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 2, "data": "abcdef01", "check": 40184 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "data", "value": "abcdef01", "quality": "good" }
+        ]
+      }
+    }
+  ]
+}

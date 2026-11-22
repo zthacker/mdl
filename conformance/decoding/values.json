@@ -1,0 +1,339 @@
+{
+  "about": "Values: unsigned and signed integers at any bit offset and width, in both byte orders and each signed form; floats, NaN, the infinities and negative zero; text in each encoding and bytes; and each one's spelling in a result.",
+  "definitions": {
+    "mdl_version": "2.1",
+    "catalog": {
+      "params": {
+        "probe.angle": { "type": "f64" },
+        "probe.blob": { "type": "bytes" },
+        "probe.count": { "type": "u64" },
+        "probe.flag": { "type": "bool" },
+        "probe.name": { "type": "str" },
+        "probe.offset": { "type": "i64" },
+        "probe.temp": { "type": "f64" },
+        "probe.total": { "type": "u64" }
+      }
+    },
+    "families": [
+      {
+        "name": "be",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "probe-be" }
+      },
+      {
+        "name": "le",
+        "encoding": "binary",
+        "byte_order": "little",
+        "alias": { "kind": "fixed", "value": "probe-le" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "be_v1",
+        "family": "be",
+        "packets": [
+          {
+            "name": "BITS",
+            "identify": { "id": 1 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "a", "type": "uint", "size_bits": 3 },
+              { "kind": "field", "name": "b", "type": "uint", "size_bits": 12, "canonical": "probe.count" },
+              { "kind": "field", "name": "c", "type": "int", "size_bits": 5, "canonical": "probe.offset" },
+              { "kind": "field", "name": "flag", "type": "bool", "size_bits": 1, "canonical": "probe.flag" },
+              { "kind": "padding", "size_bits": 3 }
+            ]
+          },
+          {
+            "name": "WIDE",
+            "identify": { "id": 2 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "at", "type": "uint", "size_bits": 64 },
+              { "kind": "field", "name": "past", "type": "uint", "size_bits": 64 },
+              { "kind": "field", "name": "big", "type": "uint", "size_bits": 64, "canonical": "probe.total" },
+              { "kind": "field", "name": "low", "type": "int", "size_bits": 64 },
+              { "kind": "field", "name": "small", "type": "int", "size_bits": 16 }
+            ]
+          },
+          {
+            "name": "SIGNED",
+            "identify": { "id": 3 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "sm", "type": "int", "size_bits": 16, "signed": "sign_magnitude" },
+              { "kind": "field", "name": "oc", "type": "int", "size_bits": 16, "signed": "ones_complement" },
+              { "kind": "field", "name": "sm_zero", "type": "int", "size_bits": 16, "signed": "sign_magnitude" },
+              { "kind": "field", "name": "oc_zero", "type": "int", "size_bits": 16, "signed": "ones_complement" },
+              { "kind": "field", "name": "tc", "type": "int", "size_bits": 16 }
+            ]
+          },
+          {
+            "name": "FLOATS",
+            "identify": { "id": 4 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "single", "type": "float", "size_bits": 32, "canonical": "probe.angle" },
+              { "kind": "field", "name": "double", "type": "float", "size_bits": 64 },
+              { "kind": "field", "name": "nan", "type": "float", "size_bits": 32, "canonical": "probe.temp" },
+              { "kind": "field", "name": "neg_inf", "type": "float", "size_bits": 64 },
+              { "kind": "field", "name": "neg_zero", "type": "float", "size_bits": 32 }
+            ]
+          },
+          {
+            "name": "TEXT",
+            "identify": { "id": 5 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "name", "type": "string", "length": { "kind": "fixed", "bytes": 6 }, "canonical": "probe.name" },
+              { "kind": "field", "name": "label", "type": "string", "length": { "kind": "fixed", "bytes": 8, "terminator": 0 }, "text": "ascii" },
+              { "kind": "field", "name": "latin", "type": "string", "length": { "kind": "fixed", "bytes": 2 }, "text": "latin1" },
+              { "kind": "field", "name": "blob", "type": "bytes", "length": { "kind": "fixed", "bytes": 3 }, "canonical": "probe.blob" },
+              { "kind": "field", "name": "rest", "type": "bytes", "length": { "kind": "remaining" } }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "le_v1",
+        "family": "le",
+        "packets": [
+          {
+            "name": "LE",
+            "entries": [
+              { "kind": "field", "name": "word", "type": "uint", "size_bits": 16, "canonical": "probe.count" },
+              { "kind": "field", "name": "high", "type": "uint", "size_bits": 4 },
+              { "kind": "field", "name": "low", "type": "uint", "size_bits": 4 },
+              { "kind": "field", "name": "long", "type": "int", "size_bits": 32, "canonical": "probe.offset" },
+              { "kind": "field", "name": "real", "type": "float", "size_bits": 32 },
+              { "kind": "field", "name": "be_word", "type": "uint", "size_bits": 16, "byte_order": "big" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "integers-at-odd-offsets-and-widths",
+      "spec": ["decoding.md §2.1", "decoding.md §4", "decoding.md §6", "decoding.md §7.3", "decoding.md §7.5", "api.md §2.2", "api.md §3.1"],
+      "note": "Bits count from the top of byte 0. b5 3d 9e is 10110101 00111101 10011110. a is bits 8 to 10, 101 = 5. b is bits 11 to 22, 10101 then 0011110 = 0xa9e = 2718. c is bits 23 to 27, 11001 = 25, which as 5-bit two's complement is 25 - 32 = -7. flag is bit 28, set. The last 3 bits are padding, which the record leaves out. With no bindings, the fixed alias's text is a stand-in asset; with no time source, the event time is the ground time.",
+      "family": "be",
+      "message": { "hex": "01 b5 3d 9e", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "be",
+        "native_id": "probe-be",
+        "asset": "probe-be",
+        "stand_in": true,
+        "set": "be_v1",
+        "packet": "BITS",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "probe.count", "value": 2718, "unit": null, "path": "b", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "probe.offset", "value": -7, "unit": null, "path": "c", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "probe.flag", "value": true, "unit": null, "path": "flag", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 1, "a": 5, "b": 2718, "c": -7, "flag": true },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "a", "value": 5, "quality": "good" },
+          { "path": "b", "value": 2718, "quality": "good" },
+          { "path": "c", "value": -7, "quality": "good" },
+          { "path": "flag", "value": true, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "integers-past-2-to-the-53-are-strings",
+      "spec": ["decoding.md §2.1", "api.md §1", "api.md §3.1"],
+      "note": "at is 0x001fffffffffffff = 2^53 - 1, the largest integer written as a number. past is 0x0020000000000000 = 2^53, written as a decimal string. big is 0xfffffffffffffffe = 2^64 - 2 = 18446744073709551614. low is 0x8000000000000000 as 64-bit two's complement, -2^63 = -9223372036854775808. small is 0xfffe as 16-bit two's complement, -2. A u64 param's good value is the integer, spelled the same way.",
+      "family": "be",
+      "message": {
+        "hex": "02 00 1f ff ff ff ff ff ff 00 20 00 00 00 00 00 00 ff ff ff ff ff ff ff fe 80 00 00 00 00 00 00 00 ff fe",
+        "metadata": {},
+        "ground_time": "2026-06-01T12:00:00Z"
+      },
+      "decoded": {
+        "family": "be",
+        "native_id": "probe-be",
+        "asset": "probe-be",
+        "stand_in": true,
+        "set": "be_v1",
+        "packet": "WIDE",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "probe.total", "value": "18446744073709551614", "unit": null, "path": "big", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": {
+          "id": 2,
+          "at": 9007199254740991,
+          "past": "9007199254740992",
+          "big": "18446744073709551614",
+          "low": "-9223372036854775808",
+          "small": -2
+        },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "at", "value": 9007199254740991, "quality": "good" },
+          { "path": "past", "value": "9007199254740992", "quality": "good" },
+          { "path": "big", "value": "18446744073709551614", "quality": "good" },
+          { "path": "low", "value": "-9223372036854775808", "quality": "good" },
+          { "path": "small", "value": -2, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "signed-forms",
+      "spec": ["decoding.md §2.1"],
+      "note": "In sign-magnitude, 0x8005 has the sign bit set and magnitude 5, so -5; 0x8000 is the second zero, read as 0. In ones' complement, 0xfffa has the top bit set and is the negative of NOT 0xfffa = 5, so -5; 0xffff is the second zero, read as 0. In two's complement, the default, 0xfffb is 65531 - 65536 = -5.",
+      "family": "be",
+      "message": { "hex": "03 80 05 ff fa 80 00 ff ff ff fb", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "be",
+        "native_id": "probe-be",
+        "asset": "probe-be",
+        "stand_in": true,
+        "set": "be_v1",
+        "packet": "SIGNED",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 3, "sm": -5, "oc": -5, "sm_zero": 0, "oc_zero": 0, "tc": -5 },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "sm", "value": -5, "quality": "good" },
+          { "path": "oc", "value": -5, "quality": "good" },
+          { "path": "sm_zero", "value": 0, "quality": "good" },
+          { "path": "oc_zero", "value": 0, "quality": "good" },
+          { "path": "tc", "value": -5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "floats-and-their-non-finite-values",
+      "spec": ["decoding.md §2.1", "decoding.md §7.3", "decoding.md §7.5", "api.md §1", "api.md §3.1"],
+      "note": "0x40490fdb is the binary32 nearest pi, 3.1415927410125732421875 exactly, written as the shortest text that reads back as that double: 3.1415927410125732. 0xc00921fb54442d18 is the binary64 -3.141592653589793. 0x7fc00000 is a NaN, and 0xfff0000000000000 negative infinity, each written as its non_finite object with quality non_finite, in the record too. The NaN's sample has quality non_finite and the raw value. 0x80000000 is negative zero, written -0.0 and good.",
+      "family": "be",
+      "message": {
+        "hex": "04 40 49 0f db c0 09 21 fb 54 44 2d 18 7f c0 00 00 ff f0 00 00 00 00 00 00 80 00 00 00",
+        "metadata": {},
+        "ground_time": "2026-06-01T12:00:00Z"
+      },
+      "decoded": {
+        "family": "be",
+        "native_id": "probe-be",
+        "asset": "probe-be",
+        "stand_in": true,
+        "set": "be_v1",
+        "packet": "FLOATS",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "probe.angle", "value": 3.1415927410125732, "unit": null, "path": "single", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "probe.temp", "value": { "non_finite": "NaN" }, "unit": null, "path": "nan", "index": null, "time_offset_ns": null, "quality": "non_finite" }
+        ],
+        "record": {
+          "id": 4,
+          "single": 3.1415927410125732,
+          "double": -3.141592653589793,
+          "nan": { "non_finite": "NaN" },
+          "neg_inf": { "non_finite": "-inf" },
+          "neg_zero": -0.0
+        },
+        "engineering": [
+          { "path": "id", "value": 4, "quality": "good" },
+          { "path": "single", "value": 3.1415927410125732, "quality": "good" },
+          { "path": "double", "value": -3.141592653589793, "quality": "good" },
+          { "path": "nan", "value": { "non_finite": "NaN" }, "quality": "non_finite" },
+          { "path": "neg_inf", "value": { "non_finite": "-inf" }, "quality": "non_finite" },
+          { "path": "neg_zero", "value": -0.0, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "text-in-each-encoding-and-bytes",
+      "spec": ["decoding.md §2.2", "decoding.md §5.2", "api.md §1"],
+      "note": "name is 6 bytes of UTF-8, the default: 68 c3a9 6c 6c 6f is h, e acute, l, l, o. label is 8 bytes ending at its terminator 00: the value is 41 42, AB, and the rest is padding that isn't decoded, though ff isn't ASCII. latin is Latin-1, each byte its own code point: e9 is e acute and ff is y diaeresis. blob is 3 bytes, written as hex. rest takes the bytes left, 01 02.",
+      "family": "be",
+      "message": {
+        "hex": "05 68 c3 a9 6c 6c 6f 41 42 00 ff ff ff ff ff e9 ff c0 ff ee 01 02",
+        "metadata": {},
+        "ground_time": "2026-06-01T12:00:00Z"
+      },
+      "decoded": {
+        "family": "be",
+        "native_id": "probe-be",
+        "asset": "probe-be",
+        "stand_in": true,
+        "set": "be_v1",
+        "packet": "TEXT",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "probe.name", "value": "héllo", "unit": null, "path": "name", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "probe.blob", "value": "c0ffee", "unit": null, "path": "blob", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 5, "name": "héllo", "label": "AB", "latin": "éÿ", "blob": "c0ffee", "rest": "0102" },
+        "engineering": [
+          { "path": "id", "value": 5, "quality": "good" },
+          { "path": "name", "value": "héllo", "quality": "good" },
+          { "path": "label", "value": "AB", "quality": "good" },
+          { "path": "latin", "value": "éÿ", "quality": "good" },
+          { "path": "blob", "value": "c0ffee", "quality": "good" },
+          { "path": "rest", "value": "0102", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "little-endian-whole-bytes-and-inside-one-byte",
+      "spec": ["decoding.md §2.1", "decoding.md §4"],
+      "note": "The packet has no identify keys, so it matches every message. In the little-endian family, word is 34 12, least significant byte first, 0x1234 = 4660. high and low lie inside byte 2, a7, so they read as big-endian: 0xa = 10 and 7. long is fe ff ff ff, 0xfffffffe, -2 as 32-bit two's complement. real is 00 00 00 c0, the binary32 0xc0000000 = -2.0, a float whose value is a whole number, which is still written as a float. be_word names its own big-endian order: 12 34 is 4660.",
+      "family": "le",
+      "message": { "hex": "34 12 a7 fe ff ff ff 00 00 00 c0 12 34", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "le",
+        "native_id": "probe-le",
+        "asset": "probe-le",
+        "stand_in": true,
+        "set": "le_v1",
+        "packet": "LE",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "probe.count", "value": 4660, "unit": null, "path": "word", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "probe.offset", "value": -2, "unit": null, "path": "long", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "word": 4660, "high": 10, "low": 7, "long": -2, "real": -2.0, "be_word": 4660 },
+        "engineering": [
+          { "path": "word", "value": 4660, "quality": "good" },
+          { "path": "high", "value": 10, "quality": "good" },
+          { "path": "low", "value": 7, "quality": "good" },
+          { "path": "long", "value": -2, "quality": "good" },
+          { "path": "real", "value": -2.0, "quality": "good" },
+          { "path": "be_word", "value": 4660, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-value-past-the-end",
+      "spec": ["decoding.md §2.1"],
+      "note": "BITS has no length, so the payload is the packet. c is bits 23 to 27, and the payload has 24 bits, so reading it is past_end.",
+      "family": "be",
+      "message": { "hex": "01 b5 3d", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "past_end"
+    },
+    {
+      "name": "ascii-above-7f",
+      "spec": ["decoding.md §2.2"],
+      "note": "label's value is the bytes before its terminator, 41 c1, and ASCII must be below 0x80.",
+      "family": "be",
+      "message": { "hex": "05 68 c3 a9 6c 6c 6f 41 c1 00 00 00 00 00 00 e9 ff c0 ff ee", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_text"
+    },
+    {
+      "name": "utf-8-that-isnt",
+      "spec": ["decoding.md §2.2"],
+      "note": "name is 68 c3 28 6c 6c 6f: c3 starts a two-byte sequence, and 28 isn't a continuation byte, so the UTF-8 isn't valid.",
+      "family": "be",
+      "message": { "hex": "05 68 c3 28 6c 6c 6f 41 42 00 00 00 00 00 00 e9 ff c0 ff ee", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_text"
+    }
+  ]
+}

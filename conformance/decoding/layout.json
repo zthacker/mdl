@@ -1,0 +1,307 @@
+{
+  "about": "Layout: a packet's length, conditions, arrays of structs counted by a field, string lengths from a field, a terminator or the rest of the packet, padding and offsets, and the errors each gives.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {
+      "params": {
+        "lay.extra": { "type": "u64" },
+        "lay.name": { "type": "str" },
+        "lay.volts": { "type": "u64" }
+      }
+    },
+    "families": [
+      {
+        "name": "lay",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "box" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "lay_v1",
+        "family": "lay",
+        "types": {
+          "cell": {
+            "entries": [
+              { "kind": "field", "name": "volts", "type": "uint", "size_bits": 16, "canonical": "lay.volts" },
+              { "kind": "field", "name": "ok", "type": "bool", "size_bits": 1 },
+              { "kind": "padding", "size_bits": 7 }
+            ]
+          }
+        },
+        "packets": [
+          {
+            "name": "LEN",
+            "identify": { "id": 1 },
+            "length": { "kind": "exact", "bytes": 4 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 16 }
+            ]
+          },
+          {
+            "name": "COND",
+            "identify": { "id": 2 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "flags", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "extra",
+                "type": "uint",
+                "size_bits": 8,
+                "canonical": "lay.extra",
+                "when": { "kind": "compare", "field": "flags", "op": "mask_any", "value": 1 }
+              },
+              { "kind": "field", "name": "after", "type": "uint", "size_bits": 8 }
+            ]
+          },
+          {
+            "name": "ARR",
+            "identify": { "id": 3 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "array",
+                "name": "cells",
+                "count": { "kind": "field", "field": "n" },
+                "element": { "kind": "struct", "name": "cell" }
+              },
+              { "kind": "field", "name": "tail", "type": "uint", "size_bits": 8 }
+            ]
+          },
+          {
+            "name": "STR",
+            "identify": { "id": 4 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "len", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "name",
+                "type": "string",
+                "length": { "kind": "field", "field": "len", "add": -1 },
+                "canonical": "lay.name"
+              },
+              { "kind": "field", "name": "term", "type": "string", "length": { "kind": "terminator", "byte": 0 }, "text": "ascii" },
+              { "kind": "field", "name": "rest", "type": "bytes", "length": { "kind": "remaining" } }
+            ]
+          },
+          {
+            "name": "PAD",
+            "identify": { "id": 5 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "padding", "size_bits": 16 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "w", "type": "uint", "size_bits": 8, "offset_bits": 40 }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "shorter-than-an-exact-length",
+      "spec": ["decoding.md §4", "decoding.md §5.1"],
+      "note": "LEN is exactly 4 bytes and the payload has 3. Its id still identifies LEN, since a packet's length takes no part in identification, so the message is too_short.",
+      "family": "lay",
+      "message": { "hex": "01 00 2a", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "too_short"
+    },
+    {
+      "name": "longer-than-an-exact-length",
+      "spec": ["decoding.md §5.1"],
+      "note": "A payload longer than an exact length is accepted, and only its first 4 bytes are the packet. v is 00 2a = 42.",
+      "family": "lay",
+      "message": { "hex": "01 00 2a 00 ff ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "lay",
+        "native_id": "box",
+        "asset": "box",
+        "stand_in": true,
+        "set": "lay_v1",
+        "packet": "LEN",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 1, "v": 42 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "v", "value": 42, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-condition-that-holds",
+      "spec": ["decoding.md §5.2", "decoding.md §5.4", "decoding.md §7.3"],
+      "note": "flags is 1, and 1 & 1 isn't 0, so mask_any holds: extra is present, 7, and gives its sample. after follows it, 9.",
+      "family": "lay",
+      "message": { "hex": "02 01 07 09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "lay",
+        "native_id": "box",
+        "asset": "box",
+        "stand_in": true,
+        "set": "lay_v1",
+        "packet": "COND",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "lay.extra", "value": 7, "unit": null, "path": "extra", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 2, "flags": 1, "extra": 7, "after": 9 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "flags", "value": 1, "quality": "good" },
+          { "path": "extra", "value": 7, "quality": "good" },
+          { "path": "after", "value": 9, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-condition-that-fails",
+      "spec": ["decoding.md §5.2", "decoding.md §5.4", "decoding.md §6", "decoding.md §7.3"],
+      "note": "flags is 0, and 0 & 1 is 0, so extra is absent: it ends where it would have started, and after is the next byte, 9. An absent entry isn't in the record, and gives no sample or engineering value.",
+      "family": "lay",
+      "message": { "hex": "02 00 09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "lay",
+        "native_id": "box",
+        "asset": "box",
+        "stand_in": true,
+        "set": "lay_v1",
+        "packet": "COND",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 2, "flags": 0, "after": 9 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "flags", "value": 0, "quality": "good" },
+          { "path": "after", "value": 9, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "an-array-of-structs-counted-by-a-field",
+      "spec": ["decoding.md §5.2", "decoding.md §5.4", "decoding.md §6", "decoding.md §7.3", "decoding.md §7.5"],
+      "note": "n is 2, so cells has 2 elements of 3 bytes: volts 00 0a = 10 with ok the top bit of 80, set; then volts 00 14 = 20 with ok clear. The 7 bits after ok are padding. tail is 05. Each volts gives a sample with its path and its index in the array.",
+      "family": "lay",
+      "message": { "hex": "03 02 00 0a 80 00 14 00 05", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "lay",
+        "native_id": "box",
+        "asset": "box",
+        "stand_in": true,
+        "set": "lay_v1",
+        "packet": "ARR",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "lay.volts", "value": 10, "unit": null, "path": "cells[0].volts", "index": 0, "time_offset_ns": null, "quality": "good" },
+          { "param": "lay.volts", "value": 20, "unit": null, "path": "cells[1].volts", "index": 1, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": {
+          "id": 3,
+          "n": 2,
+          "cells": [
+            { "volts": 10, "ok": true },
+            { "volts": 20, "ok": false }
+          ],
+          "tail": 5
+        },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "n", "value": 2, "quality": "good" },
+          { "path": "cells[0].volts", "value": 10, "quality": "good" },
+          { "path": "cells[0].ok", "value": true, "quality": "good" },
+          { "path": "cells[1].volts", "value": 20, "quality": "good" },
+          { "path": "cells[1].ok", "value": false, "quality": "good" },
+          { "path": "tail", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-count-past-the-bits-left",
+      "spec": ["decoding.md §5.5"],
+      "note": "n is 5, and a cell has the exact size 24 bits, so the array needs 120 bits; 32 are left after n, so the count is past_end before any element is read.",
+      "family": "lay",
+      "message": { "hex": "03 05 00 0a 80 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "past_end"
+    },
+    {
+      "name": "lengths-from-a-field-a-terminator-and-the-rest",
+      "spec": ["decoding.md §5.2", "decoding.md §5.4"],
+      "note": "len is 3, so name is 3 x 1 - 1 = 2 bytes, 41 42, AB. term runs to its terminator: 63 64 is cd, and the 00 ends it without being part of it. rest is the byte left, ff.",
+      "family": "lay",
+      "message": { "hex": "04 03 41 42 63 64 00 ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "lay",
+        "native_id": "box",
+        "asset": "box",
+        "stand_in": true,
+        "set": "lay_v1",
+        "packet": "STR",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "lay.name", "value": "AB", "unit": null, "path": "name", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 4, "len": 3, "name": "AB", "term": "cd", "rest": "ff" },
+        "engineering": [
+          { "path": "id", "value": 4, "quality": "good" },
+          { "path": "len", "value": 3, "quality": "good" },
+          { "path": "name", "value": "AB", "quality": "good" },
+          { "path": "term", "value": "cd", "quality": "good" },
+          { "path": "rest", "value": "ff", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-negative-length",
+      "spec": ["decoding.md §5.4"],
+      "note": "len is 0, so name's length is 0 x 1 - 1 = -1, which is bad_length.",
+      "family": "lay",
+      "message": { "hex": "04 00 63 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "bad_length"
+    },
+    {
+      "name": "no-terminator-before-the-end",
+      "spec": ["decoding.md §5.2"],
+      "note": "len is 1, so name is 0 bytes. term starts at 63 64, and the packet ends before any 00, which is no_terminator.",
+      "family": "lay",
+      "message": { "hex": "04 01 63 64", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "no_terminator"
+    },
+    {
+      "name": "padding-and-an-offset",
+      "spec": ["decoding.md §5.2", "decoding.md §6"],
+      "note": "The padding skips aa bb, and v is the next byte, 07. w is at its offset, bit 40, so cc is skipped too: w is 09. Padding has no value in the record.",
+      "family": "lay",
+      "message": { "hex": "05 aa bb 07 cc 09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "lay",
+        "native_id": "box",
+        "asset": "box",
+        "stand_in": true,
+        "set": "lay_v1",
+        "packet": "PAD",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 5, "v": 7, "w": 9 },
+        "engineering": [
+          { "path": "id", "value": 5, "quality": "good" },
+          { "path": "v", "value": 7, "quality": "good" },
+          { "path": "w", "value": 9, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-packet-that-ends-in-padding",
+      "spec": ["decoding.md §5.2"],
+      "note": "The padding is bits 8 to 23, and the payload has 16 bits, so it ends inside the padding: past_end.",
+      "family": "lay",
+      "message": { "hex": "05 aa", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "past_end"
+    }
+  ]
+}
