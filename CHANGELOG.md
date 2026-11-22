@@ -85,11 +85,16 @@ them too.
 - Decoding cases, in `conformance/decoding/`: language-neutral JSON files
   of definitions, bindings, messages and the results the spec gives for
   them, each worked out by hand and citing the sections it follows, for
-  values, layouts, checksums, routing, bindings and JSON payloads, with
-  the warnings opening with the bindings gives. A binding of the runtime
-  API must pass them through its own API
-  ([spec/conformance.md](spec/conformance.md), a new specification); the
-  runtime and the Elixir binding run them in their tests.
+  values, layouts, checksums, routing, bindings, JSON payloads,
+  conversions and qualities, composites and event time, with the warnings
+  opening with the bindings gives. A binding of the runtime API must pass
+  them through its own API ([spec/conformance.md](spec/conformance.md), a
+  new specification); the runtime and the Elixir binding run them in
+  their tests.
+- The specification now says what the runtime has always given for a
+  composite sample that isn't `good`: each member is its raw value as a
+  float, unconverted, so a composite's value is always its frame and
+  floats ([spec/decoding.md](spec/decoding.md) §7.4).
 
 ### Releases
 
