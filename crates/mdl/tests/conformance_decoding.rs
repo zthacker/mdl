@@ -111,6 +111,13 @@ fn run_file(path: &Path, sections: &mut Sections, failures: &mut Failures) -> us
             return 0;
         }
     };
+    let warnings = match expected_warnings(&file) {
+        Ok(warnings) => warnings,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
     let mut names = BTreeSet::new();
     for case in &cases {
         if !names.insert(case.name.as_str()) {
@@ -130,6 +137,18 @@ fn run_file(path: &Path, sections: &mut Sections, failures: &mut Failures) -> us
             return 0;
         }
     };
+    let mut given: Vec<(String, String)> = runtime
+        .warnings()
+        .iter()
+        .map(|warning| (warning.code.to_string(), warning.path.clone()))
+        .collect();
+    given.sort();
+    if given != warnings {
+        failures.add(
+            "",
+            format!("the open gave the warnings {given:?}, not {warnings:?}"),
+        );
+    }
     let versions = match def_versions(&runtime) {
         Ok(versions) => versions,
         Err(problem) => {
@@ -254,7 +273,7 @@ fn read_file(file: &Json) -> Result<Vec<Case>, String> {
         file,
         "the file",
         &["about", "definitions", "cases"],
-        &["bindings"],
+        &["bindings", "warnings"],
     )?;
     text(&file["about"], "about")?;
     let cases = file["cases"]
@@ -268,6 +287,29 @@ fn read_file(file: &Json) -> Result<Vec<Case>, String> {
         return Err("no cases".to_string());
     }
     Ok(cases)
+}
+
+/// The warnings a file says the open gives, as codes and paths, sorted;
+/// none when it has no `warnings` (`spec/conformance.md` §2.1).
+fn expected_warnings(file: &Json) -> Result<Vec<(String, String)>, String> {
+    let Some(warnings) = file.get("warnings") else {
+        return Ok(Vec::new());
+    };
+    let mut warnings = warnings
+        .as_array()
+        .ok_or("warnings isn't a list")?
+        .iter()
+        .map(|warning| {
+            let warning = object(warning, "a warning")?;
+            keys(warning, "a warning", &["code", "path"], &[])?;
+            Ok((
+                text(&warning["code"], "a warning's code")?,
+                text(&warning["path"], "a warning's path")?,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    warnings.sort();
+    Ok(warnings)
 }
 
 fn read_case(case: &Json) -> Result<Case, String> {

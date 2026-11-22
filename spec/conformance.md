@@ -27,6 +27,7 @@ Each file in `conformance/decoding/` is a JSON object with these keys:
 | `about` | text: what the file covers, for people |
 | `definitions` | one IR bundle, as the JSON frontend reads it ([frontends.md](frontends.md) §6) |
 | `bindings` | optional: a bindings file ([bindings.md](bindings.md)), as a list of its lines; the file is each line followed by a line feed |
+| `warnings` | optional: the warnings opening the store with the bindings gives (api.md §2.1), a list of objects with a `code` and a `path` |
 | `cases` | a list of cases |
 
 A case is an object with these keys:
@@ -41,10 +42,11 @@ A case is an object with these keys:
 | `decoded` | the decoded message (api.md §3.1), in its JSON, without `def_version` |
 | `error` | text: the error's code |
 
-Every key is required but `bindings`; a case has one of `decoded` and
-`error`, and a message one of `hex` and `json`. A file, case or message
-with a key this section doesn't list, or without one it requires, is
-malformed, so a misspelt key fails rather than being skipped.
+Every key is required but `bindings` and `warnings`; a case has one of
+`decoded` and `error`, and a message one of `hex` and `json`. A file,
+case, message or warning with a key this section doesn't list, or
+without one it requires, is malformed, so a misspelt key fails rather
+than being skipped.
 
 ### 2.1 Running a file
 
@@ -55,7 +57,10 @@ A runner:
    [store.md](store.md)): a runner that can't call MDL's library writes
    them to a `.json` file and runs `morphc build` on it. A file whose
    definitions don't build fails as a whole;
-2. opens the store (api.md §2.1) with the file's bindings, if it has any;
+2. opens the store (api.md §2.1) with the file's bindings, if it has any,
+   and compares the open's warnings with the file's: the same codes and
+   paths, in any order, each as many times. A file without `warnings`
+   opens with none;
 3. decodes each case's message (api.md §2.2) from its family, with the
    payload's bytes, its metadata and its ground time, and compares the
    result with the case's (§2.2);

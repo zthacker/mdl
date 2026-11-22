@@ -1,0 +1,333 @@
+{
+  "about": "JSON payloads: JSON Pointers and their escapes, which numbers are integers, optional and missing values, null elements, the types each entry takes, and the documents every implementation refuses alike.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {
+      "params": {
+        "web.count": { "type": "u64" },
+        "web.temp": { "type": "u64" }
+      }
+    },
+    "families": [
+      {
+        "name": "doc",
+        "encoding": "json",
+        "alias": { "kind": "fixed", "value": "doc-1" }
+      },
+      {
+        "name": "web",
+        "encoding": "json",
+        "alias": { "kind": "path", "pointer": "/id" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "doc_v1",
+        "family": "doc",
+        "packets": [
+          {
+            "name": "ANY",
+            "entries": [
+              { "kind": "field", "name": "note", "type": "string", "pointer": "/note", "optional": true }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "web_v1",
+        "family": "web",
+        "types": {
+          "xy": {
+            "entries": [
+              { "kind": "field", "name": "x", "type": "float", "pointer": "/x" },
+              { "kind": "field", "name": "y", "type": "float", "pointer": "/y" }
+            ]
+          }
+        },
+        "packets": [
+          {
+            "name": "PTR",
+            "identify": { "/kind": "ptr" },
+            "entries": [
+              { "kind": "field", "name": "a_b", "type": "uint", "pointer": "/a~1b" },
+              { "kind": "field", "name": "m_n", "type": "uint", "pointer": "/m~0n" },
+              { "kind": "field", "name": "arr1", "type": "uint", "pointer": "/arr/1" },
+              { "kind": "field", "name": "obj1", "type": "uint", "pointer": "/obj/1" },
+              { "kind": "field", "name": "lead", "type": "uint", "pointer": "/arr/01", "optional": true },
+              { "kind": "field", "name": "dash", "type": "uint", "pointer": "/arr/-", "optional": true }
+            ]
+          },
+          {
+            "name": "NUM",
+            "identify": { "/kind": "num" },
+            "entries": [
+              { "kind": "field", "name": "u_point_zero", "type": "uint", "pointer": "/u1" },
+              { "kind": "field", "name": "u_exp", "type": "uint", "pointer": "/u2", "canonical": "web.count" },
+              { "kind": "field", "name": "u_max", "type": "uint", "pointer": "/u3" },
+              { "kind": "field", "name": "u_neg_zero", "type": "uint", "pointer": "/u4" },
+              { "kind": "field", "name": "u_round", "type": "uint", "pointer": "/u5" },
+              { "kind": "field", "name": "u_tie", "type": "uint", "pointer": "/u6" },
+              { "kind": "field", "name": "i_neg", "type": "int", "pointer": "/i" },
+              { "kind": "field", "name": "f_neg_zero", "type": "float", "pointer": "/f1" },
+              { "kind": "field", "name": "f_half", "type": "float", "pointer": "/f2" },
+              { "kind": "field", "name": "f_max", "type": "float", "pointer": "/f3" },
+              { "kind": "field", "name": "f_whole", "type": "float", "pointer": "/f4" }
+            ]
+          },
+          {
+            "name": "OPT",
+            "identify": { "/kind": "opt" },
+            "entries": [
+              { "kind": "field", "name": "opt_missing", "type": "uint", "pointer": "/nothing", "optional": true },
+              { "kind": "field", "name": "opt_null", "type": "uint", "pointer": "/nul", "optional": true },
+              {
+                "kind": "array",
+                "name": "temps",
+                "pointer": "/temps",
+                "element": { "kind": "scalar", "type": "uint" },
+                "canonical": "web.temp"
+              },
+              { "kind": "struct", "name": "pos", "pointer": "/pos", "struct": "xy" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "pointers-and-their-escapes",
+      "spec": ["decoding.md §3.1", "decoding.md §3.2", "decoding.md §5.3"],
+      "note": "/a~1b unescapes to the member a/b, 1, and /m~0n to m~n, 2. /arr/1 is the element at index 1 of [7, 9], 9; /obj/1 is the member named 1 of an object, 9. 01 has a leading zero and - is no index, so neither finds anything in an array, and both optional fields are absent. The alias reads the text PX-9, a stand-in asset of that name.",
+      "family": "web",
+      "message": {
+        "json": "{\"id\": \"PX-9\", \"kind\": \"ptr\", \"a/b\": 1, \"m~n\": 2, \"arr\": [7, 9], \"obj\": {\"1\": 9}}",
+        "metadata": {},
+        "ground_time": "2026-06-01T12:00:00Z"
+      },
+      "decoded": {
+        "family": "web",
+        "native_id": "PX-9",
+        "asset": "PX-9",
+        "stand_in": true,
+        "set": "web_v1",
+        "packet": "PTR",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "a_b": 1, "m_n": 2, "arr1": 9, "obj1": 9 },
+        "engineering": [
+          { "path": "a_b", "value": 1, "quality": "good" },
+          { "path": "m_n", "value": 2, "quality": "good" },
+          { "path": "arr1", "value": 9, "quality": "good" },
+          { "path": "obj1", "value": 9, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "which-numbers-are-integers",
+      "spec": ["decoding.md §2.3", "decoding.md §3.2", "decoding.md §5.3", "api.md §1", "api.md §3.1"],
+      "note": "42.0 and 4.2e1 have no fractional part within 2^53 - 1, so both are the integer 42. 18446744073709551615 is an integer literal within 2^64 - 1, written as a string past 2^53. -0 is the integer 0. 1.0000000000000001 is nearest the binary64 1, and 4503599627370496.5 is a tie that rounds to the even 4503599627370496, both integers. A float field takes each number's nearest binary64: -0 is -0.0, 1.7976931348623158e308 rounds to the largest finite binary64, 1.7976931348623157e308, and 2 is 2.0. The alias reads the string 7, an integer's one decimal spelling, so the native id is the integer 7.",
+      "family": "web",
+      "message": {
+        "json": "{\"id\": \"7\", \"kind\": \"num\", \"u1\": 42.0, \"u2\": 4.2e1, \"u3\": 18446744073709551615, \"u4\": -0, \"u5\": 1.0000000000000001, \"u6\": 4503599627370496.5, \"i\": -3, \"f1\": -0, \"f2\": 1.5, \"f3\": 1.7976931348623158e308, \"f4\": 2}",
+        "metadata": {},
+        "ground_time": "2026-06-01T12:00:00Z"
+      },
+      "decoded": {
+        "family": "web",
+        "native_id": 7,
+        "asset": "7",
+        "stand_in": true,
+        "set": "web_v1",
+        "packet": "NUM",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "web.count", "value": 42, "unit": null, "path": "u_exp", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": {
+          "u_point_zero": 42,
+          "u_exp": 42,
+          "u_max": "18446744073709551615",
+          "u_neg_zero": 0,
+          "u_round": 1,
+          "u_tie": 4503599627370496,
+          "i_neg": -3,
+          "f_neg_zero": -0.0,
+          "f_half": 1.5,
+          "f_max": 1.7976931348623157e308,
+          "f_whole": 2.0
+        },
+        "engineering": [
+          { "path": "u_point_zero", "value": 42, "quality": "good" },
+          { "path": "u_exp", "value": 42, "quality": "good" },
+          { "path": "u_max", "value": "18446744073709551615", "quality": "good" },
+          { "path": "u_neg_zero", "value": 0, "quality": "good" },
+          { "path": "u_round", "value": 1, "quality": "good" },
+          { "path": "u_tie", "value": 4503599627370496, "quality": "good" },
+          { "path": "i_neg", "value": -3, "quality": "good" },
+          { "path": "f_neg_zero", "value": -0.0, "quality": "good" },
+          { "path": "f_half", "value": 1.5, "quality": "good" },
+          { "path": "f_max", "value": 1.7976931348623157e308, "quality": "good" },
+          { "path": "f_whole", "value": 2.0, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "optional-values-null-elements-and-a-struct",
+      "spec": ["decoding.md §5.3", "decoding.md §6", "decoding.md §7.3", "decoding.md §7.5", "api.md §3.1"],
+      "note": "Nothing is at /nothing and /nul is null, so both optional fields are absent. temps keeps its null element at index 1 as no reading: it is null in the record and gives no sample and no engineering value, and 22 keeps index 2. pos reads x and y from the object at /pos.",
+      "family": "web",
+      "message": {
+        "json": "{\"id\": 7, \"kind\": \"opt\", \"nul\": null, \"temps\": [20, null, 22], \"pos\": {\"x\": 1.5, \"y\": -2.5}}",
+        "metadata": {},
+        "ground_time": "2026-06-01T12:00:00Z"
+      },
+      "decoded": {
+        "family": "web",
+        "native_id": 7,
+        "asset": "7",
+        "stand_in": true,
+        "set": "web_v1",
+        "packet": "OPT",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "web.temp", "value": 20, "unit": null, "path": "temps[0]", "index": 0, "time_offset_ns": null, "quality": "good" },
+          { "param": "web.temp", "value": 22, "unit": null, "path": "temps[2]", "index": 2, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": {
+          "temps": [20, null, 22],
+          "pos": { "x": 1.5, "y": -2.5 }
+        },
+        "engineering": [
+          { "path": "temps[0]", "value": 20, "quality": "good" },
+          { "path": "temps[2]", "value": 22, "quality": "good" },
+          { "path": "pos.x", "value": 1.5, "quality": "good" },
+          { "path": "pos.y", "value": -2.5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-value-missing",
+      "spec": ["decoding.md §5.3"],
+      "note": "temps isn't optional, and nothing is at /temps: missing_value.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"opt\", \"pos\": {\"x\": 1.5, \"y\": -2.5}}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "missing_value"
+    },
+    {
+      "name": "a-string-for-a-uint",
+      "spec": ["decoding.md §5.3"],
+      "note": "A uint field takes a number, and /u1 is the string \"42\": wrong_type.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"num\", \"u1\": \"42\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "wrong_type"
+    },
+    {
+      "name": "a-fraction-for-a-uint",
+      "spec": ["decoding.md §2.3", "decoding.md §5.3"],
+      "note": "A uint field takes a number that is an integer, and 1.5 isn't one: out_of_range.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"num\", \"u1\": 1.5}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "out_of_range"
+    },
+    {
+      "name": "a-struct-that-isnt-an-object",
+      "spec": ["decoding.md §5.3"],
+      "note": "pos's value is an array, not an object: wrong_type.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"opt\", \"temps\": [], \"pos\": [1.5, -2.5]}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "wrong_type"
+    },
+    {
+      "name": "no-packet-has-the-key",
+      "spec": ["decoding.md §4"],
+      "note": "Pointer keys compare exactly, and no packet's /kind is zzz: no_packet.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"zzz\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "no_packet"
+    },
+    {
+      "name": "nothing-at-the-alias",
+      "spec": ["decoding.md §3.1"],
+      "note": "Nothing is at /id: unreadable_locator.",
+      "family": "web",
+      "message": { "json": "{\"kind\": \"ptr\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
+    },
+    {
+      "name": "a-duplicate-name",
+      "spec": ["decoding.md §2.3"],
+      "note": "kind appears twice, and parsers keep different ones, so the payload is refused: invalid_json.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"ptr\", \"kind\": \"num\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    },
+    {
+      "name": "a-duplicate-name-once-unescaped",
+      "spec": ["decoding.md §2.3"],
+      "note": "Names compare after unescaping, and \\u0061 is a: a appears twice, invalid_json.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"a\": 1, \"\\u0061\": 2}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    },
+    {
+      "name": "a-number-that-rounds-to-infinity",
+      "spec": ["decoding.md §2.3"],
+      "note": "1e400 rounds to infinity as a binary64, which is refused: invalid_json.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"kind\": \"ptr\", \"x\": 1e400}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    },
+    {
+      "name": "an-unpaired-surrogate",
+      "spec": ["decoding.md §2.3"],
+      "note": "The string \\ud800 escapes a surrogate with no pair, which is refused: invalid_json.",
+      "family": "web",
+      "message": { "json": "{\"id\": 7, \"s\": \"\\ud800\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    },
+    {
+      "name": "a-byte-order-mark",
+      "spec": ["decoding.md §2.3"],
+      "note": "The payload starts with a byte order mark, U+FEFF (bytes ef bb bf), which is refused: invalid_json.",
+      "family": "web",
+      "message": { "json": "\ufeff{\"id\": 7, \"kind\": \"ptr\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    },
+    {
+      "name": "a-document-that-isnt-an-object",
+      "spec": ["decoding.md §5.3"],
+      "note": "doc's alias is fixed and its packet a catch-all, so the document is read without a pointer first. It must be an object, whatever the packet's entries, and it is an array: wrong_type.",
+      "family": "doc",
+      "message": { "json": "[1, 2]", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "wrong_type"
+    },
+    {
+      "name": "nesting-127-deep",
+      "spec": ["decoding.md §2.3", "decoding.md §5.3"],
+      "note": "The document is level 1 and /d holds 126 nested arrays, so it nests 127 deep, which is accepted. Nothing is at /note, so the optional field is absent and the record is empty.",
+      "family": "doc",
+      "message": { "json": "{\"d\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "doc",
+        "native_id": "doc-1",
+        "asset": "doc-1",
+        "stand_in": true,
+        "set": "doc_v1",
+        "packet": "ANY",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": {},
+        "engineering": []
+      }
+    },
+    {
+      "name": "nesting-128-deep",
+      "spec": ["decoding.md §2.3"],
+      "note": "With 127 nested arrays at /d the document nests 128 deep, which is refused: invalid_json.",
+      "family": "doc",
+      "message": { "json": "{\"d\": [[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    }
+  ]
+}

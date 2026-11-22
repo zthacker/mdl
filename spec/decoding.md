@@ -344,7 +344,7 @@ object's members itself.
   with `optional: true` is absent; any other entry is [`missing_value`].
 - **`null` elements.** A `null` element of an array is no reading at that
   position: it keeps its index (so later elements keep theirs), and gives
-  no sample.
+  no sample and no engineering value (§7.5).
 
 ### 5.4 References
 
@@ -599,7 +599,8 @@ latitude, longitude and altitude, a source's frame only. So:
 Any field or scalar element, mapped or not, has an engineering value: its
 raw value through its conversion (a state name for `states`), with a
 quality by the same rules, or its raw value if it has no conversion. It
-is in the field's own unit, not a param's.
+is in the field's own unit, not a param's. A JSON array's `null`
+element, which is no reading (§5.3), has none.
 Implementations SHOULD compute these on request, not while decoding.
 
 ## 8. Event time

@@ -37,6 +37,15 @@ defmodule MDL.ConformanceTest do
       end
 
     {:ok, mdl} = MDL.open(store, options)
+
+    # The warnings the open gives (spec/api.md section 2.1), by code and
+    # path in any order; none when the file names none.
+    given = mdl |> MDL.warnings() |> Enum.map(&{Atom.to_string(&1.code), &1.path}) |> Enum.sort()
+    expected = (file["warnings"] || []) |> Enum.map(&{&1["code"], &1["path"]}) |> Enum.sort()
+
+    assert given == expected,
+           "the open gave the warnings #{inspect(given)}, not #{inspect(expected)}"
+
     {:ok, description} = MDL.describe(mdl)
     versions = Map.new(description["sets"], &{&1["name"], &1["def_version"]})
     cases = file["cases"]

@@ -1,0 +1,347 @@
+{
+  "about": "Bindings: the asset a native id is at a message's ground time, over a timeline of rows; the set a binding names; native ids compared by value; and the rows a build doesn't fit, which are warnings when the store opens and errors when a message needs them.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {},
+    "families": [
+      {
+        "name": "fleet",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "bits", "offset_bits": 0, "size_bits": 16 }
+      },
+      {
+        "name": "named",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "metadata", "name": "serial" },
+        "metadata": ["serial"]
+      },
+      {
+        "name": "vfam",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "bits", "offset_bits": 0, "size_bits": 8 },
+        "version": { "kind": "metadata", "name": "fmt" },
+        "metadata": ["fmt"]
+      }
+    ],
+    "sets": [
+      {
+        "name": "fleet_a",
+        "family": "fleet",
+        "packets": [
+          {
+            "name": "A",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 16 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "fleet_b",
+        "family": "fleet",
+        "packets": [
+          {
+            "name": "B",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 16 },
+              { "kind": "field", "name": "w", "type": "uint", "size_bits": 16 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "named_v1",
+        "family": "named",
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "vfam_v1",
+        "family": "vfam",
+        "version": 1,
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8 }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "bindings": [
+    "mdl_version = \"2.0\"",
+    "",
+    "[[binding]]",
+    "family = \"fleet\"",
+    "native_id = 100",
+    "asset = \"SAT-1\"",
+    "set = \"fleet_a\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"fleet\"",
+    "native_id = 100",
+    "asset = \"SAT-2\"",
+    "set = \"fleet_b\"",
+    "effective_from = \"2026-06-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"fleet\"",
+    "native_id = 100",
+    "retired = true",
+    "effective_from = \"2026-09-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"fleet\"",
+    "native_id = 200",
+    "asset = \"SAT-3\"",
+    "set = \"fleet_zz\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"fleet\"",
+    "native_id = 300",
+    "asset = \"SAT-4\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"vfam\"",
+    "native_id = 5",
+    "asset = \"BIRD-5\"",
+    "set = \"vfam_v1\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"vfam\"",
+    "native_id = 6",
+    "asset = \"BIRD-6\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"named\"",
+    "native_id = \"042\"",
+    "asset = \"BOX-A\"",
+    "set = \"named_v1\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"named\"",
+    "native_id = 42",
+    "asset = \"BOX-B\"",
+    "set = \"named_v1\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"elsewhere\"",
+    "native_id = 1",
+    "asset = \"X-1\"",
+    "set = \"elsewhere_v1\"",
+    "effective_from = \"2026-01-01T00:00:00Z\"",
+    "",
+    "[[binding]]",
+    "family = \"fleet\"",
+    "native_id = 70000",
+    "asset = \"SAT-5\"",
+    "set = \"fleet_a\"",
+    "effective_from = \"2026-01-01T00:00:00Z\""
+  ],
+  "warnings": [
+    { "code": "unknown_set", "path": "/binding/3/set" },
+    { "code": "binding_set", "path": "/binding/4" },
+    { "code": "binding_set", "path": "/binding/5/set" },
+    { "code": "native_id", "path": "/binding/10/native_id" }
+  ],
+  "cases": [
+    {
+      "name": "the-row-in-effect",
+      "spec": ["bindings.md §4", "bindings.md §5", "decoding.md §3.3", "api.md §3.1"],
+      "note": "The alias reads 00 64 = 100. At 2026-03-01 the row in effect for fleet 100 is row 0, from 2026-01-01: SAT-1, decoded by the set it names, fleet_a. With bindings, stand_in is false.",
+      "family": "fleet",
+      "message": { "hex": "00 64 05", "metadata": {}, "ground_time": "2026-03-01T00:00:00Z" },
+      "decoded": {
+        "family": "fleet",
+        "native_id": 100,
+        "asset": "SAT-1",
+        "stand_in": false,
+        "set": "fleet_a",
+        "packet": "A",
+        "event_time": { "kind": "ground", "time": "2026-03-01T00:00:00Z" },
+        "samples": [],
+        "record": { "id": 100, "v": 5 },
+        "engineering": [
+          { "path": "id", "value": 100, "quality": "good" },
+          { "path": "v", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-row-takes-effect-at-its-instant",
+      "spec": ["bindings.md §4"],
+      "note": "Row 1 is in effect from its effective_from, inclusive: at exactly 2026-06-01T00:00:00Z fleet 100 is SAT-2, decoded by fleet_b, whose w is 00 05 = 5.",
+      "family": "fleet",
+      "message": { "hex": "00 64 00 05", "metadata": {}, "ground_time": "2026-06-01T00:00:00Z" },
+      "decoded": {
+        "family": "fleet",
+        "native_id": 100,
+        "asset": "SAT-2",
+        "stand_in": false,
+        "set": "fleet_b",
+        "packet": "B",
+        "event_time": { "kind": "ground", "time": "2026-06-01T00:00:00Z" },
+        "samples": [],
+        "record": { "id": 100, "w": 5 },
+        "engineering": [
+          { "path": "id", "value": 100, "quality": "good" },
+          { "path": "w", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "the-previous-row-until-then",
+      "spec": ["bindings.md §4"],
+      "note": "Row 0 is in effect until row 1's effective_from, exclusive: a nanosecond before it, fleet 100 is still SAT-1, decoded by fleet_a.",
+      "family": "fleet",
+      "message": { "hex": "00 64 05", "metadata": {}, "ground_time": "2026-05-31T23:59:59.999999999Z" },
+      "decoded": {
+        "family": "fleet",
+        "native_id": 100,
+        "asset": "SAT-1",
+        "stand_in": false,
+        "set": "fleet_a",
+        "packet": "A",
+        "event_time": { "kind": "ground", "time": "2026-05-31T23:59:59.999999999Z" },
+        "samples": [],
+        "record": { "id": 100, "v": 5 },
+        "engineering": [
+          { "path": "id", "value": 100, "quality": "good" },
+          { "path": "v", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "before-the-first-row",
+      "spec": ["bindings.md §4", "decoding.md §3.3"],
+      "note": "At 2025-12-31T23:59:59Z no row for fleet 100 is in effect yet, so it is no asset: unknown_asset.",
+      "family": "fleet",
+      "message": { "hex": "00 64 05", "metadata": {}, "ground_time": "2025-12-31T23:59:59Z" },
+      "error": "unknown_asset"
+    },
+    {
+      "name": "a-retired-row",
+      "spec": ["bindings.md §4", "decoding.md §3.3"],
+      "note": "Row 2 retires fleet 100 from 2026-09-01T00:00:00Z, so at that instant it is no asset: unknown_asset.",
+      "family": "fleet",
+      "message": { "hex": "00 64 05", "metadata": {}, "ground_time": "2026-09-01T00:00:00Z" },
+      "error": "unknown_asset"
+    },
+    {
+      "name": "a-native-id-no-row-binds",
+      "spec": ["bindings.md §6", "decoding.md §3.3"],
+      "note": "03 e7 is 999, which no row binds, so it is no asset: unknown_asset.",
+      "family": "fleet",
+      "message": { "hex": "03 e7 05", "metadata": {}, "ground_time": "2026-03-01T00:00:00Z" },
+      "error": "unknown_asset"
+    },
+    {
+      "name": "a-binding-to-a-set-the-build-hasnt-got",
+      "spec": ["bindings.md §6", "decoding.md §3.3", "api.md §2.1"],
+      "note": "Row 3 binds fleet 200 to set fleet_zz, which the build doesn't have: a warning at the open (unknown_set, at the row's set), and its message is unknown_set.",
+      "family": "fleet",
+      "message": { "hex": "00 c8 05", "metadata": {}, "ground_time": "2026-03-01T00:00:00Z" },
+      "error": "unknown_set"
+    },
+    {
+      "name": "a-binding-without-the-set-its-family-needs",
+      "spec": ["bindings.md §6", "bindings.md §7", "decoding.md §3.3", "api.md §2.1"],
+      "note": "fleet has no version locator, and row 4 binds fleet 300 without a set: a warning at the open (binding_set, at the row, whose set key is missing), and its message is missing_set.",
+      "family": "fleet",
+      "message": { "hex": "01 2c 05", "metadata": {}, "ground_time": "2026-03-01T00:00:00Z" },
+      "error": "missing_set"
+    },
+    {
+      "name": "a-binding-naming-a-set-its-version-chooses",
+      "spec": ["bindings.md §6", "decoding.md §3.3", "api.md §2.1"],
+      "note": "vfam has a version locator, and row 5 names a set for vfam 5: a warning at the open (binding_set, at the row's set). For a family with a version locator, a binding that names a set is unexpected_set, before the version is read.",
+      "family": "vfam",
+      "message": { "hex": "05 01", "metadata": { "fmt": 1 }, "ground_time": "2026-03-01T00:00:00Z" },
+      "error": "unexpected_set"
+    },
+    {
+      "name": "a-set-the-version-chooses",
+      "spec": ["bindings.md §5", "decoding.md §3.3"],
+      "note": "Row 6 binds vfam 6 to BIRD-6 without a set, and fmt 1 chooses vfam_v1.",
+      "family": "vfam",
+      "message": { "hex": "06 01", "metadata": { "fmt": 1 }, "ground_time": "2026-03-01T00:00:00Z" },
+      "decoded": {
+        "family": "vfam",
+        "native_id": 6,
+        "asset": "BIRD-6",
+        "stand_in": false,
+        "set": "vfam_v1",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-03-01T00:00:00Z" },
+        "samples": [],
+        "record": { "id": 6, "v": 1 },
+        "engineering": [
+          { "path": "id", "value": 6, "quality": "good" },
+          { "path": "v", "value": 1, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-text-native-id",
+      "spec": ["bindings.md §3", "bindings.md §4"],
+      "note": "serial is the text 042, not an integer's one decimal spelling, so it is compared as text: row 7 binds it, BOX-A.",
+      "family": "named",
+      "message": { "hex": "09", "metadata": { "serial": "042" }, "ground_time": "2026-03-01T00:00:00Z" },
+      "decoded": {
+        "family": "named",
+        "native_id": "042",
+        "asset": "BOX-A",
+        "stand_in": false,
+        "set": "named_v1",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-03-01T00:00:00Z" },
+        "samples": [],
+        "record": { "v": 9 },
+        "engineering": [
+          { "path": "v", "value": 9, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "an-integer-native-id-beside-the-text",
+      "spec": ["bindings.md §3", "bindings.md §4"],
+      "note": "serial is the integer 42, a different native id from the text 042: row 8 binds it, BOX-B.",
+      "family": "named",
+      "message": { "hex": "09", "metadata": { "serial": 42 }, "ground_time": "2026-03-01T00:00:00Z" },
+      "decoded": {
+        "family": "named",
+        "native_id": 42,
+        "asset": "BOX-B",
+        "stand_in": false,
+        "set": "named_v1",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-03-01T00:00:00Z" },
+        "samples": [],
+        "record": { "v": 9 },
+        "engineering": [
+          { "path": "v", "value": 9, "quality": "good" }
+        ]
+      }
+    }
+  ]
+}

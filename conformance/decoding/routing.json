@@ -1,0 +1,548 @@
+{
+  "about": "Routing and identification without bindings: native ids read by each locator, stand-in assets, sets chosen by a version locator, the order routing checks in, and which packet a message is.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {
+      "params": {
+        "route.level": { "type": "u64" }
+      }
+    },
+    "families": [
+      {
+        "name": "ident",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "ident-1" },
+        "metadata": ["apid"]
+      },
+      {
+        "name": "jver",
+        "encoding": "json",
+        "alias": { "kind": "path", "pointer": "/id" },
+        "version": { "kind": "path", "pointer": "/ver" }
+      },
+      {
+        "name": "jpair",
+        "encoding": "json",
+        "alias": { "kind": "path", "pointer": "/id" }
+      },
+      {
+        "name": "meta",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "metadata", "name": "node" },
+        "metadata": ["node"]
+      },
+      {
+        "name": "pair",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "bits", "offset_bits": 0, "size_bits": 8 }
+      },
+      {
+        "name": "ver",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "bits", "offset_bits": 0, "size_bits": 8 },
+        "version": { "kind": "metadata", "name": "fmt" },
+        "metadata": ["fmt"]
+      }
+    ],
+    "sets": [
+      {
+        "name": "ident_v1",
+        "family": "ident",
+        "packets": [
+          {
+            "name": "K1",
+            "identify": { "kind": 1 },
+            "entries": [
+              { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "rest", "type": "bytes", "length": { "kind": "remaining" } }
+            ]
+          },
+          {
+            "name": "K1S2",
+            "identify": { "kind": 1, "sub": 2 },
+            "entries": [
+              { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "sub", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "y", "type": "uint", "size_bits": 16 }
+            ]
+          },
+          {
+            "name": "K2",
+            "identify": { "kind": 2 },
+            "entries": [
+              { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8 }
+            ]
+          },
+          {
+            "name": "K2A7",
+            "identify": { "kind": 2, "apid": 7 },
+            "entries": [
+              { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "w", "type": "uint", "size_bits": 16 }
+            ]
+          },
+          {
+            "name": "K3",
+            "identify": { "kind": 3 },
+            "length": { "kind": "exact", "bytes": 4 },
+            "entries": [
+              { "kind": "field", "name": "kind", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "z", "type": "uint", "size_bits": 16 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "jver_1",
+        "family": "jver",
+        "version": 1,
+        "packets": [
+          {
+            "name": "J",
+            "entries": [
+              { "kind": "field", "name": "v", "type": "uint", "pointer": "/v" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "jver_2",
+        "family": "jver",
+        "version": 2,
+        "packets": [
+          {
+            "name": "J",
+            "entries": [
+              { "kind": "field", "name": "v", "type": "uint", "pointer": "/v" },
+              { "kind": "field", "name": "w", "type": "uint", "pointer": "/w" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "jpair_a",
+        "family": "jpair",
+        "packets": [
+          {
+            "name": "J",
+            "entries": [
+              { "kind": "field", "name": "v", "type": "uint", "pointer": "/v" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "jpair_b",
+        "family": "jpair",
+        "packets": [
+          {
+            "name": "J",
+            "entries": [
+              { "kind": "field", "name": "v", "type": "float", "pointer": "/v" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "meta_v1",
+        "family": "meta",
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8, "canonical": "route.level" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "pair_a",
+        "family": "pair",
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 8 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "pair_b",
+        "family": "pair",
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "v", "type": "uint", "size_bits": 16 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "ver_v1",
+        "family": "ver",
+        "version": 1,
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "a", "type": "uint", "size_bits": 8 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "ver_v2",
+        "family": "ver",
+        "version": 2,
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "a", "type": "uint", "size_bits": 16 }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "a-native-id-from-metadata",
+      "spec": ["decoding.md §3.1", "api.md §2.2", "api.md §3.1"],
+      "note": "The alias reads the metadata value node, the integer 42. Without bindings it is an asset of its own, named by the native id's text, 42, and the family's one set decodes it. v is 5, mapped to route.level.",
+      "family": "meta",
+      "message": { "hex": "05", "metadata": { "node": 42 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "meta",
+        "native_id": 42,
+        "asset": "42",
+        "stand_in": true,
+        "set": "meta_v1",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "route.level", "value": 5, "unit": null, "path": "v", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "v": 5 },
+        "engineering": [
+          { "path": "v", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-native-id-that-is-text",
+      "spec": ["decoding.md §3.2", "bindings.md §3", "api.md §2.2"],
+      "note": "042 has a leading zero, so it isn't an integer's one decimal spelling: the native id is the text 042, and so is the stand-in asset's name.",
+      "family": "meta",
+      "message": { "hex": "05", "metadata": { "node": "042" }, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "meta",
+        "native_id": "042",
+        "asset": "042",
+        "stand_in": true,
+        "set": "meta_v1",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "route.level", "value": 5, "unit": null, "path": "v", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "v": 5 },
+        "engineering": [
+          { "path": "v", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "metadata-the-alias-needs-missing",
+      "spec": ["decoding.md §3.1", "decoding.md §3.3"],
+      "note": "The message has no metadata node, so the alias locator finds nothing usable: unreadable_locator.",
+      "family": "meta",
+      "message": { "hex": "05", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
+    },
+    {
+      "name": "a-version-locator-choosing-the-first-set",
+      "spec": ["decoding.md §3.1", "decoding.md §3.3"],
+      "note": "The alias reads bits 0 to 7, the integer 7. The version locator reads fmt, 1, so ver_v1 decodes it: a is the 8 bits after id, 9.",
+      "family": "ver",
+      "message": { "hex": "07 09", "metadata": { "fmt": 1 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ver",
+        "native_id": 7,
+        "asset": "7",
+        "stand_in": true,
+        "set": "ver_v1",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 7, "a": 9 },
+        "engineering": [
+          { "path": "id", "value": 7, "quality": "good" },
+          { "path": "a", "value": 9, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-version-locator-choosing-the-second-set",
+      "spec": ["decoding.md §3.3"],
+      "note": "fmt is 2, so ver_v2 decodes it, whose a is 16 bits: 01 02 is 258.",
+      "family": "ver",
+      "message": { "hex": "07 01 02", "metadata": { "fmt": 2 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ver",
+        "native_id": 7,
+        "asset": "7",
+        "stand_in": true,
+        "set": "ver_v2",
+        "packet": "P",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 7, "a": 258 },
+        "engineering": [
+          { "path": "id", "value": 7, "quality": "good" },
+          { "path": "a", "value": 258, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-version-no-set-has",
+      "spec": ["decoding.md §3.3"],
+      "note": "fmt is 3, and no loaded set of ver has version 3: unknown_version.",
+      "family": "ver",
+      "message": { "hex": "07 09", "metadata": { "fmt": 3 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unknown_version"
+    },
+    {
+      "name": "a-metadata-version-that-is-text",
+      "spec": ["decoding.md §3.2", "decoding.md §3.3"],
+      "note": "A version read from metadata compares by value, but 02 has a leading zero, so it is text, not 2: no set has it, unknown_version.",
+      "family": "ver",
+      "message": { "hex": "07 01 02", "metadata": { "fmt": "02" }, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unknown_version"
+    },
+    {
+      "name": "metadata-the-version-needs-missing",
+      "spec": ["decoding.md §3.1", "decoding.md §3.3"],
+      "note": "The alias reads 7, but there is no metadata fmt for the version locator: unreadable_locator.",
+      "family": "ver",
+      "message": { "hex": "07 09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
+    },
+    {
+      "name": "the-alias-is-read-before-the-version",
+      "spec": ["decoding.md §3.1", "decoding.md §3.3"],
+      "note": "The payload is empty, so the alias's bits are past its end and it finds nothing usable. The alias is read before the set, so the message is unreadable_locator although fmt is there.",
+      "family": "ver",
+      "message": { "hex": "", "metadata": { "fmt": 1 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
+    },
+    {
+      "name": "several-sets-and-no-version-locator",
+      "spec": ["decoding.md §3.3", "api.md §2.2"],
+      "note": "pair has two sets and no version locator, so an asset's set comes from its binding; without bindings its messages are missing_set.",
+      "family": "pair",
+      "message": { "hex": "07 09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "missing_set"
+    },
+    {
+      "name": "an-unreadable-alias-before-a-missing-set",
+      "spec": ["decoding.md §3.3"],
+      "note": "The alias is read before the set: with an empty payload it finds nothing, so the message is unreadable_locator, not missing_set.",
+      "family": "pair",
+      "message": { "hex": "", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
+    },
+    {
+      "name": "invalid-json-before-a-missing-set",
+      "spec": ["decoding.md §2.3", "decoding.md §3.3"],
+      "note": "jpair has two sets and no version locator, so without bindings no set can decode its messages. But the alias is read first, and reading /id parses the payload, which ends inside its object: invalid_json, not missing_set.",
+      "family": "jpair",
+      "message": { "json": "{\"id\": 3,", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_json"
+    },
+    {
+      "name": "a-json-family-with-no-set-to-choose",
+      "spec": ["decoding.md §3.3", "api.md §2.2"],
+      "note": "The payload parses and the alias reads 3, an asset of its own; jpair has two sets and no version locator, and without bindings nothing names its set: missing_set.",
+      "family": "jpair",
+      "message": { "json": "{\"id\": 3, \"v\": 1}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "missing_set"
+    },
+    {
+      "name": "a-json-version-read-exactly",
+      "spec": ["decoding.md §3.1", "decoding.md §3.2", "decoding.md §5.3"],
+      "note": "The alias reads /id, the integer 3. The version locator reads /ver, the number 2, which jver_2's version is, so jver_2 decodes it: v is 1 and w is 2.",
+      "family": "jver",
+      "message": { "json": "{\"id\": 3, \"ver\": 2, \"v\": 1, \"w\": 2}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "jver",
+        "native_id": 3,
+        "asset": "3",
+        "stand_in": true,
+        "set": "jver_2",
+        "packet": "J",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "v": 1, "w": 2 },
+        "engineering": [
+          { "path": "v", "value": 1, "quality": "good" },
+          { "path": "w", "value": 2, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-json-version-string-isnt-the-number",
+      "spec": ["decoding.md §3.2", "decoding.md §3.3"],
+      "note": "A version read by a path locator compares exactly: the string \"2\" isn't the number 2, so no set has it: unknown_version.",
+      "family": "jver",
+      "message": { "json": "{\"id\": 3, \"ver\": \"2\", \"v\": 1, \"w\": 2}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unknown_version"
+    },
+    {
+      "name": "the-packet-with-the-most-keys",
+      "spec": ["decoding.md §4"],
+      "note": "kind is 1 and sub is 2, so both K1 (kind 1) and K1S2 (kind 1, sub 2) match, and the match with the most keys is chosen: K1S2, whose y is 00 05 = 5.",
+      "family": "ident",
+      "message": { "hex": "01 02 00 05", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ident",
+        "native_id": "ident-1",
+        "asset": "ident-1",
+        "stand_in": true,
+        "set": "ident_v1",
+        "packet": "K1S2",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "kind": 1, "sub": 2, "y": 5 },
+        "engineering": [
+          { "path": "kind", "value": 1, "quality": "good" },
+          { "path": "sub", "value": 2, "quality": "good" },
+          { "path": "y", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-key-that-doesnt-match",
+      "spec": ["decoding.md §4"],
+      "note": "sub is 3, not 2, so K1S2 doesn't match and K1 does: rest is the bytes after kind, 03 09.",
+      "family": "ident",
+      "message": { "hex": "01 03 09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ident",
+        "native_id": "ident-1",
+        "asset": "ident-1",
+        "stand_in": true,
+        "set": "ident_v1",
+        "packet": "K1",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "kind": 1, "rest": "0309" },
+        "engineering": [
+          { "path": "kind", "value": 1, "quality": "good" },
+          { "path": "rest", "value": "0309", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-key-past-the-end-gives-way",
+      "spec": ["decoding.md §4"],
+      "note": "K1S2's key sub is bits 8 to 15, past the end of a 1-byte payload, so it can't be read and doesn't match; the less specific K1 then does, its rest empty.",
+      "family": "ident",
+      "message": { "hex": "01", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ident",
+        "native_id": "ident-1",
+        "asset": "ident-1",
+        "stand_in": true,
+        "set": "ident_v1",
+        "packet": "K1",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "kind": 1, "rest": "" },
+        "engineering": [
+          { "path": "kind", "value": 1, "quality": "good" },
+          { "path": "rest", "value": "", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-metadata-key",
+      "spec": ["decoding.md §4"],
+      "note": "kind is 2 and the metadata apid is 7, so K2A7 (kind 2, apid 7) matches with more keys than K2: w is 00 07 = 7.",
+      "family": "ident",
+      "message": { "hex": "02 00 07", "metadata": { "apid": 7 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ident",
+        "native_id": "ident-1",
+        "asset": "ident-1",
+        "stand_in": true,
+        "set": "ident_v1",
+        "packet": "K2A7",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "kind": 2, "w": 7 },
+        "engineering": [
+          { "path": "kind", "value": 2, "quality": "good" },
+          { "path": "w", "value": 7, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-metadata-key-that-doesnt-match",
+      "spec": ["decoding.md §4"],
+      "note": "apid is 8, not 7, so K2A7 doesn't match and K2 does: v is 5.",
+      "family": "ident",
+      "message": { "hex": "02 05", "metadata": { "apid": 8 }, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ident",
+        "native_id": "ident-1",
+        "asset": "ident-1",
+        "stand_in": true,
+        "set": "ident_v1",
+        "packet": "K2",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "kind": 2, "v": 5 },
+        "engineering": [
+          { "path": "kind", "value": 2, "quality": "good" },
+          { "path": "v", "value": 5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "too-short-for-the-packet-its-keys-match",
+      "spec": ["decoding.md §4", "decoding.md §5.1"],
+      "note": "kind is 3, which matches K3, exactly 4 bytes. A packet's length takes no part in identification, so the 2-byte payload is too_short, not another packet.",
+      "family": "ident",
+      "message": { "hex": "03 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "too_short"
+    },
+    {
+      "name": "no-packet-matches",
+      "spec": ["decoding.md §4"],
+      "note": "kind is 9, and every packet of ident_v1 has a kind key of 1, 2 or 3, with no catch-all: no_packet.",
+      "family": "ident",
+      "message": { "hex": "09", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "no_packet"
+    },
+    {
+      "name": "a-family-the-build-hasnt-got",
+      "spec": ["api.md §2.2", "api.md §4"],
+      "note": "The build has no family nope: unknown_family.",
+      "family": "nope",
+      "message": { "hex": "01", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unknown_family"
+    }
+  ]
+}
