@@ -57,6 +57,16 @@ them too.
   started at `from_bits` it covered no bytes, and in one where it started
   before, decoding and encoding gave `invalid_layout`.
 
+### Decoding and encoding
+
+- Opened without bindings, a family with several sets and no version
+  locator refused every message as `missing_set` before reading it. Its
+  messages now route as any other's, in the order `decoding.md` §3.3
+  gives: a payload that isn't valid JSON is `invalid_json` and an alias
+  that can't be read is `unreadable_locator`, and the rest are still
+  `missing_set`. Looking up such a family's binding or asset without
+  bindings is still `missing_set`.
+
 ### Compatibility
 
 - The checksum rule above is the second a build refuses before 1.0 while
@@ -73,12 +83,13 @@ them too.
 ### Tools and the runtime API
 
 - Decoding cases, in `conformance/decoding/`: language-neutral JSON files
-  of definitions, messages and the results the spec gives for them, each
-  worked out by hand and citing the sections it follows, for values,
-  layouts and checksums. A binding of the runtime API must pass them
-  through its own API ([spec/conformance.md](spec/conformance.md), a new
-  specification); the runtime and the Elixir binding run them in their
-  tests.
+  of definitions, bindings, messages and the results the spec gives for
+  them, each worked out by hand and citing the sections it follows, for
+  values, layouts, checksums, routing, bindings and JSON payloads, with
+  the warnings opening with the bindings gives. A binding of the runtime
+  API must pass them through its own API
+  ([spec/conformance.md](spec/conformance.md), a new specification); the
+  runtime and the Elixir binding run them in their tests.
 
 ### Releases
 
