@@ -1,14 +1,18 @@
-//! Decoding conformance cases (`spec/conformance.md` §2) written from the
-//! oracle's layouts: each message of a generated [`Telemetry`], with what
-//! [`crate::layout`] works out it decodes to, spelled as `spec/api.md` §1
-//! and §3.1 spell a result. This module spells them itself, never through
-//! `mdl`, so a case says what the oracle read in the spec, not what the
-//! runtime gives.
+//! Conformance cases written from the oracle's layouts: decoding cases
+//! (`spec/conformance.md` §2), each message of a generated [`Telemetry`]
+//! with what [`crate::layout`] works out it decodes to, spelled as
+//! `spec/api.md` §1 and §3.1 spell a result; and encoding cases (§3), each
+//! request of generated [`Commands`] with the command
+//! [`crate::layout::command`] works out it encodes to, spelled as
+//! `spec/api.md` §3.2 does, or the error a refused one gives. This module
+//! spells them itself, never through `mdl`, so a case says what the oracle
+//! read in the spec, not what the runtime gives.
 
 use std::collections::BTreeSet;
 
 use serde_json::{Map, Value, json};
 
+use crate::layout::command::{Commands, Given, Refused, Request, Target};
 use crate::layout::{
     Damage, Encoding, Engineering, EventTime, Expected, Message, Meta, Raw, Sample, Telemetry,
     instant_text, integer_json,
@@ -340,4 +344,199 @@ fn float_json(x: f64) -> Value {
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+// ---- Encoding cases (`spec/conformance.md` §3) ------------------------------
+
+/// An encoding case file for `commands`: its bundle, a case for each
+/// request, with the command it encodes to, and one for each refused
+/// request, with its error's code. A refused request that gives a name
+/// twice can't be a case, since a case's arguments are an object, which
+/// has each name once (`duplicate_argument` can't be written); nor can the
+/// payloads with faults planted in them, which test decoding commands
+/// (`spec/encoding.md` §7), not in the runtime API.
+pub fn encoding_case_file(commands: &Commands, about: &str, origin: &str) -> Value {
+    let mut cases: Vec<Value> = commands
+        .requests
+        .iter()
+        .enumerate()
+        .map(|(index, request)| encoded_case(commands, request, index, origin))
+        .collect();
+    cases.extend(
+        commands
+            .refused
+            .iter()
+            .enumerate()
+            .filter(|(_, refused)| !gives_a_name_twice(&refused.arguments))
+            .map(|(index, refused)| refused_case(commands, refused, index, origin)),
+    );
+    json!({
+        "about": about,
+        "definitions": commands.bundle,
+        "cases": cases,
+    })
+}
+
+fn gives_a_name_twice(arguments: &[(String, Given)]) -> bool {
+    let mut names = BTreeSet::new();
+    arguments.iter().any(|(name, _)| !names.insert(name))
+}
+
+/// The sections a request's result depends on: arguments, raw values and
+/// payloads, and what encoding takes from decoding.md (bits, byte orders,
+/// text, positions, checksums, conversion arithmetic) and units.md.
+const ENCODED_SPEC: [&str; 10] = [
+    "encoding.md §2",
+    "encoding.md §3",
+    "encoding.md §4",
+    "encoding.md §5",
+    "encoding.md §6",
+    "decoding.md §2",
+    "decoding.md §5",
+    "decoding.md §7.1",
+    "units.md §4",
+    "api.md §3.2",
+];
+
+/// The sections a refused request's error depends on: the request,
+/// arguments, raw values and the codes, and the text and units they take
+/// from decoding.md and units.md.
+const REFUSED_SPEC: [&str; 6] = [
+    "encoding.md §1",
+    "encoding.md §2",
+    "encoding.md §3",
+    "encoding.md §8",
+    "decoding.md §2",
+    "units.md §4",
+];
+
+fn encoded_case(commands: &Commands, request: &Request, index: usize, origin: &str) -> Value {
+    let set = commands.bundle["sets"]
+        .as_array()
+        .and_then(|sets| sets.iter().find(|set| set["name"] == commands.set.as_str()));
+    let packet = set
+        .and_then(|set| set["commands"].as_array())
+        .and_then(|packets| {
+            packets
+                .iter()
+                .find(|packet| packet["canonical"] == request.command.as_str())
+        })
+        .map_or(Value::Null, |packet| packet["name"].clone());
+    let deprecated = commands.bundle["catalog"]["commands"][&request.command]
+        .get("deprecated")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let metadata: Map<String, Value> = request
+        .metadata
+        .iter()
+        .map(|(name, value)| (name.clone(), integer_json(i128::from(*value))))
+        .collect();
+    let encoded = json!({
+        "family": commands.family,
+        "set": commands.set,
+        "packet": packet,
+        "command": request.command,
+        "payload": hex(&request.payload),
+        "metadata": metadata,
+        "defaulted": request.defaulted,
+        "deprecated": deprecated,
+        "record": record_json(&request.record),
+    });
+    let mut case = Map::new();
+    case.insert(
+        "name".to_string(),
+        json!(format!("request-{index:02}-{}", request.command)),
+    );
+    case.insert("spec".to_string(), json!(ENCODED_SPEC));
+    case.insert(
+        "note".to_string(),
+        json!(format!(
+            "Generated by the testkit's oracle: {origin}, request {index}."
+        )),
+    );
+    case.insert("family".to_string(), json!(commands.family));
+    case.insert(
+        "request".to_string(),
+        request_json(
+            &commands.set,
+            &request.command,
+            &request.arguments,
+            request.target.as_ref(),
+        ),
+    );
+    case.insert("encoded".to_string(), encoded);
+    Value::Object(case)
+}
+
+fn refused_case(commands: &Commands, refused: &Refused, index: usize, origin: &str) -> Value {
+    let planted: Vec<String> = refused
+        .faults
+        .iter()
+        .map(|fault| format!("{:?} ({})", fault.kind, fault.code))
+        .collect();
+    let mut case = Map::new();
+    case.insert(
+        "name".to_string(),
+        json!(format!("refused-{index:02}-{}", refused.code)),
+    );
+    case.insert("spec".to_string(), json!(REFUSED_SPEC));
+    case.insert(
+        "note".to_string(),
+        json!(format!(
+            "Generated by the testkit's oracle: {origin}, refused request {index}. Planted: {}; \
+             the first that encoding reaches is the error.",
+            planted.join(", ")
+        )),
+    );
+    case.insert("family".to_string(), json!(commands.family));
+    case.insert(
+        "request".to_string(),
+        request_json(
+            &refused.set,
+            &refused.command,
+            &refused.arguments,
+            refused.target.as_ref(),
+        ),
+    );
+    case.insert("error".to_string(), json!(refused.code));
+    Value::Object(case)
+}
+
+/// A request (`spec/conformance.md` §3): each argument tagged with the
+/// kind the request gives it as, and the target, if it gives one.
+fn request_json(
+    set: &str,
+    command: &str,
+    arguments: &[(String, Given)],
+    target: Option<&Target>,
+) -> Value {
+    let arguments: Map<String, Value> = arguments
+        .iter()
+        .map(|(name, value)| (name.clone(), tagged(value)))
+        .collect();
+    let mut request = Map::new();
+    request.insert("set".to_string(), json!(set));
+    request.insert("command".to_string(), json!(command));
+    request.insert("arguments".to_string(), Value::Object(arguments));
+    if let Some(target) = target {
+        let target = match target {
+            Target::Int(n) => integer_json(*n),
+            Target::Text(text) => json!(text),
+        };
+        request.insert("native_id".to_string(), target);
+    }
+    Value::Object(request)
+}
+
+/// A value tagged with its kind (`spec/conformance.md` §3).
+fn tagged(value: &Given) -> Value {
+    match value {
+        Given::Bool(b) => json!({ "boolean": b }),
+        Given::Int(n) => json!({ "integer": integer_json(i128::from(*n)) }),
+        Given::Uint(n) => json!({ "integer": integer_json(i128::from(*n)) }),
+        Given::Float(x) => json!({ "float": float_json(*x) }),
+        Given::Text(text) => json!({ "text": text }),
+        Given::Bytes(bytes) => json!({ "bytes": hex(bytes) }),
+        Given::List(values) => json!({ "list": values.iter().map(tagged).collect::<Vec<Value>>() }),
+    }
 }

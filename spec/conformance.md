@@ -172,9 +172,23 @@ error compares by its code, with an empty list of problems.
 
 ### 3.2 Expected results
 
-Every expected result is worked out from the specifications by hand, and
-its `note` shows how, as §2.3 says of the files directly in
-`conformance/decoding/`.
+No expected result is an encoder's output. They come from the same two
+places as decoding's (§2.3), and a disagreement is settled the same way:
+
+- The files directly in `conformance/encoding/` are worked out from the
+  specifications by hand. Each case's `note` shows how, and it cites the
+  narrowest sections its result depends on.
+- The files in `conformance/encoding/oracle/` are generated from random
+  command layouts by the testkit's oracle, which builds each request from
+  values it chose and works forward from the specifications to the
+  command it encodes to, or to the error a refused one gives, in code
+  separate from MDL's encoder, and the testkit spells the result as
+  [api.md](api.md) §3.2 does. What §2.3 says of the generated decoding
+  cases holds for these: the oracle has the same authors as MDL, the
+  property tests run MDL against it, so a misreading common to both would
+  be in these cases too, and the files are a snapshot `just conformance`
+  writes. A refused request that gives a name twice isn't among them, as
+  no case can give one.
 
 ## 4. Runners
 
