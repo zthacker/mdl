@@ -76,6 +76,18 @@ them too.
   every entry read, then the constants in entry order, then the arguments
   in the catalog's order, wherever the packet writes them
   ([spec/encoding.md](spec/encoding.md) §7.5).
+- A native id is never empty, as a bindings file already required, and
+  empty text names no asset ([spec/api.md](spec/api.md) §1):
+  - an alias that reads it, at a `metadata` name or a `path` pointer, is
+    `unreadable_locator`, where without bindings it stood for an asset of
+    its own and with them was `unknown_asset`;
+  - a command given it as its target is `missing_target`, where a string
+    target field wrote empty text and an integer one gave `target_type`;
+  - `binding` and `asset` find no asset for it, with bindings or
+    without, where without bindings they gave a stand-in.
+
+  A decoded command still reports a target field's empty text as the
+  payload holds it.
 
 ### Compatibility
 
@@ -89,6 +101,12 @@ them too.
   ([spec/compatibility.md](spec/compatibility.md) §7). Rebuilding a set
   with one fails at the checksum, located in its source file: give it a
   `from_bits` before its earliest start, or put an entry before it.
+- The empty native id rule above refuses at runtime what 0.2.0 accepted:
+  a command to an empty target, which encoded, and, without bindings, a
+  message whose alias reads empty text, which decoded as a stand-in, and
+  `binding` and `asset` for empty text, which gave a stand-in and now
+  give none. With bindings such a message was already refused, as
+  `unknown_asset`, and its code is now `unreadable_locator`.
 
 ### Tools and the runtime API
 
@@ -107,7 +125,7 @@ them too.
   argument's value tagged with its kind, and the encoded command or error
   the spec gives, worked out by hand, for argument types and resolution,
   ranges and lists, a packet's own limits, raw values, binary and JSON
-  payloads; and 274 more, in `conformance/encoding/oracle/`, generated
+  payloads; and 277 more, in `conformance/encoding/oracle/`, generated
   from random command layouts by the testkit's oracle, refused requests
   among them. A binding of the runtime API must pass both through its own
   API ([spec/conformance.md](spec/conformance.md), a new specification);
@@ -125,8 +143,8 @@ them too.
   with their metadata, and the command or error the spec gives for them,
   worked out by hand, for which packet a payload and its metadata are,
   constants, arguments through their conversions and the catalog's
-  limits, defaults, targets, checksums, lists, binary and JSON payloads;
-  and 274 more, in
+  limits, defaults, targets, checksums, lists, binary and JSON payloads,
+  and the order of the checks; and 273 more, in
   `conformance/decoding_commands/oracle/`, from the encoding cases'
   generated layouts, each request's payload decoded back and garbled
   payloads among them ([spec/conformance.md](spec/conformance.md) §4). A
