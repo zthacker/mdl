@@ -24,20 +24,22 @@ fn repository() -> PathBuf {
 #[test]
 fn every_decoding_case_gives_the_result_the_spec_does() {
     let dir = repository().join("conformance/decoding");
-    let mut paths: Vec<PathBuf> = fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{dir:?}: {e}"))
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-        .collect();
+    let mut paths = Vec::new();
+    case_files(&dir, &mut paths);
     paths.sort();
     assert!(!paths.is_empty(), "no case files in {dir:?}");
     let mut sections = Sections::default();
     let mut failures = Vec::new();
     let mut ran = 0;
     for path in &paths {
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        // A file's name is its path under conformance/decoding.
+        let name = path
+            .strip_prefix(&dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
         let mut file = Failures::new(&name);
-        ran += run_file(path, &mut sections, &mut file);
+        ran += run_file(path, &name, &mut sections, &mut file);
         failures.extend(file.list);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
@@ -93,9 +95,21 @@ impl Failures {
     }
 }
 
+/// Every case file under `dir`, in its subdirectories too.
+fn case_files(dir: &Path, paths: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(dir).unwrap_or_else(|e| panic!("{dir:?}: {e}")) {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            case_files(&path, paths);
+        } else if path.extension().is_some_and(|ext| ext == "json") {
+            paths.push(path);
+        }
+    }
+}
+
 /// Runs one file's cases, singly and with `decode_many`, and returns how
-/// many it ran.
-fn run_file(path: &Path, sections: &mut Sections, failures: &mut Failures) -> usize {
+/// many it ran. `name` is its path under conformance/decoding.
+fn run_file(path: &Path, name: &str, sections: &mut Sections, failures: &mut Failures) -> usize {
     let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
     let file: Json = match serde_json::from_str(&text) {
         Ok(file) => file,
@@ -129,7 +143,8 @@ fn run_file(path: &Path, sections: &mut Sections, failures: &mut Failures) -> us
             }
         }
     }
-    let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+    // A store of the file's own, named by its path.
+    let stem = name.trim_end_matches(".json").replace(['/', '\\'], "-");
     let runtime = match open(&file, &stem) {
         Ok(runtime) => runtime,
         Err(problem) => {

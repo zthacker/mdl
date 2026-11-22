@@ -145,12 +145,21 @@ defmodule MDL.Test.Expected do
     record(value, struct_entries(set, struct), set)
   end
 
+  # An array's elements; a JSON array's null element, scalar or record,
+  # is `nil`.
   defp entry_value(values, %{"kind" => "array", "element" => element}, set) do
-    Enum.map(values, fn value ->
-      case element do
-        %{"kind" => "scalar", "type" => type} -> raw(value, type)
-        %{"kind" => "struct", "name" => struct} -> record(value, struct_entries(set, struct), set)
-      end
+    Enum.map(values, fn
+      nil ->
+        nil
+
+      value ->
+        case element do
+          %{"kind" => "scalar", "type" => type} ->
+            raw(value, type)
+
+          %{"kind" => "struct", "name" => struct} ->
+            record(value, struct_entries(set, struct), set)
+        end
     end)
   end
 

@@ -11,7 +11,7 @@ defmodule MDL.ConformanceTest do
   alias MDL.Test.{Expected, Fixtures}
 
   @dir Path.expand("../../../../conformance/decoding", __DIR__)
-  @files @dir |> Path.join("*.json") |> Path.wildcard() |> Enum.sort()
+  @files @dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
 
   test "there are decoding cases to run" do
     assert @files != [], "no case files in #{@dir}"
@@ -20,7 +20,7 @@ defmodule MDL.ConformanceTest do
   for path <- @files do
     @external_resource path
 
-    test "the decoding cases of #{Path.basename(path)}" do
+    test "the decoding cases of #{Path.relative_to(path, @dir)}" do
       run(unquote(path))
     end
   end
@@ -28,7 +28,9 @@ defmodule MDL.ConformanceTest do
   defp run(path) do
     file = path |> File.read!() |> JSON.decode!()
     definitions = file["definitions"]
-    store = Fixtures.build_definitions!(definitions, Path.basename(path, ".json"))
+    # A store of the file's own, named by its path under conformance/decoding.
+    name = path |> Path.relative_to(@dir) |> Path.rootname() |> String.replace("/", "-")
+    store = Fixtures.build_definitions!(definitions, name)
 
     options =
       case file["bindings"] do

@@ -16,9 +16,13 @@
 //!   each encodes to by the encoding spec and what it decodes back to.
 //! - [`bindings`]: bindings files, with what they resolve to and the
 //!   diagnostics a reader gives them.
+//! - [`conformance`]: decoding conformance cases written from [`layout`]'s
+//!   layouts, which the `conformance` binary writes to
+//!   `conformance/decoding/oracle/` (`spec/conformance.md` §2.3).
 
 pub mod bindings;
 mod checksum;
+pub mod conformance;
 pub mod coverage;
 pub mod layout;
 pub mod shape;

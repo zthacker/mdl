@@ -20,7 +20,8 @@ inputs and its language's values as well as the runtime beneath it.
 
 ## 2. Decoding cases
 
-Each file in `conformance/decoding/` is a JSON object with these keys:
+Each file in `conformance/decoding/`, or in a directory under it, is a
+JSON object with these keys:
 
 | Key | Value |
 | --- | --- |
@@ -38,7 +39,7 @@ A case is an object with these keys:
 | `spec` | a list of the sections its expected result follows from, each a file and a section number (`"decoding.md §5.6"`) |
 | `note` | text: how the expected result follows from them, for people |
 | `family` | text: the family that sent the message |
-| `message` | an object: the payload, as `hex` (lowercase hex digits, two a byte, with spaces between bytes allowed) or as `json` (a JSON family's document, as its text); `metadata`, an object of values, each an integer or text read as [api.md](api.md) §1 reads them (a string in an integer's one decimal spelling within −2^63 to 2^64 − 1 is that integer); and `ground_time`, an instant (api.md §1) |
+| `message` | an object: the payload, as `hex` (lowercase hex digits, two a byte, with spaces between bytes allowed), for any family, or as `json` (a JSON family's document, as its text, when it is UTF-8 text); `metadata`, an object of values, each an integer or text read as [api.md](api.md) §1 reads them (a string in an integer's one decimal spelling within −2^63 to 2^64 − 1 is that integer); and `ground_time`, an instant (api.md §1) |
 | `decoded` | the decoded message (api.md §3.1), in its JSON, without `def_version` |
 | `error` | text: the error's code |
 
@@ -93,11 +94,28 @@ integer never equals a float, and its NaN equals NaN.
 
 ### 2.3 Expected results
 
-Every expected result is worked out from the specifications by hand, and
-its `note` shows how: no expected result is an implementation's output. A
-case cites the narrowest sections its result depends on. When a case and
-an implementation disagree, the specifications settle it: the case is
-wrong, or the implementation has a bug.
+No expected result is a decoder's output. They come from one of two
+places, and when a case and an implementation disagree, the
+specifications settle it: the case is wrong, or the implementation has a
+bug.
+
+- The files directly in `conformance/decoding/` are worked out from the
+  specifications by hand. Each case's `note` shows how, and it cites the
+  narrowest sections its result depends on.
+- The files in `conformance/decoding/oracle/` are generated from
+  random layouts by the testkit's oracle (`crates/mdl-testkit`). The
+  oracle doesn't decode: it builds each message from values it chose and
+  works forward from the specifications to the result, or to the error a
+  damaged message gives, in code separate from MDL's decoder, and the
+  testkit spells the result as [api.md](api.md) §1 and §3.1 do. It has
+  the same authors as MDL, though, and the property tests run MDL against
+  it over many more layouts, so the two agree by construction: a
+  misreading common to both would be in these cases too. The hand-written
+  cases, and other implementations, are the check on that. Each case's
+  `note` names the layout and message it came from, and what was planted
+  in a damaged one. `just conformance` writes them from fixed seeds.
+  They're a snapshot: they're regenerated on purpose, the diff reviewed
+  and the runners run again, not checked against the generator.
 
 ### 2.4 Runners
 

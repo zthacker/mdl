@@ -1,6 +1,6 @@
 [package]
 name = "mdl-testkit"
-description = "Generators of MDL IR for the workspace's property tests; never published"
+description = "Generators of MDL IR for the workspace's property tests and generated conformance cases; never published"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
