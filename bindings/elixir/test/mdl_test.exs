@@ -173,6 +173,26 @@ defmodule MDLTest do
                MDL.decode_command(context.kitchen, "vendor_x", message)
     end
 
+    # A native id is never empty (spec/api.md section 1), so empty text
+    # names no target, in a string target field or an integer one.
+    test "an empty target", context do
+      legacy = %{set: "legacy_v1", command: "eps.set_mode", arguments: %{"mode" => "SAFE"}}
+
+      sink = %{
+        set: "sink_v1",
+        command: "sink.configure",
+        arguments: %{"enable" => false, "gain" => 2.0, "label" => "OK", "taps" => [1.0, 2.0]}
+      }
+
+      for {family, request, target} <- [{"legacy", legacy, "box-1"}, {"sink", sink, 7}] do
+        assert {:ok, %MDL.Encoded{}} =
+                 MDL.encode(context.kitchen, family, Map.put(request, :native_id, target))
+
+        assert {:error, %MDL.Error{code: :missing_target}} =
+                 MDL.encode(context.kitchen, family, Map.put(request, :native_id, ""))
+      end
+    end
+
     # An artifact's identity is its canonical JSON's digest, so changing a
     # value (not its spacing) changes it.
     test "a damaged artifact" do
@@ -326,6 +346,17 @@ defmodule MDLTest do
                   set: "sink_json_v1",
                   stand_in: true
                 }}
+    end
+
+    # A native id is never empty (spec/api.md section 1), so neither
+    # lookup finds an asset for empty text, with bindings or without.
+    test "an empty native id is no asset", context do
+      {:ok, bare} = MDL.open(Fixtures.store(:kitchen))
+
+      for mdl <- [context.kitchen, bare] do
+        assert MDL.binding(mdl, "sink_json", "", @noon) == {:ok, nil}
+        assert MDL.asset(mdl, "sink_json", "", @noon) == {:ok, nil}
+      end
     end
   end
 

@@ -377,9 +377,17 @@ impl FamilySets {
         resolver: &R,
     ) -> Result<(Route<'_>, &LoadedSet), RouteError> {
         let family = &self.family.name;
-        let native_id = self
-            .read(&self.family.alias, LocatorRole::Alias, readable, message)?
-            .native_id();
+        let alias = self.read(&self.family.alias, LocatorRole::Alias, readable, message)?;
+        // A native id is never empty (`spec/api.md` §1), so empty text
+        // is nothing usable (`decoding.md` §3.1).
+        if alias.is_empty_text() {
+            return Err(RouteError::UnreadableLocator {
+                family: family.clone(),
+                locator: LocatorRole::Alias,
+                reason: "it reads empty text, which is no native id".to_string(),
+            });
+        }
+        let native_id = alias.native_id();
         let Some(binding) = resolver.resolve(family, &native_id, message.ground_time) else {
             return Err(RouteError::UnknownAsset {
                 family: family.clone(),
@@ -535,6 +543,10 @@ enum Located {
 }
 
 impl Located {
+    fn is_empty_text(&self) -> bool {
+        matches!(self, Located::Text(text) if text.is_empty())
+    }
+
     fn native_id(&self) -> NativeId {
         match self {
             Located::Uint(n) => NativeId::from(*n),

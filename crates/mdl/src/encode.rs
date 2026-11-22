@@ -346,6 +346,13 @@ pub enum FieldProblem {
     ContainsTerminator { byte: u8 },
     #[error("the field holds the target's native id, and the request names no target")]
     MissingTarget,
+    /// A native id is never empty (`spec/api.md` §1), so empty text names
+    /// no target either; its code is `missing_target`.
+    #[error(
+        "the field holds the target's native id, and the request's is empty text, which is no \
+         native id"
+    )]
+    EmptyTarget,
     #[error("native id {id} isn't {expected}")]
     TargetType { id: String, expected: &'static str },
     /// The set isn't one validation accepts.
@@ -362,7 +369,7 @@ impl FieldProblem {
             FieldProblem::Element { problem, .. } => problem.code(),
             FieldProblem::InvalidText { .. } => "invalid_text",
             FieldProblem::ContainsTerminator { .. } => "contains_terminator",
-            FieldProblem::MissingTarget => "missing_target",
+            FieldProblem::MissingTarget | FieldProblem::EmptyTarget => "missing_target",
             FieldProblem::TargetType { .. } => "target_type",
             FieldProblem::Layout(_) => "invalid_layout",
         }
@@ -1476,12 +1483,16 @@ fn constant(field: &Field, value: &Scalar, binary: bool) -> Result<Value<'static
 
 /// The target's native id as a target field's raw value: an integer field
 /// takes an integer id that fits it, a string field the id's text (an
-/// integer id in decimal).
+/// integer id in decimal). Empty text is no native id, in either field
+/// (`spec/encoding.md` §3.3).
 pub(crate) fn target_value(
     field: &Field,
     id: &NativeId,
     binary: bool,
 ) -> Result<Value<'static>, FieldProblem> {
+    if id.as_text().is_some_and(str::is_empty) {
+        return Err(FieldProblem::EmptyTarget);
+    }
     match field.ty {
         ScalarType::Uint | ScalarType::Int => {
             let n = id.as_int().ok_or_else(|| FieldProblem::TargetType {

@@ -1,5 +1,5 @@
 {
-  "about": "Decoding commands: which packet a payload and its metadata are, constants, each argument through its conversion and the catalog's limits as the packet narrows them, defaulted arguments, the target, checksums, lists, JSON command payloads, and the order of the checks.",
+  "about": "Decoding commands: which packet a payload and its metadata are, constants, each argument through its conversion and the catalog's limits as the packet narrows them, defaulted arguments, the target (an empty one too), checksums, lists, JSON command payloads, and the order of the checks.",
   "definitions": {
     "mdl_version": "2.3",
     "catalog": {
@@ -32,6 +32,7 @@
             { "name": "label", "type": "str" }
           ]
         },
+        "c.tag": {},
         "c.ping": {
           "arguments": [
             { "name": "note", "type": "str" }
@@ -177,6 +178,14 @@
               { "kind": "field", "name": "a", "type": "uint", "size_bits": 8, "argument": "a" },
               { "kind": "field", "name": "label", "type": "string", "length": { "kind": "terminator", "byte": 0 }, "text": "ascii", "argument": "label" },
               { "kind": "field", "name": "end", "type": "uint", "size_bits": 8, "value": 85 }
+            ]
+          },
+          {
+            "name": "TAGGED",
+            "canonical": "c.tag",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 7 },
+              { "kind": "field", "name": "unit", "type": "string", "length": { "kind": "terminator", "byte": 0 }, "text": "ascii", "target": true }
             ]
           }
         ]
@@ -492,6 +501,42 @@
       "set": "cmd_v1",
       "message": { "hex": "06050b0055", "metadata": {} },
       "error": "out_of_range"
+    },
+    {
+      "name": "a-text-target",
+      "spec": ["encoding.md §7.4"],
+      "note": "The packet is TAGGED by its opcode, 07. unit, the target, runs to its terminator: 62 6f 78 2d 31 is box-1, text that spells no integer.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "07626f782d3100", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "TAGGED",
+        "command": "c.tag",
+        "arguments": {},
+        "defaulted": [],
+        "target": "box-1",
+        "record": { "opcode": 7, "unit": "box-1" }
+      }
+    },
+    {
+      "name": "an-empty-target-as-it-is",
+      "spec": ["encoding.md §7.4", "api.md §1", "api.md §3.5"],
+      "note": "unit's terminator comes at once, so it holds empty text. No encoder writes that, since a native id is never empty, but a decoded command reports a target field's text as the payload holds it: \"\".",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0700", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "TAGGED",
+        "command": "c.tag",
+        "arguments": {},
+        "defaulted": [],
+        "target": "",
+        "record": { "opcode": 7, "unit": "" }
+      }
     }
   ]
 }

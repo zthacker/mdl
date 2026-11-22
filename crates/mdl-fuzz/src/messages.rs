@@ -196,7 +196,10 @@ pub(crate) fn check_decoded(decoded: &Decoded<'_>, params: &BTreeSet<String>) {
 /// request that encodes, since what decoding gives the catalog allows
 /// (`spec/encoding.md` §7.4), and that payload decodes to the same
 /// command, every argument but a float the same: only a conversion and its
-/// inverse round, and they round floats.
+/// inverse round, and they round floats. The one exception is a target
+/// field holding empty text, which decoding reports as it is but which is
+/// no native id (`spec/api.md` §1): its request names no target, so it's
+/// `missing_target`.
 pub(crate) fn check_command_payload(
     sets: &FamilySets,
     set: &str,
@@ -211,6 +214,20 @@ pub(crate) fn check_command_payload(
         }
     };
     let request = decoded.request();
+    let empty_target = decoded
+        .target
+        .as_ref()
+        .and_then(NativeId::as_text)
+        .is_some_and(str::is_empty);
+    if empty_target {
+        let refused = sets.encode(&request).err().map(|error| error.code());
+        assert_eq!(
+            refused,
+            Some("missing_target"),
+            "{request:?}: a target of empty text"
+        );
+        return;
+    }
     let encoded = match sets.encode(&request) {
         Ok(encoded) => encoded,
         Err(error) => panic!("{request:?}, decoded from a payload, didn't encode: {error}"),

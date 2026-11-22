@@ -1,5 +1,5 @@
 {
-  "about": "Raw values: arguments through each inverse conversion and unit, rounding for integer and binary32 fields, constants, the target, and arrays of records.",
+  "about": "Raw values: arguments through each inverse conversion and unit, rounding for integer and binary32 fields, constants, the target and an empty one, and arrays of records.",
   "definitions": {
     "mdl_version": "2.0",
     "catalog": {
@@ -18,6 +18,7 @@
             { "name": "ys", "type": "u64", "range": { "max": 255 }, "list": { "max": 4 } }
           ]
         },
+        "r.tag": {},
         "r.wide": {
           "arguments": [
             { "name": "big", "type": "f64" }
@@ -109,6 +110,14 @@
                 "count": { "kind": "field", "field": "n" },
                 "element": { "kind": "struct", "name": "pair" }
               }
+            ]
+          },
+          {
+            "name": "TAG",
+            "canonical": "r.tag",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 12 },
+              { "kind": "field", "name": "unit", "type": "string", "length": { "kind": "terminator", "byte": 0 }, "text": "ascii", "target": true }
             ]
           }
         ]
@@ -281,6 +290,63 @@
         "defaulted": [],
         "deprecated": null,
         "record": { "opcode": 11, "n": 0, "pairs": [] }
+      }
+    },
+    {
+      "name": "a-text-target",
+      "spec": ["encoding.md §3.3", "encoding.md §3.4"],
+      "note": "unit takes the target's text, box-1, as ASCII: 62 6f 78 2d 31, then its terminator 00. The opcode is 0c.",
+      "family": "r",
+      "request": { "set": "r_v1", "command": "r.tag", "arguments": {}, "native_id": "box-1" },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "TAG",
+        "command": "r.tag",
+        "payload": "0c626f782d3100",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 12, "unit": "box-1" }
+      }
+    },
+    {
+      "name": "an-empty-target-in-a-string-field",
+      "spec": ["encoding.md §3.3", "api.md §1"],
+      "note": "A native id is never empty, so empty text names no target, though unit could hold an empty string: missing_target.",
+      "family": "r",
+      "request": { "set": "r_v1", "command": "r.tag", "arguments": {}, "native_id": "" },
+      "error": "missing_target"
+    },
+    {
+      "name": "an-empty-target-in-an-integer-field",
+      "spec": ["encoding.md §3.3", "api.md §1"],
+      "note": "Empty text names no target before the id's type is checked, so for node, an integer field, it's missing_target, not the target_type PX-9 gives.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.cal",
+        "arguments": { "temp": { "float": 25.0 }, "gain": { "float": 0.15 }, "period": { "float": 7.5 }, "trim": { "float": 0.36 } },
+        "native_id": ""
+      },
+      "error": "missing_target"
+    },
+    {
+      "name": "an-empty-target-for-a-packet-without-one",
+      "spec": ["encoding.md §1", "encoding.md §3.3"],
+      "note": "WIDE has no target field, so it ignores the target, empty or not: the command encodes as it does with none, 0a 4b 80 00 00.",
+      "family": "r",
+      "request": { "set": "r_v1", "command": "r.wide", "arguments": { "big": { "float": 16777217.0 } }, "native_id": "" },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "WIDE",
+        "command": "r.wide",
+        "payload": "0a4b800000",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 10, "big": 16777216.0 }
       }
     }
   ]

@@ -72,7 +72,8 @@ MDL, including CUC epochs in set artifacts.
 - A string that spells an integer within ±(2^53 − 1) in its one decimal
   spelling MUST be written as that integer: `42`, not `"42"`.
   [`integer_as_string`]
-- A string native id MUST NOT be empty. [`empty`]
+- A string native id MUST NOT be empty, as no native id is (`api.md`
+  §1). [`empty`]
 - Native ids compare by value. A string in an integer's one decimal
   spelling (an optional `-`, no leading zeros, not `-0`) whose value lies
   between −2^63 and 2^64 − 1 is that integer, so a message whose alias

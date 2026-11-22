@@ -50,6 +50,11 @@ use crate::validate::rules::{
 /// assert_ne!(NativeId::from_text("042"), NativeId::from(42_u64));
 /// assert_eq!(NativeId::from_text("PX-9").to_string(), "PX-9");
 /// ```
+///
+/// Empty text makes a `NativeId` too, though it's no native id
+/// (`spec/api.md` §1): routing, encoding and the lookups refuse it where
+/// they need one, and a decoded command reports a target field's empty
+/// text as it is.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NativeId(Repr);
 

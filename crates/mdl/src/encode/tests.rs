@@ -214,6 +214,24 @@ fn a_target_field_holds_the_native_id_and_checksums_cover_each_other() {
     // An integer id in a string field is written in decimal.
     let encoded = sets.encode(&safe().with_target(42_u64)).unwrap();
     assert_eq!(&encoded.payload[1..4], b"42\0");
+
+    // Empty text is no native id (spec/api.md §1), so it names no target,
+    // and isn't written as an empty string.
+    let empty = sets.encode(&with_target("")).unwrap_err();
+    assert_eq!(empty.code(), "missing_target");
+    assert!(
+        empty
+            .to_string()
+            .contains("the request's is empty text, which is no native id"),
+        "{empty}"
+    );
+    // In an integer field too, before the id's type is checked.
+    let mut bundle = fixture();
+    bundle["sets"][2]["commands"][0]["entries"][1] = json!(
+        { "kind": "field", "name": "unit", "type": "uint", "size_bits": 8, "target": true });
+    let integer = sets_of(&bundle, "legacy");
+    assert_eq!(code(integer.encode(&with_target(""))), "missing_target");
+    assert_eq!(code(integer.encode(&with_target("box-1"))), "target_type");
 }
 
 #[test]
@@ -2055,7 +2073,9 @@ fn target_strategy(
             let high = if size >= 64 { i64::MAX } else { high };
             (low..=high).prop_map(|n| Some(NativeId::from(n))).boxed()
         }
+        // A native id is never empty (`spec/api.md` §1).
         _ => text_strategy(field, lengths)
+            .prop_filter("a native id is never empty", |text| !text.is_empty())
             .prop_map(|text| Some(NativeId::from_text(text)))
             .boxed(),
     }

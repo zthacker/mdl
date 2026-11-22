@@ -133,7 +133,11 @@ A family's alias and version locators read one value from the message:
 | `path` | the JSON value at its pointer: a string, or a number that is an integer (§2.3) |
 | `fixed` | its text |
 
-A locator that finds nothing usable is `unreadable_locator`.
+A locator that finds nothing usable is `unreadable_locator`. A native id
+is never empty (`api.md` §1), so an alias locator that reads empty text,
+at a `metadata` name or a `path` pointer, finds nothing usable too (a
+`fixed` value is never empty, by validation, and `bits` read an
+integer).
 
 ### 3.2 Comparing
 

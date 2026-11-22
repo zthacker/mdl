@@ -2330,6 +2330,32 @@ fn encode_writes_the_target_only_where_a_packet_carries_it() {
         stderr(&nowhere)
     );
 
+    // A native id is never empty (spec/api.md §1): empty text names no
+    // target.
+    let empty = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "full.json",
+            "--set",
+            "legacy_v1",
+            "--command",
+            "eps.set_mode",
+            "--arg",
+            "mode=NOMINAL",
+            "--target",
+            "",
+        ],
+        None,
+    );
+    assert_eq!(empty.status.code(), Some(1), "{}", stderr(&empty));
+    assert!(
+        stdout(&empty).starts_with("error[missing_target]: ")
+            && stdout(&empty).contains("empty text, which is no native id"),
+        "{}",
+        stdout(&empty)
+    );
+
     let elsewhere = morphc_in(
         &dir,
         &[

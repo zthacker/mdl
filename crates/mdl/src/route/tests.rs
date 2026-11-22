@@ -226,6 +226,16 @@ fn each_way_a_message_fails_to_route_has_its_own_code() {
     assert_eq!(code(json(br#"{"sat": "PX-8"}"#)), "missing_set");
     assert_eq!(code(json(br#"{"sat": "PX-7"}"#)), "unknown_set");
     assert_eq!(code(json(br#"{"sat": "PX-6"}"#)), "unknown_asset");
+    // A native id is never empty (spec/api.md §1), so empty text at the
+    // alias's pointer is nothing usable, not an asset nothing binds.
+    let empty = json(br#"{"sat": ""}"#).unwrap_err();
+    assert_eq!(empty.code(), "unreadable_locator");
+    assert!(
+        empty
+            .to_string()
+            .contains("alias locator can't be read: it reads empty text, which is no native id"),
+        "{empty}"
+    );
 }
 
 #[test]

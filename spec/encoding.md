@@ -272,9 +272,12 @@ true.
 ### 3.3 Target
 
 A field with `"target": true` holds the target's native id
-[`missing_target`]. An integer field takes an integer id that fits it
+[`missing_target`]. Empty text is no native id (`api.md` §1), so it names
+no target either, in any target field [`missing_target`], before the id's
+type is checked. An integer field takes an integer id that fits it
 [`target_type`, `raw_range`]; a string field takes the id's text, an
-integer id written in decimal.
+integer id written in decimal. A packet without a target field ignores
+the target, empty or not.
 
 ### 3.4 Strings and bytes
 
@@ -542,7 +545,9 @@ catalog order is refused at that index; it has no constants to check
 An argument the set doesn't encode is its default, and the result lists
 it as defaulted. A packet with a target field gives the target's native
 id: an integer field's integer, or a string field's text (text in an
-integer's one decimal spelling is that integer).
+integer's one decimal spelling is that integer). A string field's empty
+text, which no encoder writes, is reported as it is: command history
+shows what was sent.
 
 ### 7.5 Order
 

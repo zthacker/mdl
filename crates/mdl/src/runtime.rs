@@ -539,7 +539,8 @@ impl Runtime {
 
     /// What `native_id` of `family` is at `at` (`spec/api.md` §2.6): its
     /// binding, or the stand-in decoding uses without bindings; none when
-    /// it's no asset then.
+    /// it's no asset then. Empty text is no native id (`spec/api.md` §1),
+    /// so it's no asset, as decoding refuses an alias that reads it.
     pub fn binding(
         &self,
         family: &str,
@@ -547,6 +548,9 @@ impl Runtime {
         at: Timestamp,
     ) -> Result<Option<BindingAt>, ApiError> {
         let assembled = self.assembled(family)?;
+        if native_id.as_text().is_some_and(str::is_empty) {
+            return Ok(None);
+        }
         let Some(bindings) = &self.bindings else {
             let stand_in = assembled.stand_in.as_ref().map_err(Clone::clone)?;
             return Ok(Some(stand_in.binding_at(family, native_id.clone())));
@@ -560,7 +564,9 @@ impl Runtime {
     /// The native id that is `asset` in `family` at `at`, with its binding
     /// (`spec/api.md` §2.6): where a command to the asset goes. None when
     /// no native id is the asset then; `ambiguous_asset` when several are.
-    /// Without bindings, an asset is the native id its name spells.
+    /// Without bindings, an asset is the native id its name spells. An
+    /// empty name is none: no row names it, and no native id is empty
+    /// (`spec/api.md` §1).
     pub fn asset(
         &self,
         family: &str,
@@ -568,6 +574,9 @@ impl Runtime {
         at: Timestamp,
     ) -> Result<Option<BindingAt>, ApiError> {
         let assembled = self.assembled(family)?;
+        if asset.is_empty() {
+            return Ok(None);
+        }
         let Some(bindings) = &self.bindings else {
             let stand_in = assembled.stand_in.as_ref().map_err(Clone::clone)?;
             return Ok(Some(

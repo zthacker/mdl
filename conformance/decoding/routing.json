@@ -272,6 +272,14 @@
       "error": "unreadable_locator"
     },
     {
+      "name": "an-empty-native-id-from-metadata",
+      "spec": ["decoding.md §3.1", "api.md §1"],
+      "note": "node is empty text, and a native id is never empty, so the alias locator finds nothing usable: unreadable_locator, not a stand-in for an asset named by empty text.",
+      "family": "meta",
+      "message": { "hex": "05", "metadata": { "node": "" }, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
+    },
+    {
       "name": "a-version-locator-choosing-the-first-set",
       "spec": ["decoding.md §3.1", "decoding.md §3.3"],
       "note": "The alias reads bits 0 to 7, the integer 7. The version locator reads fmt, 1, so ver_v1 decodes it: a is the 8 bits after id, 9.",
@@ -408,6 +416,14 @@
       "family": "jver",
       "message": { "json": "{\"id\": 3, \"ver\": \"2\", \"v\": 1, \"w\": 2}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
       "error": "unknown_version"
+    },
+    {
+      "name": "an-empty-native-id-at-a-path",
+      "spec": ["decoding.md §3.1", "decoding.md §3.3", "api.md §1"],
+      "note": "The string at /id is empty, and a native id is never empty, so the alias locator finds nothing usable: unreadable_locator, though the version, 2, chooses a set that would decode the rest.",
+      "family": "jver",
+      "message": { "json": "{\"id\": \"\", \"ver\": 2, \"v\": 1, \"w\": 2}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "unreadable_locator"
     },
     {
       "name": "the-packet-with-the-most-keys",

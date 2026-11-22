@@ -884,6 +884,21 @@ effective_from = "2026-07-01T00:00:00Z"
     assert_eq!(code(bare.binding("pair", &p1, ground())), "missing_set");
     assert_eq!(code(bare.asset("pair", "p1", ground())), "missing_set");
 
+    // Empty text is no native id (spec/api.md §1): no asset, with
+    // bindings or without, and before pair's missing_set, as decoding
+    // refuses an alias that reads it before it reaches the set.
+    let empty = NativeId::from_text("");
+    for lookups in [&runtime, &bare] {
+        assert_eq!(lookups.binding("sat", &empty, ground()).unwrap(), None);
+        assert_eq!(lookups.asset("sat", "", ground()).unwrap(), None);
+    }
+    assert_eq!(bare.binding("pair", &empty, ground()).unwrap(), None);
+    assert_eq!(bare.asset("pair", "", ground()).unwrap(), None);
+    assert_eq!(
+        code(bare.binding("nope", &empty, ground())),
+        "unknown_family"
+    );
+
     // Rows the build doesn't fit: the lookups refuse them as decoding a
     // message does, with the same codes.
     let misfits = r#"mdl_version = "2.0"

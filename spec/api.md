@@ -71,6 +71,12 @@ decimal spelling (no sign but a leading `-`, no leading zeros) within
 −2^63 to 2^64 − 1 is that integer, as `bindings.md` §3 reads native ids;
 any other string is text.
 
+A native id is never empty: empty text names no asset. An alias that
+reads it is `unreadable_locator` (`decoding.md` §3.1), encoding takes it
+as no target (`missing_target`, `encoding.md` §3.3), and `binding` and
+`asset` find no asset for it (§2.6). A decoded command reports a target
+field's text as it is, empty or not (§3.5), as the payload holds it.
+
 ## 2. Operations
 
 ### 2.1 open
@@ -177,7 +183,9 @@ can't be one). Its set is checked as routing checks it (`decoding.md`
 set named for a family whose version locator chooses is
 `unexpected_set`, no set for a family without one `missing_set`, a set
 the build doesn't have `unknown_set`. It's absent when the native id is
-no asset then: no row binds it yet, or its row is retired.
+no asset then: no row binds it yet, or its row is retired, or it's empty
+(§1), with bindings or without, and then its set isn't checked, as
+decoding refuses an alias that reads it before it reaches the set.
 
 `asset` takes a handle, a family, an asset's name and an instant, and
 looks the other way: its result is what the native id that is the asset
@@ -186,7 +194,9 @@ its set checked as `binding`'s is. It's absent when no native id is the
 asset then. A registry may bind one asset to several native ids at once;
 then there's no one destination, and the result is `ambiguous_asset`.
 Without bindings, the asset is the native id its name spells
-(`bindings.md` §3), a stand-in.
+(`bindings.md` §3), a stand-in. An empty name is no asset, with bindings
+or without, its set not checked: no row names one, and no native id is
+empty (§1).
 
 Encoding takes the set and the native id (§2.4), which `asset` gives for a
 family without a version locator. A family with one picks each message's
@@ -361,7 +371,7 @@ An object with these keys:
 | `command` | text: the catalog command |
 | `arguments` | an object of every argument of the command, by name: each value in its argument's type (`encoding.md` §7.4), an integer, a float, a boolean, text (`str`, and an `enum`'s state), bytes, or a list of them for a list argument |
 | `defaulted` | a list of text: the arguments the set doesn't encode, which have their defaults, in the catalog's order |
-| `target` | integer or text (§1): the target's native id, for a packet that holds it; absent otherwise |
+| `target` | integer or text (§1): the target's native id, for a packet that holds it, or a string field's empty text as it is (`encoding.md` §7.4); absent otherwise |
 | `record` | the raw record of the payload: each field's and checksum's raw value, as decoding it gives them |
 
 For a payload an encoder wrote (`encoding.md` §1 to §6), the arguments,
@@ -369,7 +379,8 @@ encoded again with the same set and target, give the same payload
 wherever `encoding.md` §7.4 says they do. A payload written otherwise
 (bytes past its last entry, another JSON spelling or other padding, for
 example) decodes, and its arguments encode again as an encoder writes
-them.
+them, unless its target field holds empty text: that names no target to
+encode them with (§1), so encoding it is `missing_target`.
 
 ## 4. Errors
 
