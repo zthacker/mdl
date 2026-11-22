@@ -7,11 +7,11 @@ mod artifacts;
 pub use artifacts::load;
 use mdl::decode::{Decoded, EventTime, SampleValue};
 use mdl::ir::Frame;
-use mdl_testkit::layout::{self, Expected, Raw, Sample};
+use mdl_testkit::layout::{self, Engineering, Expected, Raw, Sample};
 use proptest::prelude::*;
 
-/// The decoded packet, every raw value, every sample and the event time
-/// are what the testkit packed.
+/// The decoded packet, every raw value, every sample, every engineering
+/// value and the event time are what the testkit packed.
 pub fn check(decoded: &Decoded<'_>, message: &layout::Message) -> Result<(), TestCaseError> {
     prop_assert_eq!(&decoded.packet.name, &message.packet);
     let record: Vec<(String, Raw)> = artifacts::record(&decoded.record);
@@ -29,6 +29,16 @@ pub fn check(decoded: &Decoded<'_>, message: &layout::Message) -> Result<(), Tes
         })
         .collect();
     prop_assert_eq!(&samples, &message.samples);
+    let engineering: Vec<Engineering> = decoded
+        .engineering_values()
+        .into_iter()
+        .map(|(path, engineering)| Engineering {
+            path,
+            value: expected(&engineering.value),
+            quality: engineering.quality.as_str(),
+        })
+        .collect();
+    prop_assert_eq!(&engineering, &message.engineering);
     prop_assert_eq!(&event_time(&decoded.event_time), &message.event_time);
     Ok(())
 }

@@ -27,7 +27,7 @@ pub use faults::{
 };
 pub use fleet::{Fleet, Meta, Sent, fleet};
 pub use json::{json_damaged, json_telemetry};
-use meaning::{UNIT_GROUPS, convert, convert_unit, table};
+use meaning::{UNIT_GROUPS, as_raw, convert, convert_unit, holds, table, unconverted};
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
 use proptest::sample::select;
@@ -60,6 +60,9 @@ pub struct Message {
     pub record: Vec<(String, Raw)>,
     /// Each sample, in record order.
     pub samples: Vec<Sample>,
+    /// Each field's and scalar element's engineering value, in record
+    /// order (§7.5).
+    pub engineering: Vec<Engineering>,
     /// Its ground time, in nanoseconds since 1970-01-01T00:00:00Z.
     pub received: i128,
     pub event_time: EventTime,
@@ -222,6 +225,18 @@ pub struct Sample {
     /// the packet's event time it was taken, in nanoseconds.
     pub time_offset_ns: Option<i64>,
     /// The quality's name, as `spec/decoding.md` §7.3 spells it.
+    pub quality: &'static str,
+}
+
+/// A field's or scalar element's engineering value (`spec/decoding.md`
+/// §7.5): its raw value through its conversion, in its own unit, or its
+/// raw value when it has none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Engineering {
+    /// Its record path, every index included.
+    pub path: String,
+    pub value: Expected,
+    /// The quality's name, by §7.3's rules that need no param.
     pub quality: &'static str,
 }
 
@@ -1849,6 +1864,8 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
     let mut payload = noise;
     payload.truncate(reached.max(floor));
     let samples = packet.body.samples(&values);
+    let mut engineering = header_engineering(packet, &written.record[..written.header]);
+    engineering.extend(packet.body.engineering(&values));
     let record = written.record;
     let Timing {
         count,
@@ -1880,6 +1897,7 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
         payload,
         record,
         samples,
+        engineering,
         received,
         event_time,
         encoding: Encoding::Binary,
@@ -1888,11 +1906,42 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
     }
 }
 
+/// The engineering values of a packet's id, header, correlation and time
+/// fields (§7.5): raw counts, which have no conversion, `invalid` where
+/// one holds a sentinel (§7.2, §8).
+fn header_engineering(packet: &PacketLayout, header: &[(String, Raw)]) -> Vec<Engineering> {
+    header
+        .iter()
+        .map(|(name, raw)| {
+            let correlation = packet.correlation.as_ref();
+            let sentinel = match (name.as_str(), raw) {
+                ("clock", Raw::Uint(n)) => correlation.is_some_and(|c| c.clock_invalid.contains(n)),
+                ("boot", Raw::Uint(n)) => correlation.is_some_and(|c| c.boot_invalid.contains(n)),
+                ("week", Raw::Uint(n)) => packet.week_invalid.contains(n),
+                ("t", raw) => holds(&packet.count_invalid, raw),
+                _ => false,
+            };
+            let (value, quality) = if sentinel {
+                (as_raw(raw), "invalid")
+            } else {
+                unconverted(raw)
+            };
+            Engineering {
+                path: name.clone(),
+                value,
+                quality,
+            }
+        })
+        .collect()
+}
+
 /// A message as [`write_message`] writes it.
 struct Written {
     /// Its record: its header and time fields, then its body's values,
     /// each checksum holding the value written for it.
     record: Vec<(String, Raw)>,
+    /// How many of the record's entries are header and time fields.
+    header: usize,
     /// Every step decoding takes ([`Step`]).
     steps: Vec<Step>,
     /// Where the body ends: `None` when decoding stops inside it.
@@ -1991,11 +2040,13 @@ fn write_message(
     // The body's entries are the packet's: their offsets count from bit 0.
     let end = writer.container(&packet.body.entries, values, 0, packet.body.start, "");
     writer.unreached_checksums(&packet.body.entries);
+    let header = record.len();
     record.extend(writer.record(values));
     let (steps, body_inert) = writer.finish();
     inert.extend(body_inert);
     Written {
         record,
+        header,
         steps,
         end,
         inert,

@@ -24,15 +24,15 @@ use super::composite::{CompositeNode, CompositeSpec, mix};
 use super::condition::{
     Condition, Op, Operand, Selector, WhenSpec, condition_json, leaning, when_spec,
 };
-use super::meaning::sample;
+use super::meaning::{as_raw, engineering, holds, sample, unconverted};
 use super::time::{
     CORRELATION_PACKET, Count, EventTime, Rfc3339, SECOND, Scale, TimeFields, TimeSource,
     boot_source, count_value, epoch, event_time, instant, label, no_reading, received, rfc3339,
     rfc3339_form, time_fields, time_json, time_scale, unit, week_value,
 };
 use super::{
-    Correlation, Encoding, FieldSpec, Form, Kind, Length, Meaning, Message, Meta, Placed, Raw,
-    Sample, Sentinel, Telemetry, Text, Unusable, clock_fields, correlation_spec,
+    Correlation, Encoding, Engineering, FieldSpec, Form, Kind, Length, Meaning, Message, Meta,
+    Placed, Raw, Sample, Sentinel, Telemetry, Text, Unusable, clock_fields, correlation_spec,
     correlation_values, interval, meaning, meaning_json, offset_ns, param_json, raw_value,
     sentinels, type_name,
 };
@@ -1545,6 +1545,7 @@ fn pack_routed(
         payload,
         record: record(set, packet, draft),
         samples: samples(packet, draft),
+        engineering: engineering_values(set, packet, draft),
         received: draft.received,
         event_time: event_time_of(set, packet, draft),
         encoding: Encoding::Json,
@@ -2000,6 +2001,89 @@ fn samples_of(
             }
             (JsonNode::Struct(ty), Fill::Struct(fills)) => {
                 samples_of(&ty.entries, fills, &path, index, samples);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The engineering values a message gives (§7.5): its time fields, `kind`
+/// where a field reads it and a correlation packet's clocks, raw counts
+/// with no conversion, `invalid` where one holds a sentinel; then each
+/// entry's field and scalar element, mapped or not, in record order, a
+/// `null` element giving none (§5.3).
+fn engineering_values(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft) -> Vec<Engineering> {
+    let timing = &packet.timing;
+    let correlation = packet.correlation.as_ref();
+    let mut values = Vec::new();
+    let mut add = |name: &str, raw: Raw, sentinel: bool| {
+        let (value, quality) = if sentinel {
+            (as_raw(&raw), "invalid")
+        } else {
+            unconverted(&raw)
+        };
+        values.push(Engineering {
+            path: name.to_string(),
+            value,
+            quality,
+        });
+    };
+    if let Some(count) = &draft.count {
+        if matches!(set.time, JsonTime::Fields(TimeSource::Gps { .. })) {
+            let week = u64::from(draft.week);
+            add("week", Raw::Uint(week), timing.week_invalid.contains(&week));
+        }
+        add("t", count.clone(), holds(&timing.count_invalid, count));
+    }
+    if let (true, Some((_, key))) = (packet.kind_field, packet.keys.first()) {
+        let raw = match key {
+            Key::Text(text) => Raw::Str(text.clone()),
+            Key::Int(n) => Raw::Int(*n),
+        };
+        add("kind", raw, false);
+    }
+    if let Some((clock, boot)) = draft.clocks {
+        let clock_held = correlation.is_some_and(|c| c.clock_invalid.contains(&clock));
+        let boot_held = correlation.is_some_and(|c| c.boot_invalid.contains(&boot));
+        add("clock", Raw::Uint(clock), clock_held);
+        add("boot", Raw::Uint(boot), boot_held);
+    }
+    engineering_of(&packet.entries, &draft.fills, "", &mut values);
+    values
+}
+
+fn engineering_of(
+    entries: &[JsonEntry],
+    fills: &[Fill],
+    prefix: &str,
+    values: &mut Vec<Engineering>,
+) {
+    for (entry, fill) in entries.iter().zip(fills) {
+        let path = if prefix.is_empty() {
+            entry.name.clone()
+        } else {
+            format!("{prefix}.{}", entry.name)
+        };
+        match (&entry.node, fill) {
+            (JsonNode::Field(field), Fill::Scalar(raw)) => {
+                values.extend(engineering(field, raw, path));
+            }
+            (JsonNode::Array { element, .. }, Fill::Array(items)) => {
+                for (position, item) in items.iter().enumerate() {
+                    let at = format!("{path}[{position}]");
+                    match (element, item) {
+                        (JsonElement::Scalar(element), Some(Element::Scalar(raw))) => {
+                            values.extend(engineering(element, raw, at));
+                        }
+                        (JsonElement::Record(ty), Some(Element::Record(fills))) => {
+                            engineering_of(&ty.entries, fills, &at, values);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            (JsonNode::Struct(ty), Fill::Struct(fills)) => {
+                engineering_of(&ty.entries, fills, &path, values);
             }
             _ => {}
         }

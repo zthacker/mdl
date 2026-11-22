@@ -2,7 +2,7 @@
 //! conversions (`units.md` §4), numeric conversions (§7.1), sentinels
 //! (§7.2) and the sample a field's raw value gives (§7.3).
 
-use super::{Expected, Meaning, Numeric, Placed, Raw, Sample, Sentinel};
+use super::{Engineering, Expected, Meaning, Numeric, Placed, Raw, Sample, Sentinel};
 
 // ---- Units ------------------------------------------------------------------
 
@@ -250,6 +250,78 @@ pub(super) fn member_value(
     } else {
         (x, value, "non_finite")
     }
+}
+
+/// The engineering value of a field's or element's raw value at `path`
+/// (§7.5): its raw value through its conversion, a state's name for
+/// `states`, in the field's own unit, with a quality by the rules of §7.3
+/// that need no param (so never `out_of_range`, and a text field's value
+/// is good whatever its param's states); its raw value when it has no
+/// conversion. None for a `null` element, which is no reading (§5.3).
+pub(super) fn engineering(field: &Placed, raw: &Raw, path: String) -> Option<Engineering> {
+    if matches!(raw, Raw::Null) {
+        return None;
+    }
+    let (value, quality) = if is_sentinel(field, raw) {
+        (as_raw(raw), "invalid")
+    } else {
+        match &field.meaning {
+            Meaning::States(states) => {
+                let integer = match raw {
+                    Raw::Uint(n) => Some(i128::from(*n)),
+                    Raw::Int(n) => Some(i128::from(*n)),
+                    _ => None,
+                };
+                match states.iter().find(|(state, _)| Some(*state) == integer) {
+                    Some((_, name)) => (Expected::Enum(name.clone()), "good"),
+                    None => (as_raw(raw), "unknown_state"),
+                }
+            }
+            Meaning::Number { conversion, .. } if *conversion != Numeric::Plain => {
+                let x = match raw {
+                    Raw::Uint(n) => *n as f64,
+                    Raw::Int(n) => *n as f64,
+                    Raw::Float(x) => *x,
+                    _ => f64::NAN,
+                };
+                if !x.is_finite() {
+                    (as_raw(raw), "non_finite")
+                } else {
+                    match convert(conversion, x) {
+                        None => (as_raw(raw), "out_of_calibration"),
+                        Some(value) if value.is_finite() => (Expected::F64(value), "good"),
+                        Some(_) => (as_raw(raw), "non_finite"),
+                    }
+                }
+            }
+            _ => unconverted(raw),
+        }
+    };
+    Some(Engineering {
+        path,
+        value,
+        quality,
+    })
+}
+
+/// The engineering value of a value with no conversion and no sentinel it
+/// holds: the raw value, `non_finite` when it's NaN or an infinity.
+pub(super) fn unconverted(raw: &Raw) -> (Expected, &'static str) {
+    match raw {
+        Raw::Float(x) if !x.is_finite() => (as_raw(raw), "non_finite"),
+        _ => (as_raw(raw), "good"),
+    }
+}
+
+/// Whether a count holds one of the integer sentinels, compared by value,
+/// a float numerically (§7.2).
+pub(super) fn holds(sentinels: &[i128], raw: &Raw) -> bool {
+    sentinels.iter().any(|n| match raw {
+        Raw::Uint(m) => i128::from(*m) == *n,
+        Raw::Int(m) => i128::from(*m) == *n,
+        Raw::Float(x) => *x == *n as f64,
+        _ => false,
+    })
 }
 
 /// A quality's place in §7.3's order, from the most trustworthy.

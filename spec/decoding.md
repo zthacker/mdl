@@ -600,11 +600,16 @@ latitude, longitude and altitude, a source's frame only. So:
 ### 7.5 Engineering values
 
 Any field or scalar element, mapped or not, has an engineering value: its
-raw value through its conversion (a state name for `states`), with a
-quality by the same rules, or its raw value if it has no conversion. It
-is in the field's own unit, not a param's, and as it has no param,
-`out_of_range`, which is about a param's type, never applies to it. A
-JSON array's `null` element, which is no reading (§5.3), has none.
+raw value through its conversion (a state name for `states`), or its raw
+value if it has no conversion, in the field's own unit, not a param's.
+Its quality follows the rules of §7.3 that need no param, with a
+conversion or without: `invalid` for a sentinel, `non_finite` for NaN or
+an infinity, and `out_of_calibration` and `unknown_state` from its own
+conversion; never `out_of_range`, nor a string's `unknown_state`, which
+are about a param. When its quality isn't `good`, its value is the raw
+value, as a sample's is (§7.3). A JSON array's `null` element, which is
+no reading (§5.3), has none, and neither has a checksum, which is no
+field.
 Implementations SHOULD compute these on request, not while decoding.
 
 ## 8. Event time

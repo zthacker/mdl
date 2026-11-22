@@ -27,12 +27,12 @@ use super::condition::{
     Condition, Op, Operand, Selector, Test, WhenSpec, condition_json, leaning, when_spec,
 };
 use super::faults::Place;
-use super::meaning::sample;
+use super::meaning::{engineering, sample};
 use super::{
-    Failure, FieldSpec, Form, Kind, Length, Meaning, Placed, Problem, Raw, Sample, Sentinel, Slot,
-    Text, bytes_value, encode, field_json, field_spec, fit, inside_one_byte, interval, kind,
-    length_field, meaning, offset_ns, param_json, put_bits, raw_value, remaining_kind, scalar_json,
-    sentinels, spec_of, text_value,
+    Engineering, Failure, FieldSpec, Form, Kind, Length, Meaning, Placed, Problem, Raw, Sample,
+    Sentinel, Slot, Text, bytes_value, encode, field_json, field_spec, fit, inside_one_byte,
+    interval, kind, length_field, meaning, offset_ns, param_json, put_bits, raw_value,
+    remaining_kind, scalar_json, sentinels, spec_of, text_value,
 };
 use crate::checksum::{Algorithm, algorithm};
 use composite::{composite_source, resolve};
@@ -2332,6 +2332,51 @@ impl Body {
         composites.sort_by(|a, b| a.param().cmp(b.param()));
         samples.extend(composites.into_iter().filter_map(|c| c.sample(record)));
         samples
+    }
+
+    /// The engineering values a message's values give (§7.5): each field
+    /// and scalar element, mapped or not, in record order.
+    pub(super) fn engineering(&self, record: &[(String, Raw)]) -> Vec<Engineering> {
+        let mut values = Vec::new();
+        engineering_of(&self.entries, record, "", &mut values);
+        values
+    }
+}
+
+/// Engineering values of a container's values, at paths under `prefix`.
+fn engineering_of(
+    entries: &[Entry],
+    record: &[(String, Raw)],
+    prefix: &str,
+    values: &mut Vec<Engineering>,
+) {
+    for (entry, (name, raw)) in present(entries, record) {
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        match (&entry.node, raw) {
+            (Node::Field(field), raw) => values.extend(engineering(field, raw, path)),
+            (Node::Array(array), Raw::Array(items)) => {
+                for (position, item) in items.iter().enumerate() {
+                    let at = format!("{path}[{position}]");
+                    match (&array.element, item) {
+                        (ElementNode::Scalar(element), raw) => {
+                            values.extend(engineering(element, raw, at));
+                        }
+                        (ElementNode::Struct(ty), Raw::Record(fields)) => {
+                            engineering_of(&ty.entries, fields, &at, values);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            (Node::Struct(node), Raw::Record(fields)) => {
+                engineering_of(&node.ty.entries, fields, &path, values);
+            }
+            _ => {}
+        }
     }
 }
 
