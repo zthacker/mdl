@@ -80,18 +80,21 @@ impl Validated {
 }
 
 /// Check everything; a `Validated` bundle only if nothing is wrong. This
-/// is the validation a build makes, which also refuses each spelling a
-/// release before 1.0 began refusing ([`validate_stored`]).
+/// is the validation a build makes, which also refuses what a release
+/// before 1.0 began refusing after an earlier one built it
+/// ([`validate_stored`]).
 pub fn validate(bundle: Bundle) -> Result<Validated, Diagnostics> {
     let report = check(&bundle);
     report.finish(Validated { bundle })
 }
 
 /// A stored build's validation, as a runtime opens it: every check
-/// [`validate`] makes, but the spellings a release before 1.0 began
-/// refusing after an earlier one accepted them (`spec/compatibility.md`
-/// §7). Each means what the IR's one spelling does, so a store an earlier
-/// release built still opens.
+/// [`validate`] makes, but those a release before 1.0 began making after
+/// an earlier one built what they refuse (`spec/compatibility.md` §7): a
+/// second spelling of what the IR means one way, which means what its one
+/// spelling does, and a definition that can fail to do what it's for (a
+/// checksum that can cover no bytes), which is read as it was written. A
+/// store an earlier release built still opens.
 pub fn validate_stored(bundle: Bundle) -> Result<Validated, Diagnostics> {
     let report = check(&bundle);
     report.finish_stored(Validated { bundle })

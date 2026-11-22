@@ -5672,3 +5672,30 @@ fn error_detection_in_a_values_encoding_is_refused() {
         )
     );
 }
+
+/// A check counted from where its own value starts covers no bytes. The
+/// import writes it as the document says, and validation refuses it at
+/// bitsFromReference, as it would a checksum from any frontend.
+#[test]
+fn a_check_over_no_bytes_is_refused_where_its_start_is_given() {
+    let text = checked(
+        r#"<CRC width="16" bitsFromReference="72" parameterRef="Crc16"><Polynomial>1021</Polynomial></CRC>"#,
+        &["Crc16"],
+    );
+    let (sources, result) = import_all(&[("sat.xml", &text)]);
+    let parsed = result.unwrap_or_else(|d| panic!("{:#?}", shown(&sources, &d)));
+    let diagnostics = parsed.map.locate_all(&validate(parsed.bundle).unwrap_err());
+    let shown = shown(&sources, &diagnostics);
+    assert_eq!(shown.len(), 1, "{shown:#?}");
+    assert_eq!(
+        (shown[0].1.as_str(), shown[0].3.as_str()),
+        (
+            "checksum",
+            "a checksum covers at least one byte before its own start (bit 72), so from_bits \
+             can't be 72"
+        )
+    );
+    let span = diagnostics[0].span.unwrap();
+    assert_eq!(&text[span.start..span.end], "72");
+    assert!(text[..span.start].ends_with(r#"<CRC width="16" bitsFromReference=""#));
+}

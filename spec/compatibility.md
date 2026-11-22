@@ -103,13 +103,21 @@ first, and a wrong value stopped at open is better than one stored. Such
 a refusal is `invalid_build` with the problem's own code among its
 problems, and the release notes name the rule and why.
 
-Before 1.0, a release may also refuse to build a definition only
-because it spells something two ways where the IR means one, such as a
-value written out that is already its default, so that one meaning keeps
-one digest. Its release notes name each such rule. A runtime still opens
-a store an earlier release built with such a spelling, which means what
-the IR's one spelling does. From 1.0 on, a build refuses only what the
-rule above does.
+Before 1.0, a release may also refuse to build a definition it doesn't
+refuse in a store:
+
+- one that spells something two ways where the IR means one, such as a
+  value written out that is already its default, so that one meaning
+  keeps one digest. A store an earlier release built with such a
+  spelling means what the IR's one spelling does;
+- one that can fail to do what it's for in a message it allows, such as
+  a checksum that can cover no bytes ([decoding.md](decoding.md) §5.6),
+  which checks nothing there. A store an earlier release built with one
+  is read as that release read it.
+
+Its release notes name each such rule, and a runtime still opens a store
+an earlier release built with what it refuses. From 1.0 on, a build
+refuses only what the rule above does.
 
 So upgrading the runtime, or a binding, within a major IR version:
 

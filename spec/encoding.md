@@ -548,4 +548,4 @@ integer's one decimal spelling is that integer).
 | `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `unsupported_state`, `out_of_range`, `not_default`, `list_length` | an argument (§2, §7.4); the error names it, and a list's value by its index |
 | `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length`, `bad_count` | a field or array (§3); the error names it, and an array's element by its index |
 | `no_packet`, `wrong_constant`, and the routing and entry codes of `decoding.md` | decoding a command (§7) |
-| `invalid_layout` | a definition that didn't pass validation; never for a validated one |
+| `invalid_layout` | a definition that didn't pass validation; never for one a build accepts, though a store an earlier release built can give it for a checksum that starts before its `from_bits` (`decoding.md` §5.6) |

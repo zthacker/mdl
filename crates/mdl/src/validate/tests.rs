@@ -4556,6 +4556,141 @@ fn checksums_are_computable_as_written() {
     );
 }
 
+/// What a runtime refuses opening a stored build of the fixture after
+/// `edit`: what a build refuses but its build refusals.
+fn stored_problems(edit: impl FnOnce(&mut Value)) -> Vec<(Code, String)> {
+    let mut value = fixture();
+    edit(&mut value);
+    match super::validate_stored(bundle(value)) {
+        Ok(_) => Vec::new(),
+        Err(diagnostics) => diagnostics
+            .iter()
+            .map(|d| (d.code, d.path.clone()))
+            .collect(),
+    }
+}
+
+/// An edit giving the last entry of vendor_x_v2's command packet `command`
+/// these keys.
+fn last_entry_keys(command: usize, keys: Value) -> impl FnOnce(&mut Value) {
+    move |v| {
+        let entries = set_x(v)["commands"][command]["entries"]
+            .as_array_mut()
+            .unwrap();
+        let last = entries.last_mut().unwrap();
+        for (key, value) in keys.as_object().unwrap() {
+            last[key] = value.clone();
+        }
+    }
+}
+
+#[test]
+fn a_checksum_covers_a_byte_wherever_it_can_start() {
+    // SET_MODE's check starts at bit 32 in every message. LOAD_TABLE's crc
+    // follows a table of 0 bytes or more, so it can start at bit 32 or
+    // later.
+    let (check, check_with) = ("/sets/0/commands/1/entries/3", |keys| {
+        last_entry_keys(1, keys)
+    });
+    let (crc, crc_with) = ("/sets/0/commands/0/entries/4", |keys| {
+        last_entry_keys(0, keys)
+    });
+    let none: Vec<(Code, String)> = Vec::new();
+    let refused = |path: &str| vec![(Code::Checksum, format!("{path}/from_bits"))];
+    for from in [0, 8, 24] {
+        assert_eq!(problems(check_with(json!({ "from_bits": from }))), none);
+        assert_eq!(problems(crc_with(json!({ "from_bits": from }))), none);
+    }
+    // Covering from its start, or from past it, covers nothing: a build
+    // refuses it, and a store an earlier release built still opens.
+    for from in [32, 40] {
+        let from = json!({ "from_bits": from });
+        assert_eq!(problems(check_with(from.clone())), refused(check));
+        assert_eq!(stored_problems(check_with(from.clone())), none);
+        assert_eq!(problems(crc_with(from.clone())), refused(crc));
+        assert_eq!(stored_problems(crc_with(from)), none);
+    }
+    // At its own offset, likewise. Past that was always refused, and still
+    // is when a store is opened.
+    assert_eq!(problems(check_with(json!({ "offset_bits": 32 }))), none);
+    let at = json!({ "offset_bits": 32, "from_bits": 32 });
+    assert_eq!(problems(check_with(at.clone())), refused(check));
+    assert_eq!(stored_problems(check_with(at)), none);
+    let past = json!({ "offset_bits": 32, "from_bits": 40 });
+    assert_eq!(problems(check_with(past.clone())), refused(check));
+    assert_eq!(stored_problems(check_with(past.clone())), refused(check));
+    // That needs no layout, so it's reported even when the set's family,
+    // which a layout needs, is unknown.
+    let unknown = |v: &mut Value| set_x(v)["family"] = json!("nope");
+    let without = problems(unknown);
+    let with = problems(|v| {
+        unknown(v);
+        check_with(past)(v);
+    });
+    assert_eq!(with.len(), without.len() + 1);
+    assert!(with.contains(&refused(check)[0]), "{with:?}");
+    // Without from_bits, it covers from the packet's start, so one that
+    // can start there covers nothing. It's reported at the entry.
+    let first = |v: &mut Value| {
+        v["sets"][7]["packets"][0]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .insert(
+                0,
+                json!({ "kind": "checksum", "name": "x", "algorithm": { "kind": "xor" } }),
+            );
+    };
+    assert_eq!(
+        problems(first),
+        [(Code::Checksum, "/sets/7/packets/0/entries/0".to_string())]
+    );
+    assert_eq!(stored_problems(first), none);
+    // In a struct type, where a checksum is refused already, it isn't
+    // judged again.
+    assert_one(Code::Checksum, "/sets/0/types/vec3_i32/entries/0", |v| {
+        set_x(v)["types"]["vec3_i32"]["entries"]
+            .as_array_mut()
+            .unwrap()
+            .insert(0, crc16());
+    });
+    // What each says about where it starts.
+    assert_eq!(
+        messages(check_with(json!({ "from_bits": 40 }))),
+        [
+            "a checksum covers at least one byte before its own start (bit 32), so from_bits \
+          can't be 40"
+        ]
+    );
+    assert_eq!(
+        messages(crc_with(json!({ "from_bits": 32 }))),
+        [
+            "a checksum covers at least one byte before its own start, which can be bit 32, so \
+          from_bits can't be 32"
+        ]
+    );
+    assert_eq!(
+        messages(first),
+        [
+            "a checksum covers at least one byte before its own start (bit 0), counted from the \
+          packet's start without from_bits"
+        ]
+    );
+    // Where an error leaves what's before it unplaced, a checksum without
+    // an offset can't be judged.
+    let unplaced = |v: &mut Value| {
+        load_table_packet(v)["entries"][3]["length"]["field"] = json!("nope");
+    };
+    let reported = problems(unplaced);
+    assert_ne!(reported, none);
+    assert_eq!(
+        problems(|v| {
+            unplaced(v);
+            crc_with(json!({ "from_bits": 40 }))(v);
+        }),
+        reported
+    );
+}
+
 #[test]
 fn checksums_sit_at_a_binary_packets_top_level() {
     assert_one(Code::Checksum, "/sets/0/types/vec3_i32/entries/3", |v| {

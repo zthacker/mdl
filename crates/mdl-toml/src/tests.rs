@@ -836,3 +836,57 @@ proptest! {
         let _ = read(sources.iter());
     }
 }
+
+/// A checksum over no bytes is refused when building, at its from_bits,
+/// or at its table when it has none and covers from the packet's start.
+#[test]
+fn a_checksum_over_no_bytes_is_reported_where_it_says_so() {
+    let text = r#"mdl_version = "2.0"
+
+[catalog]
+params = {}
+
+[[families]]
+name = "sat"
+encoding = "binary"
+byte_order = "big"
+alias = { kind = "fixed", value = "S1" }
+
+[[sets]]
+name = "sat_v1"
+family = "sat"
+
+[[sets.packets]]
+name = "HK"
+
+[[sets.packets.entries]]
+kind = "checksum"
+name = "first"
+algorithm = { kind = "xor" }
+
+[[sets.packets.entries]]
+kind = "field"
+name = "v"
+type = "uint"
+size_bits = 8
+
+[[sets.packets.entries]]
+kind = "checksum"
+name = "last"
+from_bits = 16
+algorithm = { kind = "xor" }
+"#;
+    let sources = sources(&[("sat.toml", text)]);
+    let parsed = read(sources.iter()).unwrap();
+    let diagnostics = validate(parsed.bundle).unwrap_err();
+    let located = parsed.map.locate_all(&diagnostics);
+    let shown: Vec<(&str, Option<usize>)> = located
+        .iter()
+        .map(|d| (d.code, d.span.map(|span| span.start)))
+        .collect();
+    let first = text.find("[[sets.packets.entries]]");
+    let from = text
+        .find("from_bits = 16")
+        .map(|at| at + "from_bits = ".len());
+    assert_eq!(shown, [("checksum", first), ("checksum", from)]);
+}

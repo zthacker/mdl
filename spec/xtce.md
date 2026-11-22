@@ -367,7 +367,9 @@ that inherits from itself is an error [`xtce.invalid`].
   - An `XOR` is MDL's `xor`. A `Parity` is unsupported: it's one bit.
   - A check covers the bytes from `bitsFromReference` bits after the
     start of the packet (whole bytes, else unsupported) up to its own
-    value. XTCE doesn't say where a check's bytes end, so its parameter
+    value, at least one, as every MDL checksum does (`decoding.md` §5.6):
+    a check counted from where its value starts, or past it, is
+    imported as written and refused when building. XTCE doesn't say where a check's bytes end, so its parameter
     is a field at the packet's top level that only other checks follow
     in bits (each covering those before it, as MDL's do); anything else
     after it is unsupported. Entries follow one another in the order

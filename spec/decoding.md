@@ -390,6 +390,16 @@ start. A decoder computes the checksum of those bytes; if the stored value
 isn't one the algorithm accepts for it (the computed value, for all but
 `iso8473`), the message is [`bad_checksum`].
 
+It covers at least one byte in every message: `from_bits` MUST be below
+its *earliest start*, which is its `offset_bits` if it has one, else 0
+for a packet's first entry, else the earliest start of the entry before
+it plus that entry's smallest size (nothing, for an entry with `when`).
+A build MUST refuse any other (`checksum`). A store an earlier release
+built with one still opens ([compatibility.md](compatibility.md) §7),
+and the checksum is read as written: over no bytes, the stored value is
+compared with what the algorithm gives for none, and a message where it
+starts before `from_bits` is [`invalid_layout`].
+
 A checksum at a static position (§5.2) is verified before any other entry
 of the packet is extracted, so damage anywhere it covers is
 `bad_checksum`, not whatever error the damaged entry would cause; those
@@ -745,4 +755,4 @@ them across restarts.
 | `too_short` | length (§5.1) |
 | `past_end`, `no_terminator`, `invalid_text`, `empty_element`, `bad_length`, `missing_value`, `wrong_type`, `out_of_range`, `bad_checksum` | an entry (§5); the error names the entry's path, which is empty for the document (§5.3) |
 | `invalid_time` | event time (§8) |
-| `invalid_layout` | a definition that didn't pass validation; never for a validated one |
+| `invalid_layout` | a definition that didn't pass validation; never for one a build accepts, though a store an earlier release built can give it for a checksum that starts before its `from_bits` (§5.6) |

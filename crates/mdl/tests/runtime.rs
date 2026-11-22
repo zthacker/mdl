@@ -446,6 +446,64 @@ fn a_store_an_earlier_release_built_with_a_refused_spelling_still_opens() {
     assert_eq!(codes, ["explicit_default"]);
 }
 
+/// A checksum that covers no bytes, which a release before 1.0 began
+/// refusing when building after an earlier one built it: it can't do what
+/// it says (`spec/compatibility.md` §7). The store still opens, and the
+/// checksum is read as written (`spec/decoding.md` §5.6).
+#[test]
+fn a_store_an_earlier_release_built_with_a_checksum_over_no_bytes_still_opens() {
+    // CRC-16/IBM-3740, whose value for no bytes is its init.
+    let crc = |from_bits: u64| {
+        json!({ "kind": "checksum", "name": "crc", "from_bits": from_bits,
+                "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535,
+                               "reflect_in": false, "reflect_out": false, "xor_out": 0 } })
+    };
+    let push = |set: &mut Json, kind: &str, entry: Json| {
+        set[kind][0]["entries"].as_array_mut().unwrap().push(entry);
+    };
+    let decode = |runtime: &Runtime, check: [u8; 2]| {
+        let mut payload = hk();
+        payload.extend_from_slice(&check);
+        runtime.decode("sat", &Message::new(Payload::Binary(&payload), ground()))
+    };
+    let reset = CommandRequest::new("sat_v1", "eps.reset");
+    // From where each starts, after HK's tag and RESET's delay: nothing.
+    let (dir, artifacts) = store_dir("empty_checksum");
+    replace_set(&dir, &artifacts, |set| {
+        push(&mut set["set"], "packets", crc(184));
+        push(&mut set["set"], "commands", crc(24));
+    });
+    let runtime = Runtime::open(&dir, None).unwrap();
+    assert!(decode(&runtime, [0xff, 0xff]).is_ok());
+    assert_eq!(code(decode(&runtime, [0x12, 0x34])), "bad_checksum");
+    let encoded = runtime.encode("sat", &reset).unwrap();
+    assert_eq!(encoded.payload, [9, 0, 5, 0xff, 0xff]);
+    // From past where each starts: every message is invalid_layout.
+    replace_set(&dir, &artifacts, |set| {
+        push(&mut set["set"], "packets", crc(192));
+        push(&mut set["set"], "commands", crc(32));
+    });
+    let runtime = Runtime::open(&dir, None).unwrap();
+    assert_eq!(code(decode(&runtime, [0xff, 0xff])), "invalid_layout");
+    assert_eq!(code(runtime.encode("sat", &reset)), "invalid_layout");
+    // A build of the same definitions refuses each.
+    let mut definitions = bundle();
+    push(&mut definitions["sets"][0], "packets", crc(184));
+    push(&mut definitions["sets"][0], "commands", crc(32));
+    let refused = validate(read_bundle_value(&definitions).unwrap().value).unwrap_err();
+    let problems: Vec<(&str, &str)> = refused
+        .iter()
+        .map(|d| (d.code.as_str(), d.path.as_str()))
+        .collect();
+    assert_eq!(
+        problems,
+        [
+            ("checksum", "/sets/0/commands/0/entries/2/from_bits"),
+            ("checksum", "/sets/0/packets/0/entries/5/from_bits"),
+        ]
+    );
+}
+
 #[test]
 fn without_bindings_each_native_id_stands_for_an_asset() {
     let (dir, _) = store_dir("stand_ins");

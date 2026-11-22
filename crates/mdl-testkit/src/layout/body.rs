@@ -116,21 +116,24 @@ struct ChecksumSpec {
     algorithm: Algorithm,
     cover: Cover,
     /// Whether an `iso8473` checksum that computes 0xFFFF holds 0x0000,
-    /// which decoders accept too (§5.6). Over no bytes it computes that.
+    /// which decoders accept too (§5.6). Over bytes that are all 0, such
+    /// as padding, it computes that.
     zero: bool,
 }
 
-/// What a checksum covers.
+/// What a checksum covers: at least one byte before where it starts at
+/// the earliest, which validation requires (§5.6). A body starts after
+/// the packet's id, so the packet's start is always before it.
 #[derive(Debug, Clone)]
 enum Cover {
     /// The packet from its start, `from_bits` left out.
     All,
-    /// From a byte this picks, up to where it starts at the earliest,
+    /// From a byte this picks before where it starts at the earliest,
     /// spelled as `from_bits`.
     From(Index),
-    /// From where it starts at the earliest: nothing, where its position
-    /// is static.
-    Nothing,
+    /// A byte of padding put right before it, from where that byte starts
+    /// at the earliest: only that byte, where its position is static.
+    Padding,
 }
 
 /// A packet's `length` (§5.1), before its body is laid out, which decides
@@ -300,7 +303,7 @@ fn checksum_spec() -> BoxedStrategy<ChecksumSpec> {
     let cover = prop_oneof![
         4 => Just(Cover::All),
         3 => any::<Index>().prop_map(Cover::From),
-        1 => Just(Cover::Nothing),
+        1 => Just(Cover::Padding),
     ];
     (algorithm(), cover, any::<bool>())
         .prop_map(|(algorithm, cover, zero)| ChecksumSpec {
@@ -566,6 +569,10 @@ pub(super) struct ChecksumNode {
     little: bool,
     /// Whether an `iso8473` checksum that computes 0xFFFF holds 0x0000.
     zero: bool,
+    /// Whether the byte right before it is padding it covers, written as
+    /// 0 rather than noise: over that byte alone, an `iso8473` checksum
+    /// computes 0xFFFF.
+    padded: bool,
 }
 
 impl ChecksumNode {
@@ -965,26 +972,36 @@ impl Placer {
     }
 
     /// A checksum (§5.6), on a byte: at an offset if one is pending, which
-    /// is rounded up to a byte so the checksum takes it. It covers the
-    /// packet from its start, or from a byte up to where it starts at the
-    /// earliest. Its position is static when what's before it has static
-    /// positions and exact sizes, or it has an offset (§5.2).
+    /// is rounded up to a byte so the checksum, or the padding it covers,
+    /// takes it. It covers the packet from its start, from a byte before
+    /// where it starts at the earliest, or a byte of padding before it. Its
+    /// position is static when what's before it has static positions and
+    /// exact sizes, or it has an offset (§5.2).
     fn checksum(&mut self, name: String, spec: ChecksumSpec) {
-        // The earliest it starts: where its offset puts it, if it has one.
-        let least = if self.pending_offset {
+        if self.pending_offset {
             self.at = self.at.next_multiple_of(8);
-            self.at
         } else {
             self.pad_to_byte();
+        }
+        if let Cover::Padding = spec.cover {
+            self.push(Node::Padding(8), None);
+            self.at += 8;
+        }
+        // The earliest it starts: where its offset puts it, if it has one.
+        let least = if self.pending_offset {
+            self.at
+        } else {
             self.least_at()
         };
         let from = match spec.cover {
             Cover::All => None,
+            // A body starts after the packet's id, so there's a byte to
+            // pick; were there none, validation would refuse the layout.
             Cover::From(index) => {
                 let bytes = usize::try_from(least / 8).unwrap_or(0);
-                Some(8 * index.index(bytes + 1) as u64)
+                Some(8 * index.index(bytes.max(1)) as u64)
             }
-            Cover::Nothing => Some(least),
+            Cover::Padding => Some(least - 8),
         };
         let bits = u64::from(spec.algorithm.bits());
         let node = ChecksumNode {
@@ -995,6 +1012,7 @@ impl Placer {
             fixed: self.exact.then_some(self.at),
             little: self.little,
             zero: spec.zero,
+            padded: matches!(spec.cover, Cover::Padding),
         };
         self.push(Node::Checksum(node), None);
         self.at += bits;
@@ -1911,8 +1929,12 @@ impl<'p> Writer<'p> {
     /// Writes a checksum's value at `at`, worked out over the bytes it
     /// covers as they are. They're all written by now: entries are written
     /// in order, and none at an offset is written before one already
-    /// written.
+    /// written. The padding right before it, if it covers one, is cleared
+    /// first; a checksum before it covers none of it.
     fn sum(&mut self, node: &ChecksumNode, at: u64, path: &str) {
+        if node.padded {
+            self.payload[(at / 8 - 1) as usize] = 0;
+        }
         let covered = &self.payload[(node.from / 8) as usize..(at / 8) as usize];
         let mut value = node.algorithm.compute(covered);
         if node.zero && node.algorithm == Algorithm::Iso8473 && value == 0xffff {

@@ -1218,7 +1218,9 @@ fn check_entries(
 }
 
 /// A checksum covers whole bytes of a packet up to its own start, with
-/// parameters that fit its width.
+/// parameters that fit its width. That it covers at least one wherever
+/// the entries before it put it is checked with the layout, which knows
+/// where that can be.
 fn check_checksum(checksum: &ChecksumEntry, top_level: bool, place: &Place, report: &mut Report) {
     if !top_level {
         report.error(

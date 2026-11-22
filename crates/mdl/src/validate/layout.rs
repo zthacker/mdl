@@ -43,8 +43,9 @@ use super::rules::{MAX_SAFE_INTEGER, check_int, check_integer_spelling, integer_
 use crate::bits::IntForm;
 use crate::diagnostics::{Code, Place, Report};
 use crate::ir::{
-    ArrayEntry, ByteLength, ByteOrder, CompareOp, Condition, Conversion, Count, Element, Entry,
-    Field, FromField, Length, Scalar, ScalarElement, ScalarType, Signed, StructType, TextEncoding,
+    ArrayEntry, ByteLength, ByteOrder, ChecksumEntry, CompareOp, Condition, Conversion, Count,
+    Element, Entry, Field, FromField, Length, Scalar, ScalarElement, ScalarType, Signed,
+    StructType, TextEncoding,
 };
 use crate::layout::Placement;
 
@@ -382,6 +383,14 @@ impl<'a> Layout<'a> {
                 }
                 None => (cursor, residues),
             };
+            // A checksum in a struct type is refused already. Its start is
+            // known after an error only where its offset gives it.
+            if let Entry::Checksum(checksum) = entry
+                && !in_struct
+                && (known || checksum.offset_bits.is_some())
+            {
+                check_coverage(checksum, start, &entry_place, report);
+            }
             let facts = self.entry_facts(entry, &scope, &entry_place, report);
             remember(entry, &mut scope);
             let Some(facts) = facts else {
@@ -1325,6 +1334,52 @@ fn report_overlaps(entries: &[Entry], extents: &[Extent], container: &Place, rep
             &entry_place(container, later, &entries[later]),
             format!("{later_name} {verb} {earlier_name}: they can read the same bits"),
         );
+    }
+}
+
+/// A checksum covers at least one byte before its own start, from
+/// `from_bits` or the packet's start, wherever the entries before it put
+/// it: `from_bits` is below the earliest bit it can start at
+/// (decoding.md §5.6). Every release refused a `from_bits` past the
+/// checksum's own `offset_bits`, which set.rs reports with its other
+/// rules, in a stored build too. The rest of the rule came later, and a
+/// store an earlier release built with what it refuses is read as written
+/// (`compatibility.md` §7): a checksum of no bytes, or `invalid_layout` for
+/// a message where it starts before `from_bits`.
+fn check_coverage(
+    checksum: &ChecksumEntry,
+    (earliest, latest): (u64, Option<u64>),
+    place: &Place,
+    report: &mut Report,
+) {
+    let from = checksum.from_bits.map_or(0, u64::from);
+    let past_offset = checksum
+        .offset_bits
+        .is_some_and(|offset| from > u64::from(offset));
+    if from < earliest || past_offset {
+        return;
+    }
+    let start = if latest == Some(earliest) {
+        format!("its own start (bit {earliest})")
+    } else {
+        format!("its own start, which can be bit {earliest}")
+    };
+    match checksum.from_bits {
+        Some(_) => report.build_refusal(
+            Code::Checksum,
+            &place.key("from_bits"),
+            format!(
+                "a checksum covers at least one byte before {start}, so from_bits can't be {from}"
+            ),
+        ),
+        None => report.build_refusal(
+            Code::Checksum,
+            place,
+            format!(
+                "a checksum covers at least one byte before {start}, counted from the packet's \
+                 start without from_bits"
+            ),
+        ),
     }
 }
 
