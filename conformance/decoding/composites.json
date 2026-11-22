@@ -1,0 +1,268 @@
+{
+  "about": "Composites: a vector and a quaternion from their members, through conversions and into the param's unit, in the source's frame; a geodetic position's latitude and longitude in degrees; no sample when a member is absent; and a composite's quality from its least trustworthy member.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {
+      "params": {
+        "c.att": { "type": "quat", "frame": "BODY" },
+        "c.pos": { "type": "vec3", "unit": "m", "frame": "ECEF" }
+      }
+    },
+    "families": [
+      {
+        "name": "nav",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "nav-1" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "nav_v1",
+        "family": "nav",
+        "packets": [
+          {
+            "name": "POS",
+            "identify": { "id": 1 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "px", "type": "int", "size_bits": 16, "unit": "km" },
+              { "kind": "field", "name": "py", "type": "int", "size_bits": 16, "unit": "km" },
+              { "kind": "field", "name": "pz", "type": "int", "size_bits": 16, "unit": "km", "invalid": [-32768] }
+            ],
+            "composites": [
+              { "canonical": "c.pos", "frame": "ECI_J2000", "members": ["px", "py", "pz"] }
+            ]
+          },
+          {
+            "name": "OPTZ",
+            "identify": { "id": 2 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "has_z", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "px", "type": "int", "size_bits": 16, "unit": "km" },
+              { "kind": "field", "name": "py", "type": "int", "size_bits": 16, "unit": "km" },
+              {
+                "kind": "field",
+                "name": "pz",
+                "type": "int",
+                "size_bits": 16,
+                "unit": "km",
+                "when": { "kind": "compare", "field": "has_z", "op": "eq", "value": 1 }
+              }
+            ],
+            "composites": [
+              { "canonical": "c.pos", "frame": "ECEF", "members": ["px", "py", "pz"] }
+            ]
+          },
+          {
+            "name": "ATT",
+            "identify": { "id": 3 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "array",
+                "name": "q",
+                "count": { "kind": "fixed", "count": 4 },
+                "element": { "kind": "scalar", "type": "float", "size_bits": 32 }
+              }
+            ],
+            "composites": [
+              { "canonical": "c.att", "frame": "BODY", "members": ["q[0]", "q[1]", "q[2]", "q[3]"] }
+            ]
+          },
+          {
+            "name": "GEO",
+            "identify": { "id": 4 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "lat",
+                "type": "int",
+                "size_bits": 32,
+                "unit": "rad",
+                "conversion": { "kind": "linear", "scale": 1e-6, "offset": 0 }
+              },
+              {
+                "kind": "field",
+                "name": "lon",
+                "type": "int",
+                "size_bits": 32,
+                "unit": "rad",
+                "conversion": { "kind": "linear", "scale": 1e-6, "offset": 0 }
+              },
+              { "kind": "field", "name": "alt", "type": "int", "size_bits": 32, "unit": "m" }
+            ],
+            "composites": [
+              { "canonical": "c.pos", "frame": "GEODETIC", "members": ["lat", "lon", "alt"] }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "a-vector-in-its-sources-frame",
+      "spec": ["decoding.md §7.4", "units.md §4", "api.md §3.1"],
+      "note": "px, py, pz are 1, -2 and 3 km. Each becomes a binary64 and converts into the param's unit, m: (1 x 1000) / 1 = 1000, and so on. The composite keeps its source's frame, ECI_J2000, which converts into the param's ECEF. Its path joins the members' paths with commas, and it has no index or time offset.",
+      "family": "nav",
+      "message": { "hex": "01 00 01 ff fe 00 03", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "nav",
+        "native_id": "nav-1",
+        "asset": "nav-1",
+        "stand_in": true,
+        "set": "nav_v1",
+        "packet": "POS",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          {
+            "param": "c.pos",
+            "value": { "frame": "ECI_J2000", "x": 1000.0, "y": -2000.0, "z": 3000.0 },
+            "unit": "m",
+            "path": "px,py,pz",
+            "index": null,
+            "time_offset_ns": null,
+            "quality": "good"
+          }
+        ],
+        "record": { "id": 1, "px": 1, "py": -2, "pz": 3 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "px", "value": 1, "quality": "good" },
+          { "path": "py", "value": -2, "quality": "good" },
+          { "path": "pz", "value": 3, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-member-that-isnt-good",
+      "spec": ["decoding.md §7.1", "decoding.md §7.2", "decoding.md §7.4", "api.md §3.1"],
+      "note": "pz is -32768, its sentinel, so pz is invalid. A composite's quality is that of its least trustworthy member, invalid, and then every member is its raw value as a binary64, not converted into m: 1.0, -2.0 and -32768.0.",
+      "family": "nav",
+      "message": { "hex": "01 00 01 ff fe 80 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "nav",
+        "native_id": "nav-1",
+        "asset": "nav-1",
+        "stand_in": true,
+        "set": "nav_v1",
+        "packet": "POS",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          {
+            "param": "c.pos",
+            "value": { "frame": "ECI_J2000", "x": 1.0, "y": -2.0, "z": -32768.0 },
+            "unit": "m",
+            "path": "px,py,pz",
+            "index": null,
+            "time_offset_ns": null,
+            "quality": "invalid"
+          }
+        ],
+        "record": { "id": 1, "px": 1, "py": -2, "pz": -32768 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "px", "value": 1, "quality": "good" },
+          { "path": "py", "value": -2, "quality": "good" },
+          { "path": "pz", "value": -32768, "quality": "invalid" }
+        ]
+      }
+    },
+    {
+      "name": "no-sample-when-a-member-is-absent",
+      "spec": ["decoding.md §5.2", "decoding.md §7.4"],
+      "note": "has_z is 0, so pz's condition fails and pz is absent. A composite with an absent member gives no sample.",
+      "family": "nav",
+      "message": { "hex": "02 00 00 01 ff fe", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "nav",
+        "native_id": "nav-1",
+        "asset": "nav-1",
+        "stand_in": true,
+        "set": "nav_v1",
+        "packet": "OPTZ",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 2, "has_z": 0, "px": 1, "py": -2 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "has_z", "value": 0, "quality": "good" },
+          { "path": "px", "value": 1, "quality": "good" },
+          { "path": "py", "value": -2, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-quaternion-from-array-elements",
+      "spec": ["decoding.md §7.4", "api.md §3.1"],
+      "note": "q's elements are the binary32 0.5 each; a quaternion is w, x, y, z in its members' order, scalar first. The param has no unit, so none is converted. Its members are array elements, and still the composite has no index or time offset.",
+      "family": "nav",
+      "message": { "hex": "03 3f 00 00 00 3f 00 00 00 3f 00 00 00 3f 00 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "nav",
+        "native_id": "nav-1",
+        "asset": "nav-1",
+        "stand_in": true,
+        "set": "nav_v1",
+        "packet": "ATT",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          {
+            "param": "c.att",
+            "value": { "frame": "BODY", "w": 0.5, "x": 0.5, "y": 0.5, "z": 0.5 },
+            "unit": null,
+            "path": "q[0],q[1],q[2],q[3]",
+            "index": null,
+            "time_offset_ns": null,
+            "quality": "good"
+          }
+        ],
+        "record": { "id": 3, "q": [0.5, 0.5, 0.5, 0.5] },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "q[0]", "value": 0.5, "quality": "good" },
+          { "path": "q[1]", "value": 0.5, "quality": "good" },
+          { "path": "q[2]", "value": 0.5, "quality": "good" },
+          { "path": "q[3]", "value": 0.5, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-geodetic-position-in-degrees",
+      "spec": ["decoding.md §7.1", "decoding.md §7.4", "units.md §2", "units.md §4"],
+      "note": "lat is 785398 x 1e-6 = 0.7853979999999999 rad and lon -1570796 x 1e-6 = -1.5707959999999999 rad, their engineering values. A geodetic position's latitude and longitude convert into deg, (v x 1) / 0.017453292519943295: 44.999990638015824 and -89.99998127603165. alt is 400 m, the param's unit: 400.0. The frame is the source's, GEODETIC.",
+      "family": "nav",
+      "message": { "hex": "04 00 0b fb f6 ff e8 08 14 00 00 01 90", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "nav",
+        "native_id": "nav-1",
+        "asset": "nav-1",
+        "stand_in": true,
+        "set": "nav_v1",
+        "packet": "GEO",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          {
+            "param": "c.pos",
+            "value": { "frame": "GEODETIC", "x": 44.999990638015824, "y": -89.99998127603165, "z": 400.0 },
+            "unit": "m",
+            "path": "lat,lon,alt",
+            "index": null,
+            "time_offset_ns": null,
+            "quality": "good"
+          }
+        ],
+        "record": { "id": 4, "lat": 785398, "lon": -1570796, "alt": 400 },
+        "engineering": [
+          { "path": "id", "value": 4, "quality": "good" },
+          { "path": "lat", "value": 0.7853979999999999, "quality": "good" },
+          { "path": "lon", "value": -1.5707959999999999, "quality": "good" },
+          { "path": "alt", "value": 400, "quality": "good" }
+        ]
+      }
+    }
+  ]
+}

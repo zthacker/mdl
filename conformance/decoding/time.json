@@ -1,0 +1,531 @@
+{
+  "about": "Event time: CUC, GPS, elapsed counts, ISO 8601 text and time since boot, the UTC, TAI, GPS and TT scales with their leap seconds, and when a message has only its ground time or none it can read.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {},
+    "families": [
+      {
+        "name": "tboot",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "boot-1" }
+      },
+      {
+        "name": "tcuc",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "clock-1" }
+      },
+      {
+        "name": "tel",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "count-1" }
+      },
+      {
+        "name": "tgps",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "gps-1" }
+      },
+      {
+        "name": "tiso",
+        "encoding": "json",
+        "alias": { "kind": "fixed", "value": "iso-1" }
+      },
+      {
+        "name": "ttt",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "tt-1" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "tboot_v1",
+        "family": "tboot",
+        "time": {
+          "kind": "boot",
+          "unit": "ms",
+          "correlate": {
+            "packet": "TIME",
+            "clock_field": "unix_us",
+            "clock_unit": "us",
+            "epoch": "1970-01-01T00:00:00Z",
+            "scale": "utc",
+            "boot_field": "boot_ms"
+          }
+        },
+        "packets": [
+          {
+            "name": "TIME",
+            "identify": { "id": 1 },
+            "time_field": "boot_ms",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "unix_us", "type": "uint", "size_bits": 64 },
+              { "kind": "field", "name": "boot_ms", "type": "uint", "size_bits": 32 }
+            ]
+          },
+          {
+            "name": "HK",
+            "identify": { "id": 2 },
+            "time_field": "up",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "up", "type": "uint", "size_bits": 32 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "tcuc_v1",
+        "family": "tcuc",
+        "time": { "kind": "cuc", "offset_bits": 0, "coarse_bytes": 4, "fine_bytes": 2, "epoch": "1958-01-01T00:00:00Z", "scale": "tai" },
+        "packets": [
+          {
+            "name": "T",
+            "entries": [
+              { "kind": "field", "name": "head", "type": "uint", "size_bits": 8 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "tel_v1",
+        "family": "tel",
+        "time": { "kind": "elapsed", "unit": "ms", "epoch": "1970-01-01T00:00:00Z", "scale": "utc" },
+        "packets": [
+          {
+            "name": "INT",
+            "identify": { "id": 1 },
+            "time_field": "t",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "t", "type": "uint", "size_bits": 64 }
+            ]
+          },
+          {
+            "name": "FLT",
+            "identify": { "id": 2 },
+            "time_field": "t",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "t", "type": "float", "size_bits": 64 }
+            ]
+          },
+          {
+            "name": "SENT",
+            "identify": { "id": 3 },
+            "time_field": "t",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "t", "type": "uint", "size_bits": 32, "invalid": [4294967295] }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "tgps_v1",
+        "family": "tgps",
+        "time": { "kind": "gps", "unit": "ms", "week_field": "week", "week_bits": 10 },
+        "packets": [
+          {
+            "name": "P",
+            "time_field": "tow",
+            "entries": [
+              { "kind": "field", "name": "week", "type": "uint", "size_bits": 16 },
+              { "kind": "field", "name": "tow", "type": "uint", "size_bits": 32 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "tiso_v1",
+        "family": "tiso",
+        "time": { "kind": "iso8601", "pointer": "/t" },
+        "packets": [
+          {
+            "name": "P",
+            "entries": [
+              { "kind": "field", "name": "n", "type": "uint", "pointer": "/n", "optional": true }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "ttt_v1",
+        "family": "ttt",
+        "time": { "kind": "elapsed", "unit": "s", "epoch": "2000-01-01T12:00:00Z", "scale": "tt" },
+        "packets": [
+          {
+            "name": "P",
+            "time_field": "t",
+            "entries": [
+              { "kind": "field", "name": "t", "type": "uint", "size_bits": 32 }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "cuc-on-tai-with-a-truncated-fraction",
+      "spec": ["decoding.md §8", "decoding.md §8.1"],
+      "note": "The coarse time is 0x80afd2e5 = 2159006437 s from 1958-01-01 on the tai scale, the fine time 0x0001 of 2^16, floor(1 x 10^9 / 65536) = 15258 ns. The label is 1958-01-01T00:00:00 plus that, 2026-06-01T12:00:37.000015258 TAI, and TAI - UTC is 37 s then: 2026-06-01T12:00:00.000015258Z.",
+      "family": "tcuc",
+      "message": { "hex": "80 af d2 e5 00 01", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tcuc",
+        "native_id": "clock-1",
+        "asset": "clock-1",
+        "stand_in": true,
+        "set": "tcuc_v1",
+        "packet": "T",
+        "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.000015258Z" },
+        "samples": [],
+        "record": { "head": 128 },
+        "engineering": [
+          { "path": "head", "value": 128, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-tai-label-inside-a-leap-second",
+      "spec": ["decoding.md §8", "decoding.md §8.1"],
+      "note": "1861920036.5 s from the epoch is the label 2017-01-01T00:00:36.5 TAI. The 2017-01-01 entry's start plus the previous offset, 36 s, is at or before it, and its start plus its own 37 s after it, so it falls inside that entry's leap second, 2016-12-31T23:59:60 UTC, and is the instant before the entry starts: 2016-12-31T23:59:59.999999999Z.",
+      "family": "tcuc",
+      "message": { "hex": "6e fa a5 24 80 00", "metadata": {}, "ground_time": "2017-01-01T00:00:00Z" },
+      "decoded": {
+        "family": "tcuc",
+        "native_id": "clock-1",
+        "asset": "clock-1",
+        "stand_in": true,
+        "set": "tcuc_v1",
+        "packet": "T",
+        "event_time": { "kind": "at", "time": "2016-12-31T23:59:59.999999999Z" },
+        "samples": [],
+        "record": { "head": 110 },
+        "engineering": [
+          { "path": "head", "value": 110, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "the-tai-label-after-the-leap-second",
+      "spec": ["decoding.md §8.1"],
+      "note": "A second later the label is 2017-01-01T00:00:37 TAI, the entry's start plus its own 37 s, so 37 s applies: 2017-01-01T00:00:00Z.",
+      "family": "tcuc",
+      "message": { "hex": "6e fa a5 25 00 00", "metadata": {}, "ground_time": "2017-01-01T00:00:00Z" },
+      "decoded": {
+        "family": "tcuc",
+        "native_id": "clock-1",
+        "asset": "clock-1",
+        "stand_in": true,
+        "set": "tcuc_v1",
+        "packet": "T",
+        "event_time": { "kind": "at", "time": "2017-01-01T00:00:00Z" },
+        "samples": [],
+        "record": { "head": 110 },
+        "engineering": [
+          { "path": "head", "value": 110, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-cuc-time-past-the-end",
+      "spec": ["decoding.md §8"],
+      "note": "The packet's one entry, head, fits in 3 bytes, so it extracts; then the CUC time's 6 bytes reach past the end: invalid_time.",
+      "family": "tcuc",
+      "message": { "hex": "80 af d2", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_time"
+    },
+    {
+      "name": "a-gps-week-and-time-of-week",
+      "spec": ["decoding.md §8", "decoding.md §8.1"],
+      "note": "The ground time's GPS label is 2026-06-01T12:00:18 (37 - 19 = 18 s ahead of UTC), week G = 2421 since 1980-01-06. week is 373 = 2421 mod 2^10, and c = floor((2421 - 373 + 512) / 1024) = 2, so the week is 373 + 2 x 1024 = 2421. tow is 129618250 ms. The label 1980-01-06 + 2421 weeks + 129618.25 s is 2026-06-01T12:00:18.25 GPS, plus 19 s as TAI, less 37 s: 2026-06-01T12:00:00.25Z.",
+      "family": "tgps",
+      "message": { "hex": "01 75 07 b9 d1 4a", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tgps",
+        "native_id": "gps-1",
+        "asset": "gps-1",
+        "stand_in": true,
+        "set": "tgps_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.25Z" },
+        "samples": [],
+        "record": { "week": 373, "tow": 129618250 },
+        "engineering": [
+          { "path": "week", "value": 373, "quality": "good" },
+          { "path": "tow", "value": 129618250, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-gps-week-rolled-over",
+      "spec": ["decoding.md §8"],
+      "note": "week is 1023. The week congruent to it nearest the ground's week 2421 is 1023 + c x 1024 with c = floor((2421 - 1023 + 512) / 1024) = 1: week 2047. tow 0 makes the label 2019-03-31T00:00:00 GPS, which is 18 s ahead of UTC then: 2019-03-30T23:59:42Z.",
+      "family": "tgps",
+      "message": { "hex": "03 ff 00 00 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tgps",
+        "native_id": "gps-1",
+        "asset": "gps-1",
+        "stand_in": true,
+        "set": "tgps_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2019-03-30T23:59:42Z" },
+        "samples": [],
+        "record": { "week": 1023, "tow": 0 },
+        "engineering": [
+          { "path": "week", "value": 1023, "quality": "good" },
+          { "path": "tow", "value": 0, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-gps-week-just-ahead-of-the-grounds",
+      "spec": ["decoding.md §8"],
+      "note": "week is 374, one past the ground's week 2421 mod 1024 (373), as a message stamped after a week boundary the ground clock hasn't reached is. c = floor((2421 - 374 + 512) / 1024) = 2, so the week is 374 + 2048 = 2422, a week ahead; without the half cycle it would be a cycle back, 1398. tow 0 makes the label 2026-06-07T00:00:00 GPS: 2026-06-06T23:59:42Z.",
+      "family": "tgps",
+      "message": { "hex": "01 76 00 00 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tgps",
+        "native_id": "gps-1",
+        "asset": "gps-1",
+        "stand_in": true,
+        "set": "tgps_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2026-06-06T23:59:42Z" },
+        "samples": [],
+        "record": { "week": 374, "tow": 0 },
+        "engineering": [
+          { "path": "week", "value": 374, "quality": "good" },
+          { "path": "tow", "value": 0, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "an-integer-count-of-ms",
+      "spec": ["decoding.md §8", "decoding.md §8.1"],
+      "note": "t is 1780315200123 ms since 1970-01-01T00:00:00 on the utc scale, Unix time, exactly: 2026-06-01T12:00:00.123Z.",
+      "family": "tel",
+      "message": { "hex": "01 00 00 01 9e 83 0e 1a 7b", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tel",
+        "native_id": "count-1",
+        "asset": "count-1",
+        "stand_in": true,
+        "set": "tel_v1",
+        "packet": "INT",
+        "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.123Z" },
+        "samples": [],
+        "record": { "id": 1, "t": 1780315200123 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "t", "value": 1780315200123, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-float-count-rounded-down",
+      "spec": ["decoding.md §8"],
+      "note": "t is the binary64 4.1 ms. Multiplied by 1000000 ns in binary64 it is 4099999.9999999995, rounded down: 4099999 ns after the epoch, 1970-01-01T00:00:00.004099999Z.",
+      "family": "tel",
+      "message": { "hex": "02 40 10 66 66 66 66 66 66", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tel",
+        "native_id": "count-1",
+        "asset": "count-1",
+        "stand_in": true,
+        "set": "tel_v1",
+        "packet": "FLT",
+        "event_time": { "kind": "at", "time": "1970-01-01T00:00:00.004099999Z" },
+        "samples": [],
+        "record": { "id": 2, "t": 4.1 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "t", "value": 4.1, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-time-field-holding-its-sentinel",
+      "spec": ["decoding.md §8"],
+      "note": "t holds its sentinel, so it has no reading and the packet has ground time only.",
+      "family": "tel",
+      "message": { "hex": "03 ff ff ff ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tel",
+        "native_id": "count-1",
+        "asset": "count-1",
+        "stand_in": true,
+        "set": "tel_v1",
+        "packet": "SENT",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": { "id": 3, "t": 4294967295 },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "t", "value": 4294967295, "quality": "invalid" }
+        ]
+      }
+    },
+    {
+      "name": "terrestrial-time",
+      "spec": ["decoding.md §8", "decoding.md §8.1"],
+      "note": "t is 0 s from 2000-01-01T12:00:00 on the tt scale. TT is 32.184 s ahead of TAI, and TAI - UTC was 32 s in 2000: 2000-01-01T11:58:55.816Z.",
+      "family": "ttt",
+      "message": { "hex": "00 00 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "ttt",
+        "native_id": "tt-1",
+        "asset": "tt-1",
+        "stand_in": true,
+        "set": "ttt_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2000-01-01T11:58:55.816Z" },
+        "samples": [],
+        "record": { "t": 0 },
+        "engineering": [
+          { "path": "t", "value": 0, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "iso-8601-with-an-offset-and-a-long-fraction",
+      "spec": ["decoding.md §8"],
+      "note": "14:00 at +02:00 is 12:00 UTC, and the fraction's digits past nanoseconds are truncated: 2026-06-01T12:00:00.123456789Z.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"2026-06-01T14:00:00.123456789123+02:00\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tiso",
+        "native_id": "iso-1",
+        "asset": "iso-1",
+        "stand_in": true,
+        "set": "tiso_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.123456789Z" },
+        "samples": [],
+        "record": {},
+        "engineering": []
+      }
+    },
+    {
+      "name": "iso-8601-in-lower-case",
+      "spec": ["decoding.md §8"],
+      "note": "A lower-case t between date and time and a lower-case z are accepted.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"2026-06-01t12:00:00z\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tiso",
+        "native_id": "iso-1",
+        "asset": "iso-1",
+        "stand_in": true,
+        "set": "tiso_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": {},
+        "engineering": []
+      }
+    },
+    {
+      "name": "iso-8601-with-a-space",
+      "spec": ["decoding.md §8"],
+      "note": "A space between date and time is accepted.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"2026-06-01 12:00:00Z\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tiso",
+        "native_id": "iso-1",
+        "asset": "iso-1",
+        "stand_in": true,
+        "set": "tiso_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2026-06-01T12:00:00Z" },
+        "samples": [],
+        "record": {},
+        "engineering": []
+      }
+    },
+    {
+      "name": "iso-8601-second-60",
+      "spec": ["decoding.md §8"],
+      "note": "A seconds value of 60 reads as the last nanosecond of second 59 of that minute: 2016-12-31T23:59:59.999999999Z.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"2016-12-31T23:59:60Z\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tiso",
+        "native_id": "iso-1",
+        "asset": "iso-1",
+        "stand_in": true,
+        "set": "tiso_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "2016-12-31T23:59:59.999999999Z" },
+        "samples": [],
+        "record": {},
+        "engineering": []
+      }
+    },
+    {
+      "name": "iso-8601-year-0000-that-is-0001-in-utc",
+      "spec": ["decoding.md §8"],
+      "note": "The range check applies to the instant in UTC: 0000-12-31T23:00:00-02:00 is 0001-01-01T01:00:00Z, which is accepted.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"0000-12-31T23:00:00-02:00\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tiso",
+        "native_id": "iso-1",
+        "asset": "iso-1",
+        "stand_in": true,
+        "set": "tiso_v1",
+        "packet": "P",
+        "event_time": { "kind": "at", "time": "0001-01-01T01:00:00Z" },
+        "samples": [],
+        "record": {},
+        "engineering": []
+      }
+    },
+    {
+      "name": "iso-8601-past-year-9999-in-utc",
+      "spec": ["decoding.md §8"],
+      "note": "9999-12-31T23:59:59-01:00 is 10000-01-01T00:59:59 in UTC, past year 9999: invalid_time.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"9999-12-31T23:59:59-01:00\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_time"
+    },
+    {
+      "name": "iso-8601-that-isnt-an-instant",
+      "spec": ["decoding.md §8"],
+      "note": "A date without a time isn't an RFC 3339 instant: invalid_time.",
+      "family": "tiso",
+      "message": { "json": "{\"t\": \"2026-06-01\"}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "error": "invalid_time"
+    },
+    {
+      "name": "time-since-boot",
+      "spec": ["decoding.md §8", "api.md §3.1"],
+      "note": "up is 12345, time since the asset booted in the source's unit, ms, returned as it is; it isn't an instant until correlated.",
+      "family": "tboot",
+      "message": { "hex": "02 00 00 30 39", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot",
+        "native_id": "boot-1",
+        "asset": "boot-1",
+        "stand_in": true,
+        "set": "tboot_v1",
+        "packet": "HK",
+        "event_time": { "kind": "since_boot", "value": 12345, "unit": "ms" },
+        "samples": [],
+        "record": { "id": 2, "up": 12345 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "up", "value": 12345, "quality": "good" }
+        ]
+      }
+    }
+  ]
+}

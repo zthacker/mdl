@@ -1,0 +1,530 @@
+{
+  "about": "Conversions and qualities: linear, polynomial, state, table and spline conversions in binary64 as decoding.md orders the arithmetic, sentinels, which quality wins, a field's unit converted into its param's, and sample time offsets.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {
+      "params": {
+        "c.big": { "type": "i64" },
+        "c.celsius": { "type": "f64", "unit": "Cel" },
+        "c.count": { "type": "u64" },
+        "c.curve": { "type": "f64" },
+        "c.kelvin": { "type": "f64", "unit": "K" },
+        "c.level": { "type": "f64" },
+        "c.mode": { "type": "enum", "states": ["OFF", "ON", "STANDBY"] },
+        "c.on": { "type": "bool" },
+        "c.poly": { "type": "f64" },
+        "c.series": { "type": "f64" },
+        "c.temp": { "type": "f64" },
+        "c.volts": { "type": "f64", "unit": "V" }
+      }
+    },
+    "families": [
+      {
+        "name": "conv",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "conv-1" }
+      },
+      {
+        "name": "convj",
+        "encoding": "json",
+        "alias": { "kind": "fixed", "value": "convj-1" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "conv_v1",
+        "family": "conv",
+        "packets": [
+          {
+            "name": "LIN",
+            "identify": { "id": 1 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "raw",
+                "type": "uint",
+                "size_bits": 16,
+                "conversion": { "kind": "linear", "scale": 0.1, "offset": -40 },
+                "canonical": "c.temp"
+              }
+            ]
+          },
+          {
+            "name": "POLY",
+            "identify": { "id": 2 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "x",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "poly", "coefficients": [0.1, 0.3, 0.7] },
+                "canonical": "c.poly"
+              }
+            ]
+          },
+          {
+            "name": "STATES",
+            "identify": { "id": 3 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "mode",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": {
+                  "kind": "states",
+                  "states": [
+                    { "raw": 0, "name": "OFF" },
+                    { "raw": 1, "name": "ON" },
+                    { "raw": 2, "name": "STANDBY" }
+                  ]
+                },
+                "canonical": "c.mode"
+              },
+              {
+                "kind": "field",
+                "name": "big",
+                "type": "uint",
+                "size_bits": 64,
+                "conversion": {
+                  "kind": "states",
+                  "states": [
+                    { "raw": 0, "name": "ZERO" },
+                    { "raw": "18446744073709551615", "name": "MAX" }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "name": "TABLE",
+            "identify": { "id": 4 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "t_lin",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }, { "raw": 20, "value": 150 }] },
+                "canonical": "c.level"
+              },
+              {
+                "kind": "field",
+                "name": "t_at",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }, { "raw": 20, "value": 150 }] }
+              },
+              {
+                "kind": "field",
+                "name": "t_step",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }, { "raw": 20, "value": 150 }], "interpolation": "step" }
+              },
+              {
+                "kind": "field",
+                "name": "t_step_ext",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }, { "raw": 20, "value": 150 }], "interpolation": "step", "extrapolate": true }
+              },
+              {
+                "kind": "field",
+                "name": "t_ext",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }, { "raw": 20, "value": 150 }], "extrapolate": true }
+              },
+              {
+                "kind": "field",
+                "name": "t_out",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }, { "raw": 20, "value": 150 }] }
+              }
+            ]
+          },
+          {
+            "name": "SPLINE",
+            "identify": { "id": 5 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "field",
+                "name": "s_in",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "spline", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 10 }, { "raw": 25, "value": 5 }, { "raw": 30, "value": 20 }] },
+                "canonical": "c.curve"
+              },
+              {
+                "kind": "field",
+                "name": "s_at",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "spline", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 10 }, { "raw": 25, "value": 5 }, { "raw": 30, "value": 20 }] }
+              },
+              {
+                "kind": "field",
+                "name": "s_hi",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "spline", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 10 }, { "raw": 25, "value": 5 }, { "raw": 30, "value": 20 }], "extrapolate": true }
+              },
+              {
+                "kind": "field",
+                "name": "s_lo",
+                "type": "int",
+                "size_bits": 8,
+                "conversion": { "kind": "spline", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 10 }, { "raw": 25, "value": 5 }, { "raw": 30, "value": 20 }], "extrapolate": true }
+              }
+            ]
+          },
+          {
+            "name": "QUALITY",
+            "identify": { "id": 6 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "q_int", "type": "uint", "size_bits": 8, "invalid": [255], "canonical": "c.count" },
+              { "kind": "field", "name": "q_str", "type": "string", "length": { "kind": "fixed", "bytes": 4 }, "text": "ascii", "invalid": ["9999"] },
+              { "kind": "field", "name": "q_float", "type": "float", "size_bits": 32, "invalid": [-1] },
+              {
+                "kind": "field",
+                "name": "q_both",
+                "type": "uint",
+                "size_bits": 8,
+                "invalid": [10],
+                "conversion": { "kind": "linear", "scale": 1e308, "offset": 0 }
+              },
+              {
+                "kind": "field",
+                "name": "q_inf",
+                "type": "float",
+                "size_bits": 32,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 100 }] }
+              },
+              { "kind": "field", "name": "flag", "type": "uint", "size_bits": 8, "canonical": "c.on" }
+            ]
+          },
+          {
+            "name": "UNITS",
+            "identify": { "id": 7 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "mv", "type": "uint", "size_bits": 16, "unit": "mV", "canonical": "c.volts" },
+              { "kind": "field", "name": "cel", "type": "int", "size_bits": 16, "unit": "Cel", "canonical": "c.kelvin" },
+              { "kind": "field", "name": "fahr", "type": "uint", "size_bits": 16, "unit": "[degF]", "canonical": "c.celsius" }
+            ]
+          },
+          {
+            "name": "SERIES",
+            "identify": { "id": 8 },
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "array",
+                "name": "s",
+                "count": { "kind": "fixed", "count": 3 },
+                "element": { "kind": "scalar", "type": "uint", "size_bits": 8 },
+                "sample_interval_ms": 0.0000025,
+                "canonical": "c.series"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "convj_v1",
+        "family": "convj",
+        "packets": [
+          {
+            "name": "BIG",
+            "entries": [
+              { "kind": "field", "name": "n", "type": "uint", "pointer": "/n", "canonical": "c.big" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "linear-multiplies-then-adds",
+      "spec": ["decoding.md §7.1", "decoding.md §7.3", "decoding.md §7.5"],
+      "note": "raw is 02 0b = 523, which becomes the binary64 523. 523 x 0.1 rounds to 52.300000000000004, and adding -40 gives 12.300000000000004, each operation rounded on its own.",
+      "family": "conv",
+      "message": { "hex": "01 02 0b", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "LIN",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.temp", "value": 12.300000000000004, "unit": null, "path": "raw", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 1, "raw": 523 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "raw", "value": 12.300000000000004, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-polynomial-by-horners-rule",
+      "spec": ["decoding.md §7.1"],
+      "note": "Horner's rule from the highest coefficient, multiplying then adding, each rounded: 0.7 x 3 = 2.0999999999999996, + 0.3 = 2.3999999999999995, x 3 = 7.199999999999999, + 0.1 = 7.299999999999998. A fused multiply and add, or summing 0.1 + 0.3 x 3 + 0.7 x 3^2, gives 7.3 instead.",
+      "family": "conv",
+      "message": { "hex": "02 03", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "POLY",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.poly", "value": 7.299999999999998, "unit": null, "path": "x", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 2, "x": 3 },
+        "engineering": [
+          { "path": "id", "value": 2, "quality": "good" },
+          { "path": "x", "value": 7.299999999999998, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "states-including-one-past-2-to-the-53",
+      "spec": ["decoding.md §7.1", "decoding.md §7.3", "decoding.md §7.5"],
+      "note": "mode 1 is the state ON, the enum param's value. big is 2^64 - 1, which equals the state raw written as the string 18446744073709551615, compared as its integer: MAX. A states conversion compares integers, not binary64.",
+      "family": "conv",
+      "message": { "hex": "03 01 ff ff ff ff ff ff ff ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "STATES",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.mode", "value": "ON", "unit": null, "path": "mode", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 3, "mode": 1, "big": "18446744073709551615" },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "mode", "value": "ON", "quality": "good" },
+          { "path": "big", "value": "MAX", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "no-state-for-the-raw-value",
+      "spec": ["decoding.md §7.1", "decoding.md §7.3", "decoding.md §7.5"],
+      "note": "No state has raw 7, so the quality is unknown_state, and the sample's and engineering value is the raw 7. big is 0, the state ZERO.",
+      "family": "conv",
+      "message": { "hex": "03 07 00 00 00 00 00 00 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "STATES",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.mode", "value": 7, "unit": null, "path": "mode", "index": null, "time_offset_ns": null, "quality": "unknown_state" }
+        ],
+        "record": { "id": 3, "mode": 7, "big": 0 },
+        "engineering": [
+          { "path": "id", "value": 3, "quality": "good" },
+          { "path": "mode", "value": 7, "quality": "unknown_state" },
+          { "path": "big", "value": "ZERO", "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "tables",
+      "spec": ["decoding.md §7.1", "decoding.md §7.3", "decoding.md §7.5"],
+      "note": "The points are (0, 0), (10, 100), (20, 150). t_lin 15 is in segment 1: 100 + ((15 - 10) x (150 - 100)) / (20 - 10) = 125. t_at 10 is a point's raw, so exactly its value, 100. Step interpolation gives the last point below 15, 100, and extrapolated past the end, the nearest end point's value, 150. Linear extrapolation continues the last segment: 100 + ((25 - 10) x 50) / 10 = 175. t_out 25 is outside without extrapolate, so it has no engineering value: out_of_calibration, with the raw 25.",
+      "family": "conv",
+      "message": { "hex": "04 0f 0a 0f 19 19 19", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "TABLE",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.level", "value": 125.0, "unit": null, "path": "t_lin", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 4, "t_lin": 15, "t_at": 10, "t_step": 15, "t_step_ext": 25, "t_ext": 25, "t_out": 25 },
+        "engineering": [
+          { "path": "id", "value": 4, "quality": "good" },
+          { "path": "t_lin", "value": 125.0, "quality": "good" },
+          { "path": "t_at", "value": 100.0, "quality": "good" },
+          { "path": "t_step", "value": 100.0, "quality": "good" },
+          { "path": "t_step_ext", "value": 150.0, "quality": "good" },
+          { "path": "t_ext", "value": 175.0, "quality": "good" },
+          { "path": "t_out", "value": 25, "quality": "out_of_calibration" }
+        ]
+      }
+    },
+    {
+      "name": "a-natural-cubic-spline",
+      "spec": ["decoding.md §7.1"],
+      "note": "The points are (0, 0), (10, 10), (25, 5), (30, 20): h = 10, 15, 5 and s = 1, -1/3, 3. The sweep gives c1 = 0.3, d1 = -0.16, c2 = 0.14084507042253522, d2 = 0.6309859154929577, so M2 = 0.6309859154929577 and M1 = d1 - c1 x M2 = -0.3492957746478873. s_in 21 is in segment 1, L = 4 and R = 11: the segment formula, evaluated in binary64 in the order written, M1 x L x L x L as ((M1 x L) x L) x L, gives 1.5573708920187794; grouping the cube first, M1 x (L x L x L), would give 1.5573708920187777. s_at 25 is a point's raw: 5. With extrapolate, s_hi 40 continues at the end slope, 20 + 10 x (3 + 5 x M2 / 6) = 55.25821596244131, and s_lo -5 below the start, 0 + -5 x (1 - 10 x M1 / 6) = -7.910798122065728.",
+      "family": "conv",
+      "message": { "hex": "05 15 19 28 fb", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "SPLINE",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.curve", "value": 1.5573708920187794, "unit": null, "path": "s_in", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 5, "s_in": 21, "s_at": 25, "s_hi": 40, "s_lo": -5 },
+        "engineering": [
+          { "path": "id", "value": 5, "quality": "good" },
+          { "path": "s_in", "value": 1.5573708920187794, "quality": "good" },
+          { "path": "s_at", "value": 5.0, "quality": "good" },
+          { "path": "s_hi", "value": 55.25821596244131, "quality": "good" },
+          { "path": "s_lo", "value": -7.910798122065728, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "sentinels-and-which-quality-wins",
+      "spec": ["decoding.md §7.1", "decoding.md §7.2", "decoding.md §7.3", "decoding.md §7.5"],
+      "note": "q_int 255 is its sentinel: invalid, with the raw value, for its sample too. q_str 9999 equals its string sentinel exactly. q_float -1.0 equals the integer sentinel -1 numerically. q_both 10 is its sentinel and its conversion gives 1e309, infinity, so both invalid and non_finite apply; the quality is the first that applies from the bottom of the order up, invalid, with the raw 10. q_inf reads infinity, which is outside the table's points, so both non_finite and out_of_calibration apply; from the bottom up non_finite comes first, with the raw value. flag 2 maps to a bool param: an integer that isn't 0 is true; its engineering value is the raw 2.",
+      "family": "conv",
+      "message": { "hex": "06 ff 39 39 39 39 bf 80 00 00 0a 7f 80 00 00 02", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "QUALITY",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.count", "value": 255, "unit": null, "path": "q_int", "index": null, "time_offset_ns": null, "quality": "invalid" },
+          { "param": "c.on", "value": true, "unit": null, "path": "flag", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": {
+          "id": 6,
+          "q_int": 255,
+          "q_str": "9999",
+          "q_float": -1.0,
+          "q_both": 10,
+          "q_inf": { "non_finite": "inf" },
+          "flag": 2
+        },
+        "engineering": [
+          { "path": "id", "value": 6, "quality": "good" },
+          { "path": "q_int", "value": 255, "quality": "invalid" },
+          { "path": "q_str", "value": "9999", "quality": "invalid" },
+          { "path": "q_float", "value": -1.0, "quality": "invalid" },
+          { "path": "q_both", "value": 10, "quality": "invalid" },
+          { "path": "q_inf", "value": { "non_finite": "inf" }, "quality": "non_finite" },
+          { "path": "flag", "value": 2, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-fields-unit-into-its-params",
+      "spec": ["decoding.md §7.3", "decoding.md §7.5", "units.md §2", "units.md §4"],
+      "note": "mV's factor is 1e-3 x 1000 = 1 and V's 1000, so 1500 mV is (1500 x 1) / 1000 = 1.5 V. 25 Cel is 25 + 273.15 = 298.15 K, divided by K's factor 1. 0 [degF] is ((0 + 459.67) x 5) / 9 = 255.3722222222222 K, less 273.15: -17.77777777777777 Cel; multiplying by the reciprocal 5 / 9, which decoding.md forbids, would give -17.777777777777743. Each sample carries its param's unit; each engineering value stays in its field's unit, the raw integer.",
+      "family": "conv",
+      "message": { "hex": "07 05 dc 00 19 00 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "UNITS",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.volts", "value": 1.5, "unit": "V", "path": "mv", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "c.kelvin", "value": 298.15, "unit": "K", "path": "cel", "index": null, "time_offset_ns": null, "quality": "good" },
+          { "param": "c.celsius", "value": -17.77777777777777, "unit": "Cel", "path": "fahr", "index": null, "time_offset_ns": null, "quality": "good" }
+        ],
+        "record": { "id": 7, "mv": 1500, "cel": 25, "fahr": 0 },
+        "engineering": [
+          { "path": "id", "value": 7, "quality": "good" },
+          { "path": "mv", "value": 1500, "quality": "good" },
+          { "path": "cel", "value": 25, "quality": "good" },
+          { "path": "fahr", "value": 0, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "sample-time-offsets",
+      "spec": ["decoding.md §7.3"],
+      "note": "Element i is taken round(i x 0.0000025 x 1000000) ns after the packet's time, left to right in binary64: 0, 2.5 and 5.0. 2.5 is a tie, which rounds away from zero to 3 (to even it would be 2). Each value is an f64 param's, so the float of its integer.",
+      "family": "conv",
+      "message": { "hex": "08 0a 14 1e", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "conv",
+        "native_id": "conv-1",
+        "asset": "conv-1",
+        "stand_in": true,
+        "set": "conv_v1",
+        "packet": "SERIES",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.series", "value": 10.0, "unit": null, "path": "s[0]", "index": 0, "time_offset_ns": 0, "quality": "good" },
+          { "param": "c.series", "value": 20.0, "unit": null, "path": "s[1]", "index": 1, "time_offset_ns": 3, "quality": "good" },
+          { "param": "c.series", "value": 30.0, "unit": null, "path": "s[2]", "index": 2, "time_offset_ns": 5, "quality": "good" }
+        ],
+        "record": { "id": 8, "s": [10, 20, 30] },
+        "engineering": [
+          { "path": "id", "value": 8, "quality": "good" },
+          { "path": "s[0]", "value": 10, "quality": "good" },
+          { "path": "s[1]", "value": 20, "quality": "good" },
+          { "path": "s[2]", "value": 30, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-value-its-param-cant-hold",
+      "spec": ["decoding.md §7.3", "decoding.md §7.5"],
+      "note": "/n is the JSON integer 2^64 - 1, which a uint field takes and an i64 param can't hold: the sample is out_of_range, with the raw value. Its engineering value has no param, so it is the raw value and good.",
+      "family": "convj",
+      "message": { "json": "{\"n\": 18446744073709551615}", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "convj",
+        "native_id": "convj-1",
+        "asset": "convj-1",
+        "stand_in": true,
+        "set": "convj_v1",
+        "packet": "BIG",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "samples": [
+          { "param": "c.big", "value": "18446744073709551615", "unit": null, "path": "n", "index": null, "time_offset_ns": null, "quality": "out_of_range" }
+        ],
+        "record": { "n": "18446744073709551615" },
+        "engineering": [
+          { "path": "n", "value": "18446744073709551615", "quality": "good" }
+        ]
+      }
+    }
+  ]
+}

@@ -577,8 +577,11 @@ entry whose condition fails, an optional entry that finds nothing or
 `null`), when its index is past a JSON array's end, or when it, or the
 record element holding it, is a `null` element. Its quality is that of its
 least trustworthy member; if that isn't `good`, every member is its raw
-value. Its `path` is the members' paths joined by `,`. It has no `index`
-and no `time_offset`, even when its members are array elements.
+value as a binary64, with no conversion or unit applied (an integer is
+its nearest binary64, §7.1), so a composite's value is always its frame
+and binary64 members. Its `path` is the members' paths joined by `,`.
+It has no `index` and no `time_offset`, even when its members are array
+elements.
 
 A composite's `frame` is its source's, which validation requires to be
 one consumers can convert into its param's frame. A vec3's frame converts
@@ -599,8 +602,9 @@ latitude, longitude and altitude, a source's frame only. So:
 Any field or scalar element, mapped or not, has an engineering value: its
 raw value through its conversion (a state name for `states`), with a
 quality by the same rules, or its raw value if it has no conversion. It
-is in the field's own unit, not a param's. A JSON array's `null`
-element, which is no reading (§5.3), has none.
+is in the field's own unit, not a param's, and as it has no param,
+`out_of_range`, which is about a param's type, never applies to it. A
+JSON array's `null` element, which is no reading (§5.3), has none.
 Implementations SHOULD compute these on request, not while decoding.
 
 ## 8. Event time

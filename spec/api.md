@@ -240,8 +240,10 @@ A value whose quality is `good` is in the param's type and unit: a float
 state's name, text (`enum`), and for `vec3` and `quat` an object of the
 frame's name (`frame`) and floats (`x`, `y`, `z`; `w`, `x`, `y`, `z` for
 a quaternion, scalar first), in the frame of the entries it came from.
-Any other quality's value is the raw value, as in the record: check the
-quality before storing or plotting a value.
+Any other quality's value is the raw value, as in the record, but for a
+composite, whose value is always its frame and floats: each member is
+then its raw value as a float, unconverted (`decoding.md` §7.4). Check
+the quality before storing or plotting a value.
 
 **Record** (`decoding.md` §6): an object of each entry that's present, by
 name, in the packet's order: a field's raw value (an integer for `uint`
