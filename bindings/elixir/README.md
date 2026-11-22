@@ -1,8 +1,8 @@
 # MDL for Elixir
 
 MDL's runtime as an Elixir library: open an artifact store `morphc`
-built, decode telemetry, encode commands, describe the build, and look up
-which asset a native id is. It calls the runtime every binding calls
+built, decode telemetry, encode commands and decode them back, describe
+the build, and look up which asset a native id is. It calls the runtime every binding calls
 ([spec/api.md](../../spec/api.md)) through a native library built with
 [Rustler](https://github.com/rusterlium/rustler), and holds no MDL
 semantics of its own, so it decodes and encodes exactly as `morphc` does.
@@ -86,6 +86,7 @@ end
 | `MDL.with_bindings/2` | The same build with other bindings, without reading it again |
 | `MDL.decode/3`, `MDL.decode_many/3` | Decode one message, or many, each to an `MDL.Decoded` or an error |
 | `MDL.encode/3` | Encode a catalog command as a set's command packet, an `MDL.Encoded` |
+| `MDL.decode_command/3` | Decode a command payload back into its catalog command and arguments, an `MDL.DecodedCommand` |
 | `MDL.describe/1` | The catalog, families and sets as the IR has them, and each binary set's layout |
 | `MDL.binding/4`, `MDL.asset/4` | What a native id is at an instant, and which native id an asset is |
 
@@ -98,7 +99,7 @@ that isn't a binary, raises `ArgumentError`.
 
 | Value | In Elixir |
 | --- | --- |
-| A decoded message, sample, encoded command, route, error, problem | `%MDL.Decoded{}`, `%MDL.Sample{}`, `%MDL.Encoded{}`, `%MDL.Route{}`, `%MDL.Error{}`, `%MDL.Problem{}` |
+| A decoded message, sample, encoded command, decoded command, route, error, problem | `%MDL.Decoded{}`, `%MDL.Sample{}`, `%MDL.Encoded{}`, `%MDL.DecodedCommand{}`, `%MDL.Route{}`, `%MDL.Error{}`, `%MDL.Problem{}` |
 | A vector's or quaternion's value | `%MDL.Vec3{frame:, x:, y:, z:}`, `%MDL.Quat{frame:, w:, x:, y:, z:}` |
 | A quality, a frame, a code, a time unit | atoms: `:good`, `:eci_j2000` (the IR's `ECI_J2000` in lower case), `:past_end`, `:ms` |
 | Names, paths, units, states, metadata keys, a record's keys | strings |
@@ -149,8 +150,8 @@ system, and runs these tests on it as a Hex install would load it, with
 `mix test` builds `morphc` with the repository's workspace, builds its
 test stores from the repository's definitions, and checks the binding's
 results against `morphc`'s for the same messages and commands
-([test/fixtures](test/fixtures/README.md)), and against the decoding
-cases in `conformance/decoding`, whose results are worked out from the
-spec ([spec/conformance.md](../../spec/conformance.md)). `mix format`
+([test/fixtures](test/fixtures/README.md)), and against the decoding,
+encoding and command decoding cases in `conformance/`, whose results are
+worked out from the spec ([spec/conformance.md](../../spec/conformance.md)). `mix format`
 formats the Elixir; the native library is in `native/mdl_nif`, its own
 Cargo workspace (`cargo clippy` and `cargo fmt` there).

@@ -1,7 +1,8 @@
 defmodule MDL do
   @moduledoc """
   MDL's runtime for Elixir: open an artifact store `morphc` built, decode
-  telemetry, encode commands, describe the build, and look up which asset
+  telemetry, encode commands and decode them back, describe the build, and
+  look up which asset
   a native id is. It calls the runtime every binding calls (spec/api.md),
   through a native library, and holds no MDL semantics of its own.
 
@@ -115,6 +116,18 @@ defmodule MDL do
           optional(:native_id) => native_id() | nil
         }
 
+  @typedoc """
+  A command payload to decode: the set that decodes it, the payload, a
+  binary, and the metadata the link framed it with, which a command
+  packet's identity includes. No ground time: decoding a command takes
+  none.
+  """
+  @type command_message :: %{
+          required(:set) => String.t(),
+          required(:payload) => binary(),
+          optional(:metadata) => %{optional(String.t()) => integer() | String.t()}
+        }
+
   @typedoc "A float, or NaN or an infinity."
   @type float_value :: float() | :nan | :infinity | :neg_infinity
 
@@ -223,6 +236,17 @@ defmodule MDL do
   @spec encode(handle(), family(), request()) :: result(MDL.Encoded.t())
   def encode(handle, family, request) when is_binary(family) and is_map(request) do
     MDL.Native.encode(handle, family, request)
+  end
+
+  @doc """
+  Decodes a command payload with one of `family`'s sets (spec/api.md
+  section 2.7): which of its command packets the payload and its metadata
+  are, and each argument, as a simulated asset receiving it or command
+  history reads it. The set is the caller's to name, as for `encode/3`.
+  """
+  @spec decode_command(handle(), family(), command_message()) :: result(MDL.DecodedCommand.t())
+  def decode_command(handle, family, message) when is_binary(family) and is_map(message) do
+    MDL.Native.decode_command(handle, family, message)
   end
 
   @doc """

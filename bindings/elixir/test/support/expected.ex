@@ -14,6 +14,7 @@ defmodule MDL.Test.Expected do
   @decoded_keys ~w(family native_id asset stand_in set def_version packet event_time samples record engineering)
   @encoded_keys ~w(family set def_version packet command payload metadata defaulted deprecated record)
   @sample_keys ~w(param value unit path index time_offset_ns quality)
+  @decoded_command_keys ~w(family set def_version packet command arguments defaulted target record)
 
   @doc "An `MDL.Decoded` from a decoded message's JSON."
   def decoded(json, bundle) do
@@ -64,6 +65,44 @@ defmodule MDL.Test.Expected do
       record: record(json["record"], packet["entries"], set)
     }
   end
+
+  @doc """
+  An `MDL.DecodedCommand` from a decoded command's JSON (spec/api.md
+  section 3.5): each argument read by its type in the catalog.
+  """
+  def decoded_command(json, bundle) do
+    keys!(json, @decoded_command_keys)
+    set = set!(bundle, json["set"])
+    packet = Enum.find(set["commands"], &(&1["name"] == json["packet"]))
+
+    types =
+      Map.new(
+        bundle["catalog"]["commands"][json["command"]]["arguments"] || [],
+        &{&1["name"], {&1["type"], Map.has_key?(&1, "list")}}
+      )
+
+    %MDL.DecodedCommand{
+      family: json["family"],
+      set: json["set"],
+      def_version: json["def_version"],
+      packet: json["packet"],
+      command: json["command"],
+      arguments:
+        Map.new(json["arguments"], fn {name, value} ->
+          {name, argument(value, Map.fetch!(types, name))}
+        end),
+      defaulted: json["defaulted"],
+      target: if(is_nil(json["target"]), do: nil, else: integer_or_text(json["target"])),
+      record: record(json["record"], packet["entries"], set)
+    }
+  end
+
+  # A decoded argument's value by its type: a list argument's a list of them.
+  defp argument(values, {type, true}), do: Enum.map(values, &argument(&1, {type, false}))
+  defp argument(value, {type, false}) when type in ["u64", "i64"], do: integer(value)
+  defp argument(value, {"f64", false}), do: float(value)
+  defp argument(hex, {"bytes", false}), do: Base.decode16!(hex, case: :lower)
+  defp argument(value, {type, false}) when type in ["bool", "str", "enum"], do: value
 
   @doc "An `MDL.Error` from an error's JSON."
   def error(json) do

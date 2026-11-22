@@ -163,6 +163,24 @@ fn encode<'a>(
     output::result(env, handle.0.encode(&family, &request), output::encoded)
 }
 
+/// A command payload, decoded by one of `family`'s sets (`spec/api.md`
+/// §2.7).
+#[rustler::nif(schedule = "DirtyCpu")]
+fn decode_command<'a>(
+    env: Env<'a>,
+    handle: ResourceArc<Handle>,
+    family: String,
+    message: Term<'a>,
+) -> NifResult<Term<'a>> {
+    let (set, input) = input::command_message(message)?;
+    let runtime = &handle.0;
+    let decoded = runtime.payload(&family, input.bytes()).and_then(|payload| {
+        let metadata = input.metadata();
+        runtime.decode_command(&family, &set, &input.message(payload, &metadata))
+    });
+    output::result(env, decoded, output::decoded_command)
+}
+
 /// The build, described (`spec/api.md` §2.5).
 #[rustler::nif(schedule = "DirtyCpu")]
 fn describe<'a>(env: Env<'a>, handle: ResourceArc<Handle>) -> NifResult<Term<'a>> {

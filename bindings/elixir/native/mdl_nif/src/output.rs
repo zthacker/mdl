@@ -7,7 +7,9 @@
 
 use mdl::bindings::NativeId;
 use mdl::decode::{EventTime, SampleValue};
-use mdl::runtime::{ApiError, BindingAt, DecodedMessage, EncodedCommand, Problem, Sample, Value};
+use mdl::runtime::{
+    ApiError, BindingAt, DecodedCommand, DecodedMessage, EncodedCommand, Problem, Sample, Value,
+};
 use mdl::time::Timestamp;
 use rustler::types::NewBinary;
 use rustler::{Atom, Encoder, Env, Error, NifResult, Term};
@@ -55,6 +57,7 @@ pub(crate) mod atoms {
         quality,
         defaulted,
         deprecated,
+        target,
         code,
         message,
         problems,
@@ -67,6 +70,7 @@ pub(crate) mod atoms {
         decoded_module = "Elixir.MDL.Decoded",
         sample_module = "Elixir.MDL.Sample",
         encoded_module = "Elixir.MDL.Encoded",
+        decoded_command_module = "Elixir.MDL.DecodedCommand",
         route_module = "Elixir.MDL.Route",
         error_module = "Elixir.MDL.Error",
         problem_module = "Elixir.MDL.Problem",
@@ -264,6 +268,37 @@ pub(crate) fn encoded<'a>(env: Env<'a>, encoded: &EncodedCommand) -> NifResult<T
                 optional(env, encoded.deprecated.as_deref()),
             ),
             (atoms::record(), value(env, &encoded.record)?),
+        ],
+    )
+}
+
+/// `%MDL.DecodedCommand{}` (`spec/api.md` §3.5).
+pub(crate) fn decoded_command<'a>(env: Env<'a>, decoded: &DecodedCommand) -> NifResult<Term<'a>> {
+    let arguments = decoded
+        .arguments
+        .iter()
+        .map(|(name, argument)| Ok((name.as_str().encode(env), value(env, argument)?)))
+        .collect::<NifResult<Vec<(Term<'a>, Term<'a>)>>>()?;
+    let target = match &decoded.target {
+        Some(id) => native_id(env, id),
+        None => atoms::nil().encode(env),
+    };
+    structure(
+        env,
+        atoms::decoded_command_module(),
+        &[
+            (atoms::family(), decoded.family.encode(env)),
+            (atoms::set(), decoded.set.encode(env)),
+            (
+                atoms::def_version(),
+                decoded.def_version.to_string().encode(env),
+            ),
+            (atoms::packet(), decoded.packet.encode(env)),
+            (atoms::command(), decoded.command.encode(env)),
+            (atoms::arguments(), Term::map_from_pairs(env, &arguments)?),
+            (atoms::defaulted(), decoded.defaulted.encode(env)),
+            (atoms::target(), target),
+            (atoms::record(), value(env, &decoded.record)?),
         ],
     )
 }

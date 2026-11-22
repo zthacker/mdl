@@ -91,6 +91,43 @@ pub(crate) fn message(term: Term<'_>) -> NifResult<MessageInput<'_>> {
     }
 }
 
+/// A command message as `MDL.decode_command/3` takes it: a map of `:set`,
+/// a string; `:payload`, a binary; and `:metadata`, optional. A command's
+/// decoding takes no ground time (`spec/api.md` §2.7), so the message
+/// carries the epoch, which nothing reads.
+pub(crate) fn command_message(term: Term<'_>) -> NifResult<(String, MessageInput<'_>)> {
+    const SHAPE: &str = "a command message is a map of :set (a string), :payload (a binary) \
+                         and, optionally, :metadata (a map of names to integers or strings)";
+    let mut set = None;
+    let mut payload = None;
+    let mut metadata = Vec::new();
+    for (key, value) in fields(term, SHAPE)? {
+        if key == atoms::set() {
+            set = Some(text(value).ok_or_else(|| bad("a command message's :set is a string"))?);
+        } else if key == atoms::payload() {
+            if value.get_type() != TermType::Binary {
+                return Err(bad("a command message's :payload is a binary"));
+            }
+            payload = Some(value.decode::<Binary>()?);
+        } else if key == atoms::metadata() {
+            metadata = metadata_map(value)?;
+        } else {
+            return Err(bad(SHAPE));
+        }
+    }
+    match (set, payload) {
+        (Some(set), Some(payload)) => Ok((
+            set,
+            MessageInput {
+                payload,
+                metadata,
+                ground_time: Timestamp::from_unix_nanos(0),
+            },
+        )),
+        _ => Err(bad(SHAPE)),
+    }
+}
+
 /// Metadata: names, strings as the link names them, to integers or text.
 fn metadata_map(term: Term<'_>) -> NifResult<Vec<(String, Meta)>> {
     const SHAPE: &str = "a message's :metadata is a map of names (strings, such as \"apid\") \

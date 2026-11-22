@@ -157,6 +157,22 @@ defmodule MDLTest do
       assert {:ok, %MDL.Encoded{defaulted: []}} = MDL.encode(context.kitchen, "vendor_x", given)
     end
 
+    # The payload is the packet by its opcode and the link's metadata
+    # together, so without the apid it's no packet of the set.
+    test "a command payload without its metadata", context do
+      request = %{
+        set: "vendor_x_v2",
+        command: "eps.set_mode",
+        arguments: %{"mode" => "SAFE", "delay_s" => 0}
+      }
+
+      {:ok, encoded} = MDL.encode(context.kitchen, "vendor_x", request)
+      message = %{set: "vendor_x_v2", payload: encoded.payload}
+
+      assert {:error, %MDL.Error{code: :no_packet}} =
+               MDL.decode_command(context.kitchen, "vendor_x", message)
+    end
+
     # An artifact's identity is its canonical JSON's digest, so changing a
     # value (not its spacing) changes it.
     test "a damaged artifact" do
@@ -313,6 +329,33 @@ defmodule MDLTest do
     end
   end
 
+  describe "commands" do
+    test "a payload decodes back to the command and arguments that encoded it", context do
+      request = %{
+        set: "vendor_x_v2",
+        command: "eps.set_mode",
+        arguments: %{"mode" => "NOMINAL", "delay_s" => 2.5}
+      }
+
+      {:ok, encoded} = MDL.encode(context.kitchen, "vendor_x", request)
+
+      message = %{set: "vendor_x_v2", payload: encoded.payload, metadata: encoded.metadata}
+      {:ok, decoded} = MDL.decode_command(context.kitchen, "vendor_x", message)
+
+      assert decoded == %MDL.DecodedCommand{
+               family: "vendor_x",
+               set: "vendor_x_v2",
+               def_version: encoded.def_version,
+               packet: encoded.packet,
+               command: "eps.set_mode",
+               arguments: %{"mode" => "NOMINAL", "delay_s" => 2.5},
+               defaulted: [],
+               target: nil,
+               record: encoded.record
+             }
+    end
+  end
+
   describe "describe" do
     test "the build, as maps with string keys", context do
       {:ok, decoded} = decode(context.kitchen, context.messages, "sink-mixed")
@@ -357,6 +400,24 @@ defmodule MDLTest do
       end
 
       assert_raise ArgumentError, fn -> MDL.decode_many(kitchen, "sink", [%{payload: 1}]) end
+    end
+
+    # A command's decoding takes no ground time, so a message with one is
+    # of the wrong shape, as with any other key a command message hasn't got.
+    test "a command message", context do
+      kitchen = context.kitchen
+
+      for {message, expected} <- [
+            {%{payload: <<1>>}, ~r/a command message is a map/},
+            {%{set: :sink_v1, payload: <<1>>}, ~r/:set is a string/},
+            {%{set: "sink_v1", payload: [1]}, ~r/:payload is a binary/},
+            {%{set: "sink_v1", payload: <<1>>, ground_time: 0}, ~r/a command message is a map/},
+            {%{set: "sink_v1", payload: <<1>>, metadata: %{apid: 1}}, ~r/names \(strings/}
+          ] do
+        assert_raise ArgumentError, expected, fn ->
+          MDL.decode_command(kitchen, "sink", message)
+        end
+      end
     end
 
     test "a command request", context do

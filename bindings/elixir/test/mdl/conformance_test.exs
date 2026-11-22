@@ -14,10 +14,13 @@ defmodule MDL.ConformanceTest do
   @files @dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
   @encoding_dir Path.expand("../../../../conformance/encoding", __DIR__)
   @encoding_files @encoding_dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
+  @commands_dir Path.expand("../../../../conformance/decoding_commands", __DIR__)
+  @command_files @commands_dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
 
-  test "there are decoding and encoding cases to run" do
+  test "there are decoding, encoding and command decoding cases to run" do
     assert @files != [], "no case files in #{@dir}"
     assert @encoding_files != [], "no case files in #{@encoding_dir}"
+    assert @command_files != [], "no case files in #{@commands_dir}"
   end
 
   for path <- @files do
@@ -33,6 +36,14 @@ defmodule MDL.ConformanceTest do
 
     test "the encoding cases of #{Path.relative_to(path, @encoding_dir)}" do
       run_encoding(unquote(path))
+    end
+  end
+
+  for path <- @command_files do
+    @external_resource path
+
+    test "the command decoding cases of #{Path.relative_to(path, @commands_dir)}" do
+      run_command_decoding(unquote(path))
     end
   end
 
@@ -220,6 +231,65 @@ defmodule MDL.ConformanceTest do
 
       {%{"encoded" => _}, _} ->
         "#{kase["name"]}: expected an encoded command, got #{inspect(actual)}"
+    end
+  end
+
+  # A command decoding file (spec/conformance.md section 4): each case's
+  # payload and metadata decoded as a command with its set.
+  defp run_command_decoding(path) do
+    file = path |> File.read!() |> JSON.decode!()
+    definitions = file["definitions"]
+    # A store of the file's own, apart from the other suites' stores.
+    name =
+      "commands-" <>
+        (path |> Path.relative_to(@commands_dir) |> Path.rootname() |> String.replace("/", "-"))
+
+    store = Fixtures.build_definitions!(definitions, name)
+    {:ok, mdl} = MDL.open(store)
+    {:ok, description} = MDL.describe(mdl)
+    versions = Map.new(description["sets"], &{&1["name"], &1["def_version"]})
+
+    failures =
+      file["cases"]
+      |> Enum.map(fn kase ->
+        message = message(Map.put(kase["message"], "ground_time", "1970-01-01T00:00:00Z"))
+
+        command_message = %{
+          set: kase["set"],
+          payload: message.payload,
+          metadata: message.metadata
+        }
+
+        actual = MDL.decode_command(mdl, kase["family"], command_message)
+        command_failure(kase, actual, definitions, versions)
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    assert failures == [], Enum.join(failures, "\n\n")
+  end
+
+  defp command_failure(kase, actual, definitions, versions) do
+    case {kase, actual} do
+      {%{"decoded" => decoded}, {:ok, _}} ->
+        expected =
+          decoded
+          |> Map.put("def_version", Map.fetch!(versions, decoded["set"]))
+          |> Expected.decoded_command(definitions)
+
+        if Expected.exact(actual) === Expected.exact({:ok, expected}),
+          do: nil,
+          else: "#{kase["name"]}: expected #{inspect({:ok, expected})}, got #{inspect(actual)}"
+
+      {%{"error" => code}, {:error, %MDL.Error{code: got, problems: []}}} ->
+        if Atom.to_string(got) == code,
+          do: nil,
+          else: "#{kase["name"]}: expected the error #{code}, got #{inspect(actual)}"
+
+      {%{"error" => code}, _} ->
+        "#{kase["name"]}: expected the error #{code}, got #{inspect(actual)}"
+
+      {%{"decoded" => _}, _} ->
+        "#{kase["name"]}: expected a decoded command, got #{inspect(actual)}"
     end
   end
 
