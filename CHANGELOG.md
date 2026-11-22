@@ -49,6 +49,26 @@ them too.
     parity, `sum16` to `sum32` (XTCE doesn't say what they add), the other
     checksums XTCE names, and a check followed in bits by anything but
     another check are unsupported.
+- A checksum covers at least one byte in every message: its `from_bits`
+  (0 when not given) is below the earliest bit the entries before it let
+  it start at. 0.2.0 refused one only when its own `offset_bits` came
+  before `from_bits`. A build now refuses (`checksum`) any other that can
+  start at or before `from_bits`, in any frontend: in a message where it
+  started at `from_bits` it covered no bytes, and in one where it started
+  before, decoding and encoding gave `invalid_layout`.
+
+### Compatibility
+
+- The checksum rule above is the second a build refuses before 1.0 while
+  a store an earlier release built with it still opens. The store reads
+  as it did: in a message where such a checksum covers no bytes, it's
+  compared with what its algorithm gives for none, and where it starts
+  before `from_bits`, the message is `invalid_layout`. Such a rule now
+  covers a definition that can fail to do what it's for in a message it
+  allows, as well as a second spelling of one meaning
+  ([spec/compatibility.md](spec/compatibility.md) §7). Rebuilding a set
+  with one fails at the checksum, located in its source file: give it a
+  `from_bits` before its earliest start, or put an entry before it.
 
 ### Releases
 
