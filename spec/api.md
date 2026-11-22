@@ -17,8 +17,8 @@ in JSON and as the values a binding returns. The `mdl` crate's `runtime`
 module implements it; `morphc decode` and `morphc encode` write the same
 results in their JSON reports. The result format's version is 1
 ([compatibility](compatibility.md) §4 says what changes it). A binding
-MUST pass the decoding cases of [conformance](conformance.md) §2 through
-its own API.
+MUST pass the decoding and encoding cases of [conformance](conformance.md)
+§2 and §3 through its own API.
 
 ## 1. Values
 

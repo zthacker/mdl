@@ -1,20 +1,23 @@
 defmodule MDL.ConformanceTest do
-  # The language-neutral decoding cases in conformance/decoding
-  # (spec/conformance.md section 2), through the binding's own API. morphc
-  # builds each file's definitions. Each expected result, worked out from
-  # the spec by hand, is read by MDL.Test.Expected as the Elixir values
-  # the binding must return, and compared with === with each float as its
-  # bits, so an integer and a float of one value differ, and so do 0.0 and
-  # -0.0 on every OTP release.
+  # The language-neutral decoding and encoding cases in conformance/decoding
+  # and conformance/encoding (spec/conformance.md sections 2 and 3),
+  # through the binding's own API. morphc builds each file's definitions.
+  # Each expected result, never an implementation's output, is read by
+  # MDL.Test.Expected as the Elixir values the binding must return, and
+  # compared with === with each float as its bits, so an integer and a
+  # float of one value differ, and so do 0.0 and -0.0 on every OTP release.
   use ExUnit.Case, async: true
 
   alias MDL.Test.{Expected, Fixtures}
 
   @dir Path.expand("../../../../conformance/decoding", __DIR__)
   @files @dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
+  @encoding_dir Path.expand("../../../../conformance/encoding", __DIR__)
+  @encoding_files @encoding_dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
 
-  test "there are decoding cases to run" do
+  test "there are decoding and encoding cases to run" do
     assert @files != [], "no case files in #{@dir}"
+    assert @encoding_files != [], "no case files in #{@encoding_dir}"
   end
 
   for path <- @files do
@@ -22,6 +25,14 @@ defmodule MDL.ConformanceTest do
 
     test "the decoding cases of #{Path.relative_to(path, @dir)}" do
       run(unquote(path))
+    end
+  end
+
+  for path <- @encoding_files do
+    @external_resource path
+
+    test "the encoding cases of #{Path.relative_to(path, @encoding_dir)}" do
+      run_encoding(unquote(path))
     end
   end
 
@@ -127,6 +138,88 @@ defmodule MDL.ConformanceTest do
 
       {%{"decoded" => _}, _} ->
         "#{kase["name"]}#{how}: expected a decoded message, got #{inspect(actual)}"
+    end
+  end
+
+  # An encoding file (spec/conformance.md section 3): each case's request
+  # encoded without bindings, the result compared as a decoded message's.
+  defp run_encoding(path) do
+    file = path |> File.read!() |> JSON.decode!()
+    definitions = file["definitions"]
+    # A store of the file's own, apart from the decoding files' stores.
+    name =
+      "encoding-" <>
+        (path |> Path.relative_to(@encoding_dir) |> Path.rootname() |> String.replace("/", "-"))
+
+    store = Fixtures.build_definitions!(definitions, name)
+    {:ok, mdl} = MDL.open(store)
+    {:ok, description} = MDL.describe(mdl)
+    versions = Map.new(description["sets"], &{&1["name"], &1["def_version"]})
+
+    failures =
+      file["cases"]
+      |> Enum.map(fn kase ->
+        actual = MDL.encode(mdl, kase["family"], request(kase["request"]))
+        encoding_failure(kase, actual, definitions, versions)
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    assert failures == [], Enum.join(failures, "\n\n")
+  end
+
+  # A case's request as MDL.encode/3 takes it, each argument's tagged value
+  # as the binding's own (spec/conformance.md section 3). This reads a
+  # well-formed file; the runtime's runner, in the same CI, is the one
+  # that refuses a malformed value (a second key, an integer's other
+  # spellings, a list of lists).
+  defp request(request) do
+    target =
+      case request do
+        %{"native_id" => id} -> Expected.integer_or_text(id)
+        _ -> nil
+      end
+
+    %{
+      set: request["set"],
+      command: request["command"],
+      arguments: Map.new(request["arguments"], fn {name, value} -> {name, argument(value)} end),
+      native_id: target
+    }
+  end
+
+  defp argument(%{"integer" => n}) when is_integer(n), do: n
+  defp argument(%{"integer" => digits}) when is_binary(digits), do: String.to_integer(digits)
+  defp argument(%{"float" => %{"non_finite" => "NaN"}}), do: :nan
+  defp argument(%{"float" => %{"non_finite" => "inf"}}), do: :infinity
+  defp argument(%{"float" => %{"non_finite" => "-inf"}}), do: :neg_infinity
+  defp argument(%{"float" => x}) when is_float(x), do: x
+  defp argument(%{"boolean" => b}) when is_boolean(b), do: b
+  defp argument(%{"text" => text}) when is_binary(text), do: text
+  defp argument(%{"bytes" => hex}), do: {:bytes, Base.decode16!(hex, case: :lower)}
+  defp argument(%{"list" => values}) when is_list(values), do: Enum.map(values, &argument/1)
+
+  defp encoding_failure(kase, actual, definitions, versions) do
+    case {kase, actual} do
+      {%{"encoded" => encoded}, {:ok, _}} ->
+        expected =
+          encoded
+          |> Map.put("def_version", Map.fetch!(versions, encoded["set"]))
+          |> Expected.encoded(definitions)
+
+        if Expected.exact(actual) === Expected.exact({:ok, expected}),
+          do: nil,
+          else: "#{kase["name"]}: expected #{inspect({:ok, expected})}, got #{inspect(actual)}"
+
+      {%{"error" => code}, {:error, %MDL.Error{code: got, problems: []}}} ->
+        if Atom.to_string(got) == code,
+          do: nil,
+          else: "#{kase["name"]}: expected the error #{code}, got #{inspect(actual)}"
+
+      {%{"error" => code}, _} ->
+        "#{kase["name"]}: expected the error #{code}, got #{inspect(actual)}"
+
+      {%{"encoded" => _}, _} ->
+        "#{kase["name"]}: expected an encoded command, got #{inspect(actual)}"
     end
   end
 

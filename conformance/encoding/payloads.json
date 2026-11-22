@@ -1,0 +1,287 @@
+{
+  "about": "Payloads: values in each byte order and signed form, padding, checksums written after every other entry, JSON payloads in canonical text, metadata, and a deprecated command.",
+  "definitions": {
+    "mdl_version": "2.1",
+    "catalog": {
+      "commands": {
+        "p.check": {
+          "arguments": [
+            { "name": "data", "type": "bytes" }
+          ]
+        },
+        "p.iso": {
+          "arguments": [
+            { "name": "data", "type": "bytes" }
+          ]
+        },
+        "p.json": {
+          "arguments": [
+            { "name": "x", "type": "f64" },
+            { "name": "n", "type": "u64" },
+            { "name": "name", "type": "str" },
+            { "name": "big", "type": "u64" }
+          ]
+        },
+        "p.le": {
+          "arguments": [
+            { "name": "word", "type": "u64", "range": { "max": 65535 } },
+            { "name": "small", "type": "i64", "range": { "min": -100, "max": 100 } },
+            { "name": "on", "type": "bool" }
+          ]
+        },
+        "p.old": {
+          "deprecated": "use p.le"
+        }
+      }
+    },
+    "families": [
+      {
+        "name": "be",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "be-1" }
+      },
+      {
+        "name": "js",
+        "encoding": "json",
+        "alias": { "kind": "fixed", "value": "js-1" }
+      },
+      {
+        "name": "le",
+        "encoding": "binary",
+        "byte_order": "little",
+        "alias": { "kind": "fixed", "value": "le-1" },
+        "metadata": ["apid"]
+      }
+    ],
+    "sets": [
+      {
+        "name": "be_v1",
+        "family": "be",
+        "commands": [
+          {
+            "name": "CHECK",
+            "canonical": "p.check",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 6 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 9 }, "argument": "data" },
+              {
+                "kind": "checksum",
+                "name": "crc",
+                "from_bits": 8,
+                "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535, "reflect_in": false, "reflect_out": false, "xor_out": 0 }
+              }
+            ]
+          },
+          {
+            "name": "ISO",
+            "canonical": "p.iso",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 7 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 2 }, "argument": "data" },
+              { "kind": "checksum", "name": "check", "from_bits": 8, "algorithm": { "kind": "iso8473" } }
+            ]
+          },
+          {
+            "name": "OLD",
+            "canonical": "p.old",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 8 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "js_v1",
+        "family": "js",
+        "commands": [
+          {
+            "name": "J",
+            "canonical": "p.json",
+            "entries": [
+              { "kind": "field", "name": "x", "type": "float", "pointer": "/v/x", "argument": "x" },
+              { "kind": "field", "name": "n", "type": "uint", "pointer": "/n", "argument": "n" },
+              { "kind": "field", "name": "name", "type": "string", "pointer": "/name", "argument": "name" },
+              { "kind": "field", "name": "big", "type": "uint", "pointer": "/v/big", "argument": "big" }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "le_v1",
+        "family": "le",
+        "commands": [
+          {
+            "name": "LE",
+            "canonical": "p.le",
+            "metadata": { "apid": 300 },
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 5 },
+              { "kind": "field", "name": "word", "type": "uint", "size_bits": 16, "argument": "word" },
+              { "kind": "field", "name": "small", "type": "int", "size_bits": 8, "signed": "sign_magnitude", "argument": "small" },
+              { "kind": "field", "name": "on", "type": "bool", "size_bits": 1, "argument": "on" },
+              { "kind": "padding", "size_bits": 7 }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "little-endian-sign-magnitude-and-padding",
+      "spec": ["encoding.md §4", "encoding.md §6", "decoding.md §2.1"],
+      "note": "In the little-endian family, word 4660 = 0x1234 is written least significant byte first, 34 12. small -5 in 8-bit sign-magnitude is the sign bit and magnitude 5, 85. on true is the top bit of the last byte, and the padding after it is 0: 80. The packet's metadata, apid 300, is what the link frames the payload with.",
+      "family": "le",
+      "request": {
+        "set": "le_v1",
+        "command": "p.le",
+        "arguments": { "word": { "integer": 4660 }, "small": { "integer": -5 }, "on": { "boolean": true } }
+      },
+      "encoded": {
+        "family": "le",
+        "set": "le_v1",
+        "packet": "LE",
+        "command": "p.le",
+        "payload": "0534128580",
+        "metadata": { "apid": 300 },
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 5, "word": 4660, "small": -5, "on": true }
+      }
+    },
+    {
+      "name": "a-crc-over-the-bytes-before-it",
+      "spec": ["encoding.md §4", "decoding.md §5.6"],
+      "note": "data is its fixed 9 bytes, 123456789. The checksum is written after every other entry, over the bytes from bit 8, the data: CRC-16/IBM-3740 of 123456789 is 0x29b1, in the family's big-endian order.",
+      "family": "be",
+      "request": { "set": "be_v1", "command": "p.check", "arguments": { "data": { "bytes": "313233343536373839" } } },
+      "encoded": {
+        "family": "be",
+        "set": "be_v1",
+        "packet": "CHECK",
+        "command": "p.check",
+        "payload": "0631323334353637383929b1",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 6, "data": "313233343536373839", "crc": 10673 }
+      }
+    },
+    {
+      "name": "iso-8473-as-computed",
+      "spec": ["encoding.md §4", "decoding.md §5.6"],
+      "note": "For data 00 00 the ISO 8473 check bytes are ff ff, and an encoder writes them as computed, never as the 00 00 a decoder also accepts.",
+      "family": "be",
+      "request": { "set": "be_v1", "command": "p.iso", "arguments": { "data": { "bytes": "0000" } } },
+      "encoded": {
+        "family": "be",
+        "set": "be_v1",
+        "packet": "ISO",
+        "command": "p.iso",
+        "payload": "070000ffff",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 7, "data": "0000", "check": 65535 }
+      }
+    },
+    {
+      "name": "fixed-bytes-of-the-wrong-length",
+      "spec": ["encoding.md §3.4"],
+      "note": "A fixed length without a terminator takes exactly 2 bytes, and 00 is 1: bad_length.",
+      "family": "be",
+      "request": { "set": "be_v1", "command": "p.iso", "arguments": { "data": { "bytes": "00" } } },
+      "error": "bad_length"
+    },
+    {
+      "name": "a-deprecated-command",
+      "spec": ["encoding.md §6"],
+      "note": "A deprecated command still encodes, and the result carries the catalog's note. It has no arguments, and its packet only its opcode.",
+      "family": "be",
+      "request": { "set": "be_v1", "command": "p.old", "arguments": {} },
+      "encoded": {
+        "family": "be",
+        "set": "be_v1",
+        "packet": "OLD",
+        "command": "p.old",
+        "payload": "08",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": "use p.le",
+        "record": { "opcode": 8 }
+      }
+    },
+    {
+      "name": "json-in-canonical-text",
+      "spec": ["encoding.md §5", "encoding.md §6", "api.md §3.2"],
+      "note": "The payload is one object, its members in key order (n before name before v), objects created along /v, no whitespace. 1e21 is written as ECMAScript writes it, 1e+21; the quote in a\"b is escaped; and big, 2^64 - 1, an integer field's value, in exact digits. The payload is the text's UTF-8 bytes, in hex. Decoding it gives the record, big past 2^53 as a string.",
+      "family": "js",
+      "request": {
+        "set": "js_v1",
+        "command": "p.json",
+        "arguments": {
+          "x": { "float": 1e21 },
+          "n": { "integer": 7 },
+          "name": { "text": "a\"b" },
+          "big": { "integer": "18446744073709551615" }
+        }
+      },
+      "encoded": {
+        "family": "js",
+        "set": "js_v1",
+        "packet": "J",
+        "command": "p.json",
+        "payload": "7b226e223a372c226e616d65223a22615c2262222c2276223a7b22626967223a31383434363734343037333730393535313631352c2278223a31652b32317d7d",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "x": 1e21, "n": 7, "name": "a\"b", "big": "18446744073709551615" }
+      }
+    },
+    {
+      "name": "json-negative-zero-and-text-unescaped",
+      "spec": ["encoding.md §5", "decoding.md §5.3"],
+      "note": "-0.0 is written 0, as RFC 8785 writes both zeros, so decoding the payload gives the float field 0.0, not -0.0. e acute isn't escaped: c3 a9 in the UTF-8 text.",
+      "family": "js",
+      "request": {
+        "set": "js_v1",
+        "command": "p.json",
+        "arguments": { "x": { "float": -0.0 }, "n": { "integer": 0 }, "name": { "text": "é" }, "big": { "integer": 0 } }
+      },
+      "encoded": {
+        "family": "js",
+        "set": "js_v1",
+        "packet": "J",
+        "command": "p.json",
+        "payload": "7b226e223a302c226e616d65223a22c3a9222c2276223a7b22626967223a302c2278223a307d7d",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "x": 0.0, "n": 0, "name": "é", "big": 0 }
+      }
+    },
+    {
+      "name": "json-the-nearer-of-two-spellings",
+      "spec": ["encoding.md §5"],
+      "note": "The double 1214.19732666015625 has two equally near 17-digit spellings, and the even one is written: 1214.1973266601562 (encoding.md's own example).",
+      "family": "js",
+      "request": {
+        "set": "js_v1",
+        "command": "p.json",
+        "arguments": { "x": { "float": 1214.19732666015625 }, "n": { "integer": 1 }, "name": { "text": "" }, "big": { "integer": 1 } }
+      },
+      "encoded": {
+        "family": "js",
+        "set": "js_v1",
+        "packet": "J",
+        "command": "p.json",
+        "payload": "7b226e223a312c226e616d65223a22222c2276223a7b22626967223a312c2278223a313231342e313937333236363630313536327d7d",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "x": 1214.1973266601562, "n": 1, "name": "", "big": 1 }
+      }
+    }
+  ]
+}

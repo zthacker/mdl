@@ -1,17 +1,20 @@
-//! The language-neutral decoding cases in `conformance/decoding/`
-//! (`spec/conformance.md` §2), run through the runtime API as a binding
-//! calls it. Each expected result there is worked out from the spec by
-//! hand, never taken from MDL's output, so a case that fails is wrong
-//! itself or has found a bug in MDL, and the spec says which.
+//! The language-neutral decoding and encoding cases in
+//! `conformance/decoding/` and `conformance/encoding/`
+//! (`spec/conformance.md` §2 and §3), run through the runtime API as a
+//! binding calls it. No expected result there is taken from MDL's output,
+//! so a case that fails is wrong itself or has found a bug in MDL, and the
+//! spec says which.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use mdl::artifact::build;
+use mdl::bindings::NativeId;
+use mdl::encode::{ArgumentValue, CommandRequest};
 use mdl::message::{Message, MetaValue};
 use mdl::read::read_bundle_value;
-use mdl::runtime::{ApiError, DecodedMessage, Runtime};
+use mdl::runtime::{ApiError, DecodedMessage, EncodedCommand, Runtime, Value};
 use mdl::store;
 use mdl::time::Timestamp;
 use mdl::validate::validate;
@@ -44,6 +47,65 @@ fn every_decoding_case_gives_the_result_the_spec_does() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
     assert!(ran > 0, "no cases in {dir:?}");
+}
+
+#[test]
+fn every_encoding_case_gives_the_result_the_spec_does() {
+    let dir = repository().join("conformance/encoding");
+    let mut paths = Vec::new();
+    case_files(&dir, &mut paths);
+    paths.sort();
+    assert!(!paths.is_empty(), "no case files in {dir:?}");
+    let mut sections = Sections::default();
+    let mut failures = Vec::new();
+    let mut ran = 0;
+    for path in &paths {
+        // A file's name is its path under conformance/encoding.
+        let name = path
+            .strip_prefix(&dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        let mut file = Failures::new(&name);
+        ran += run_encoding_file(path, &name, &mut sections, &mut file);
+        failures.extend(file.list);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    assert!(ran > 0, "no cases in {dir:?}");
+}
+
+/// A request's values are read as `spec/conformance.md` §3 spells them,
+/// and any other spelling is a malformed case, not a value.
+#[test]
+fn a_tagged_value_has_one_spelling() {
+    use serde_json::json;
+    let read = |value: Json| tagged(&value);
+    assert_eq!(read(json!({ "integer": 7 })), Ok(ArgumentValue::Uint(7)));
+    assert_eq!(read(json!({ "integer": -7 })), Ok(ArgumentValue::Int(-7)));
+    assert_eq!(
+        read(json!({ "integer": "9007199254740992" })),
+        Ok(ArgumentValue::Uint(1 << 53))
+    );
+    assert_eq!(
+        read(json!({ "list": [{ "text": "a" }, { "bytes": "c0ff" }] })),
+        Ok(ArgumentValue::List(vec![
+            ArgumentValue::Text("a".to_string()),
+            ArgumentValue::Bytes(vec![0xc0, 0xff]),
+        ]))
+    );
+    for malformed in [
+        json!({ "integer": "7" }),
+        json!({ "integer": "09007199254740992" }),
+        json!({ "integer": 7.0 }),
+        json!({ "float": 1 }),
+        json!({ "bytes": "c0 ff" }),
+        json!({ "bytes": "C0FF" }),
+        json!({ "list": [{ "list": [] }] }),
+        json!({ "text": "a", "bytes": "00" }),
+        json!({ "number": 1 }),
+    ] {
+        assert!(read(malformed.clone()).is_err(), "{malformed}");
+    }
 }
 
 /// Metadata strings read as `spec/api.md` §1 reads them, which cases
@@ -181,7 +243,8 @@ fn run_file(path: &Path, name: &str, sections: &mut Sections, failures: &mut Fai
                     Message::new(payload, case.message.ground_time).with_metadata(&metadata);
                 runtime.decode(&case.family, &message)
             });
-        if let Err(problem) = compare(&case.expected, &result, &versions) {
+        if let Err(problem) = compare(&case.expected, &result, DecodedMessage::to_value, &versions)
+        {
             failures.add(&case.name, problem);
         }
     }
@@ -226,7 +289,9 @@ fn run_file(path: &Path, name: &str, sections: &mut Sections, failures: &mut Fai
             continue;
         }
         for (case, result) in of_family.iter().zip(&results) {
-            if let Err(problem) = compare(&case.expected, result, &versions) {
+            if let Err(problem) =
+                compare(&case.expected, result, DecodedMessage::to_value, &versions)
+            {
                 failures.add(&case.name, format!("with decode_many: {problem}"));
             }
         }
@@ -244,8 +309,9 @@ struct Case {
 }
 
 enum Expected {
-    /// The decoded message's JSON, without `def_version`.
-    Decoded(Json),
+    /// The result's JSON, a decoded message or an encoded command, without
+    /// `def_version`.
+    Result(Json),
     /// The error's code.
     Error(String),
 }
@@ -352,7 +418,7 @@ fn read_case(case: &Json) -> Result<Case, String> {
                     "{name}: decoded gives def_version, which describe gives"
                 ));
             }
-            Expected::Decoded(Json::Object(decoded.clone()))
+            Expected::Result(Json::Object(decoded.clone()))
         }
         (None, Some(error)) => Expected::Error(text(error, "error")?),
         _ => return Err(format!("{name}: a case has decoded or error, and not both")),
@@ -544,7 +610,7 @@ fn open(file: &Json, stem: &str) -> Result<Runtime, String> {
     })?;
     let artifacts = build(&validated).map_err(|e| format!("the definitions don't build: {e}"))?;
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join("conformance_decoding")
+        .join("conformance")
         .join(stem);
     if dir.exists() {
         fs::remove_dir_all(&dir).map_err(|e| format!("{dir:?}: {e}"))?;
@@ -588,18 +654,20 @@ fn def_versions(runtime: &Runtime) -> Result<BTreeMap<String, String>, String> {
         .collect()
 }
 
-/// A result against a case's (`spec/conformance.md` §2.1).
-fn compare(
+/// A result against a case's (`spec/conformance.md` §2.1, §3.1): `value`
+/// gives a decoded message's or an encoded command's JSON.
+fn compare<T>(
     expected: &Expected,
-    result: &Result<DecodedMessage, ApiError>,
+    result: &Result<T, ApiError>,
+    value: impl Fn(&T) -> Value,
     versions: &BTreeMap<String, String>,
 ) -> Result<(), String> {
     match (expected, result) {
-        (Expected::Decoded(expected), Ok(decoded)) => {
-            let mut actual = serde_json::to_value(decoded.to_value()).map_err(|e| e.to_string())?;
+        (Expected::Result(expected), Ok(result)) => {
+            let mut actual = serde_json::to_value(value(result)).map_err(|e| e.to_string())?;
             let fields = actual
                 .as_object_mut()
-                .ok_or("a decoded message that isn't an object")?;
+                .ok_or("a result that isn't an object")?;
             let def_version = fields.remove("def_version");
             let set = fields.get("set").and_then(Json::as_str).unwrap_or_default();
             let digest = versions.get(set);
@@ -616,8 +684,8 @@ fn compare(
                 Some(difference) => Err(format!("{difference}\nthe whole result: {actual}")),
             }
         }
-        (Expected::Decoded(_), Err(error)) => Err(format!(
-            "expected a decoded message, got the error {}: {error}",
+        (Expected::Result(_), Err(error)) => Err(format!(
+            "expected a result, got the error {}: {error}",
             error.code
         )),
         (Expected::Error(code), Err(error)) => {
@@ -635,8 +703,8 @@ fn compare(
                 Ok(())
             }
         }
-        (Expected::Error(code), Ok(decoded)) => {
-            let actual = serde_json::to_value(decoded.to_value()).map_err(|e| e.to_string())?;
+        (Expected::Error(code), Ok(result)) => {
+            let actual = serde_json::to_value(value(result)).map_err(|e| e.to_string())?;
             Err(format!("expected the error {code}, got {actual}"))
         }
     }
@@ -691,5 +759,256 @@ fn number(n: &serde_json::Number) -> Option<Number> {
         text.parse::<f64>().ok().map(|x| Number::Float(x.to_bits()))
     } else {
         text.parse::<i128>().ok().map(Number::Integer)
+    }
+}
+
+// ---- Encoding cases (`spec/conformance.md` §3) ------------------------------
+
+/// One encoding case.
+struct EncodingCase {
+    name: String,
+    spec: Vec<String>,
+    family: String,
+    request: CommandRequest,
+    expected: Expected,
+}
+
+/// Runs one encoding file's cases and returns how many it ran. `name` is
+/// its path under conformance/encoding.
+fn run_encoding_file(
+    path: &Path,
+    name: &str,
+    sections: &mut Sections,
+    failures: &mut Failures,
+) -> usize {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    let file: Json = match serde_json::from_str(&text) {
+        Ok(file) => file,
+        Err(error) => {
+            failures.add("", format!("not JSON: {error}"));
+            return 0;
+        }
+    };
+    let cases = match read_encoding_file(&file) {
+        Ok(cases) => cases,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    let mut names = BTreeSet::new();
+    for case in &cases {
+        if !names.insert(case.name.as_str()) {
+            failures.add(&case.name, "a second case of this name");
+        }
+        for citation in &case.spec {
+            if let Err(problem) = sections.check(citation) {
+                failures.add(&case.name, problem);
+            }
+        }
+    }
+    // A store of the file's own, apart from the decoding files' stores.
+    let stem = format!(
+        "encoding-{}",
+        name.trim_end_matches(".json").replace(['/', '\\'], "-")
+    );
+    let runtime = match open(&file, &stem) {
+        Ok(runtime) => runtime,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    let versions = match def_versions(&runtime) {
+        Ok(versions) => versions,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    for case in &cases {
+        let result = runtime.encode(&case.family, &case.request);
+        if let Err(problem) = compare(&case.expected, &result, EncodedCommand::to_value, &versions)
+        {
+            failures.add(&case.name, problem);
+        }
+    }
+    cases.len()
+}
+
+fn read_encoding_file(file: &Json) -> Result<Vec<EncodingCase>, String> {
+    let file = object(file, "the file")?;
+    keys(file, "the file", &["about", "definitions", "cases"], &[])?;
+    text(&file["about"], "about")?;
+    let cases = file["cases"]
+        .as_array()
+        .ok_or("cases isn't a list")?
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            read_encoding_case(case).map_err(|problem| format!("case {index}: {problem}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if cases.is_empty() {
+        return Err("no cases".to_string());
+    }
+    Ok(cases)
+}
+
+fn read_encoding_case(case: &Json) -> Result<EncodingCase, String> {
+    let case = object(case, "a case")?;
+    keys(
+        case,
+        "a case",
+        &["name", "spec", "note", "family", "request"],
+        &["encoded", "error"],
+    )?;
+    let name = text(&case["name"], "name")?;
+    let spec = case["spec"]
+        .as_array()
+        .filter(|citations| !citations.is_empty())
+        .ok_or_else(|| format!("{name}: spec isn't a list of sections"))?
+        .iter()
+        .map(|citation| text(citation, "a citation"))
+        .collect::<Result<Vec<_>, _>>()?;
+    text(&case["note"], "note")?;
+    let expected = match (case.get("encoded"), case.get("error")) {
+        (Some(encoded), None) => {
+            let encoded = object(encoded, "encoded")?;
+            if encoded.contains_key("def_version") {
+                return Err(format!(
+                    "{name}: encoded gives def_version, which describe gives"
+                ));
+            }
+            Expected::Result(Json::Object(encoded.clone()))
+        }
+        (None, Some(error)) => Expected::Error(text(error, "error")?),
+        _ => return Err(format!("{name}: a case has encoded or error, and not both")),
+    };
+    Ok(EncodingCase {
+        family: text(&case["family"], "family")?,
+        request: read_request(&case["request"]).map_err(|problem| format!("{name}: {problem}"))?,
+        name,
+        spec,
+        expected,
+    })
+}
+
+/// A request (`spec/conformance.md` §3): its set and command, its tagged
+/// arguments, and its target.
+fn read_request(request: &Json) -> Result<CommandRequest, String> {
+    let request = object(request, "request")?;
+    keys(
+        request,
+        "request",
+        &["set", "command", "arguments"],
+        &["native_id"],
+    )?;
+    let mut built = CommandRequest::new(
+        text(&request["set"], "set")?,
+        text(&request["command"], "command")?,
+    );
+    for (name, value) in object(&request["arguments"], "arguments")? {
+        let value = tagged(value).map_err(|problem| format!("argument {name}: {problem}"))?;
+        built = built.with_argument(name.clone(), value);
+    }
+    if let Some(native_id) = request.get("native_id") {
+        built = built.with_target(target(native_id)?);
+    }
+    Ok(built)
+}
+
+/// A tagged value: an object whose one key names its kind.
+fn tagged(value: &Json) -> Result<ArgumentValue, String> {
+    let value = object(value, "a value")?;
+    let mut entries = value.iter();
+    let (Some((kind, inner)), None) = (entries.next(), entries.next()) else {
+        return Err(format!("a value has one key, its kind: {value:?}"));
+    };
+    match kind.as_str() {
+        "integer" => match integer(inner)? {
+            n if n >= 0 => u64::try_from(n).map(ArgumentValue::Uint),
+            n => i64::try_from(n).map(ArgumentValue::Int),
+        }
+        .map_err(|_| format!("{inner} is past -2^63 to 2^64 - 1")),
+        "float" => float(inner).map(ArgumentValue::Float),
+        "boolean" => inner
+            .as_bool()
+            .map(ArgumentValue::Bool)
+            .ok_or_else(|| format!("{inner} isn't a boolean")),
+        "text" => text(inner, "text").map(ArgumentValue::Text),
+        "bytes" => {
+            let hex = text(inner, "bytes")?;
+            if hex.contains(' ') {
+                return Err(format!("bytes {hex:?} has a space"));
+            }
+            from_hex(&hex).map(ArgumentValue::Bytes)
+        }
+        "list" => {
+            let values = inner
+                .as_array()
+                .ok_or_else(|| format!("{inner} isn't a list"))?
+                .iter()
+                .map(tagged)
+                .collect::<Result<Vec<_>, _>>()?;
+            // A list argument's values are scalars (`spec/api.md` §2.4).
+            if values
+                .iter()
+                .any(|value| matches!(value, ArgumentValue::List(_)))
+            {
+                return Err(format!("a list's values aren't lists: {inner}"));
+            }
+            Ok(ArgumentValue::List(values))
+        }
+        other => Err(format!("{other:?} isn't a kind of value")),
+    }
+}
+
+/// An integer in `spec/api.md` §1's one spelling: a number within
+/// ±(2^53 - 1), or a decimal string past it.
+fn integer(value: &Json) -> Result<i128, String> {
+    match value {
+        Json::Number(n) => match number(n) {
+            Some(Number::Integer(n)) if n.unsigned_abs() <= MAX_SAFE_INTEGER => Ok(n),
+            _ => Err(format!("{n} isn't an integer within 2^53 - 1")),
+        },
+        Json::String(text) => match integer_spelled(text) {
+            Some(Meta::Uint(n)) if u128::from(n) > MAX_SAFE_INTEGER => Ok(i128::from(n)),
+            Some(Meta::Int(n)) if n.unsigned_abs() > MAX_SAFE_INTEGER as u64 => Ok(i128::from(n)),
+            _ => Err(format!(
+                "{text:?} isn't an integer's decimal spelling past 2^53 - 1"
+            )),
+        },
+        other => Err(format!("{other} isn't an integer")),
+    }
+}
+
+/// A float in `spec/api.md` §1's spelling: a number with a fraction or an
+/// exponent, or NaN or an infinity as its `non_finite` object.
+fn float(value: &Json) -> Result<f64, String> {
+    match value {
+        Json::Number(n) => match number(n) {
+            Some(Number::Float(bits)) => Ok(f64::from_bits(bits)),
+            _ => Err(format!("{n} isn't written as a float")),
+        },
+        Json::Object(map) if map.len() == 1 => match map.get("non_finite").and_then(Json::as_str) {
+            Some("NaN") => Ok(f64::NAN),
+            Some("inf") => Ok(f64::INFINITY),
+            Some("-inf") => Ok(f64::NEG_INFINITY),
+            _ => Err(format!("{value} isn't a non_finite object")),
+        },
+        other => Err(format!("{other} isn't a float")),
+    }
+}
+
+/// A target: an integer or text, read as `spec/api.md` §1 reads a native id.
+fn target(value: &Json) -> Result<NativeId, String> {
+    match value {
+        Json::String(text) => Ok(NativeId::from_text(text.clone())),
+        number => match integer(number)? {
+            n if n >= 0 => u64::try_from(n).map(NativeId::from),
+            n => i64::try_from(n).map(NativeId::from),
+        }
+        .map_err(|_| format!("{number} is past -2^63 to 2^64 - 1")),
     }
 }

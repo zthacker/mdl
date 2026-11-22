@@ -6,7 +6,9 @@ MUST NOT, SHOULD and MAY are to be interpreted as described in RFC 2119.
 Encoding turns a canonical command and its arguments into the payload of
 a set's command packet. Two implementations given the same artifacts and
 request MUST produce the same payload byte for byte, or the same error
-code. Encoding is a pure function of those inputs.
+code; the encoding cases of [conformance.md](conformance.md) §3 are
+examples of this document that every implementation runs. Encoding is a
+pure function of those inputs.
 
 A command encodes completely or not at all. Any failure in this document
 refuses the whole request with the code in brackets. An encoder never
@@ -64,8 +66,10 @@ number.
 | `bytes` | bytes |
 | `enum` | text naming one of its states [`unknown_state`] that the packet accepts (§2.6) [`unsupported_state`] |
 
-Anything else is [`wrong_type`]. A double for an `f64` argument MUST be
-finite [`non_finite`].
+Anything else is [`wrong_type`], not `out_of_range`: a double with a
+fraction for an integer argument, or an integer a double doesn't hold
+exactly for an `f64` one. A double for an `f64` argument MUST be finite
+[`non_finite`].
 Defaults are values like any other: a bytes default is written in the
 catalog as lowercase hex, and an integer past ±(2^53 − 1) as a decimal
 string. A list argument's default is a JSON array of them (§2.5). A

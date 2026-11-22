@@ -1,0 +1,495 @@
+{
+  "about": "Arguments: the types each accepts, ranges, defaults, lists, the order arguments are checked in, a set that leaves an argument out, and a packet's own limits.",
+  "definitions": {
+    "mdl_version": "2.3",
+    "catalog": {
+      "commands": {
+        "t.limited": {
+          "arguments": [
+            { "name": "rate", "type": "f64", "unit": "s", "range": { "min": 0, "max": 100 }, "default": 10 },
+            { "name": "kind", "type": "enum", "states": ["A", "B", "C"] },
+            { "name": "extra", "type": "u64", "range": { "max": 255 }, "default": 7 }
+          ]
+        },
+        "t.list": {
+          "arguments": [
+            { "name": "values", "type": "u64", "range": { "max": 200 }, "list": { "min": 1, "max": 3 } }
+          ]
+        },
+        "t.name": {
+          "arguments": [
+            { "name": "label", "type": "str" },
+            { "name": "blob", "type": "bytes" }
+          ]
+        },
+        "t.set": {
+          "arguments": [
+            { "name": "level", "type": "f64", "unit": "V", "range": { "min": 0, "max": 10 }, "default": 5 },
+            { "name": "count", "type": "u64", "range": { "min": 1, "max": 1000 } },
+            { "name": "offset", "type": "i64", "range": { "min": -100, "max": 100 }, "default": 0 },
+            { "name": "flag", "type": "bool", "default": false },
+            { "name": "mode", "type": "enum", "states": ["OFF", "ON", "STANDBY"], "default": "OFF" }
+          ]
+        }
+      }
+    },
+    "families": [
+      {
+        "name": "a",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "a-1" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "a_old",
+        "family": "a",
+        "commands": [
+          {
+            "name": "SET_OLD",
+            "canonical": "t.set",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 1 },
+              { "kind": "field", "name": "count", "type": "uint", "size_bits": 16, "argument": "count" },
+              { "kind": "field", "name": "offset", "type": "int", "size_bits": 8, "argument": "offset" },
+              { "kind": "field", "name": "flag", "type": "bool", "size_bits": 1, "argument": "flag" },
+              { "kind": "padding", "size_bits": 7 },
+              {
+                "kind": "field",
+                "name": "mode",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "OFF" }, { "raw": 1, "name": "ON" }, { "raw": 2, "name": "STANDBY" }] },
+                "argument": "mode"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "a_v1",
+        "family": "a",
+        "commands": [
+          {
+            "name": "SET",
+            "canonical": "t.set",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 1 },
+              { "kind": "field", "name": "level", "type": "float", "size_bits": 32, "unit": "V", "argument": "level" },
+              { "kind": "field", "name": "count", "type": "uint", "size_bits": 16, "argument": "count" },
+              { "kind": "field", "name": "offset", "type": "int", "size_bits": 8, "argument": "offset" },
+              { "kind": "field", "name": "flag", "type": "bool", "size_bits": 1, "argument": "flag" },
+              { "kind": "padding", "size_bits": 7 },
+              {
+                "kind": "field",
+                "name": "mode",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "OFF" }, { "raw": 1, "name": "ON" }, { "raw": 2, "name": "STANDBY" }] },
+                "argument": "mode"
+              }
+            ]
+          },
+          {
+            "name": "NAME",
+            "canonical": "t.name",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 2 },
+              { "kind": "field", "name": "label", "type": "string", "length": { "kind": "fixed", "bytes": 4, "terminator": 0 }, "text": "ascii", "argument": "label" },
+              { "kind": "field", "name": "len", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "blob", "type": "bytes", "length": { "kind": "field", "field": "len" }, "argument": "blob" }
+            ]
+          },
+          {
+            "name": "LIST",
+            "canonical": "t.list",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 3 },
+              { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "array",
+                "name": "values",
+                "count": { "kind": "field", "field": "n" },
+                "element": { "kind": "scalar", "type": "uint", "size_bits": 8 },
+                "argument": "values"
+              }
+            ]
+          },
+          {
+            "name": "LIMITED",
+            "canonical": "t.limited",
+            "arguments": {
+              "extra": { "required": true },
+              "kind": { "states": ["A", "B"] },
+              "rate": { "range": { "min": 0, "max": 60000 }, "default": 5000, "unit": "ms" }
+            },
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 4 },
+              { "kind": "field", "name": "rate", "type": "uint", "size_bits": 16, "unit": "ms", "argument": "rate" },
+              {
+                "kind": "field",
+                "name": "kind",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "A" }, { "raw": 1, "name": "B" }] },
+                "argument": "kind"
+              },
+              { "kind": "field", "name": "extra", "type": "uint", "size_bits": 8, "argument": "extra" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "every-argument-given",
+      "spec": ["encoding.md §2.2", "encoding.md §3.1", "encoding.md §3.2", "encoding.md §4", "encoding.md §6", "api.md §3.2"],
+      "note": "The constant opcode is 01. level 2.5 V into a 32-bit float field in V is the binary32 0x40200000. count 12 is 00 0c, offset -3 is fd as an 8-bit two's complement, flag true is the top bit of the next byte, and its 7 bits of padding are 0, so 80. mode ON is the raw 1 the states conversion lists. Nothing was left out, so nothing is defaulted; the packet has no metadata and the command isn't deprecated. The record holds each field's raw value as decoding the payload gives it.",
+      "family": "a",
+      "request": {
+        "set": "a_v1",
+        "command": "t.set",
+        "arguments": {
+          "level": { "float": 2.5 },
+          "count": { "integer": 12 },
+          "offset": { "integer": -3 },
+          "flag": { "boolean": true },
+          "mode": { "text": "ON" }
+        }
+      },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "SET",
+        "command": "t.set",
+        "payload": "0140200000000cfd8001",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 1, "level": 2.5, "count": 12, "offset": -3, "flag": true, "mode": 1 }
+      }
+    },
+    {
+      "name": "defaults-fill-what-is-left-out",
+      "spec": ["encoding.md §2.1", "encoding.md §6"],
+      "note": "Only count is given, 1. level takes its default 5 (0x40a00000), offset 0, flag false and mode OFF (raw 0): defaulted lists them in catalog order.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "integer": 1 } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "SET",
+        "command": "t.set",
+        "payload": "0140a000000001000000",
+        "metadata": {},
+        "defaulted": ["level", "offset", "flag", "mode"],
+        "deprecated": null,
+        "record": { "opcode": 1, "level": 5.0, "count": 1, "offset": 0, "flag": false, "mode": 0 }
+      }
+    },
+    {
+      "name": "an-integer-for-an-f64",
+      "spec": ["encoding.md §2.2"],
+      "note": "An f64 argument accepts an integer a double holds exactly: 3 is 3.0, the binary32 0x40400000.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "level": { "integer": 3 }, "count": { "integer": 1 } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "SET",
+        "command": "t.set",
+        "payload": "01404000000001000000",
+        "metadata": {},
+        "defaulted": ["offset", "flag", "mode"],
+        "deprecated": null,
+        "record": { "opcode": 1, "level": 3.0, "count": 1, "offset": 0, "flag": false, "mode": 0 }
+      }
+    },
+    {
+      "name": "a-whole-float-for-an-integer",
+      "spec": ["encoding.md §2.2"],
+      "note": "A u64 argument accepts a double with no fraction: 7.0 is 7, 00 07.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "float": 7.0 } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "SET",
+        "command": "t.set",
+        "payload": "0140a000000007000000",
+        "metadata": {},
+        "defaulted": ["level", "offset", "flag", "mode"],
+        "deprecated": null,
+        "record": { "opcode": 1, "level": 5.0, "count": 7, "offset": 0, "flag": false, "mode": 0 }
+      }
+    },
+    {
+      "name": "a-fraction-for-an-integer",
+      "spec": ["encoding.md §2.2"],
+      "note": "A u64 argument accepts an integer, or a double with no fraction; 7.5 is neither, and anything else is wrong_type.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "float": 7.5 } } },
+      "error": "wrong_type"
+    },
+    {
+      "name": "an-integer-a-double-cant-hold",
+      "spec": ["encoding.md §2.2"],
+      "note": "An f64 argument accepts an integer a double holds exactly, and 2^53 + 1 = 9007199254740993 lies between the doubles 2^53 and 2^53 + 2: wrong_type, checked before level's range.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "level": { "integer": "9007199254740993" }, "count": { "integer": 1 } } },
+      "error": "wrong_type"
+    },
+    {
+      "name": "past-the-range",
+      "spec": ["encoding.md §2.3"],
+      "note": "count's range is 1 to 1000, ends included, and 1001 is past it: out_of_range.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "integer": 1001 } } },
+      "error": "out_of_range"
+    },
+    {
+      "name": "text-for-an-integer",
+      "spec": ["encoding.md §2.2"],
+      "note": "The text 12 isn't an integer: wrong_type.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "text": "12" } } },
+      "error": "wrong_type"
+    },
+    {
+      "name": "nan-for-an-f64",
+      "spec": ["encoding.md §2.2"],
+      "note": "A double for an f64 argument must be finite: non_finite.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "level": { "float": { "non_finite": "NaN" } }, "count": { "integer": 1 } } },
+      "error": "non_finite"
+    },
+    {
+      "name": "a-state-the-catalog-hasnt-got",
+      "spec": ["encoding.md §2.2"],
+      "note": "BOGUS names none of mode's states: unknown_state.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "integer": 1 }, "mode": { "text": "BOGUS" } } },
+      "error": "unknown_state"
+    },
+    {
+      "name": "an-integer-for-a-bool",
+      "spec": ["encoding.md §2.2"],
+      "note": "A bool argument accepts a bool, and 1 isn't one: wrong_type.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "integer": 1 }, "flag": { "integer": 1 } } },
+      "error": "wrong_type"
+    },
+    {
+      "name": "names-before-values",
+      "spec": ["encoding.md §2.1"],
+      "note": "The first pass checks the given names: speed isn't one of t.set's arguments, unknown_argument, before count's text is checked.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "text": "x" }, "speed": { "integer": 2 } } },
+      "error": "unknown_argument"
+    },
+    {
+      "name": "an-argument-without-a-default-left-out",
+      "spec": ["encoding.md §2.1"],
+      "note": "count has no default, and isn't given: missing_argument.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": {} },
+      "error": "missing_argument"
+    },
+    {
+      "name": "arguments-in-catalog-order",
+      "spec": ["encoding.md §2.1"],
+      "note": "The second pass checks every argument in catalog order: level comes before count, so level 11, past its range, is out_of_range before count's text is checked.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.set", "arguments": { "count": { "text": "x" }, "level": { "float": 11.0 } } },
+      "error": "out_of_range"
+    },
+    {
+      "name": "a-set-the-family-hasnt-got",
+      "spec": ["encoding.md §1"],
+      "note": "The family has no set a_v9: unknown_set.",
+      "family": "a",
+      "request": { "set": "a_v9", "command": "t.set", "arguments": { "count": { "integer": 1 } } },
+      "error": "unknown_set"
+    },
+    {
+      "name": "a-command-the-set-doesnt-encode",
+      "spec": ["encoding.md §1"],
+      "note": "a_old encodes only t.set: unknown_command.",
+      "family": "a",
+      "request": { "set": "a_old", "command": "t.name", "arguments": { "label": { "text": "AB" }, "blob": { "bytes": "00" } } },
+      "error": "unknown_command"
+    },
+    {
+      "name": "only-the-default-where-a-set-leaves-an-argument-out",
+      "spec": ["encoding.md §2.4"],
+      "note": "a_old leaves level out, so with it level can only be its default, 5; 2.5 is not_default.",
+      "family": "a",
+      "request": { "set": "a_old", "command": "t.set", "arguments": { "level": { "float": 2.5 }, "count": { "integer": 1 } } },
+      "error": "not_default"
+    },
+    {
+      "name": "the-default-where-a-set-leaves-an-argument-out",
+      "spec": ["encoding.md §2.4", "encoding.md §6"],
+      "note": "level given as its default, 5.0, is accepted, and written nowhere. It was given, so it isn't defaulted; offset, flag and mode are.",
+      "family": "a",
+      "request": { "set": "a_old", "command": "t.set", "arguments": { "level": { "float": 5.0 }, "count": { "integer": 1 } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_old",
+        "packet": "SET_OLD",
+        "command": "t.set",
+        "payload": "010001000000",
+        "metadata": {},
+        "defaulted": ["offset", "flag", "mode"],
+        "deprecated": null,
+        "record": { "opcode": 1, "count": 1, "offset": 0, "flag": false, "mode": 0 }
+      }
+    },
+    {
+      "name": "strings-and-bytes",
+      "spec": ["encoding.md §3.4", "encoding.md §3.5", "encoding.md §6"],
+      "note": "label AB in a fixed 4 bytes with a NUL terminator is 41 42, and the terminator fills the rest: 00 00. blob c0ffee is 3 bytes, which the length field before it holds: 03. Decoding the label gives the text before the terminator, AB.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.name", "arguments": { "label": { "text": "AB" }, "blob": { "bytes": "c0ffee" } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "NAME",
+        "command": "t.name",
+        "payload": "024142000003c0ffee",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 2, "label": "AB", "len": 3, "blob": "c0ffee" }
+      }
+    },
+    {
+      "name": "too-long-for-a-fixed-length",
+      "spec": ["encoding.md §3.4"],
+      "note": "With a terminator, the bytes must be at most the fixed 4; ABCDE is 5: bad_length.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.name", "arguments": { "label": { "text": "ABCDE" }, "blob": { "bytes": "00" } } },
+      "error": "bad_length"
+    },
+    {
+      "name": "text-ascii-cant-hold",
+      "spec": ["encoding.md §3.4"],
+      "note": "label is ASCII, only below 0x80, and e acute is U+00E9: invalid_text.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.name", "arguments": { "label": { "text": "é" }, "blob": { "bytes": "00" } } },
+      "error": "invalid_text"
+    },
+    {
+      "name": "the-terminator-in-the-text",
+      "spec": ["encoding.md §3.4"],
+      "note": "The bytes must not contain the terminator, and A NUL B does: contains_terminator.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.name", "arguments": { "label": { "text": "A\u0000B" }, "blob": { "bytes": "00" } } },
+      "error": "contains_terminator"
+    },
+    {
+      "name": "a-list-and-its-count",
+      "spec": ["encoding.md §2.5", "encoding.md §3.6"],
+      "note": "values [10, 20] is one element each, 0a 14, and the count field holds the 2 elements.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.list", "arguments": { "values": { "list": [{ "integer": 10 }, { "integer": 20 }] } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "LIST",
+        "command": "t.list",
+        "payload": "03020a14",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 3, "n": 2, "values": [10, 20] }
+      }
+    },
+    {
+      "name": "an-empty-list",
+      "spec": ["encoding.md §2.5"],
+      "note": "values takes at least 1 value, and none is given: list_length.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.list", "arguments": { "values": { "list": [] } } },
+      "error": "list_length"
+    },
+    {
+      "name": "a-value-in-a-list-past-the-range",
+      "spec": ["encoding.md §2.5"],
+      "note": "Each value is checked against the range, max 200: 300, at index 1, is out_of_range.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.list", "arguments": { "values": { "list": [{ "integer": 10 }, { "integer": 300 }] } } },
+      "error": "out_of_range"
+    },
+    {
+      "name": "one-value-for-a-list",
+      "spec": ["encoding.md §2.5"],
+      "note": "A list argument takes a list of values, and 10 alone isn't one: wrong_type.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.list", "arguments": { "values": { "integer": 10 } } },
+      "error": "wrong_type"
+    },
+    {
+      "name": "a-packets-own-limits",
+      "spec": ["encoding.md §2.6", "encoding.md §3.1", "units.md §4"],
+      "note": "rate 30 s converts into the field's unit, ms: (30 x 1) / 0.001 = 30000, 75 30. kind A is raw 0; extra 9.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.limited", "arguments": { "rate": { "float": 30.0 }, "kind": { "text": "A" }, "extra": { "integer": 9 } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "LIMITED",
+        "command": "t.limited",
+        "payload": "0475300009",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 4, "rate": 30000, "kind": 0, "extra": 9 }
+      }
+    },
+    {
+      "name": "the-packets-default",
+      "spec": ["encoding.md §2.6", "encoding.md §3.1", "units.md §4"],
+      "note": "rate is left out, so it takes the packet's default, 5000 ms, which is 5 s and raw 5000, 13 88, not the catalog's 10 s.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.limited", "arguments": { "kind": { "text": "B" }, "extra": { "integer": 9 } } },
+      "encoded": {
+        "family": "a",
+        "set": "a_v1",
+        "packet": "LIMITED",
+        "command": "t.limited",
+        "payload": "0413880109",
+        "metadata": {},
+        "defaulted": ["rate"],
+        "deprecated": null,
+        "record": { "opcode": 4, "rate": 5000, "kind": 1, "extra": 9 }
+      }
+    },
+    {
+      "name": "the-packets-range",
+      "spec": ["encoding.md §2.6", "units.md §4"],
+      "note": "The packet's range, 0 to 60000 ms, is 0 to 60 s; 70 s lies within the catalog's 0 to 100 but not within both: out_of_range.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.limited", "arguments": { "rate": { "float": 70.0 }, "kind": { "text": "A" }, "extra": { "integer": 9 } } },
+      "error": "out_of_range"
+    },
+    {
+      "name": "a-state-the-packet-doesnt-accept",
+      "spec": ["encoding.md §2.6"],
+      "note": "The catalog has C, and the packet accepts only A and B: unsupported_state.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.limited", "arguments": { "kind": { "text": "C" }, "extra": { "integer": 9 } } },
+      "error": "unsupported_state"
+    },
+    {
+      "name": "an-argument-the-packet-requires",
+      "spec": ["encoding.md §2.6"],
+      "note": "The packet requires extra, so leaving it out is missing_argument, though the catalog's default is 7.",
+      "family": "a",
+      "request": { "set": "a_v1", "command": "t.limited", "arguments": { "kind": { "text": "A" } } },
+      "error": "missing_argument"
+    }
+  ]
+}

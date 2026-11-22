@@ -17,6 +17,7 @@ inputs and its language's values as well as the runtime beneath it.
 | --- | --- | --- |
 | `conformance/canonical/` | canonical JSON: number text, canonical form, the input rules | [canonical-json.md](canonical-json.md) §4 |
 | `conformance/decoding/` | decoding messages through the runtime API | §2 |
+| `conformance/encoding/` | encoding commands through the runtime API | §3 |
 
 ## 2. Decoding cases
 
@@ -117,10 +118,68 @@ bug.
   They're a snapshot: they're regenerated on purpose, the diff reviewed
   and the runners run again, not checked against the generator.
 
-### 2.4 Runners
+## 3. Encoding cases
 
-This repository runs the cases in two places: the runtime's runner,
-`crates/mdl/tests/conformance_decoding.rs`, which also checks that each
-section a case cites is a heading of its file, and the Elixir binding's,
+Each file in `conformance/encoding/`, or in a directory under it, is a
+JSON object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `about` | text: what the file covers, for people |
+| `definitions` | one IR bundle, as the JSON frontend reads it ([frontends.md](frontends.md) §6) |
+| `cases` | a list of cases |
+
+A case is an object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `name` | text, unique in its file |
+| `spec` | a list of the sections its expected result follows from, as in §2 (`"encoding.md §3.1"`) |
+| `note` | text: how the expected result follows from them, for people |
+| `family` | text: the family whose set encodes the command |
+| `request` | an object: `set` and `command`, text; `arguments`, an object of the arguments given, by name, each value tagged (below); and `native_id`, the target, an integer or text read as [api.md](api.md) §1 reads a native id |
+| `encoded` | the encoded command (api.md §3.2), in its JSON, without `def_version` |
+| `error` | text: the error's code |
+
+Every key is required but a request's `native_id`; a case has one of
+`encoded` and `error`. A file, case, request or value with a key this
+section doesn't list, or without one it requires, is malformed.
+
+A value is an object with one key, which names its kind (api.md §1,
+[encoding.md](encoding.md) §1), so a case gives exactly the value it
+means, one of a kind its argument refuses included: `{"text": "3"}` for
+an integer argument is `wrong_type`, not 3.
+
+| Key | Value |
+| --- | --- |
+| `integer` | a number within ±(2^53 − 1), or past it a string in its one decimal spelling (api.md §1: no sign but a leading `-`, no leading zeros), within −2^63 to 2^64 − 1 |
+| `float` | a number with a fraction or an exponent, or a `non_finite` object (api.md §1) |
+| `boolean` | `true` or `false` |
+| `text` | a string |
+| `bytes` | lowercase hex digits, two a byte, with no spaces |
+| `list` | a list of values, none of them a list: a list argument's |
+
+A request's arguments are an object, as a binding that takes them as a
+map takes them, so no case gives a name twice (`duplicate_argument`).
+
+### 3.1 Running a file
+
+A runner builds the definitions into a store as §2.1 says, opens it
+without bindings, and encodes each case's request (api.md §2.4) with its
+family. It compares the result with the case's as §2.2 does: an encoded
+command's `def_version` is the digest `describe` gives for its set, and an
+error compares by its code, with an empty list of problems.
+
+### 3.2 Expected results
+
+Every expected result is worked out from the specifications by hand, and
+its `note` shows how, as §2.3 says of the files directly in
+`conformance/decoding/`.
+
+## 4. Runners
+
+This repository runs both suites in two places: the runtime's runner,
+`crates/mdl/tests/conformance.rs`, which also checks that each section a
+case cites is a heading of its file, and the Elixir binding's,
 `bindings/elixir/test/mdl/conformance_test.exs`, which builds each file's
 definitions with `morphc`.

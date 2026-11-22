@@ -1,0 +1,287 @@
+{
+  "about": "Raw values: arguments through each inverse conversion and unit, rounding for integer and binary32 fields, constants, the target, and arrays of records.",
+  "definitions": {
+    "mdl_version": "2.0",
+    "catalog": {
+      "commands": {
+        "r.cal": {
+          "arguments": [
+            { "name": "temp", "type": "f64", "unit": "Cel", "range": { "min": -40, "max": 85 } },
+            { "name": "gain", "type": "f64", "range": { "min": 0, "max": 1 } },
+            { "name": "period", "type": "f64", "range": { "min": 0, "max": 10 } },
+            { "name": "trim", "type": "f64", "range": { "min": 0, "max": 1 } }
+          ]
+        },
+        "r.pairs": {
+          "arguments": [
+            { "name": "xs", "type": "u64", "range": { "max": 255 }, "list": { "max": 4 } },
+            { "name": "ys", "type": "u64", "range": { "max": 255 }, "list": { "max": 4 } }
+          ]
+        },
+        "r.wide": {
+          "arguments": [
+            { "name": "big", "type": "f64" }
+          ]
+        }
+      }
+    },
+    "families": [
+      {
+        "name": "r",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "r-1" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "r_v1",
+        "family": "r",
+        "types": {
+          "pair": {
+            "entries": [
+              { "kind": "field", "name": "x", "type": "uint", "size_bits": 8, "argument": "xs" },
+              { "kind": "field", "name": "y", "type": "uint", "size_bits": 8, "argument": "ys" },
+              { "kind": "field", "name": "tag", "type": "uint", "size_bits": 8, "value": 7 }
+            ]
+          }
+        },
+        "commands": [
+          {
+            "name": "CAL",
+            "canonical": "r.cal",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 9 },
+              {
+                "kind": "field",
+                "name": "temp",
+                "type": "uint",
+                "size_bits": 16,
+                "unit": "K",
+                "conversion": { "kind": "linear", "scale": 0.01, "offset": 0 },
+                "argument": "temp"
+              },
+              {
+                "kind": "field",
+                "name": "gain",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "linear", "scale": 0.1, "offset": 0 },
+                "argument": "gain"
+              },
+              {
+                "kind": "field",
+                "name": "period",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "table", "points": [{ "raw": 0, "value": 0 }, { "raw": 10, "value": 5 }, { "raw": 20, "value": 10 }] },
+                "argument": "period"
+              },
+              {
+                "kind": "field",
+                "name": "trim",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "poly", "coefficients": [0.01, 0.1] },
+                "inverse": { "kind": "poly", "coefficients": [-0.1, 10] },
+                "argument": "trim"
+              },
+              { "kind": "field", "name": "node", "type": "uint", "size_bits": 16, "target": true }
+            ]
+          },
+          {
+            "name": "WIDE",
+            "canonical": "r.wide",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 10 },
+              { "kind": "field", "name": "big", "type": "float", "size_bits": 32, "argument": "big" }
+            ]
+          },
+          {
+            "name": "PAIRS",
+            "canonical": "r.pairs",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 11 },
+              { "kind": "field", "name": "n", "type": "uint", "size_bits": 8 },
+              {
+                "kind": "array",
+                "name": "pairs",
+                "count": { "kind": "field", "field": "n" },
+                "element": { "kind": "struct", "name": "pair" }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "conversions-inverted",
+      "spec": ["encoding.md §3.1", "encoding.md §3.2", "encoding.md §3.3", "units.md §4"],
+      "note": "temp 25 Cel is 25 + 273.15 = 298.15 in the field's K, then (298.15 - 0) / 0.01 = 29814.999999999996, rounded to 29815: 74 77. gain 0.15 is (0.15 - 0) / 0.1 = 1.4999999999999998, raw 1 (encoding.md's own example). period 7.5 goes through the table read backwards, points (0, 0), (5, 10), (10, 20): 10 + ((7.5 - 5) x (20 - 10)) / (10 - 5) = 15. trim 0.36 goes through its explicit inverse, poly [-0.1, 10] by Horner's rule: 10 x 0.36 + -0.1 = 3.4999999999999996, raw 3. The constant opcode is 09, and the target 513 is 02 01.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.cal",
+        "arguments": {
+          "temp": { "float": 25.0 },
+          "gain": { "float": 0.15 },
+          "period": { "float": 7.5 },
+          "trim": { "float": 0.36 }
+        },
+        "native_id": 513
+      },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "CAL",
+        "command": "r.cal",
+        "payload": "097477010f030201",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 9, "temp": 29815, "gain": 1, "period": 15, "trim": 3, "node": 513 }
+      }
+    },
+    {
+      "name": "a-tie-rounds-away-from-zero",
+      "spec": ["encoding.md §3.1"],
+      "note": "gain 0.25 is (0.25 - 0) / 0.1 = 2.5 exactly, a tie, which rounds away from zero: raw 3 (encoding.md's own example), not the even 2.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.cal",
+        "arguments": { "temp": { "float": 25.0 }, "gain": { "float": 0.25 }, "period": { "float": 7.5 }, "trim": { "float": 0.36 } },
+        "native_id": 513
+      },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "CAL",
+        "command": "r.cal",
+        "payload": "097477030f030201",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 9, "temp": 29815, "gain": 3, "period": 15, "trim": 3, "node": 513 }
+      }
+    },
+    {
+      "name": "no-target",
+      "spec": ["encoding.md §3.3"],
+      "note": "node holds the target's native id, and the request gives none: missing_target.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.cal",
+        "arguments": { "temp": { "float": 25.0 }, "gain": { "float": 0.15 }, "period": { "float": 7.5 }, "trim": { "float": 0.36 } }
+      },
+      "error": "missing_target"
+    },
+    {
+      "name": "a-text-target-for-an-integer-field",
+      "spec": ["encoding.md §3.3"],
+      "note": "An integer field takes an integer id, and PX-9 is text: target_type.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.cal",
+        "arguments": { "temp": { "float": 25.0 }, "gain": { "float": 0.15 }, "period": { "float": 7.5 }, "trim": { "float": 0.36 } },
+        "native_id": "PX-9"
+      },
+      "error": "target_type"
+    },
+    {
+      "name": "a-target-the-field-cant-hold",
+      "spec": ["encoding.md §3.3"],
+      "note": "70000 doesn't fit node's 16 bits: raw_range.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.cal",
+        "arguments": { "temp": { "float": 25.0 }, "gain": { "float": 0.15 }, "period": { "float": 7.5 }, "trim": { "float": 0.36 } },
+        "native_id": 70000
+      },
+      "error": "raw_range"
+    },
+    {
+      "name": "binary32-rounds-to-even",
+      "spec": ["encoding.md §3.1"],
+      "note": "16777217 = 2^24 + 1 lies halfway between the binary32 values 16777216 and 16777218, and rounds to the even 16777216, 0x4b800000.",
+      "family": "r",
+      "request": { "set": "r_v1", "command": "r.wide", "arguments": { "big": { "float": 16777217.0 } } },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "WIDE",
+        "command": "r.wide",
+        "payload": "0a4b800000",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 10, "big": 16777216.0 }
+      }
+    },
+    {
+      "name": "past-binary32s-largest",
+      "spec": ["encoding.md §3.1"],
+      "note": "big has no range, so nothing keeps it within binary32: 1e39 rounds to infinity, which isn't finite: raw_range.",
+      "family": "r",
+      "request": { "set": "r_v1", "command": "r.wide", "arguments": { "big": { "float": 1e39 } } },
+      "error": "raw_range"
+    },
+    {
+      "name": "records-from-lists",
+      "spec": ["encoding.md §3.6", "encoding.md §4"],
+      "note": "Record i holds xs's value i and ys's value i, and the constant tag 7, laid out from the record's start: 01 03 07, then 02 04 07. The count field holds the 2 records.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.pairs",
+        "arguments": { "xs": { "list": [{ "integer": 1 }, { "integer": 2 }] }, "ys": { "list": [{ "integer": 3 }, { "integer": 4 }] } }
+      },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "PAIRS",
+        "command": "r.pairs",
+        "payload": "0b02010307020407",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 11, "n": 2, "pairs": [{ "x": 1, "y": 3, "tag": 7 }, { "x": 2, "y": 4, "tag": 7 }] }
+      }
+    },
+    {
+      "name": "lists-of-two-lengths-in-one-array",
+      "spec": ["encoding.md §3.6"],
+      "note": "The lists a record's fields take must have one length, and xs has 1 value where ys has 2: bad_count.",
+      "family": "r",
+      "request": {
+        "set": "r_v1",
+        "command": "r.pairs",
+        "arguments": { "xs": { "list": [{ "integer": 1 }] }, "ys": { "list": [{ "integer": 3 }, { "integer": 4 }] } }
+      },
+      "error": "bad_count"
+    },
+    {
+      "name": "no-records",
+      "spec": ["encoding.md §3.6", "encoding.md §4"],
+      "note": "Two empty lists make no records, and the count field holds 0. The payload ends after the count, its furthest entry's end.",
+      "family": "r",
+      "request": { "set": "r_v1", "command": "r.pairs", "arguments": { "xs": { "list": [] }, "ys": { "list": [] } } },
+      "encoded": {
+        "family": "r",
+        "set": "r_v1",
+        "packet": "PAIRS",
+        "command": "r.pairs",
+        "payload": "0b00",
+        "metadata": {},
+        "defaulted": [],
+        "deprecated": null,
+        "record": { "opcode": 11, "n": 0, "pairs": [] }
+      }
+    }
+  ]
+}
