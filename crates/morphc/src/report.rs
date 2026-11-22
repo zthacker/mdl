@@ -19,7 +19,7 @@ pub enum Format {
 }
 
 /// The JSON document's format version.
-const REPORT_VERSION: u32 = 2;
+const REPORT_VERSION: u32 = 3;
 
 /// One artifact of the build, or one the replaced build had and this one
 /// doesn't.

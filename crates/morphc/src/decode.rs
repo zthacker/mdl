@@ -13,17 +13,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, bail};
 use clap::{ArgGroup, Args};
 use mdl::bindings::{Binding, Bindings, BindingsError, NativeId, Resolver};
-use mdl::decode::DecodedCommand;
 use mdl::ir::{Bundle, Encoding};
 use mdl::message::{Message, MetaValue, Payload};
-use mdl::runtime::{DecodedMessage, Value};
+use mdl::runtime::{DecodedCommand, DecodedMessage, Value};
 use mdl::source::SourceDiagnostic;
 use mdl::time::Timestamp;
 use serde::Serialize;
 use serde_json::Value as Json;
 
 use crate::report::{Outcome, Report};
-use crate::values::{Failure, argument_json, parse_hex};
+use crate::values::{Failure, parse_hex};
 use crate::{Opened, Origin, ReadArgs, family_sets, open};
 
 #[derive(Debug, Args)]
@@ -221,7 +220,7 @@ pub fn run(args: &DecodeArgs) -> anyhow::Result<ExitCode> {
                 match &mode {
                     Mode::Command(set) => family_sets
                         .decode_command(set, &message_in)
-                        .map(|decoded| Decodes::Command(command_result(&decoded)))
+                        .map(|decoded| Decodes::Command(DecodedCommand::of(&decoded, &family)))
                         .map_err(|err| failure(err.code(), err.to_string())),
                     Mode::Telemetry(assets) => family_sets
                         .decode(&message_in, assets)
@@ -616,15 +615,17 @@ struct MessageResult {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     telemetry: Option<Telemetry>,
+    /// A decoded command, as the runtime API gives it (`spec/api.md`
+    /// §3.5).
     #[serde(skip_serializing_if = "Option::is_none")]
-    command: Option<CommandResult>,
+    command: Option<DecodedCommand>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<Failure>,
 }
 
 enum Decodes {
     Telemetry(Telemetry),
-    Command(CommandResult),
+    Command(DecodedCommand),
 }
 
 impl MessageResult {
@@ -691,44 +692,6 @@ fn value_rows(value: &Value, path: String, rows: &mut Vec<(String, String)>) {
             path,
             plain(&serde_json::to_value(scalar).unwrap_or(Json::Null)),
         )),
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct CommandResult {
-    set: String,
-    def_version: String,
-    packet: String,
-    command: String,
-    /// Each argument of the catalog command, in catalog order.
-    arguments: Vec<ArgumentOut>,
-    target: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct ArgumentOut {
-    name: String,
-    value: Json,
-    /// The set doesn't encode it, so it has its default.
-    defaulted: bool,
-}
-
-fn command_result(decoded: &DecodedCommand<'_>) -> CommandResult {
-    CommandResult {
-        set: decoded.set.name.clone(),
-        def_version: decoded.def_version.to_string(),
-        packet: decoded.packet.name.clone(),
-        command: decoded.command().to_string(),
-        arguments: decoded
-            .arguments
-            .iter()
-            .map(|(name, value)| ArgumentOut {
-                name: (*name).to_string(),
-                value: argument_json(value),
-                defaulted: decoded.defaulted.contains(name),
-            })
-            .collect(),
-        target: decoded.target.as_ref().map(NativeId::to_string),
     }
 }
 
@@ -893,15 +856,16 @@ fn telemetry_text(t: &Telemetry) -> String {
     text
 }
 
-fn command_text(c: &CommandResult) -> String {
+fn command_text(c: &DecodedCommand) -> String {
     let mut text = format!(
         "set {}  command {}  encodes {}\n  def_version {}\n",
         c.set, c.packet, c.command, c.def_version
     );
     let mut rows = Vec::new();
-    for argument in &c.arguments {
-        let mut row = vec![argument.name.clone(), plain(&argument.value)];
-        if argument.defaulted {
+    for (name, value) in &c.arguments {
+        let value = serde_json::to_value(value).unwrap_or(Json::Null);
+        let mut row = vec![name.clone(), plain(&value)];
+        if c.defaulted.contains(name) {
             row.push("(default; the set doesn't encode it)".to_string());
         }
         rows.push(row);

@@ -1,9 +1,7 @@
 //! Values in reports: decoded and encoded values as JSON, and bytes as
 //! hex both ways.
 
-use mdl::encode::ArgumentValue;
 use serde::Serialize;
-use serde_json::Value as Json;
 
 /// Why a message didn't decode or a command didn't encode: the library's
 /// stable code and its message.
@@ -40,68 +38,12 @@ pub fn parse_hex(text: &str) -> Result<Vec<u8>, String> {
         .collect()
 }
 
-/// The largest integer every JSON reader holds exactly; larger ones are
-/// written as text, as MDL writes them.
-const MAX_SAFE_INTEGER: u64 = (1 << 53) - 1;
-
-pub fn integer_json(value: i128) -> Json {
-    if value.unsigned_abs() <= u128::from(MAX_SAFE_INTEGER) {
-        match i64::try_from(value) {
-            Ok(n) => Json::from(n),
-            Err(_) => Json::String(value.to_string()),
-        }
-    } else {
-        Json::String(value.to_string())
-    }
-}
-
-/// A float as a JSON number, or, when JSON has no number for it, an
-/// object that can't be taken for text: `{"non_finite": "NaN"}`, `"inf"`
-/// or `"-inf"`.
-pub fn float_json(value: f64) -> Json {
-    match serde_json::Number::from_f64(value) {
-        Some(n) => Json::Number(n),
-        None => {
-            let name = if value.is_nan() {
-                "NaN"
-            } else if value > 0.0 {
-                "inf"
-            } else {
-                "-inf"
-            };
-            serde_json::json!({ "non_finite": name })
-        }
-    }
-}
-
-/// A value of a kind this morphc doesn't know (one a newer library adds),
-/// as an object that can't be taken for a value: `{"unsupported": ...}`
-/// with the library's description of it.
-pub fn unsupported<T: std::fmt::Debug>(value: &T) -> Json {
-    serde_json::json!({ "unsupported": format!("{value:?}") })
-}
-
 pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn argument_json(value: &ArgumentValue) -> Json {
-    match value {
-        ArgumentValue::Bool(b) => Json::Bool(*b),
-        ArgumentValue::Int(n) => integer_json(i128::from(*n)),
-        ArgumentValue::Uint(n) => integer_json(i128::from(*n)),
-        ArgumentValue::Float(f) => float_json(*f),
-        ArgumentValue::Text(text) => Json::String(text.clone()),
-        ArgumentValue::Bytes(bytes) => Json::String(hex(bytes)),
-        ArgumentValue::List(values) => Json::Array(values.iter().map(argument_json).collect()),
-        other => unsupported(other),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     #[test]
@@ -120,25 +62,5 @@ mod tests {
         assert!(parse_hex("0a1").unwrap_err().contains("odd number"));
         assert!(parse_hex("zz").unwrap_err().contains("isn't a hex byte"));
         assert_eq!(hex(&[0x0a, 0xff]), "0aff");
-    }
-
-    #[test]
-    fn json_values_never_pass_for_other_values() {
-        assert_eq!(float_json(1.5), json!(1.5));
-        assert_eq!(float_json(f64::NAN), json!({ "non_finite": "NaN" }));
-        assert_eq!(float_json(f64::INFINITY), json!({ "non_finite": "inf" }));
-        assert_eq!(
-            float_json(f64::NEG_INFINITY),
-            json!({ "non_finite": "-inf" })
-        );
-        let safe = (1_i128 << 53) - 1;
-        assert_eq!(integer_json(safe), json!(9_007_199_254_740_991_i64));
-        assert_eq!(integer_json(-safe), json!(-9_007_199_254_740_991_i64));
-        assert_eq!(integer_json(safe + 1), json!("9007199254740992"));
-        assert_eq!(
-            integer_json(i128::from(u64::MAX)),
-            json!("18446744073709551615")
-        );
-        assert_eq!(unsupported(&Some(1)), json!({ "unsupported": "Some(1)" }));
     }
 }

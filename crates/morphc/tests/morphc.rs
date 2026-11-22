@@ -704,7 +704,7 @@ fn json_output_reports_problems_and_failures_too() {
     let problems = morphc_in(&dir, &["build", "defs", "--format", "json"], None);
     assert_eq!(problems.status.code(), Some(1));
     let report: Value = serde_json::from_str(&stdout(&problems)).unwrap();
-    assert_eq!(report["report"], 2);
+    assert_eq!(report["report"], 3);
     assert_eq!(report["ok"], false);
     assert_eq!(report["build"], Value::Null);
     let error = report["diagnostics"]
@@ -1661,15 +1661,18 @@ fn decode_command_gives_the_command_and_its_arguments() {
     let mut json = args.to_vec();
     json.extend(["--format", "json"]);
     let report: Value = serde_json::from_str(&stdout(&morphc_in(&dir, &json, None))).unwrap();
+    // The runtime API's decoded command (spec/api.md §3.5).
     let command = &report["decode"]["messages"][0]["command"];
+    assert_eq!(command["family"], "vendor_j");
+    assert_eq!(command["set"], "vendor_j_v1");
+    assert_eq!(command["packet"], "SET_MODE");
     assert_eq!(command["command"], "eps.set_mode");
     assert_eq!(
         command["arguments"],
-        serde_json::json!([
-            { "name": "mode", "value": "NOMINAL", "defaulted": false },
-            { "name": "delay_s", "value": 2.5, "defaulted": false }
-        ])
+        serde_json::json!({ "mode": "NOMINAL", "delay_s": 2.5 })
     );
+    assert_eq!(command["defaulted"], serde_json::json!([]));
+    assert_eq!(command["target"], Value::Null);
 }
 
 #[test]
@@ -1891,13 +1894,12 @@ fn encode_gives_the_metadata_and_decodes_back() {
     );
     assert_eq!(back.status.code(), Some(0), "{}", stderr(&back));
     let report: Value = serde_json::from_str(&stdout(&back)).unwrap();
+    let command = &report["decode"]["messages"][0]["command"];
     assert_eq!(
-        report["decode"]["messages"][0]["command"]["arguments"],
-        serde_json::json!([
-            { "name": "table", "value": "c0ffee", "defaulted": false },
-            { "name": "slot", "value": 3, "defaulted": false }
-        ])
+        command["arguments"],
+        serde_json::json!({ "table": "c0ffee", "slot": 3 })
     );
+    assert_eq!(command["defaulted"], serde_json::json!([]));
 
     let json = morphc_in(
         &dir,
@@ -2265,6 +2267,43 @@ fn encode_writes_the_target_only_where_a_packet_carries_it() {
     assert_eq!(carried.status.code(), Some(0), "{}", stderr(&carried));
     let report: Value = serde_json::from_str(&stdout(&carried)).unwrap();
     assert_eq!(report["encode"]["packet"]["record"]["unit"], "SAT-9");
+
+    // Decoded back, the target is where it's sent, and delay_s, which
+    // legacy_v1 doesn't encode, has the catalog's default.
+    let payload = report["encode"]["packet"]["payload"].as_str().unwrap();
+    let decode = |format: &str| {
+        let out = morphc_in(
+            &dir,
+            &[
+                "decode",
+                "full.json",
+                "--command",
+                "--set",
+                "legacy_v1",
+                "--hex",
+                payload,
+                "--format",
+                format,
+            ],
+            None,
+        );
+        assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+        stdout(&out)
+    };
+    let text = decode("human");
+    assert!(
+        text.contains("  delay_s  0.0      (default; the set doesn't encode it)\n")
+            && text.ends_with("  sent to SAT-9\n"),
+        "{text}"
+    );
+    let report: Value = serde_json::from_str(&decode("json")).unwrap();
+    let command = &report["decode"]["messages"][0]["command"];
+    assert_eq!(
+        command["arguments"],
+        serde_json::json!({ "mode": "NOMINAL", "delay_s": 0.0 })
+    );
+    assert_eq!(command["defaulted"], serde_json::json!(["delay_s"]));
+    assert_eq!(command["target"], "SAT-9");
 
     let nowhere = morphc_in(
         &dir,
