@@ -544,6 +544,24 @@ it as defaulted. A packet with a target field gives the target's native
 id: an integer field's integer, or a string field's text (text in an
 integer's one decimal spelling is that integer).
 
+### 7.5 Order
+
+The checks run in this order, and the first failure is the error:
+
+1. the set (§7.1) [`unknown_set`];
+2. the payload's encoding (§7.1) [`wrong_encoding`, `invalid_json`];
+3. identification (§7.2) [`no_packet`];
+4. the packet's entries, read as `decoding.md` §5 reads them, with its
+   errors (§7.3);
+5. the constants, in entry order, and in an array of records each
+   record's in turn (§7.3) [`wrong_constant`];
+6. the arguments, in the catalog's order, each by §7.4: a list's length
+   before its elements, and its elements in order.
+
+So a payload that ends early is `past_end` even when a constant it holds
+is wrong, and of two arguments the catalog refuses, the error is the one
+the catalog lists first, wherever the packet writes it.
+
 ## 8. Error codes
 
 | Code | Where |

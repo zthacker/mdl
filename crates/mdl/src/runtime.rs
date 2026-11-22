@@ -1,6 +1,7 @@
 //! The runtime API every binding calls (`spec/api.md`): open a store,
-//! decode messages, encode commands, describe the build and look up its
-//! bindings, with results whose shape and values the spec fixes.
+//! decode messages, encode commands and decode them back, describe the
+//! build and look up its bindings, with results whose shape and values the
+//! spec fixes.
 //!
 //! A [`Runtime`] is an opened store, with bindings or without; it's
 //! immutable, cheap to clone and safe to share across threads. Its results
@@ -19,10 +20,11 @@ use thiserror::Error;
 use crate::artifact::AssembleError;
 use crate::bindings::{Binding, Bindings, BindingsError, NativeId, Resolver};
 use crate::decode::{
-    DecodeError, Decoded, Engineering, EventTime, Quality, Record, SampleValue, Value as Raw,
+    CommandDecodeError, DecodeError, Decoded, Engineering, EventTime, Quality, Record, SampleValue,
+    Value as Raw,
 };
 use crate::diagnostics::{Diagnostic, Diagnostics};
-use crate::encode::{CommandRequest, EncodeError, Encoded};
+use crate::encode::{ArgumentValue, CommandRequest, EncodeError, Encoded};
 use crate::ir::{Artifact, Bundle, Catalog, Digest, Family, Set};
 use crate::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
 use crate::message::{Message, MetaValue, Payload};
@@ -263,6 +265,12 @@ impl From<DecodeError> for ApiError {
 
 impl From<EncodeError> for ApiError {
     fn from(error: EncodeError) -> ApiError {
+        ApiError::new(error.code(), error.to_string())
+    }
+}
+
+impl From<CommandDecodeError> for ApiError {
+    fn from(error: CommandDecodeError) -> ApiError {
         ApiError::new(error.code(), error.to_string())
     }
 }
@@ -596,6 +604,20 @@ impl Runtime {
         let sets = self.family(family)?;
         let encoded = sets.encode(request)?;
         Ok(EncodedCommand::of(&encoded, family, &request.command))
+    }
+
+    /// A command payload `family`'s set `set` decodes (`spec/api.md` §2.7):
+    /// which of its command packets the payload and its metadata are, and
+    /// each argument. The message's ground time takes no part.
+    pub fn decode_command(
+        &self,
+        family: &str,
+        set: &str,
+        message: &Message<'_>,
+    ) -> Result<DecodedCommand, ApiError> {
+        let sets = self.family(family)?;
+        let decoded = sets.decode_command(set, message)?;
+        Ok(DecodedCommand::of(&decoded, family))
     }
 }
 
@@ -991,6 +1013,87 @@ impl EncodedCommand {
 impl Serialize for EncodedCommand {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.to_value().serialize(serializer)
+    }
+}
+
+/// A decoded command (`spec/api.md` §3.5).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DecodedCommand {
+    pub family: String,
+    pub set: String,
+    pub def_version: Digest,
+    pub packet: String,
+    pub command: String,
+    /// Every argument of the catalog command, by name, in catalog order.
+    pub arguments: Vec<(String, Value)>,
+    /// The arguments the set doesn't encode, which have their defaults, in
+    /// catalog order.
+    pub defaulted: Vec<String>,
+    /// The target's native id, for a packet that holds it.
+    pub target: Option<NativeId>,
+    /// Each field's and checksum's raw value, as an object by entry name.
+    pub record: Value,
+}
+
+impl DecodedCommand {
+    /// What `family`'s set decoded, as the API gives it.
+    pub fn of(decoded: &crate::decode::DecodedCommand<'_>, family: &str) -> DecodedCommand {
+        DecodedCommand {
+            family: family.to_string(),
+            set: decoded.set.name.clone(),
+            def_version: decoded.def_version.clone(),
+            packet: decoded.packet.name.clone(),
+            command: decoded.command().to_string(),
+            arguments: decoded
+                .arguments
+                .iter()
+                .map(|(name, value)| ((*name).to_string(), argument_value(value)))
+                .collect(),
+            defaulted: decoded.defaulted.iter().map(|s| (*s).to_string()).collect(),
+            target: decoded.target.clone(),
+            record: record_value(&decoded.record),
+        }
+    }
+
+    pub fn to_value(&self) -> Value {
+        Value::object([
+            ("family", Value::text(&self.family)),
+            ("set", Value::text(&self.set)),
+            ("def_version", Value::text(self.def_version.to_string())),
+            ("packet", Value::text(&self.packet)),
+            ("command", Value::text(&self.command)),
+            ("arguments", Value::Object(self.arguments.clone())),
+            (
+                "defaulted",
+                Value::List(self.defaulted.iter().map(Value::text).collect()),
+            ),
+            (
+                "target",
+                Value::or_absent(self.target.as_ref(), native_id_value),
+            ),
+            ("record", self.record.clone()),
+        ])
+    }
+}
+
+impl Serialize for DecodedCommand {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_value().serialize(serializer)
+    }
+}
+
+/// An argument's value (`spec/api.md` §1): an enum's is its state's name,
+/// text; a list argument's, a list.
+fn argument_value(value: &ArgumentValue) -> Value {
+    match value {
+        ArgumentValue::Bool(b) => Value::Bool(*b),
+        ArgumentValue::Int(n) => Value::Integer(i128::from(*n)),
+        ArgumentValue::Uint(n) => Value::Integer(i128::from(*n)),
+        ArgumentValue::Float(x) => Value::Float(*x),
+        ArgumentValue::Text(text) => Value::text(text),
+        ArgumentValue::Bytes(bytes) => Value::Bytes(bytes.clone()),
+        ArgumentValue::List(values) => Value::List(values.iter().map(argument_value).collect()),
     }
 }
 

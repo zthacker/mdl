@@ -5,8 +5,8 @@ MAY are to be interpreted as described in RFC 2119.
 
 Every binding of MDL to another language calls one runtime, this
 repository's, through one coarse API: open a store, decode messages,
-encode commands, describe the build, and look up which asset a native id
-is. A binding converts its language's inputs for the runtime
+encode commands and decode them back, describe the build, and look up
+which asset a native id is. A binding converts its language's inputs for the runtime
 and the runtime's results into its language's values, and does nothing
 else. No MDL semantics live in a binding, so a feature reaches every
 language when the runtime gains it, and no second implementation has to
@@ -17,8 +17,8 @@ in JSON and as the values a binding returns. The `mdl` crate's `runtime`
 module implements it; `morphc decode` and `morphc encode` write the same
 results in their JSON reports. The result format's version is 1
 ([compatibility](compatibility.md) §4 says what changes it). A binding
-MUST pass the decoding and encoding cases of [conformance](conformance.md)
-§2 and §3 through its own API.
+MUST pass the decoding, encoding and command decoding cases of
+[conformance](conformance.md) §2 to §4 through its own API.
 
 ## 1. Values
 
@@ -56,8 +56,9 @@ object that comes from definitions or messages (a record, metadata), so
 no input can grow a table of symbols its language never frees. A binding
 documents its forms. The Elixir binding's (`bindings/elixir`) are structs
 with atom fields (`%MDL.Decoded{}`, `%MDL.Sample{}`, `%MDL.Encoded{}`,
-`%MDL.Route{}`, `%MDL.Error{}`, `%MDL.Problem{}`, and `%MDL.Vec3{}` and
-`%MDL.Quat{}` for a vector's or quaternion's value); atoms for the
+`%MDL.DecodedCommand{}`, `%MDL.Route{}`, `%MDL.Error{}`, `%MDL.Problem{}`,
+and `%MDL.Vec3{}` and `%MDL.Quat{}` for a vector's or quaternion's
+value); atoms for the
 enumerations, a frame's being its IR name in lower case (`:eci_j2000`);
 an event time as `{:ground, ns}`, `{:at, ns}` or `{:since_boot, count,
 unit}`; and an engineering value as `{path, value, quality}`. Elixir's
@@ -193,6 +194,20 @@ set by its version, so no binding says which set a command to an asset
 uses: a ground system takes it from what it knows of the asset, such as
 the set of its latest decoded telemetry (§3.1's `set`). MDL has no rule
 of its own for it.
+
+### 2.7 decode_command
+
+Inputs: a handle, a family, the set that decodes the payload, by name,
+and the message: its payload, in the family's encoding as for decode
+(§2.2), and its metadata, which a command packet's identity includes
+(`encoding.md` §7). A ground time takes no part, so a binding needn't
+ask for one.
+
+Decoding a command is what a simulated asset does with a command it
+receives, and what command history records: the payload back into its
+catalog command and arguments, by `encoding.md` §7. The set is the
+caller's to name, as for encode. The result is a decoded command (§3.5),
+or an error (§4).
 
 ## 3. Results
 
@@ -333,6 +348,29 @@ An object with these keys:
 | `set` | text: the set that decodes the asset's messages, absent when the family's version locator chooses |
 | `stand_in` | boolean: true when there are no bindings, and the native id stands for an asset of its own (§2.2) |
 
+### 3.5 A decoded command
+
+An object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `family` | text |
+| `set` | text |
+| `def_version` | text: the set artifact's digest |
+| `packet` | text: the command packet the payload is |
+| `command` | text: the catalog command |
+| `arguments` | an object of every argument of the command, by name: each value in its argument's type (`encoding.md` §7.4), an integer, a float, a boolean, text (`str`, and an `enum`'s state), bytes, or a list of them for a list argument |
+| `defaulted` | a list of text: the arguments the set doesn't encode, which have their defaults, in the catalog's order |
+| `target` | integer or text (§1): the target's native id, for a packet that holds it; absent otherwise |
+| `record` | the raw record of the payload: each field's and checksum's raw value, as decoding it gives them |
+
+For a payload an encoder wrote (`encoding.md` §1 to §6), the arguments,
+encoded again with the same set and target, give the same payload
+wherever `encoding.md` §7.4 says they do. A payload written otherwise
+(bytes past its last entry, another JSON spelling or other padding, for
+example) decodes, and its arguments encode again as an encoder writes
+them.
+
 ## 4. Errors
 
 An error is an object with a `code`, which is stable and names the
@@ -351,11 +389,11 @@ never by unwinding across the binding's boundary (Elixir:
 `{:error, %MDL.Error{}}`, its code an atom).
 
 The codes are those `decoding.md` §9 and `encoding.md` §8 define for
-decoding and encoding, and these:
+decoding, encoding and decoding commands, and these:
 
 | Code | Operation | Meaning |
 | --- | --- | --- |
-| `unknown_family` | decode, encode, binding, asset | the build has no family of that name |
+| `unknown_family` | decode, encode, decode_command, binding, asset | the build has no family of that name |
 | `ambiguous_asset` | asset | several native ids are the asset at the instant |
 | `invalid_layout` | describe | a set validated, but its layout can't be worked out: a bug in MDL |
 | `store_unreadable` | open | a file of the store can't be read, or isn't there |

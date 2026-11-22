@@ -1,7 +1,7 @@
-//! The language-neutral decoding and encoding cases in
-//! `conformance/decoding/` and `conformance/encoding/`
-//! (`spec/conformance.md` §2 and §3), run through the runtime API as a
-//! binding calls it. No expected result there is taken from MDL's output,
+//! The language-neutral decoding, encoding and command decoding cases in
+//! `conformance/decoding/`, `conformance/encoding/` and
+//! `conformance/decoding_commands/` (`spec/conformance.md` §2 to §4), run
+//! through the runtime API as a binding calls it. No expected result there is taken from MDL's output,
 //! so a case that fails is wrong itself or has found a bug in MDL, and the
 //! spec says which.
 
@@ -14,7 +14,7 @@ use mdl::bindings::NativeId;
 use mdl::encode::{ArgumentValue, CommandRequest};
 use mdl::message::{Message, MetaValue};
 use mdl::read::read_bundle_value;
-use mdl::runtime::{ApiError, DecodedMessage, EncodedCommand, Runtime, Value};
+use mdl::runtime::{ApiError, DecodedCommand, DecodedMessage, EncodedCommand, Runtime, Value};
 use mdl::store;
 use mdl::time::Timestamp;
 use mdl::validate::validate;
@@ -106,6 +106,31 @@ fn a_tagged_value_has_one_spelling() {
     ] {
         assert!(read(malformed.clone()).is_err(), "{malformed}");
     }
+}
+
+#[test]
+fn every_command_decoding_case_gives_the_result_the_spec_does() {
+    let dir = repository().join("conformance/decoding_commands");
+    let mut paths = Vec::new();
+    case_files(&dir, &mut paths);
+    paths.sort();
+    assert!(!paths.is_empty(), "no case files in {dir:?}");
+    let mut sections = Sections::default();
+    let mut failures = Vec::new();
+    let mut ran = 0;
+    for path in &paths {
+        // A file's name is its path under conformance/decoding_commands.
+        let name = path
+            .strip_prefix(&dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        let mut file = Failures::new(&name);
+        ran += run_command_file(path, &name, &mut sections, &mut file);
+        failures.extend(file.list);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    assert!(ran > 0, "no cases in {dir:?}");
 }
 
 /// Metadata strings read as `spec/api.md` §1 reads them, which cases
@@ -440,6 +465,23 @@ fn read_message(message: &Json) -> Result<Input, String> {
         &["metadata", "ground_time"],
         &["hex", "json"],
     )?;
+    let ground_time = text(&message["ground_time"], "ground_time")?;
+    let ground_time = Timestamp::from_rfc3339(&ground_time)
+        .map_err(|e| format!("ground_time {ground_time:?}: {e}"))?;
+    message_input(message, ground_time)
+}
+
+/// A command message (`spec/conformance.md` §4): its payload and metadata,
+/// with the epoch as a ground time, which decoding a command doesn't read.
+fn read_command_message(message: &Json) -> Result<Input, String> {
+    let message = object(message, "message")?;
+    keys(message, "message", &["metadata"], &["hex", "json"])?;
+    message_input(message, Timestamp::from_unix_nanos(0))
+}
+
+/// A message's payload, from `hex` or `json`, and its metadata, with the
+/// ground time given.
+fn message_input(message: &Map<String, Json>, ground_time: Timestamp) -> Result<Input, String> {
     let payload = match (message.get("hex"), message.get("json")) {
         (Some(hex), None) => from_hex(&text(hex, "hex")?)?,
         (None, Some(json)) => text(json, "json")?.into_bytes(),
@@ -468,9 +510,6 @@ fn read_message(message: &Json) -> Result<Input, String> {
             Ok((name.clone(), value))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let ground_time = text(&message["ground_time"], "ground_time")?;
-    let ground_time = Timestamp::from_rfc3339(&ground_time)
-        .map_err(|e| format!("ground_time {ground_time:?}: {e}"))?;
     Ok(Input {
         payload,
         metadata,
@@ -1011,4 +1050,146 @@ fn target(value: &Json) -> Result<NativeId, String> {
         }
         .map_err(|_| format!("{number} is past -2^63 to 2^64 - 1")),
     }
+}
+
+// ---- Command decoding cases (`spec/conformance.md` §4) -----------------------
+
+/// One command decoding case.
+struct CommandCase {
+    name: String,
+    spec: Vec<String>,
+    family: String,
+    set: String,
+    message: Input,
+    expected: Expected,
+}
+
+/// Runs one command decoding file's cases and returns how many it ran.
+/// `name` is its path under conformance/decoding_commands.
+fn run_command_file(
+    path: &Path,
+    name: &str,
+    sections: &mut Sections,
+    failures: &mut Failures,
+) -> usize {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    let file: Json = match serde_json::from_str(&text) {
+        Ok(file) => file,
+        Err(error) => {
+            failures.add("", format!("not JSON: {error}"));
+            return 0;
+        }
+    };
+    let cases = match read_command_file(&file) {
+        Ok(cases) => cases,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    let mut names = BTreeSet::new();
+    for case in &cases {
+        if !names.insert(case.name.as_str()) {
+            failures.add(&case.name, "a second case of this name");
+        }
+        for citation in &case.spec {
+            if let Err(problem) = sections.check(citation) {
+                failures.add(&case.name, problem);
+            }
+        }
+    }
+    // A store of the file's own, apart from the other suites' stores.
+    let stem = format!(
+        "commands-{}",
+        name.trim_end_matches(".json").replace(['/', '\\'], "-")
+    );
+    let runtime = match open(&file, &stem) {
+        Ok(runtime) => runtime,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    let versions = match def_versions(&runtime) {
+        Ok(versions) => versions,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    for case in &cases {
+        let metadata = case.message.metadata();
+        let result = runtime
+            .payload(&case.family, &case.message.payload)
+            .and_then(|payload| {
+                let message =
+                    Message::new(payload, case.message.ground_time).with_metadata(&metadata);
+                runtime.decode_command(&case.family, &case.set, &message)
+            });
+        if let Err(problem) = compare(&case.expected, &result, DecodedCommand::to_value, &versions)
+        {
+            failures.add(&case.name, problem);
+        }
+    }
+    cases.len()
+}
+
+fn read_command_file(file: &Json) -> Result<Vec<CommandCase>, String> {
+    let file = object(file, "the file")?;
+    keys(file, "the file", &["about", "definitions", "cases"], &[])?;
+    text(&file["about"], "about")?;
+    let cases = file["cases"]
+        .as_array()
+        .ok_or("cases isn't a list")?
+        .iter()
+        .enumerate()
+        .map(|(index, case)| {
+            read_command_case(case).map_err(|problem| format!("case {index}: {problem}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    if cases.is_empty() {
+        return Err("no cases".to_string());
+    }
+    Ok(cases)
+}
+
+fn read_command_case(case: &Json) -> Result<CommandCase, String> {
+    let case = object(case, "a case")?;
+    keys(
+        case,
+        "a case",
+        &["name", "spec", "note", "family", "set", "message"],
+        &["decoded", "error"],
+    )?;
+    let name = text(&case["name"], "name")?;
+    let spec = case["spec"]
+        .as_array()
+        .filter(|citations| !citations.is_empty())
+        .ok_or_else(|| format!("{name}: spec isn't a list of sections"))?
+        .iter()
+        .map(|citation| text(citation, "a citation"))
+        .collect::<Result<Vec<_>, _>>()?;
+    text(&case["note"], "note")?;
+    let expected = match (case.get("decoded"), case.get("error")) {
+        (Some(decoded), None) => {
+            let decoded = object(decoded, "decoded")?;
+            if decoded.contains_key("def_version") {
+                return Err(format!(
+                    "{name}: decoded gives def_version, which describe gives"
+                ));
+            }
+            Expected::Result(Json::Object(decoded.clone()))
+        }
+        (None, Some(error)) => Expected::Error(text(error, "error")?),
+        _ => return Err(format!("{name}: a case has decoded or error, and not both")),
+    };
+    Ok(CommandCase {
+        family: text(&case["family"], "family")?,
+        set: text(&case["set"], "set")?,
+        message: read_command_message(&case["message"])
+            .map_err(|problem| format!("{name}: {problem}"))?,
+        name,
+        spec,
+        expected,
+    })
 }

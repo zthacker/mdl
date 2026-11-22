@@ -179,10 +179,11 @@ elixir-lock:
 corpus *dir:
     cargo run -q --profile props -p mdl-fuzz --bin corpus -- "$@"
 
-# Regenerate the decoding and encoding cases the testkit's oracle writes,
-# in conformance/decoding/oracle and conformance/encoding/oracle
-# (spec/conformance.md §2.3, §3.2). They're a snapshot: regenerate them on
-# purpose and review the diff; no test checks them against the generator
+# Regenerate the decoding, encoding and command decoding cases the
+# testkit's oracle writes, in conformance/decoding/oracle,
+# conformance/encoding/oracle and conformance/decoding_commands/oracle
+# (spec/conformance.md §2.3, §3.2, §4). They're a snapshot: regenerate them
+# on purpose and review the diff; no test checks them against the generator
 conformance:
     cargo run -q -p mdl-testkit --bin conformance -- conformance
 

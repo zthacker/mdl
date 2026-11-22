@@ -1,6 +1,8 @@
 //! Writes the generated conformance cases under `conformance/`, or under
-//! the directory given: decoding cases in `decoding/oracle/` and encoding
-//! cases in `encoding/oracle/` (`spec/conformance.md` §2.3, §3.2). Each is
+//! the directory given: decoding cases in `decoding/oracle/`, encoding
+//! cases in `encoding/oracle/` and command decoding cases in
+//! `decoding_commands/oracle/` (`spec/conformance.md` §2.3, §3.2, §4),
+//! the last from the encoding cases' layouts. Each is
 //! a fixed sample of the oracle's layouts, each from a seed of its own, so
 //! running it again with the same testkit and proptest writes the same
 //! files. The files are a snapshot: regenerate them on purpose, and review
@@ -11,7 +13,7 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mdl_testkit::conformance::{case_file, encoding_case_file};
+use mdl_testkit::conformance::{case_file, command_decoding_case_file, encoding_case_file};
 use mdl_testkit::layout::command::{self, Commands};
 use mdl_testkit::layout::{self, Telemetry};
 use proptest::strategy::{BoxedStrategy, Strategy, ValueTree};
@@ -91,8 +93,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         "the command or error the oracle works out forward from encoding.md, in code separate from \
          MDL's encoder; spec/conformance.md section 3.2 says what that does and doesn't check.",
     )?;
+    // The encoding cases' layouts, from the same seeds: each request's
+    // payload decodes back to what it encoded.
+    let commands = write_suite(
+        &root.join("decoding_commands/oracle"),
+        &encoding_kinds(),
+        command_decoding_case_file,
+        "the command or error the oracle works out forward from encoding.md for each payload, in \
+         code separate from MDL's decoder; spec/conformance.md section 4 says what that does and \
+         doesn't check.",
+    )?;
     println!(
-        "wrote {decoding} decoding cases and {encoding} encoding cases under {}",
+        "wrote {decoding} decoding cases, {encoding} encoding cases and {commands} command \
+         decoding cases under {}",
         root.display()
     );
     Ok(())

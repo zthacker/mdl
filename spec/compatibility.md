@@ -62,9 +62,9 @@ The results the runtime API returns ([api](api.md)) have a format version,
 
 - Additive changes keep the version: a new key in a result object, a new
   error code, a new value form for a new IR feature (which appears only
-  for sets that use the feature). A consumer MUST ignore keys it doesn't
-  know, and SHOULD treat a code it doesn't know as an error it can't
-  handle more specifically.
+  for sets that use the feature), a new operation and its result. A
+  consumer MUST ignore keys it doesn't know, and SHOULD treat a code it
+  doesn't know as an error it can't handle more specifically.
 - Removing or renaming a key, changing a value's spelling, or changing
   what a key means is a new format version.
 - `morphc`'s JSON reports carry their own version (`"report"`), which

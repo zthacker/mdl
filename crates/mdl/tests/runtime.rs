@@ -271,6 +271,46 @@ fn a_store_decodes_and_encodes_with_the_results_the_spec_gives() {
 }
 
 #[test]
+fn a_command_payload_decodes_with_the_result_the_spec_gives() {
+    let (dir, artifacts) = store_dir("decode_command");
+    let runtime = Runtime::open(&dir, None).unwrap();
+    let apid = [("apid", MetaValue::Uint(7))];
+    let decode = |bytes: &[u8], metadata: &[(&str, MetaValue<'_>)]| {
+        let message = Message::new(Payload::Binary(bytes), ground()).with_metadata(metadata);
+        runtime.decode_command("sat", "sat_v1", &message)
+    };
+    let decoded = decode(&[9, 0, 5], &apid).unwrap();
+    assert_eq!(
+        json_of(&decoded.to_value()),
+        json!({
+            "family": "sat",
+            "set": "sat_v1",
+            "def_version": artifacts.sets["sat_v1"].digest.to_string(),
+            "packet": "RESET",
+            "command": "eps.reset",
+            "arguments": { "delay": 5 },
+            "defaulted": [],
+            "target": null,
+            "record": { "op": 9, "delay": 5 }
+        })
+    );
+    // The packet's metadata is part of its identity; so is its constant.
+    assert_eq!(code(decode(&[9, 0, 5], &[])), "no_packet");
+    assert_eq!(code(decode(&[8, 0, 5], &apid)), "no_packet");
+    // 601 s is past the catalog's 600, as encoding refuses it.
+    assert_eq!(code(decode(&[9, 2, 0x59], &apid)), "out_of_range");
+    let message = Message::new(Payload::Binary(&[9, 0, 5]), ground()).with_metadata(&apid);
+    assert_eq!(
+        code(runtime.decode_command("sat", "sat_v9", &message)),
+        "unknown_set"
+    );
+    assert_eq!(
+        code(runtime.decode_command("nope", "sat_v1", &message)),
+        "unknown_family"
+    );
+}
+
+#[test]
 fn a_store_from_bytes_reads_as_its_directory_does() {
     let (dir, _) = store_dir("bytes");
     let mut files: Vec<(String, Vec<u8>)> = fs::read_dir(&dir)

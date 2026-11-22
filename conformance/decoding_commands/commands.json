@@ -1,0 +1,497 @@
+{
+  "about": "Decoding commands: which packet a payload and its metadata are, constants, each argument through its conversion and the catalog's limits as the packet narrows them, defaulted arguments, the target, checksums, lists, JSON command payloads, and the order of the checks.",
+  "definitions": {
+    "mdl_version": "2.3",
+    "catalog": {
+      "commands": {
+        "c.gain": {
+          "arguments": [
+            { "name": "g", "type": "f64" }
+          ]
+        },
+        "c.load": {
+          "arguments": [
+            { "name": "data", "type": "bytes" }
+          ]
+        },
+        "c.json": {
+          "arguments": [
+            { "name": "values", "type": "u64", "list": { "min": 1, "max": 3 } },
+            { "name": "name", "type": "str" }
+          ]
+        },
+        "c.pick": {
+          "arguments": [
+            { "name": "kind", "type": "enum", "states": ["A", "B", "C"] }
+          ]
+        },
+        "c.pair": {
+          "arguments": [
+            { "name": "a", "type": "u64", "range": { "max": 10 } },
+            { "name": "b", "type": "enum", "states": ["X", "Y"] },
+            { "name": "label", "type": "str" }
+          ]
+        },
+        "c.ping": {
+          "arguments": [
+            { "name": "note", "type": "str" }
+          ]
+        },
+        "c.set": {
+          "arguments": [
+            { "name": "level", "type": "f64", "unit": "V", "range": { "min": 0, "max": 10 }, "default": 5 },
+            { "name": "count", "type": "u64", "range": { "min": 1, "max": 1000 } },
+            { "name": "mode", "type": "enum", "states": ["OFF", "ON", "STANDBY"], "default": "OFF" }
+          ]
+        }
+      }
+    },
+    "families": [
+      {
+        "name": "cmd",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "cmd-1" },
+        "metadata": ["apid"]
+      },
+      {
+        "name": "cmdj",
+        "encoding": "json",
+        "alias": { "kind": "fixed", "value": "cmdj-1" }
+      }
+    ],
+    "sets": [
+      {
+        "name": "cmd_old",
+        "family": "cmd",
+        "commands": [
+          {
+            "name": "SET_OLD",
+            "canonical": "c.set",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 1 },
+              { "kind": "field", "name": "count", "type": "uint", "size_bits": 16, "argument": "count" },
+              {
+                "kind": "field",
+                "name": "mode",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "OFF" }, { "raw": 1, "name": "ON" }, { "raw": 2, "name": "STANDBY" }] },
+                "argument": "mode"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "cmd_v1",
+        "family": "cmd",
+        "commands": [
+          {
+            "name": "SET",
+            "canonical": "c.set",
+            "metadata": { "apid": 5 },
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 1 },
+              {
+                "kind": "field",
+                "name": "level",
+                "type": "uint",
+                "size_bits": 8,
+                "unit": "V",
+                "conversion": { "kind": "linear", "scale": 0.1, "offset": 0 },
+                "argument": "level"
+              },
+              { "kind": "field", "name": "count", "type": "uint", "size_bits": 16, "argument": "count" },
+              {
+                "kind": "field",
+                "name": "mode",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "OFF" }, { "raw": 1, "name": "ON" }, { "raw": 2, "name": "STANDBY" }] },
+                "argument": "mode"
+              }
+            ]
+          },
+          {
+            "name": "PING",
+            "canonical": "c.ping",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 2 },
+              { "kind": "field", "name": "note", "type": "string", "length": { "kind": "terminator", "byte": 0 }, "text": "ascii", "argument": "note" },
+              { "kind": "field", "name": "end", "type": "uint", "size_bits": 8, "value": 170 },
+              { "kind": "field", "name": "node", "type": "uint", "size_bits": 16, "target": true }
+            ]
+          },
+          {
+            "name": "PICK",
+            "canonical": "c.pick",
+            "arguments": { "kind": { "states": ["A", "B"] } },
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 3 },
+              {
+                "kind": "field",
+                "name": "kind",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "A" }, { "raw": 1, "name": "B" }, { "raw": 2, "name": "C" }] },
+                "argument": "kind"
+              }
+            ]
+          },
+          {
+            "name": "GAIN",
+            "canonical": "c.gain",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 4 },
+              { "kind": "field", "name": "g", "type": "float", "size_bits": 32, "argument": "g" }
+            ]
+          },
+          {
+            "name": "LOAD",
+            "canonical": "c.load",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 5 },
+              { "kind": "field", "name": "data", "type": "bytes", "length": { "kind": "fixed", "bytes": 9 }, "argument": "data" },
+              {
+                "kind": "checksum",
+                "name": "crc",
+                "from_bits": 8,
+                "algorithm": { "kind": "crc", "width": 16, "poly": 4129, "init": 65535, "reflect_in": false, "reflect_out": false, "xor_out": 0 }
+              }
+            ]
+          },
+          {
+            "name": "PAIR",
+            "canonical": "c.pair",
+            "entries": [
+              { "kind": "field", "name": "opcode", "type": "uint", "size_bits": 8, "value": 6 },
+              {
+                "kind": "field",
+                "name": "b",
+                "type": "uint",
+                "size_bits": 8,
+                "conversion": { "kind": "states", "states": [{ "raw": 0, "name": "X" }, { "raw": 1, "name": "Y" }] },
+                "argument": "b"
+              },
+              { "kind": "field", "name": "a", "type": "uint", "size_bits": 8, "argument": "a" },
+              { "kind": "field", "name": "label", "type": "string", "length": { "kind": "terminator", "byte": 0 }, "text": "ascii", "argument": "label" },
+              { "kind": "field", "name": "end", "type": "uint", "size_bits": 8, "value": 85 }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "cmdj_v1",
+        "family": "cmdj",
+        "commands": [
+          {
+            "name": "LIST",
+            "canonical": "c.json",
+            "entries": [
+              { "kind": "field", "name": "op", "type": "string", "pointer": "/op", "value": "list" },
+              {
+                "kind": "array",
+                "name": "values",
+                "pointer": "/values",
+                "element": { "kind": "scalar", "type": "uint" },
+                "argument": "values"
+              },
+              { "kind": "field", "name": "name", "type": "string", "pointer": "/name", "argument": "name" }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "a-packet-by-its-constant-and-metadata",
+      "spec": ["encoding.md §7.2", "encoding.md §7.4", "decoding.md §7.1", "api.md §3.5"],
+      "note": "The constant opcode 01 and the metadata apid 5 are SET's keys. level is raw 25 through linear 0.1: 25 x 0.1 + 0 = 2.5 V, within its range. count is 00 0c = 12, and mode raw 1 is the state ON. Every argument is encoded, so none is defaulted; SET has no target. The record holds the raw values.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0119000c01", "metadata": { "apid": 5 } },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "SET",
+        "command": "c.set",
+        "arguments": { "level": 2.5, "count": 12, "mode": "ON" },
+        "defaulted": [],
+        "target": null,
+        "record": { "opcode": 1, "level": 25, "count": 12, "mode": 1 }
+      }
+    },
+    {
+      "name": "metadata-is-part-of-the-packets-identity",
+      "spec": ["encoding.md §7.2"],
+      "note": "SET's metadata key apid can't be read without metadata, and a key that can't be read doesn't match: no_packet.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0119000c01", "metadata": {} },
+      "error": "no_packet"
+    },
+    {
+      "name": "a-constant-no-packet-has",
+      "spec": ["encoding.md §7.2"],
+      "note": "No command packet of cmd_v1 has opcode 9: no_packet.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0919000c01", "metadata": { "apid": 5 } },
+      "error": "no_packet"
+    },
+    {
+      "name": "a-raw-value-past-the-ranges-ends",
+      "spec": ["encoding.md §7.4", "encoding.md §3.1"],
+      "note": "level's range, 0 to 10 V, becomes raw 0 to 100 through its inverse, (v - 0) / 0.1, and the raw value 101 lies past it: out_of_range, tested on the raw value before converting.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0165000c01", "metadata": { "apid": 5 } },
+      "error": "out_of_range"
+    },
+    {
+      "name": "an-integer-the-catalog-refuses",
+      "spec": ["encoding.md §7.4", "encoding.md §2.3"],
+      "note": "count is 0, and the catalog's range starts at 1: out_of_range, as encoding refuses it.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0119000001", "metadata": { "apid": 5 } },
+      "error": "out_of_range"
+    },
+    {
+      "name": "a-raw-value-no-state-lists",
+      "spec": ["encoding.md §7.4"],
+      "note": "mode's states list raw 0, 1 and 2, and 7 is none of them: unknown_state.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0119000c07", "metadata": { "apid": 5 } },
+      "error": "unknown_state"
+    },
+    {
+      "name": "a-payload-that-ends-early",
+      "spec": ["encoding.md §7.3", "decoding.md §5.2"],
+      "note": "The packet's entries are read as a telemetry packet's: count's 16 bits reach past the 2-byte payload, past_end.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0119", "metadata": { "apid": 5 } },
+      "error": "past_end"
+    },
+    {
+      "name": "a-target-and-a-constant-after-a-string",
+      "spec": ["encoding.md §7.3", "encoding.md §7.4"],
+      "note": "note runs to its terminator: 68 69 is hi. The constant end, 170, sits after a string, so it's no key, but it must hold its value, and does. node is the target's native id, 02 01 = 513.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "02686900aa0201", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "PING",
+        "command": "c.ping",
+        "arguments": { "note": "hi" },
+        "defaulted": [],
+        "target": 513,
+        "record": { "opcode": 2, "note": "hi", "end": 170, "node": 513 }
+      }
+    },
+    {
+      "name": "a-constant-that-doesnt-hold-its-value",
+      "spec": ["encoding.md §7.3"],
+      "note": "The packet is PING by its opcode, and its constant end holds ab where its value is aa: wrong_constant.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "02686900ab0201", "metadata": {} },
+      "error": "wrong_constant"
+    },
+    {
+      "name": "a-checksum-over-the-bytes-before-it",
+      "spec": ["encoding.md §7.3", "decoding.md §5.6"],
+      "note": "The packet is LOAD by its opcode, 05. data is its fixed 9 bytes, 123456789, and crc covers the bytes from bit 8 to itself: CRC-16/IBM-3740 of 123456789 is 0x29b1, its catalog check value, and the payload holds 29 b1. The ff ff after crc are past the packet's last entry, so they're ignored, and no checksum covers them.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0531323334353637383929b1ffff", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "LOAD",
+        "command": "c.load",
+        "arguments": { "data": "313233343536373839" },
+        "defaulted": [],
+        "target": null,
+        "record": { "opcode": 5, "data": "313233343536373839", "crc": 10673 }
+      }
+    },
+    {
+      "name": "a-checksum-that-doesnt-hold",
+      "spec": ["encoding.md §7.3", "decoding.md §5.6"],
+      "note": "As above, but the payload holds 29 b2 where CRC-16/IBM-3740 of 123456789 is 29 b1: bad_checksum.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0531323334353637383929b2", "metadata": {} },
+      "error": "bad_checksum"
+    },
+    {
+      "name": "a-state-the-packet-accepts",
+      "spec": ["encoding.md §7.4"],
+      "note": "kind raw 1 is the state B, which the packet accepts.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0301", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "PICK",
+        "command": "c.pick",
+        "arguments": { "kind": "B" },
+        "defaulted": [],
+        "target": null,
+        "record": { "opcode": 3, "kind": 1 }
+      }
+    },
+    {
+      "name": "a-state-the-packet-doesnt-accept",
+      "spec": ["encoding.md §7.4", "encoding.md §3.1"],
+      "note": "kind raw 2 is the state C, which the conversion lists and the packet doesn't accept: unsupported_state.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "0302", "metadata": {} },
+      "error": "unsupported_state"
+    },
+    {
+      "name": "a-float-that-isnt-finite",
+      "spec": ["encoding.md §7.4"],
+      "note": "g reads the binary32 NaN 0x7fc00000, and a float raw value must be finite: non_finite.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "047fc00000", "metadata": {} },
+      "error": "non_finite"
+    },
+    {
+      "name": "a-float-argument",
+      "spec": ["encoding.md §7.4"],
+      "note": "g reads the binary32 0x3fc00000, 1.5, unconverted.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "043fc00000", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_v1",
+        "packet": "GAIN",
+        "command": "c.gain",
+        "arguments": { "g": 1.5 },
+        "defaulted": [],
+        "target": null,
+        "record": { "opcode": 4, "g": 1.5 }
+      }
+    },
+    {
+      "name": "an-argument-the-set-doesnt-encode",
+      "spec": ["encoding.md §7.4", "api.md §3.5"],
+      "note": "cmd_old leaves level out, so level is its default, 5, an f64 argument's 5.0, and defaulted lists it. count is 12, and mode raw 1 is ON.",
+      "family": "cmd",
+      "set": "cmd_old",
+      "message": { "hex": "01000c01", "metadata": {} },
+      "decoded": {
+        "family": "cmd",
+        "set": "cmd_old",
+        "packet": "SET_OLD",
+        "command": "c.set",
+        "arguments": { "level": 5.0, "count": 12, "mode": "ON" },
+        "defaulted": ["level"],
+        "target": null,
+        "record": { "opcode": 1, "count": 12, "mode": 1 }
+      }
+    },
+    {
+      "name": "a-set-the-family-hasnt-got",
+      "spec": ["encoding.md §7.1"],
+      "note": "The family has no set cmd_v9: unknown_set.",
+      "family": "cmd",
+      "set": "cmd_v9",
+      "message": { "hex": "0301", "metadata": {} },
+      "error": "unknown_set"
+    },
+    {
+      "name": "a-family-the-build-hasnt-got",
+      "spec": ["api.md §2.7", "api.md §4"],
+      "note": "The build has no family nope: unknown_family.",
+      "family": "nope",
+      "set": "cmd_v1",
+      "message": { "hex": "0301", "metadata": {} },
+      "error": "unknown_family"
+    },
+    {
+      "name": "a-json-command",
+      "spec": ["encoding.md §7.2", "encoding.md §7.3", "encoding.md §7.4", "decoding.md §5.3"],
+      "note": "The constant op, \"list\", is the packet's key, compared exactly. values is the list of the array's elements, [1, 2], and name is x.",
+      "family": "cmdj",
+      "set": "cmdj_v1",
+      "message": { "json": "{\"op\": \"list\", \"values\": [1, 2], \"name\": \"x\"}", "metadata": {} },
+      "decoded": {
+        "family": "cmdj",
+        "set": "cmdj_v1",
+        "packet": "LIST",
+        "command": "c.json",
+        "arguments": { "values": [1, 2], "name": "x" },
+        "defaulted": [],
+        "target": null,
+        "record": { "op": "list", "values": [1, 2], "name": "x" }
+      }
+    },
+    {
+      "name": "a-list-too-short",
+      "spec": ["encoding.md §7.4"],
+      "note": "values takes 1 to 3 values, and the array is empty: list_length.",
+      "family": "cmdj",
+      "set": "cmdj_v1",
+      "message": { "json": "{\"op\": \"list\", \"values\": [], \"name\": \"x\"}", "metadata": {} },
+      "error": "list_length"
+    },
+    {
+      "name": "a-null-element-is-no-value",
+      "spec": ["encoding.md §7.4", "decoding.md §5.3"],
+      "note": "A null element is no reading, so no value: wrong_type, at index 1.",
+      "family": "cmdj",
+      "set": "cmdj_v1",
+      "message": { "json": "{\"op\": \"list\", \"values\": [1, null], \"name\": \"x\"}", "metadata": {} },
+      "error": "wrong_type"
+    },
+    {
+      "name": "a-json-constant-no-packet-has",
+      "spec": ["encoding.md §7.2"],
+      "note": "No packet's op is nope, compared exactly: no_packet.",
+      "family": "cmdj",
+      "set": "cmdj_v1",
+      "message": { "json": "{\"op\": \"nope\", \"values\": [1], \"name\": \"x\"}", "metadata": {} },
+      "error": "no_packet"
+    },
+    {
+      "name": "entries-are-read-before-constants-are-checked",
+      "spec": ["encoding.md §7.5", "encoding.md §7.3", "decoding.md §5.2"],
+      "note": "The packet is PING by its opcode. Its constant end holds ab where its value is aa, but node, 2 bytes, has only 02 left. Every entry is read before any constant is checked, so the error is the read's: past_end.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "02686900ab02", "metadata": {} },
+      "error": "past_end"
+    },
+    {
+      "name": "constants-are-checked-before-arguments",
+      "spec": ["encoding.md §7.5", "encoding.md §7.3", "encoding.md §7.4"],
+      "note": "The packet is PAIR by its opcode, 06. b raw 5 is no state, a 11 is past its range's 10, and label is empty, ended by 00; end, after a string, is no key, and holds 00 where its value is 85 = 0x55. Constants are checked before arguments: wrong_constant.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "06050b0000", "metadata": {} },
+      "error": "wrong_constant"
+    },
+    {
+      "name": "arguments-in-the-catalogs-order",
+      "spec": ["encoding.md §7.5", "encoding.md §7.4", "encoding.md §2.3"],
+      "note": "As above, but end holds 55, its value. The packet writes b before a, and both are refused: b raw 5 is no state (unknown_state), and a 11 is past its range's 10 (out_of_range). Arguments are checked in the catalog's order, which lists a first: out_of_range.",
+      "family": "cmd",
+      "set": "cmd_v1",
+      "message": { "hex": "06050b0055", "metadata": {} },
+      "error": "out_of_range"
+    }
+  ]
+}
