@@ -49,6 +49,10 @@ them too.
     parity, `sum16` to `sum32` (XTCE doesn't say what they add), the other
     checksums XTCE names, and a check followed in bits by anything but
     another check are unsupported.
+- A command packet that gives its own limits (IR 2.2, 2.3) for an
+  argument named `kind` was refused when read, from JSON or TOML: the
+  reader took the argument's name for a tagged object's `kind`. It reads
+  now, and a store holding one opens.
 - A checksum covers at least one byte in every message: its `from_bits`
   (0 when not given) is below the earliest bit the entries before it let
   it start at. 0.2.0 refused one only when its own `offset_bits` came
@@ -93,10 +97,13 @@ them too.
   the result or error the oracle works out from the spec, in code
   separate from MDL's decoder ([spec/conformance.md](spec/conformance.md)
   §2.3 says what that does and doesn't check; `just conformance` writes
-  them). A binding of the runtime API must
-  pass them through its own API
-  ([spec/conformance.md](spec/conformance.md), a new specification); the
-  runtime and the Elixir binding run them in their tests.
+  them). Encoding cases, in `conformance/encoding/`: requests, each
+  argument's value tagged with its kind, and the encoded command or error
+  the spec gives, worked out by hand, for argument types and resolution,
+  ranges and lists, a packet's own limits, raw values, binary and JSON
+  payloads. A binding of the runtime API must pass both through its own
+  API ([spec/conformance.md](spec/conformance.md), a new specification);
+  the runtime and the Elixir binding run them in their tests.
 - The specification now says what the runtime has always given for a
   composite sample that isn't `good`: each member is its raw value as a
   float, unconverted, so a composite's value is always its frame and
