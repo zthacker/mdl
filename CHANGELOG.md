@@ -31,6 +31,24 @@ them too.
 - A reference to an array's element (`Cells[2]`), or into an argument's
   members or elements, which XTCE 1.3 allows, is reported as unsupported
   (`xtce.unsupported`) rather than as naming nothing.
+- An XTCE container's `BinaryEncoding`, which was refused, is read:
+  - its `SizeInBits` pads the container's entries to that many bits,
+    counted from the start of the packet as entry locations are (an
+    embedded container's from its own start), in telemetry and command
+    containers and in any XTCE version. Yamcs reads a size only for an
+    embedded container, so padding any other is an `xtce.differs`
+    warning;
+  - XTCE 1.3's checks over a packet's bytes (`ErrorDetectCorrect`) that
+    name the parameter holding their value (`parameterRef`) make it a
+    checksum entry, which decoding verifies and encoding works out: a CRC
+    of 8 to 64 bits, `sum8`, or XOR, covering the bytes from
+    `bitsFromReference` up to the value. The parameter gives no sample and
+    leaves the catalog unless another packet's field maps it. A check
+    naming no parameter, as before 1.3 none can, is left out with a
+    warning, as it is from a packet that doesn't hold the parameter;
+    parity, `sum16` to `sum32` (XTCE doesn't say what they add), the other
+    checksums XTCE names, and a check followed in bits by anything but
+    another check are unsupported.
 
 ### Releases
 
