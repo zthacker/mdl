@@ -83,22 +83,22 @@
         "arguments": {
           "a0": -2.3619602416147245e-6,
           "a1": "S0",
-          "a2": -725956.1917703296,
-          "a3": "é",
+          "a2": -715388.5123012499,
+          "a3": "\r\b=Q\t\u0001gh",
           "a4": 387.25744058404246,
           "a5": [
-            "36028797018963967",
-            "11437181857883853",
-            "29254255618456952",
-            "36028797018963967",
-            7516185765253657
+            0,
+            1522380625979449,
+            0,
+            0,
+            0
           ],
           "a6": [
             0.0,
+            -153974.97633027157,
+            -66171.08567758306,
             13165.501742042368,
-            -153974.97633027157,
-            -153974.97633027157,
-            -105671.33234792051
+            -153974.97633027157
           ],
           "a7": [
             384698.2929443859,
@@ -113,37 +113,37 @@
         "family": "fam",
         "packet": "C0",
         "record": {
-          "c0": 89,
-          "f0": "",
+          "c0": 112,
+          "f0": "a",
           "f1": [
             694.4058988330756,
+            1163.6764362001195,
+            896.0759472666225,
             654.2813134982289,
-            1163.6764362001195,
-            1163.6764362001195,
-            1016.4611060950301
+            1163.6764362001195
           ],
           "f1_n": 2,
           "f2": -3762,
           "f3": -76222745265,
-          "f4": 31.735367421093088,
+          "f4": 64.58119926295973,
           "f5": [
-            "36028797018963967",
-            "11437181857883853",
-            "29254255618456952",
-            "36028797018963967",
-            7516185765253657
+            0,
+            1522380625979449,
+            0,
+            0,
+            0
           ],
           "f5_n": 2,
-          "f6": "é",
+          "f6": "\r\b=Q\t\u0001gh",
           "f7": -0.20610760152339935,
           "op": "ed"
         },
         "set": "fam_v1",
-        "target": ""
+        "target": "a"
       },
       "family": "fam",
       "message": {
-        "hex": "656497974810b667e8fc658b68108e48042952d1081245d695761eac081245d695761eac0811f8760b0c8e240059c5344e35c540ee403fbc410a10238009fffffffffffffca28839a77b9b359fba5ca939f5e1fffffffffffffc6acfb97a6a4864c3a986df0d53be",
+        "hex": "656461974810b667e8fc658b681245d695761eac081180137147b25d48108e48042952d1081245d695761eac0070c5344e35c540ee405025325e64b7c4080000000000000015a26371b2a0e40000000000000000000000000000000000000000000d083d510901676886df0d53be",
         "metadata": {
           "apid": 0
         }
@@ -164,24 +164,24 @@
     {
       "decoded": {
         "arguments": {
-          "a0": -2.3619602416147245e-6,
+          "a0": -169881.05108926655,
           "a1": "S0",
-          "a2": -709430.0986810008,
-          "a3": "",
+          "a2": -725956.1917703296,
+          "a3": "zéé﻿i",
           "a4": 387.25744058404246,
           "a5": [
+            "10813143314203880",
+            0,
+            0,
             "36028797018963967",
-            "31433861514042589",
-            0,
-            0,
-            0
+            1076026312081529
           ],
           "a6": [
-            0.0,
-            -134336.01955967426,
+            13165.501742042368,
+            -98071.77086555405,
+            -32657.146819233196,
             -153974.97633027157,
-            -21148.090423604706,
-            0.0
+            13165.501742042368
           ],
           "a7": [
             384698.2929443859,
@@ -196,37 +196,37 @@
         "family": "fam",
         "packet": "C0",
         "record": {
-          "c0": 248,
-          "f0": "",
+          "c0": 254,
+          "f0": "a",
           "f1": [
-            694.4058988330756,
-            1103.8226598481858,
+            654.2813134982289,
+            993.2998731104282,
+            793.9352977132177,
             1163.6764362001195,
-            758.8590716400956,
-            694.4058988330756
+            654.2813134982289
           ],
           "f1_n": 2,
           "f2": -3762,
           "f3": -76222745265,
-          "f4": 83.10078555317816,
+          "f4": 31.735367421093088,
           "f5": [
+            "10813143314203880",
+            0,
+            0,
             "36028797018963967",
-            "31433861514042589",
-            0,
-            0,
-            0
+            1076026312081529
           ],
           "f5_n": 2,
-          "f6": "",
-          "f7": -0.20610760152339935,
+          "f6": "zéé﻿i",
+          "f7": -445.21551513671875,
           "op": "ed"
         },
         "set": "fam_v1",
-        "target": ""
+        "target": "a"
       },
       "family": "fam",
       "message": {
-        "hex": "656497974810b667e8fc658b681227e94ceafbd8681245d695761eac0810f6dbec1e7721c810b667e8fc658b60f8c5344e35c540ee4054c673453fb3ce09fffffffffffffdbeb3b8d5da737400000000000000000000000000000000000000000086df0d53be",
+        "hex": "6564619748108e48042952d10811e14cc47bf23d281119ef6fabc24b281245d695761eac08108e48042952d100fec5344e35c540ee403fbc410a1023800899a9fc789813a00000000000000000000000000001fffffffffffffc0f4a8f986701e47ac3a9c3a9efbbbf6986969bdec3",
         "metadata": {
           "apid": 0
         }
@@ -248,7 +248,68 @@
       "decoded": {
         "arguments": {
           "a0": 0,
-          "a1": -437571.53604581556,
+          "a1": -385798.9799526194,
+          "a2": [],
+          "a3": [
+            "S1",
+            "S0"
+          ],
+          "a4": [
+            "p/\"de",
+            "abc"
+          ]
+        },
+        "command": "cmd.c1",
+        "defaulted": [
+          "a4"
+        ],
+        "family": "fam",
+        "packet": "C1",
+        "record": {
+          "f0": [],
+          "f0_n": 0,
+          "f1": true,
+          "f2": [
+            {
+              "r0": 2277601932472
+            },
+            {
+              "r0": -12543792598116
+            }
+          ],
+          "f3": 0,
+          "f4": "1b",
+          "f5": 424,
+          "op": "ha"
+        },
+        "set": "fam_v1",
+        "target": null
+      },
+      "family": "fam",
+      "message": {
+        "hex": "68610810925d3ba5c0a4bb5d959ce000000000000000003162a801",
+        "metadata": {
+          "apid": 0
+        }
+      },
+      "name": "request-03-cmd.c1",
+      "note": "Generated by the testkit's oracle: commands seed 3, the payload request 3 encodes to.",
+      "set": "fam_v1",
+      "spec": [
+        "encoding.md §7",
+        "encoding.md §2",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §7.1",
+        "units.md §4",
+        "api.md §3.5"
+      ]
+    },
+    {
+      "decoded": {
+        "arguments": {
+          "a0": "18446744073709551615",
+          "a1": -243537.10954166637,
           "a2": [
             -9007199254740991,
             -9007199254740991,
@@ -285,82 +346,7 @@
               "r0": 2277601932472
             }
           ],
-          "f3": 0,
-          "f4": "1b",
-          "f5": 481,
-          "op": "ha"
-        },
-        "set": "fam_v1",
-        "target": null
-      },
-      "family": "fam",
-      "message": {
-        "hex": "686119fffffffffffff9fffffffffffff9fffffffffffff810925d3ba5c010925d3ba5c000000000000000003162e101",
-        "metadata": {
-          "apid": 0
-        }
-      },
-      "name": "request-03-cmd.c1",
-      "note": "Generated by the testkit's oracle: commands seed 3, the payload request 3 encodes to.",
-      "set": "fam_v1",
-      "spec": [
-        "encoding.md §7",
-        "encoding.md §2",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §7.1",
-        "units.md §4",
-        "api.md §3.5"
-      ]
-    },
-    {
-      "decoded": {
-        "arguments": {
-          "a0": 0,
-          "a1": -243537.10954166637,
-          "a2": [
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991
-          ],
-          "a3": [
-            "S0",
-            "S1"
-          ],
-          "a4": [
-            "p/\"de",
-            "abc"
-          ]
-        },
-        "command": "cmd.c1",
-        "defaulted": [
-          "a4"
-        ],
-        "family": "fam",
-        "packet": "C1",
-        "record": {
-          "f0": [
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991
-          ],
-          "f0_n": 2,
-          "f1": true,
-          "f2": [
-            {
-              "r0": -12543792598116
-            },
-            {
-              "r0": 2277601932472
-            }
-          ],
-          "f3": 0,
+          "f3": "18446744073709551615",
           "f4": "1b",
           "f5": 267,
           "op": "ha"
@@ -370,7 +356,7 @@
       },
       "family": "fam",
       "message": {
-        "hex": "686129fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff8a4bb5d959ce010925d3ba5c0000000000000000031620b01",
+        "hex": "686119fffffffffffff9fffffffffffff9fffffffffffff810925d3ba5c010925d3ba5c0ffffffffffffffff31620b01",
         "metadata": {
           "apid": 0
         }
@@ -393,72 +379,62 @@
         "arguments": {
           "a0": "ejff",
           "a1": [
-            741310.2816696874,
             0.0,
-            0.0,
-            -611252.7233525236,
             -914635.9937615198,
-            -575292.2969674465,
             -914635.9937615198,
             0.0,
-            0.0,
+            -914635.9937615198,
+            -914635.9937615198,
             0.0
           ],
           "a2": [
-            "abgbf",
             "ghahe",
             "abgbf",
             "abgbf",
-            "abgbf",
-            "abgbf",
-            "abgbf",
-            "abgbf",
             "ghahe",
-            "abgbf"
+            "ghahe",
+            "abgbf",
+            "abgbf",
+            "ghahe"
           ],
-          "a3": "9bfa"
+          "a3": "895f0afa"
         },
         "command": "cmd.c2",
         "defaulted": [],
         "family": "fam",
         "packet": "C2",
         "record": {
-          "c0": 79,
+          "c0": 63,
           "f0": [
-            "abgbf",
             "ghahe",
             "abgbf",
             "abgbf",
-            "abgbf",
-            "abgbf",
-            "abgbf",
-            "abgbf",
             "ghahe",
-            "abgbf"
+            "ghahe",
+            "abgbf",
+            "abgbf",
+            "ghahe"
           ],
-          "f0_n": 4,
+          "f0_n": 3,
           "f1": "ejff",
           "f2": [
-            -818.2420890165369,
             -0.08464815697434218,
-            -0.08464815697434218,
-            674.5329528968495,
             1009.3661344336847,
-            634.8447263189495,
             1009.3661344336847,
             -0.08464815697434218,
-            -0.08464815697434218,
+            1009.3661344336847,
+            1009.3661344336847,
             -0.08464815697434218
           ],
           "op": "aa",
-          "rest": "9bfa"
+          "rest": "895f0afa"
         },
         "set": "fam_v1",
         "target": null
       },
       "family": "fam",
       "message": {
-        "hex": "6161406162676266676861686561626762666162676266616267626661626762666162676266616267626667686168656162676266656a6666ffff4ff9c55dccef9189c0eb18df6980abb5bfeb18df6980abb5bf37f2ce7c43148540ecd4e3d7ed8a8f40ab4fdfffc1d68340ecd4e3d7ed8a8f40eb18df6980abb5bfeb18df6980abb5bfeb18df6980abb5bf9bfa",
+        "hex": "61613067686168656162676266616267626667686168656768616865616267626661626762666768616865656a6666ffff3feb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bf895f0afa",
         "metadata": {
           "apid": 0
         }
@@ -477,16 +453,192 @@
       ]
     },
     {
-      "error": "bad_length",
+      "decoded": {
+        "arguments": {
+          "a0": "ejff",
+          "a1": [
+            -914635.9937615198,
+            0.0,
+            -313134.8286324051,
+            0.0,
+            -529160.5540782047,
+            889183.9187385195,
+            0.0,
+            0.0,
+            0.0,
+            -409100.1751617517
+          ],
+          "a2": [
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "ghahe",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "abgbf"
+          ],
+          "a3": "60"
+        },
+        "command": "cmd.c2",
+        "defaulted": [],
+        "family": "fam",
+        "packet": "C2",
+        "record": {
+          "c0": 76,
+          "f0": [
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "ghahe",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "abgbf"
+          ],
+          "f0_n": 4,
+          "f1": "ejff",
+          "f2": [
+            1009.3661344336847,
+            -0.08464815697434218,
+            345.51097674229123,
+            -0.08464815697434218,
+            583.9307842923489,
+            -981.444892844286,
+            -0.08464815697434218,
+            -0.08464815697434218,
+            -0.08464815697434218,
+            451.42447109017604
+          ],
+          "op": "aa",
+          "rest": "60"
+        },
+        "set": "fam_v1",
+        "target": null
+      },
       "family": "fam",
       "message": {
-        "hex": "6564363808121dc427c94f52281245d695761eac00c8c5344e35c540ee40720f13532a798c04000000000000015493e1c3a2e2780000000000000086df0d53be",
+        "hex": "6161406162676266676861686561626762666768616865676861686567686168656162676266676861686561626762666162676266656a6666ffff4cecd4e3d7ed8a8f40eb18df6980abb5bf85d2f2f52c987540eb18df6980abb5bf27fa083f723f824076c3fa238fab8ec0eb18df6980abb5bfeb18df6980abb5bfeb18df6980abb5bf75a632a2ca367c4060",
         "metadata": {
           "apid": 0
         }
       },
-      "name": "garbled-00-bad_length",
-      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 0. Planted: count 0 for f1.",
+      "name": "request-06-cmd.c2",
+      "note": "Generated by the testkit's oracle: commands seed 3, the payload request 6 encodes to.",
+      "set": "fam_v1",
+      "spec": [
+        "encoding.md §7",
+        "encoding.md §2",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §7.1",
+        "units.md §4",
+        "api.md §3.5"
+      ]
+    },
+    {
+      "decoded": {
+        "arguments": {
+          "a0": "ejff",
+          "a1": [
+            0.0,
+            849041.9953666335,
+            725098.4742502518,
+            0.0,
+            0.0,
+            655833.3477973305,
+            -914635.9937615198,
+            -914635.9937615198,
+            0.0,
+            0.0
+          ],
+          "a2": [
+            "abgbf",
+            "abgbf",
+            "abgbf",
+            "ghahe",
+            "ghahe",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "abgbf"
+          ],
+          "a3": "1f74bb41c9824b656681"
+        },
+        "command": "cmd.c2",
+        "defaulted": [],
+        "family": "fam",
+        "packet": "C2",
+        "record": {
+          "c0": 79,
+          "f0": [
+            "abgbf",
+            "abgbf",
+            "abgbf",
+            "ghahe",
+            "ghahe",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "abgbf"
+          ],
+          "f0_n": 4,
+          "f1": "ejff",
+          "f2": [
+            -0.08464815697434218,
+            -937.141698744306,
+            -800.3497014455472,
+            -0.08464815697434218,
+            -0.08464815697434218,
+            -723.9042777129961,
+            1009.3661344336847,
+            1009.3661344336847,
+            -0.08464815697434218,
+            -0.08464815697434218
+          ],
+          "op": "aa",
+          "rest": "1f74bb41c9824b656681"
+        },
+        "set": "fam_v1",
+        "target": null
+      },
+      "family": "fam",
+      "message": {
+        "hex": "6161406162676266616267626661626762666768616865676861686567686168656162676266676861686561626762666162676266656a6666ffff4feb18df6980abb5bf6e85f33222498dc0ea7f4530cc0289c0eb18df6980abb5bfeb18df6980abb5bf8f1ef4f53b9f86c0ecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfeb18df6980abb5bf1f74bb41c9824b656681",
+        "metadata": {
+          "apid": 0
+        }
+      },
+      "name": "request-07-cmd.c2",
+      "note": "Generated by the testkit's oracle: commands seed 3, the payload request 7 encodes to.",
+      "set": "fam_v1",
+      "spec": [
+        "encoding.md §7",
+        "encoding.md §2",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §7.1",
+        "units.md §4",
+        "api.md §3.5"
+      ]
+    },
+    {
+      "error": "past_end",
+      "family": "fam",
+      "message": {
+        "hex": "65643f62",
+        "metadata": {
+          "apid": 0
+        }
+      },
+      "name": "garbled-00-past_end",
+      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 0. Planted: cut to 4 bytes.",
       "set": "fam_v1",
       "spec": [
         "encoding.md §7",
@@ -501,13 +653,13 @@
       "error": "past_end",
       "family": "fam",
       "message": {
-        "hex": "6861f8a4bb5d959ce010925d3ba5c0000000000000000031626d02",
+        "hex": "656461622810b667e8fc658b",
         "metadata": {
           "apid": 0
         }
       },
       "name": "garbled-01-past_end",
-      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 1. Planted: count 15 for f0.",
+      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 1. Planted: cut to 12 bytes, inside f1.",
       "set": "fam_v1",
       "spec": [
         "encoding.md §7",
@@ -519,37 +671,16 @@
       ]
     },
     {
-      "error": "past_end",
+      "error": "unknown_state",
       "family": "fam",
       "message": {
-        "hex": "686129fffffffffffff9fffffffffffff9ffffffffffff",
+        "hex": "686129fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff880000000000010925d3ba5c0000000000000000031623302",
         "metadata": {
           "apid": 0
         }
       },
-      "name": "garbled-02-past_end",
-      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 2. Planted: cut to 23 bytes, inside f0.",
-      "set": "fam_v1",
-      "spec": [
-        "encoding.md §7",
-        "encoding.md §8",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §9",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "out_of_range",
-      "family": "fam",
-      "message": {
-        "hex": "686108a4bb5d959ce010925d3ba5c000000000000000003162f602",
-        "metadata": {
-          "apid": 0
-        }
-      },
-      "name": "garbled-03-out_of_range",
-      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 3. Planted: raw 0x2f6 at 8.",
+      "name": "garbled-02-unknown_state",
+      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 2. Planted: raw 0x100000000000 in f2[0].",
       "set": "fam_v1",
       "spec": [
         "encoding.md §7",
@@ -564,55 +695,34 @@
       "error": "bad_checksum",
       "family": "fam",
       "message": {
-        "hex": "61613067686168656768616865616267626661626762666768616865616267626661626762666768616865656a6666ffff3eeb18df6980abb5bfecd4e3d7ed8a8f40082ca56e5fc27bc0ecd4e3d7ed8a8f40eb18df6980abb5bfeb18df6980abb5bfe76453467ffc77c0295e",
+        "hex": "61613061626762666162676266676861686561626762666162676266676861686567686168656768616865656a6666ffff3eeb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfdd5e5b97190ba5ce",
+        "metadata": {
+          "apid": 0
+        }
+      },
+      "name": "garbled-03-bad_checksum",
+      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 3. Planted: checksum 5.",
+      "set": "fam_v1",
+      "spec": [
+        "encoding.md §7",
+        "encoding.md §8",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §9",
+        "units.md §4"
+      ]
+    },
+    {
+      "error": "bad_checksum",
+      "family": "fam",
+      "message": {
+        "hex": "61613061626762666162676266616267626667686168656162676266616267626667686168656162676266656a6666ffff3eeb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bf8aaf1cea8c8871",
         "metadata": {
           "apid": 0
         }
       },
       "name": "garbled-04-bad_checksum",
       "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 4. Planted: checksum 5.",
-      "set": "fam_v1",
-      "spec": [
-        "encoding.md §7",
-        "encoding.md §8",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §9",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "past_end",
-      "family": "fam",
-      "message": {
-        "hex": "6161f061626762666162676266676861686567686168656162676266676861686561626762666162676266656a6666fffffce18a3e03593d8c40e9264b3b5f0f7ec03292e1636ab090c0eb18df6980abb5bfeb50ff4e5fa98040eb18df6980abb5bfecd4e3d7ed8a8f40b2b393da4fadf6",
-        "metadata": {
-          "apid": 0
-        }
-      },
-      "name": "garbled-05-past_end",
-      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 5. Planted: count 15 for f0.",
-      "set": "fam_v1",
-      "spec": [
-        "encoding.md §7",
-        "encoding.md §8",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §9",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "past_end",
-      "family": "fam",
-      "message": {
-        "hex": "6161406162676266616267626667686168656162676266676861686561626762666768616865676861686561626762666162676266656a6666ffff4feb18df6980abb5bf95807a7853d78bc0ecd4e3d7ed8a8f40bde540fcd31085c04211ae32451789",
-        "metadata": {
-          "apid": 0
-        }
-      },
-      "name": "garbled-06-past_end",
-      "note": "Generated by the testkit's oracle: commands seed 3, garbled payload 6. Planted: cut to 99 bytes, inside f2.",
       "set": "fam_v1",
       "spec": [
         "encoding.md §7",

@@ -133,7 +133,8 @@ fn given_value(
 }
 
 /// A native id a target field holds: an integer it holds (maybe spelled as
-/// text), or text it takes, which may spell an integer.
+/// text), or text it takes, which may spell an integer and is never empty
+/// (`spec/api.md` §1).
 fn target_value(shape: &Shape) -> BoxedStrategy<Target> {
     match shape {
         Shape::Text(text, len) => {
@@ -149,7 +150,9 @@ fn target_value(shape: &Shape) -> BoxedStrategy<Target> {
                 },
             );
             prop_oneof![
-                text_for(*text, len).prop_map(Target::Text),
+                text_for(*text, len)
+                    .prop_filter("a native id is never empty", |text| !text.is_empty())
+                    .prop_map(Target::Text),
                 (integer, any::<bool>()).prop_map(|(n, as_text)| spelled_id(n, as_text)),
             ]
             .boxed()

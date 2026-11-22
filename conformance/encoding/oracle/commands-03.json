@@ -116,37 +116,40 @@
     {
       "encoded": {
         "command": "cmd.c0",
-        "defaulted": [],
+        "defaulted": [
+          "a4",
+          "a7"
+        ],
         "deprecated": null,
         "family": "fam",
         "metadata": {
           "apid": 0
         },
         "packet": "C0",
-        "payload": "656497974810b667e8fc658b68108e48042952d1081245d695761eac081245d695761eac0811f8760b0c8e240059c5344e35c540ee403fbc410a10238009fffffffffffffca28839a77b9b359fba5ca939f5e1fffffffffffffc6acfb97a6a4864c3a986df0d53be",
+        "payload": "656461974810b667e8fc658b681245d695761eac081180137147b25d48108e48042952d1081245d695761eac0070c5344e35c540ee405025325e64b7c4080000000000000015a26371b2a0e40000000000000000000000000000000000000000000d083d510901676886df0d53be",
         "record": {
-          "c0": 89,
-          "f0": "",
+          "c0": 112,
+          "f0": "a",
           "f1": [
             694.4058988330756,
+            1163.6764362001195,
+            896.0759472666225,
             654.2813134982289,
-            1163.6764362001195,
-            1163.6764362001195,
-            1016.4611060950301
+            1163.6764362001195
           ],
           "f1_n": 2,
           "f2": -3762,
           "f3": -76222745265,
-          "f4": 31.735367421093088,
+          "f4": 64.58119926295973,
           "f5": [
-            "36028797018963967",
-            "11437181857883853",
-            "29254255618456952",
-            "36028797018963967",
-            7516185765253657
+            0,
+            1522380625979449,
+            0,
+            0,
+            0
           ],
           "f5_n": 2,
-          "f6": "é",
+          "f6": "\r\b=Q\t\u0001gh",
           "f7": -0.20610760152339935,
           "op": "ed"
         },
@@ -158,36 +161,33 @@
       "request": {
         "arguments": {
           "a0": {
-            "float": -0.0
+            "integer": 0
           },
           "a1": {
             "text": "S0"
           },
           "a2": {
-            "float": -725956.1917703296
+            "float": -715388.5123012499
           },
           "a3": {
-            "text": "é"
-          },
-          "a4": {
-            "float": 387.25744058404246
+            "text": "\r\b=Q\t\u0001gh"
           },
           "a5": {
             "list": [
               {
-                "integer": "36028797018963967"
+                "integer": 0
               },
               {
-                "integer": "11437181857883853"
+                "integer": 1522380625979449
               },
               {
-                "integer": "29254255618456952"
+                "float": 0.0
               },
               {
-                "integer": "36028797018963967"
+                "integer": 0
               },
               {
-                "integer": 7516185765253657
+                "integer": 0
               }
             ]
           },
@@ -197,32 +197,22 @@
                 "integer": 0
               },
               {
+                "float": -153974.97633027157
+              },
+              {
+                "float": -66171.08567758305
+              },
+              {
                 "float": 13165.501742042426
               },
               {
                 "float": -153974.97633027157
-              },
-              {
-                "float": -153974.97633027157
-              },
-              {
-                "float": -105671.3323479205
-              }
-            ]
-          },
-          "a7": {
-            "list": [
-              {
-                "float": 384698.2929443859
-              },
-              {
-                "float": 191840.5
               }
             ]
           }
         },
         "command": "cmd.c0",
-        "native_id": "",
+        "native_id": "a",
         "set": "fam_v1"
       },
       "spec": [
@@ -242,7 +232,7 @@
       "encoded": {
         "command": "cmd.c0",
         "defaulted": [
-          "a7"
+          "a1"
         ],
         "deprecated": null,
         "family": "fam",
@@ -250,31 +240,31 @@
           "apid": 0
         },
         "packet": "C0",
-        "payload": "656497974810b667e8fc658b681227e94ceafbd8681245d695761eac0810f6dbec1e7721c810b667e8fc658b60f8c5344e35c540ee4054c673453fb3ce09fffffffffffffdbeb3b8d5da737400000000000000000000000000000000000000000086df0d53be",
+        "payload": "6564619748108e48042952d10811e14cc47bf23d281119ef6fabc24b281245d695761eac08108e48042952d100fec5344e35c540ee403fbc410a1023800899a9fc789813a00000000000000000000000000001fffffffffffffc0f4a8f986701e47ac3a9c3a9efbbbf6986969bdec3",
         "record": {
-          "c0": 248,
-          "f0": "",
+          "c0": 254,
+          "f0": "a",
           "f1": [
-            694.4058988330756,
-            1103.8226598481858,
+            654.2813134982289,
+            993.2998731104282,
+            793.9352977132177,
             1163.6764362001195,
-            758.8590716400956,
-            694.4058988330756
+            654.2813134982289
           ],
           "f1_n": 2,
           "f2": -3762,
           "f3": -76222745265,
-          "f4": 83.10078555317816,
+          "f4": 31.735367421093088,
           "f5": [
+            "10813143314203880",
+            0,
+            0,
             "36028797018963967",
-            "31433861514042589",
-            0,
-            0,
-            0
+            1076026312081529
           ],
           "f5_n": 2,
-          "f6": "",
-          "f7": -0.20610760152339935,
+          "f6": "zéé﻿i",
+          "f7": -445.21551513671875,
           "op": "ed"
         },
         "set": "fam_v1"
@@ -285,16 +275,13 @@
       "request": {
         "arguments": {
           "a0": {
-            "float": -0.0
-          },
-          "a1": {
-            "text": "S0"
+            "float": -169881.05076834632
           },
           "a2": {
-            "float": -709430.0986810008
+            "float": -725956.1917703296
           },
           "a3": {
-            "text": ""
+            "text": "zéé﻿i"
           },
           "a4": {
             "float": 387.25744058404246
@@ -302,44 +289,54 @@
           "a5": {
             "list": [
               {
+                "float": 1.081314331420388e+16
+              },
+              {
+                "integer": 0
+              },
+              {
+                "integer": 0
+              },
+              {
                 "integer": "36028797018963967"
               },
               {
-                "integer": "31433861514042589"
-              },
-              {
-                "float": 0.0
-              },
-              {
-                "integer": 0
-              },
-              {
-                "integer": 0
+                "integer": 1076026312081529
               }
             ]
           },
           "a6": {
             "list": [
               {
-                "float": -0.0
+                "float": 13165.501742042426
               },
               {
-                "float": -134336.01955967423
+                "float": -98071.77086555406
+              },
+              {
+                "float": -32657.146819233232
               },
               {
                 "float": -153974.97633027157
               },
               {
-                "float": -21148.090423604684
+                "float": 13165.501742042426
+              }
+            ]
+          },
+          "a7": {
+            "list": [
+              {
+                "float": 384698.2929443859
               },
               {
-                "integer": 0
+                "float": 191840.5
               }
             ]
           }
         },
         "command": "cmd.c0",
-        "native_id": "",
+        "native_id": "a",
         "set": "fam_v1"
       },
       "spec": [
@@ -368,7 +365,77 @@
           "apid": 0
         },
         "packet": "C1",
-        "payload": "686119fffffffffffff9fffffffffffff9fffffffffffff810925d3ba5c010925d3ba5c000000000000000003162e101",
+        "payload": "68610810925d3ba5c0a4bb5d959ce000000000000000003162a801",
+        "record": {
+          "f0": [],
+          "f0_n": 0,
+          "f1": true,
+          "f2": [
+            {
+              "r0": 2277601932472
+            },
+            {
+              "r0": -12543792598116
+            }
+          ],
+          "f3": 0,
+          "f4": "1b",
+          "f5": 424,
+          "op": "ha"
+        },
+        "set": "fam_v1"
+      },
+      "family": "fam",
+      "name": "request-03-cmd.c1",
+      "note": "Generated by the testkit's oracle: commands seed 3, request 3.",
+      "request": {
+        "arguments": {
+          "a1": {
+            "float": -385344.83472373174
+          },
+          "a2": {
+            "list": []
+          },
+          "a3": {
+            "list": [
+              {
+                "text": "S1"
+              },
+              {
+                "text": "S0"
+              }
+            ]
+          }
+        },
+        "command": "cmd.c1",
+        "set": "fam_v1"
+      },
+      "spec": [
+        "encoding.md §2",
+        "encoding.md §3",
+        "encoding.md §4",
+        "encoding.md §5",
+        "encoding.md §6",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §7.1",
+        "units.md §4",
+        "api.md §3.2"
+      ]
+    },
+    {
+      "encoded": {
+        "command": "cmd.c1",
+        "defaulted": [
+          "a4"
+        ],
+        "deprecated": null,
+        "family": "fam",
+        "metadata": {
+          "apid": 0
+        },
+        "packet": "C1",
+        "payload": "686119fffffffffffff9fffffffffffff9fffffffffffff810925d3ba5c010925d3ba5c0ffffffffffffffff31620b01",
         "record": {
           "f0": [
             -9007199254740991,
@@ -385,20 +452,23 @@
               "r0": 2277601932472
             }
           ],
-          "f3": 0,
+          "f3": "18446744073709551615",
           "f4": "1b",
-          "f5": 481,
+          "f5": 267,
           "op": "ha"
         },
         "set": "fam_v1"
       },
       "family": "fam",
-      "name": "request-03-cmd.c1",
-      "note": "Generated by the testkit's oracle: commands seed 3, request 3.",
+      "name": "request-04-cmd.c1",
+      "note": "Generated by the testkit's oracle: commands seed 3, request 4.",
       "request": {
         "arguments": {
+          "a0": {
+            "integer": "18446744073709551615"
+          },
           "a1": {
-            "float": -437899.2013220257
+            "float": -243537.10954166637
           },
           "a2": {
             "list": [
@@ -442,86 +512,86 @@
     },
     {
       "encoded": {
-        "command": "cmd.c1",
+        "command": "cmd.c2",
         "defaulted": [
-          "a0",
-          "a3"
+          "a1"
         ],
         "deprecated": null,
         "family": "fam",
         "metadata": {
           "apid": 0
         },
-        "packet": "C1",
-        "payload": "686129fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff9fffffffffffff8a4bb5d959ce010925d3ba5c0000000000000000031620b01",
+        "packet": "C2",
+        "payload": "61613067686168656162676266616267626667686168656768616865616267626661626762666768616865656a6666ffff3feb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bf895f0afa",
         "record": {
+          "c0": 63,
           "f0": [
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991,
-            -9007199254740991
+            "ghahe",
+            "abgbf",
+            "abgbf",
+            "ghahe",
+            "ghahe",
+            "abgbf",
+            "abgbf",
+            "ghahe"
           ],
-          "f0_n": 2,
-          "f1": true,
+          "f0_n": 3,
+          "f1": "ejff",
           "f2": [
-            {
-              "r0": -12543792598116
-            },
-            {
-              "r0": 2277601932472
-            }
+            -0.08464815697434218,
+            1009.3661344336847,
+            1009.3661344336847,
+            -0.08464815697434218,
+            1009.3661344336847,
+            1009.3661344336847,
+            -0.08464815697434218
           ],
-          "f3": 0,
-          "f4": "1b",
-          "f5": 267,
-          "op": "ha"
+          "op": "aa",
+          "rest": "895f0afa"
         },
         "set": "fam_v1"
       },
       "family": "fam",
-      "name": "request-04-cmd.c1",
-      "note": "Generated by the testkit's oracle: commands seed 3, request 4.",
+      "name": "request-05-cmd.c2",
+      "note": "Generated by the testkit's oracle: commands seed 3, request 5.",
       "request": {
         "arguments": {
-          "a1": {
-            "float": -243537.10954166637
+          "a0": {
+            "text": "ejff"
           },
           "a2": {
             "list": [
               {
-                "integer": -9007199254740991
+                "text": "ghahe"
               },
               {
-                "float": -9007199254740991.0
+                "text": "abgbf"
               },
               {
-                "integer": -9007199254740991
+                "text": "abgbf"
               },
               {
-                "integer": -9007199254740991
+                "text": "ghahe"
               },
               {
-                "float": -9007199254740991.0
+                "text": "ghahe"
               },
               {
-                "integer": -9007199254740991
+                "text": "abgbf"
+              },
+              {
+                "text": "abgbf"
+              },
+              {
+                "text": "ghahe"
               }
             ]
           },
-          "a4": {
-            "list": [
-              {
-                "text": "p/\"de"
-              },
-              {
-                "text": "abc"
-              }
-            ]
+          "a3": {
+            "bytes": "895f0afa"
           }
         },
-        "command": "cmd.c1",
+        "command": "cmd.c2",
         "set": "fam_v1"
       },
       "spec": [
@@ -547,43 +617,43 @@
           "apid": 0
         },
         "packet": "C2",
-        "payload": "6161406162676266676861686561626762666162676266616267626661626762666162676266616267626667686168656162676266656a6666ffff4ff9c55dccef9189c0eb18df6980abb5bfeb18df6980abb5bf37f2ce7c43148540ecd4e3d7ed8a8f40ab4fdfffc1d68340ecd4e3d7ed8a8f40eb18df6980abb5bfeb18df6980abb5bfeb18df6980abb5bf9bfa",
+        "payload": "6161406162676266676861686561626762666768616865676861686567686168656162676266676861686561626762666162676266656a6666ffff4cecd4e3d7ed8a8f40eb18df6980abb5bf85d2f2f52c987540eb18df6980abb5bf27fa083f723f824076c3fa238fab8ec0eb18df6980abb5bfeb18df6980abb5bfeb18df6980abb5bf75a632a2ca367c4060",
         "record": {
-          "c0": 79,
+          "c0": 76,
           "f0": [
             "abgbf",
             "ghahe",
             "abgbf",
-            "abgbf",
-            "abgbf",
-            "abgbf",
-            "abgbf",
+            "ghahe",
+            "ghahe",
+            "ghahe",
             "abgbf",
             "ghahe",
+            "abgbf",
             "abgbf"
           ],
           "f0_n": 4,
           "f1": "ejff",
           "f2": [
-            -818.2420890165369,
-            -0.08464815697434218,
-            -0.08464815697434218,
-            674.5329528968495,
-            1009.3661344336847,
-            634.8447263189495,
             1009.3661344336847,
             -0.08464815697434218,
+            345.51097674229123,
             -0.08464815697434218,
-            -0.08464815697434218
+            583.9307842923489,
+            -981.444892844286,
+            -0.08464815697434218,
+            -0.08464815697434218,
+            -0.08464815697434218,
+            451.42447109017604
           ],
           "op": "aa",
-          "rest": "9bfa"
+          "rest": "60"
         },
         "set": "fam_v1"
       },
       "family": "fam",
-      "name": "request-05-cmd.c2",
-      "note": "Generated by the testkit's oracle: commands seed 3, request 5.",
+      "name": "request-06-cmd.c2",
+      "note": "Generated by the testkit's oracle: commands seed 3, request 6.",
       "request": {
         "arguments": {
           "a0": {
@@ -592,25 +662,22 @@
           "a1": {
             "list": [
               {
-                "float": 741310.2816696874
+                "float": -914635.9937615198
               },
               {
                 "integer": 0
               },
               {
+                "float": -313134.8286324051
+              },
+              {
                 "integer": 0
               },
               {
-                "float": -611252.7233525236
+                "float": -529160.5540782047
               },
               {
-                "float": -914635.9937615198
-              },
-              {
-                "float": -575292.2969674465
-              },
-              {
-                "float": -914635.9937615198
+                "float": 889183.9187385195
               },
               {
                 "integer": 0
@@ -620,6 +687,9 @@
               },
               {
                 "float": -0.0
+              },
+              {
+                "float": -409100.1751617517
               }
             ]
           },
@@ -635,16 +705,13 @@
                 "text": "abgbf"
               },
               {
-                "text": "abgbf"
+                "text": "ghahe"
               },
               {
-                "text": "abgbf"
+                "text": "ghahe"
               },
               {
-                "text": "abgbf"
-              },
-              {
-                "text": "abgbf"
+                "text": "ghahe"
               },
               {
                 "text": "abgbf"
@@ -654,11 +721,14 @@
               },
               {
                 "text": "abgbf"
+              },
+              {
+                "text": "abgbf"
               }
             ]
           },
           "a3": {
-            "bytes": "9bfa"
+            "bytes": "60"
           }
         },
         "command": "cmd.c2",
@@ -678,62 +748,212 @@
       ]
     },
     {
-      "error": "bad_count",
+      "encoded": {
+        "command": "cmd.c2",
+        "defaulted": [],
+        "deprecated": null,
+        "family": "fam",
+        "metadata": {
+          "apid": 0
+        },
+        "packet": "C2",
+        "payload": "6161406162676266616267626661626762666768616865676861686567686168656162676266676861686561626762666162676266656a6666ffff4feb18df6980abb5bf6e85f33222498dc0ea7f4530cc0289c0eb18df6980abb5bfeb18df6980abb5bf8f1ef4f53b9f86c0ecd4e3d7ed8a8f40ecd4e3d7ed8a8f40eb18df6980abb5bfeb18df6980abb5bf1f74bb41c9824b656681",
+        "record": {
+          "c0": 79,
+          "f0": [
+            "abgbf",
+            "abgbf",
+            "abgbf",
+            "ghahe",
+            "ghahe",
+            "ghahe",
+            "abgbf",
+            "ghahe",
+            "abgbf",
+            "abgbf"
+          ],
+          "f0_n": 4,
+          "f1": "ejff",
+          "f2": [
+            -0.08464815697434218,
+            -937.141698744306,
+            -800.3497014455472,
+            -0.08464815697434218,
+            -0.08464815697434218,
+            -723.9042777129961,
+            1009.3661344336847,
+            1009.3661344336847,
+            -0.08464815697434218,
+            -0.08464815697434218
+          ],
+          "op": "aa",
+          "rest": "1f74bb41c9824b656681"
+        },
+        "set": "fam_v1"
+      },
       "family": "fam",
-      "name": "refused-00-bad_count",
-      "note": "Generated by the testkit's oracle: commands seed 3, refused request 0. Planted: Multiply (bad_count); the first that encoding reaches is the error.",
+      "name": "request-07-cmd.c2",
+      "note": "Generated by the testkit's oracle: commands seed 3, request 7.",
       "request": {
         "arguments": {
           "a0": {
-            "integer": 0
+            "text": "ejff"
           },
-          "a2": {
-            "float": -725956.1917703296
-          },
-          "a3": {
-            "text": "a"
-          },
-          "a4": {
-            "float": 387.25744058404246
-          },
-          "a5": {
+          "a1": {
             "list": [
               {
                 "integer": 0
               },
               {
-                "float": 0.0
+                "float": 849041.9953666335
               },
               {
-                "integer": "10102494457002745"
+                "float": 725098.4742502518
               },
               {
-                "integer": "36028797018963964"
+                "integer": 0
+              },
+              {
+                "integer": 0
+              },
+              {
+                "float": 655833.3477973305
+              },
+              {
+                "float": -914635.9937615198
+              },
+              {
+                "float": -914635.9937615198
+              },
+              {
+                "float": -0.0
+              },
+              {
+                "integer": 0
+              }
+            ]
+          },
+          "a2": {
+            "list": [
+              {
+                "text": "abgbf"
+              },
+              {
+                "text": "abgbf"
+              },
+              {
+                "text": "abgbf"
+              },
+              {
+                "text": "ghahe"
+              },
+              {
+                "text": "ghahe"
+              },
+              {
+                "text": "ghahe"
+              },
+              {
+                "text": "abgbf"
+              },
+              {
+                "text": "ghahe"
+              },
+              {
+                "text": "abgbf"
+              },
+              {
+                "text": "abgbf"
+              }
+            ]
+          },
+          "a3": {
+            "bytes": "1f74bb41c9824b656681"
+          }
+        },
+        "command": "cmd.c2",
+        "set": "fam_v1"
+      },
+      "spec": [
+        "encoding.md §2",
+        "encoding.md §3",
+        "encoding.md §4",
+        "encoding.md §5",
+        "encoding.md §6",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §7.1",
+        "units.md §4",
+        "api.md §3.2"
+      ]
+    },
+    {
+      "error": "not_default",
+      "family": "fam",
+      "name": "refused-00-not_default",
+      "note": "Generated by the testkit's oracle: commands seed 3, refused request 0. Planted: Value (not_default), Field (raw_range); the first that encoding reaches is the error.",
+      "request": {
+        "arguments": {
+          "a0": {
+            "float": -1e+300
+          },
+          "a1": {
+            "text": "S0"
+          },
+          "a2": {
+            "float": -622852.307327442
+          },
+          "a3": {
+            "text": "{\\񘔅"
+          },
+          "a4": {
+            "integer": 0
+          },
+          "a5": {
+            "list": [
+              {
+                "integer": "27419745439480663"
+              },
+              {
+                "integer": "36028797018963967"
+              },
+              {
+                "integer": "36028797018963967"
               }
             ]
           },
           "a6": {
             "list": [
               {
-                "float": -136313.88388955296
-              },
-              {
-                "integer": 0
-              },
-              {
-                "integer": 0
-              },
-              {
-                "float": -0.0
-              },
-              {
                 "float": -153974.97633027157
+              },
+              {
+                "float": 13165.501742042426
+              },
+              {
+                "float": 13165.501742042426
+              },
+              {
+                "float": -151097.38886567313
+              },
+              {
+                "float": -102441.69946451795
+              }
+            ]
+          },
+          "a7": {
+            "list": [
+              {
+                "float": 384698.2929443859
+              },
+              {
+                "float": 191840.5
               }
             ]
           }
         },
         "command": "cmd.c0",
-        "native_id": "",
+        "native_id": "ab",
         "set": "fam_v1"
       },
       "spec": [
@@ -746,36 +966,115 @@
       ]
     },
     {
-      "error": "bad_count",
+      "error": "raw_range",
       "family": "fam",
-      "name": "refused-01-bad_count",
-      "note": "Generated by the testkit's oracle: commands seed 3, refused request 1. Planted: Multiply (bad_count); the first that encoding reaches is the error.",
+      "name": "refused-01-raw_range",
+      "note": "Generated by the testkit's oracle: commands seed 3, refused request 1. Planted: Multiply (bad_count), Field (raw_range); the first that encoding reaches is the error.",
       "request": {
         "arguments": {
           "a0": {
-            "integer": 0
-          },
-          "a1": {
-            "float": -345046.38880090887
+            "float": -1.7976931348623157e+308
           },
           "a2": {
+            "float": -622852.307327442
+          },
+          "a3": {
+            "text": "%\u001bcdefghij"
+          },
+          "a5": {
             "list": [
               {
-                "integer": -9007199254740991
+                "integer": "36028797018963967"
               },
               {
-                "integer": -9007199254740991
+                "integer": "36028797018963964"
               },
               {
-                "float": -9007199254740991.0
+                "float": 0.0
               },
               {
-                "integer": -9007199254740991
+                "integer": "36028797018963964"
+              }
+            ]
+          },
+          "a6": {
+            "list": [
+              {
+                "integer": 0
+              },
+              {
+                "float": -0.0
               }
             ]
           }
         },
-        "command": "cmd.c1",
+        "command": "cmd.c0",
+        "native_id": "'",
+        "set": "fam_v1"
+      },
+      "spec": [
+        "encoding.md §1",
+        "encoding.md §2",
+        "encoding.md §3",
+        "encoding.md §8",
+        "decoding.md §2",
+        "units.md §4"
+      ]
+    },
+    {
+      "error": "raw_range",
+      "family": "fam",
+      "name": "refused-02-raw_range",
+      "note": "Generated by the testkit's oracle: commands seed 3, refused request 2. Planted: Multiply (bad_count), Field (raw_range); the first that encoding reaches is the error.",
+      "request": {
+        "arguments": {
+          "a0": {
+            "float": -1.7976931348623157e+308
+          },
+          "a1": {
+            "text": "S0"
+          },
+          "a2": {
+            "float": -650673.2285816757
+          },
+          "a3": {
+            "text": "/Gcde"
+          },
+          "a5": {
+            "list": [
+              {
+                "integer": "36028797018963967"
+              },
+              {
+                "float": 0.0
+              },
+              {
+                "integer": 4526901415872393
+              },
+              {
+                "integer": "25906239356261286"
+              },
+              {
+                "float": 0.0
+              }
+            ]
+          },
+          "a6": {
+            "list": [
+              {
+                "float": -153974.97633027157
+              },
+              {
+                "float": 13165.501742042426
+              },
+              {
+                "float": -153974.97633027157
+              }
+            ]
+          }
+        },
+        "command": "cmd.c0",
+        "native_id": "\n",
         "set": "fam_v1"
       },
       "spec": [
@@ -790,22 +1089,24 @@
     {
       "error": "wrong_type",
       "family": "fam",
-      "name": "refused-02-wrong_type",
-      "note": "Generated by the testkit's oracle: commands seed 3, refused request 2. Planted: Value (wrong_type); the first that encoding reaches is the error.",
+      "name": "refused-03-wrong_type",
+      "note": "Generated by the testkit's oracle: commands seed 3, refused request 3. Planted: Value (wrong_type), ListValue (wrong_type); the first that encoding reaches is the error.",
       "request": {
         "arguments": {
           "a0": {
-            "list": [
-              {
-                "float": 0.0
-              }
-            ]
+            "boolean": true
           },
           "a1": {
-            "float": -522100.55833829776
+            "float": -250365.36312616977
           },
           "a2": {
             "list": [
+              {
+                "integer": -9007199254740991
+              },
+              {
+                "integer": -9007199254740991
+              },
               {
                 "float": -9007199254740991.0
               },
@@ -814,6 +1115,9 @@
               },
               {
                 "integer": -9007199254740991
+              },
+              {
+                "float": -9007199254740991.0
               }
             ]
           },
@@ -823,94 +1127,22 @@
                 "text": "S1"
               },
               {
-                "text": "S1"
+                "integer": 0
+              }
+            ]
+          },
+          "a4": {
+            "list": [
+              {
+                "text": "p/\"de"
+              },
+              {
+                "text": "abc"
               }
             ]
           }
         },
         "command": "cmd.c1",
-        "set": "fam_v1"
-      },
-      "spec": [
-        "encoding.md §1",
-        "encoding.md §2",
-        "encoding.md §3",
-        "encoding.md §8",
-        "decoding.md §2",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "bad_count",
-      "family": "fam",
-      "name": "refused-03-bad_count",
-      "note": "Generated by the testkit's oracle: commands seed 3, refused request 3. Planted: Multiply (bad_count); the first that encoding reaches is the error.",
-      "request": {
-        "arguments": {
-          "a0": {
-            "text": "ejff"
-          },
-          "a1": {
-            "list": [
-              {
-                "float": -298327.43174544116
-              },
-              {
-                "float": 273850.4871018365
-              },
-              {
-                "integer": 0
-              },
-              {
-                "integer": 0
-              },
-              {
-                "float": -914635.9937615198
-              },
-              {
-                "integer": 0
-              },
-              {
-                "float": -914635.9937615198
-              },
-              {
-                "float": -883935.8812407672
-              }
-            ]
-          },
-          "a2": {
-            "list": [
-              {
-                "text": "abgbf"
-              },
-              {
-                "text": "ghahe"
-              },
-              {
-                "text": "abgbf"
-              },
-              {
-                "text": "abgbf"
-              },
-              {
-                "text": "ghahe"
-              },
-              {
-                "text": "ghahe"
-              },
-              {
-                "text": "ghahe"
-              },
-              {
-                "text": "abgbf"
-              }
-            ]
-          },
-          "a3": {
-            "bytes": ""
-          }
-        },
-        "command": "cmd.c2",
         "set": "fam_v1"
       },
       "spec": [
@@ -935,7 +1167,13 @@
           "a1": {
             "list": [
               {
-                "float": 1026074.1518101145
+                "integer": 0
+              },
+              {
+                "float": -914635.9937615198
+              },
+              {
+                "float": 943342.760221584
               },
               {
                 "integer": 0
@@ -944,22 +1182,16 @@
                 "float": -914635.9937615198
               },
               {
-                "float": 678594.2213476509
+                "float": -0.0
+              },
+              {
+                "float": 638607.9274668447
               },
               {
                 "integer": 0
               },
               {
-                "float": 258458.92487842456
-              },
-              {
-                "integer": 0
-              },
-              {
-                "float": -542414.4629099208
-              },
-              {
-                "float": -914635.9937615198
+                "float": -846012.4367494837
               },
               {
                 "float": -914635.9937615198
@@ -972,6 +1204,15 @@
                 "text": "abgbf"
               },
               {
+                "text": "ghahe"
+              },
+              {
+                "text": "ghahe"
+              },
+              {
+                "text": "ghahe"
+              },
+              {
                 "text": "abgbf"
               },
               {
@@ -982,20 +1223,11 @@
               },
               {
                 "text": "ghahe"
-              },
-              {
-                "text": "ghahe"
-              },
-              {
-                "text": "ghahe"
-              },
-              {
-                "text": "abgbf"
               }
             ]
           },
           "a3": {
-            "bytes": "1318747453"
+            "bytes": "8afd635e74"
           }
         },
         "command": "cmd.c2",
