@@ -235,6 +235,7 @@ An object with these keys:
 | `def_version` | text: the set artifact's digest |
 | `packet` | text |
 | `event_time` | an event time, below |
+| `booted` | an instant: when the asset booted, which the message teaches as its set's correlation packet (`decoding.md` §8.2); absent for any other message, and for a correlation packet that teaches nothing |
 | `samples` | a list of samples, below |
 | `record` | the raw record, below |
 | `engineering` | a list of engineering values, below |
@@ -247,6 +248,13 @@ An object with these keys:
 - `since_boot`: `value`, an integer, in `unit` (`s`, `ms`, `us` or `ns`):
   time since the asset booted, which isn't an instant until correlated
   (`decoding.md` §8.2).
+
+Correlating takes state across messages, which the runtime doesn't keep:
+`booted` is what one message teaches, and a consumer keeps, per family
+and asset, the latest `booted` it has seen, a message's own included, in
+the order messages arrive. A `since_boot` event time's instant is then
+that boot instant plus its `value` in its `unit`, when that's within
+years 0001 to 9999.
 
 **Sample** (`decoding.md` §7.3): an object with
 

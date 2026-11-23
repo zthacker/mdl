@@ -21,7 +21,7 @@ use crate::artifact::AssembleError;
 use crate::bindings::{Binding, Bindings, BindingsError, NativeId, Resolver};
 use crate::decode::{
     CommandDecodeError, DecodeError, Decoded, Engineering, EventTime, Quality, Record, SampleValue,
-    Value as Raw,
+    Value as Raw, boot_instant,
 };
 use crate::diagnostics::{Diagnostic, Diagnostics};
 use crate::encode::{ArgumentValue, CommandRequest, EncodeError, Encoded};
@@ -748,6 +748,10 @@ pub struct DecodedMessage {
     pub event_time: EventTime,
     /// The message's ground time, which an event time of `ground` is.
     pub ground_time: Timestamp,
+    /// The instant the asset booted, which the message teaches as its
+    /// set's correlation packet (`spec/decoding.md` §8.2); `None` for any
+    /// other message, and for one that teaches nothing.
+    pub booted: Option<Timestamp>,
     pub samples: Vec<Sample>,
     /// Every present entry's raw value, as an object by entry name.
     pub record: Value,
@@ -808,6 +812,7 @@ impl DecodedMessage {
             packet: decoded.packet.name.clone(),
             event_time: decoded.event_time,
             ground_time,
+            booted: boot_instant(decoded),
             samples,
             record: record_value(&decoded.record),
             engineering: decoded.engineering_values(),
@@ -826,6 +831,10 @@ impl DecodedMessage {
             (
                 "event_time",
                 event_time_value(&self.event_time, self.ground_time),
+            ),
+            (
+                "booted",
+                Value::or_absent(self.booted.as_ref(), |at| Value::Instant(*at)),
             ),
             (
                 "samples",

@@ -203,6 +203,7 @@ fn decoded(telemetry: &Telemetry, message: &Message) -> Value {
         "set": telemetry.set,
         "packet": message.packet,
         "event_time": event_time(&message.event_time, message.received),
+        "booted": message.booted.map_or(Value::Null, |at| json!(instant_text(at))),
         "samples": message
             .samples
             .iter()

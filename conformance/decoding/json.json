@@ -113,6 +113,7 @@
         "set": "web_v1",
         "packet": "PTR",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "a_b": 1, "m_n": 2, "arr1": 9, "obj1": 9 },
         "engineering": [
@@ -141,6 +142,7 @@
         "set": "web_v1",
         "packet": "NUM",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "web.count", "value": 42, "unit": null, "path": "u_exp", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -190,6 +192,7 @@
         "set": "web_v1",
         "packet": "OPT",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "web.temp", "value": 20, "unit": null, "path": "temps[0]", "index": 0, "time_offset_ns": null, "quality": "good" },
           { "param": "web.temp", "value": 22, "unit": null, "path": "temps[2]", "index": 2, "time_offset_ns": null, "quality": "good" }
@@ -316,6 +319,7 @@
         "set": "doc_v1",
         "packet": "ANY",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": {},
         "engineering": []

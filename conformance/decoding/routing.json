@@ -231,6 +231,7 @@
         "set": "meta_v1",
         "packet": "P",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "route.level", "value": 5, "unit": null, "path": "v", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -254,6 +255,7 @@
         "set": "meta_v1",
         "packet": "P",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "route.level", "value": 5, "unit": null, "path": "v", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -293,6 +295,7 @@
         "set": "ver_v1",
         "packet": "P",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 7, "a": 9 },
         "engineering": [
@@ -315,6 +318,7 @@
         "set": "ver_v2",
         "packet": "P",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 7, "a": 258 },
         "engineering": [
@@ -401,6 +405,7 @@
         "set": "jver_2",
         "packet": "J",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "v": 1, "w": 2 },
         "engineering": [
@@ -439,6 +444,7 @@
         "set": "ident_v1",
         "packet": "K1S2",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "kind": 1, "sub": 2, "y": 5 },
         "engineering": [
@@ -462,6 +468,7 @@
         "set": "ident_v1",
         "packet": "K1",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "kind": 1, "rest": "0309" },
         "engineering": [
@@ -484,6 +491,7 @@
         "set": "ident_v1",
         "packet": "K1",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "kind": 1, "rest": "" },
         "engineering": [
@@ -506,6 +514,7 @@
         "set": "ident_v1",
         "packet": "K2A7",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "kind": 2, "w": 7 },
         "engineering": [
@@ -528,6 +537,7 @@
         "set": "ident_v1",
         "packet": "K2",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "kind": 2, "v": 5 },
         "engineering": [

@@ -221,6 +221,7 @@ fn a_store_decodes_and_encodes_with_the_results_the_spec_gives() {
             "def_version": artifacts.sets["sat_v1"].digest.to_string(),
             "packet": "HK",
             "event_time": { "kind": "at", "time": "2000-01-01T00:00:01.5Z" },
+            "booted": null,
             "samples": [
                 { "param": "eps.volts", "value": 12.5, "unit": "V", "path": "volts",
                   "index": null, "time_offset_ns": null, "quality": "good" },
@@ -981,5 +982,101 @@ fn a_payload_takes_its_familys_encoding() {
     assert_eq!(
         runtime.payload("nope", bytes).map_err(|error| error.code),
         Err("unknown_family")
+    );
+}
+
+/// A family whose set counts time since boot, with a correlation packet
+/// whose absolute clock has a sentinel (`spec/decoding.md` §8.2).
+fn boot_bundle() -> Json {
+    json!({
+        "mdl_version": "2.0",
+        "catalog": {},
+        "families": [{
+            "name": "tboot", "encoding": "binary", "byte_order": "big",
+            "alias": { "kind": "fixed", "value": "boot-1" }
+        }],
+        "sets": [{
+            "name": "tboot_v1",
+            "family": "tboot",
+            "time": {
+                "kind": "boot", "unit": "ms",
+                "correlate": {
+                    "packet": "TIME", "clock_field": "unix_us", "clock_unit": "us",
+                    "epoch": "1970-01-01T00:00:00Z", "scale": "utc", "boot_field": "boot_ms"
+                }
+            },
+            "packets": [
+                {
+                    "name": "TIME", "identify": { "id": 1 }, "time_field": "boot_ms",
+                    "entries": [
+                        { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+                        { "kind": "field", "name": "unix_us", "type": "uint", "size_bits": 64,
+                          "invalid": [0] },
+                        { "kind": "field", "name": "boot_ms", "type": "uint", "size_bits": 32 }
+                    ]
+                },
+                {
+                    "name": "HK", "identify": { "id": 2 }, "time_field": "up",
+                    "entries": [
+                        { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+                        { "kind": "field", "name": "up", "type": "uint", "size_bits": 32 }
+                    ]
+                }
+            ]
+        }]
+    })
+}
+
+#[test]
+fn a_correlation_packet_gives_the_boot_instant_it_teaches() {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("runtime")
+        .join("booted");
+    if dir.exists() {
+        fs::remove_dir_all(&dir).unwrap();
+    }
+    let bundle = read_bundle_value(&boot_bundle()).unwrap().value;
+    store::write(&dir, &build(&validate(bundle).unwrap()).unwrap(), None).unwrap();
+    let runtime = Runtime::open(&dir, None).unwrap();
+    let decode = |payload: &[u8]| {
+        runtime
+            .decode("tboot", &Message::new(Payload::Binary(payload), ground()))
+            .unwrap()
+    };
+    let time = |unix_us: u64, boot_ms: u32| {
+        let mut payload = vec![1];
+        payload.extend_from_slice(&unix_us.to_be_bytes());
+        payload.extend_from_slice(&boot_ms.to_be_bytes());
+        payload
+    };
+
+    // 2026-06-01T12:00:00Z in microseconds, 5000 ms after boot: the asset
+    // booted 5 s before.
+    let taught = decode(&time(1_780_315_200_000_000, 5_000));
+    assert_eq!(
+        taught.booted,
+        Some(Timestamp::from_rfc3339("2026-06-01T11:59:55Z").unwrap())
+    );
+    let json = json_of(&taught.to_value());
+    assert_eq!(json["booted"], json!("2026-06-01T11:59:55Z"));
+    assert_eq!(
+        json["event_time"],
+        json!({ "kind": "since_boot", "value": 5000, "unit": "ms" })
+    );
+    // Another packet teaches nothing, and neither does a correlation whose
+    // absolute clock holds its sentinel, 0, which as a reading would give
+    // an instant 5 s before 1970.
+    let hk = decode(&[2, 0, 0, 0x30, 0x39]);
+    assert_eq!(hk.booted, None);
+    assert_eq!(json_of(&hk.to_value())["booted"], Json::Null);
+    assert_eq!(decode(&time(0, 5_000)).booted, None);
+    // A boot instant before the clock's epoch is an instant like any
+    // other: 1 µs after it, 2^32 - 1 ms after boot, is in 1969.
+    let early = decode(&time(1, u32::MAX)).booted;
+    assert_eq!(
+        early,
+        Some(Timestamp::from_unix_nanos(
+            1_000 - 4_294_967_295 * 1_000_000
+        ))
     );
 }

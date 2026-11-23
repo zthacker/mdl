@@ -26,7 +26,7 @@ pub use faults::{
     Unmet, Unusable, Wanted,
 };
 pub use fleet::{Fleet, Meta, Sent, fleet};
-pub use json::{json_damaged, json_telemetry};
+pub use json::{json_boot_telemetry, json_damaged, json_telemetry};
 use meaning::{UNIT_GROUPS, as_raw, convert, convert_unit, holds, table, unconverted};
 use proptest::collection::{btree_set, vec};
 use proptest::prelude::*;
@@ -35,7 +35,7 @@ use serde_json::{Map, Value, json};
 pub use time::EventTime;
 use time::{
     Count, SECOND, TimeFields, TimeSource, Unit, boot_source, count_value, event_time, near_leap,
-    no_reading, received, time_fields, time_json, time_source, to_utc, week_value,
+    no_reading, received, time_fields, time_json, time_source, to_utc, week_value, within_years,
 };
 pub(crate) use time::{instant_text, label};
 
@@ -66,6 +66,10 @@ pub struct Message {
     /// Its ground time, in nanoseconds since 1970-01-01T00:00:00Z.
     pub received: i128,
     pub event_time: EventTime,
+    /// For a boot set's correlation packet whose clocks teach it, the
+    /// instant the asset booted, in nanoseconds since
+    /// 1970-01-01T00:00:00Z (§8.2); `None` for any other message.
+    pub booted: Option<i128>,
     /// The encoding it's delivered in: its family's, unless a fault
     /// delivers it in the other.
     pub encoding: Encoding,
@@ -312,34 +316,67 @@ impl PartialEq for Expected {
 /// Any telemetry layout validation accepts, of the kinds this module
 /// builds, with one to three messages for each packet.
 pub fn telemetry() -> BoxedStrategy<Telemetry> {
-    case(message)
+    case(time_source(), message)
 }
 
 /// Layouts as [`telemetry`] makes them, with messages damaged as
 /// `layout/body/faults.rs` plants faults in them: each fails with its
 /// [`Damage::failure`], or decodes when nothing could be planted in it.
 pub fn damaged() -> BoxedStrategy<Telemetry> {
-    case(body::faults::damaged_message)
+    case(time_source(), body::faults::damaged_message)
 }
 
-/// A family and its set, with one to three messages from `message` for
-/// each packet.
+/// Layouts as [`telemetry`] makes them, but always with boot time: after
+/// its other packets, each has a correlation packet, whose clocks teach
+/// when its asset booted (§8.2).
+pub fn boot_telemetry() -> BoxedStrategy<Telemetry> {
+    case(boot_source(), message)
+}
+
+/// A family and its set, its time source from `time`, with one to three
+/// messages from `message` for each packet. With boot time, the set's last
+/// packet is its correlation packet.
 fn case(
+    time: BoxedStrategy<TimeSource>,
     message: fn(PacketLayout, TimeSource) -> BoxedStrategy<Message>,
 ) -> BoxedStrategy<Telemetry> {
-    (any::<bool>(), time_source())
+    (any::<bool>(), time)
         .prop_flat_map(|(little, time)| {
             let packet = (body_spec(), time_fields(&time));
-            (Just(little), Just(time), vec(packet, 1..=3))
+            let correlation = match &time {
+                TimeSource::Boot { clock_unit, .. } => {
+                    correlation_spec(*clock_unit).prop_map(Some).boxed()
+                }
+                _ => Just(None).boxed(),
+            };
+            (Just(little), Just(time), vec(packet, 1..=3), correlation)
         })
-        .prop_flat_map(move |(little, time, packets)| {
-            let packets: Vec<PacketLayout> = packets
+        .prop_flat_map(move |(little, time, packets, correlation)| {
+            let mut packets: Vec<PacketLayout> = packets
                 .into_iter()
                 .enumerate()
                 .map(|(index, (body, count))| {
                     lay_out(PacketShape::single(index), little, &time, count, None, body)
                 })
                 .collect();
+            if let Some(correlation) = correlation {
+                let id = u8::try_from(packets.len() + 1).unwrap_or(u8::MAX);
+                let shape = PacketShape {
+                    name: time::CORRELATION_PACKET.into(),
+                    params: "corr".into(),
+                    id,
+                    identify: json!({ "id": id }),
+                    header: Vec::new(),
+                };
+                packets.push(lay_out(
+                    shape,
+                    little,
+                    &time,
+                    TimeFields::default(),
+                    Some(correlation),
+                    BodySpec::fields(Vec::new()),
+                ));
+            }
             let messages: Vec<BoxedStrategy<Vec<Message>>> = packets
                 .iter()
                 .map(|packet| vec(message(packet.clone(), time.clone()), 1..=3).boxed())
@@ -1039,6 +1076,28 @@ struct Correlation {
     boot_invalid: Vec<u64>,
     /// Whether the clocks restate the units they count in.
     units: bool,
+}
+
+/// The instant a boot set's correlation packet says its asset booted
+/// (§8.2): the absolute clock's instant less the boot clock, counted
+/// exactly, when neither holds one of its sentinels and the result is
+/// within years 0001 to 9999.
+fn booted(time: &TimeSource, correlation: &Correlation, clock: u64, boot: u64) -> Option<i128> {
+    let TimeSource::Boot {
+        unit,
+        clock_unit,
+        epoch,
+        scale,
+    } = time
+    else {
+        return None;
+    };
+    if correlation.clock_invalid.contains(&clock) || correlation.boot_invalid.contains(&boot) {
+        return None;
+    }
+    let instant = to_utc(epoch.label + i128::from(clock) * clock_unit.nanos(), *scale);
+    let at = instant - i128::from(boot) * unit.nanos();
+    within_years(at).then_some(at)
 }
 
 /// A correlation's fields: the clock no wider than keeps its instant
@@ -1867,6 +1926,10 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
     let mut engineering = header_engineering(packet, &written.record[..written.header]);
     engineering.extend(packet.body.engineering(&values));
     let record = written.record;
+    let booted = match (&packet.correlation, timing.correlation) {
+        (Some(correlation), Some((clock, boot))) => booted(time, correlation, clock, boot),
+        _ => None,
+    };
     let Timing {
         count,
         week,
@@ -1900,6 +1963,7 @@ fn pack(packet: &PacketLayout, time: &TimeSource, draft: Draft) -> Message {
         engineering,
         received,
         event_time,
+        booted,
         encoding: Encoding::Binary,
         metadata: Vec::new(),
         damage: None,

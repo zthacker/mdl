@@ -55,6 +55,18 @@ fn decoding_kinds() -> Vec<Kind<Telemetry>> {
             count: 12,
             holds: "a JSON layout as layout::json_damaged() makes it, and its messages, faults planted in most of them",
         },
+        Kind {
+            name: "binary-boot",
+            strategy: layout::boot_telemetry(),
+            count: 12,
+            holds: "a binary layout with boot time and a correlation packet, as layout::boot_telemetry() makes it, and its messages",
+        },
+        Kind {
+            name: "json-boot",
+            strategy: layout::json_boot_telemetry(),
+            count: 8,
+            holds: "a JSON layout with boot time and a correlation packet, as layout::json_boot_telemetry() makes it, and its messages",
+        },
     ]
 }
 

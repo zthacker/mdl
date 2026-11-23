@@ -742,25 +742,28 @@ label on a scale is the instant plus the TAI − UTC in effect at it (less
 Turning boot time into an instant takes state across messages, which a
 decoder doesn't keep. A consumer that does (MDL offers one) keeps, per
 family and asset, the instant the asset booted, from the latest
-`correlate` packet it has observed, in the order messages arrive: the
-instant its `clock_field` gives, a count of `clock_unit`s since the
-correlation's `epoch` on its `scale` (converted as §8.1; Unix time is
-`1970-01-01T00:00:00Z` on `utc`), minus its `boot_field` (in the time
-source's unit), both read at one moment. If either clock's quality isn't
-`good`, the packet teaches nothing: its engineering quality (§7.5),
-whether or not it's mapped, which for these unconverted fields is
-`invalid` when it holds one of its sentinels and `good` otherwise. The
-counts are taken exactly, however large: a 64-bit count of seconds is some
-1.8 × 10^28 nanoseconds, past what 64 bits hold (96 are enough). A
-`clock_field` instant past year 9999 is no fault in itself, but a boot
-instant outside years 0001 to 9999 is no instant, so a packet giving one
-teaches nothing too. A packet that teaches nothing leaves the asset's boot
-instant as it was. A boot time's instant is the boot instant plus the boot
-time, if that's within years 0001 to 9999; otherwise its message has no
-instant. Messages before an asset's first correlation have no instant;
-those between a reboot and the next correlation get the previous boot's.
-Boot instants are ordinary instants, so a consumer can save and restore
-them across restarts.
+`correlate` packet it has observed, in the order messages arrive, the
+message's own included: the instant its `clock_field` gives, a count of
+`clock_unit`s since the correlation's `epoch` on its `scale` (converted
+as §8.1; Unix time is `1970-01-01T00:00:00Z` on `utc`), minus its
+`boot_field` (in the time source's unit), both read at one moment. If
+either clock's quality isn't `good`, the packet teaches nothing: its
+engineering quality (§7.5), whether or not it's mapped, which for these
+unconverted fields is `invalid` when it holds one of its sentinels and
+`good` otherwise. The counts are taken exactly, however large: a 64-bit
+count of seconds is some 1.8 × 10^28 nanoseconds, past what 64 bits hold
+(96 are enough). A `clock_field` instant past year 9999 is no fault in
+itself, but a boot instant outside years 0001 to 9999 is no instant, so a
+packet giving one teaches nothing too. A packet that teaches nothing
+leaves the asset's boot instant as it was. A boot time's instant is the
+boot instant plus the boot time, if that's within years 0001 to 9999;
+otherwise its message has no instant. Messages before an asset's first
+correlation have no instant; those between a reboot and the next
+correlation get the previous boot's. Boot instants are ordinary instants,
+so a consumer can save and restore them across restarts. The runtime API
+gives the boot instant each correlation packet teaches with its decoded
+message (`api.md` §3.1, `booted`), so the consumer keeps only the latest
+one per family and asset.
 
 ## 9. Error codes
 

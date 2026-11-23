@@ -11,7 +11,7 @@ defmodule MDL.Test.Expected do
   # The largest integer JSON writes as a number (spec/api.md section 1).
   @max_safe 9_007_199_254_740_991
 
-  @decoded_keys ~w(family native_id asset stand_in set def_version packet event_time samples record engineering)
+  @decoded_keys ~w(family native_id asset stand_in set def_version packet event_time booted samples record engineering)
   @encoded_keys ~w(family set def_version packet command payload metadata defaulted deprecated record)
   @sample_keys ~w(param value unit path index time_offset_ns quality)
   @decoded_command_keys ~w(family set def_version packet command arguments defaulted target record)
@@ -33,6 +33,7 @@ defmodule MDL.Test.Expected do
       def_version: json["def_version"],
       packet: json["packet"],
       event_time: event_time(json["event_time"]),
+      booted: json["booted"] && MDL.Test.Fixtures.nanos(json["booted"]),
       samples: Enum.map(json["samples"], &sample(&1, params, types)),
       record: record(json["record"], packet["entries"], set),
       engineering:

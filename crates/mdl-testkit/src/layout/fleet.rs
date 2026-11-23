@@ -22,7 +22,7 @@ use super::time::{CORRELATION_PACKET, within_years};
 use super::{
     BodySpec, Correlation, EventTime, FieldSpec, Message, PacketLayout, PacketShape, SECOND,
     TimeFields, TimeSource, Unusable, boot_source, correlation_spec, field_spec, instant_text,
-    label, lay_out, message_at, time_fields, time_json, to_utc,
+    label, lay_out, message_at, time_fields, time_json,
 };
 
 /// Families, their sets and bindings, and messages for them.
@@ -1093,7 +1093,7 @@ fn assemble(
         let unspoiled_error = routed
             .unspoiled_error
             .or(unreadable_time.then_some("invalid_time"));
-        let teaches = error.is_none() && correlate(plan, &routed, &message, &mut booted);
+        let teaches = error.is_none() && correlate(&routed, &message, &mut booted);
         let absolute = match (&error, &message.event_time) {
             (Some(_), _) => None,
             (None, EventTime::At(at)) => Some(*at),
@@ -1187,47 +1187,16 @@ fn boot_of(plan: &Plan, set: usize) -> Option<(&TimeSource, &Correlation)> {
 }
 
 /// Whether a correlator learns from the message (§8.2): a boot set's
-/// correlation packet whose clocks both read good, giving the asset's boot
-/// instant in its family as the absolute clock's instant less the boot
-/// clock, counted exactly, when that's within years 0001 to 9999.
+/// correlation packet whose clocks teach its asset's boot instant
+/// ([`Message::booted`]), which it keeps for the asset in its family.
 fn correlate(
-    plan: &Plan,
     routed: &Routed,
     message: &Message,
     booted: &mut BTreeMap<(usize, usize), i128>,
 ) -> bool {
-    let Some((
-        TimeSource::Boot {
-            unit,
-            clock_unit,
-            epoch,
-            scale,
-        },
-        correlation,
-    )) = boot_of(plan, routed.set)
-    else {
+    let Some(at) = message.booted else {
         return false;
     };
-    if message.packet != CORRELATION_PACKET {
-        return false;
-    }
-    let value = |name: &str| {
-        message.record.iter().find_map(|(field, raw)| match raw {
-            super::Raw::Uint(n) if field == name => Some(*n),
-            _ => None,
-        })
-    };
-    let (Some(clock), Some(boot)) = (value("clock"), value("boot")) else {
-        return false;
-    };
-    if correlation.clock_invalid.contains(&clock) || correlation.boot_invalid.contains(&boot) {
-        return false;
-    }
-    let instant = to_utc(epoch.label + i128::from(clock) * clock_unit.nanos(), *scale);
-    let at = instant - i128::from(boot) * unit.nanos();
-    if !within_years(at) {
-        return false;
-    }
     booted.insert((routed.family, routed.asset), at);
     true
 }

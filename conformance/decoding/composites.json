@@ -117,6 +117,7 @@
         "set": "nav_v1",
         "packet": "POS",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           {
             "param": "c.pos",
@@ -151,6 +152,7 @@
         "set": "nav_v1",
         "packet": "POS",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           {
             "param": "c.pos",
@@ -185,6 +187,7 @@
         "set": "nav_v1",
         "packet": "OPTZ",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 2, "has_z": 0, "px": 1, "py": -2 },
         "engineering": [
@@ -209,6 +212,7 @@
         "set": "nav_v1",
         "packet": "ATT",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           {
             "param": "c.att",
@@ -244,6 +248,7 @@
         "set": "nav_v1",
         "packet": "GEO",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           {
             "param": "c.pos",

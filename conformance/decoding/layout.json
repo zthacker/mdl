@@ -126,6 +126,7 @@
         "set": "lay_v1",
         "packet": "LEN",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 1, "v": 42 },
         "engineering": [
@@ -148,6 +149,7 @@
         "set": "lay_v1",
         "packet": "COND",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "lay.extra", "value": 7, "unit": null, "path": "extra", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -174,6 +176,7 @@
         "set": "lay_v1",
         "packet": "COND",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 2, "flags": 0, "after": 9 },
         "engineering": [
@@ -197,6 +200,7 @@
         "set": "lay_v1",
         "packet": "ARR",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "lay.volts", "value": 10, "unit": null, "path": "cells[0].volts", "index": 0, "time_offset_ns": null, "quality": "good" },
           { "param": "lay.volts", "value": 20, "unit": null, "path": "cells[1].volts", "index": 1, "time_offset_ns": null, "quality": "good" }
@@ -243,6 +247,7 @@
         "set": "lay_v1",
         "packet": "STR",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "lay.name", "value": "AB", "unit": null, "path": "name", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -286,6 +291,7 @@
         "set": "lay_v1",
         "packet": "PAD",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 5, "v": 7, "w": 9 },
         "engineering": [

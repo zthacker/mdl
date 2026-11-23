@@ -148,6 +148,7 @@ unit (28.41 V). The mode's raw 1 is the state `NOMINAL`. With
   "def_version": "6ac262f19dba7ca92aed618221d5e88a8d0796e9e5b26ce7415bb4f8e3cc6a66",
   "packet": "BEACON",
   "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+  "booted": null,
   "samples": [
     { "param": "eps.bus_voltage", "value": 28.41, "unit": "V", "path": "bus",
       "index": null, "time_offset_ns": null, "quality": "good" },

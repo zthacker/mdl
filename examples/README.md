@@ -167,6 +167,7 @@ line 3: set drone_v1  packet SYS_STATUS  asset UAV-1 (native id 1)
 line 4: set drone_v1  packet SYSTEM_TIME  asset UAV-1 (native id 1)
   def_version 9cdb54d367681f74df4f0223c2b3cbbb8cbdd5909ca64839dc2dcfc8d7458617
   60000 ms since boot
+  booted 2026-06-01T11:59:30Z
   no catalog samples
 
 line 5: error[unknown_asset]: native id 2 of family drone is no asset at 2026-06-01T12:00:02Z; bind it in the asset registry

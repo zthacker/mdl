@@ -1047,3 +1047,46 @@ fn layouts_pack_negative_values_in_every_signed_form() {
         );
     }
 }
+
+/// The boot layouts the generated conformance cases draw always have boot
+/// time and a correlation packet, and their correlation messages both
+/// teach a boot instant and teach nothing (a clock's sentinel, a boot
+/// instant outside years 0001 to 9999), binary and JSON.
+#[test]
+fn boot_layouts_always_correlate() {
+    use proptest::strategy::{Strategy, ValueTree};
+    use proptest::test_runner::TestRunner;
+
+    use super::time::CORRELATION_PACKET;
+    use super::{boot_telemetry, json_boot_telemetry};
+
+    for (name, strategy) in [
+        ("binary", boot_telemetry()),
+        ("json", json_boot_telemetry()),
+    ] {
+        let mut runner = TestRunner::deterministic();
+        let (mut taught, mut nothing) = (0, 0);
+        for _ in 0..200 {
+            let case = strategy.new_tree(&mut runner).unwrap().current();
+            let set = &case.bundle["sets"][0];
+            assert_eq!(set["time"]["kind"], "boot", "{name}: {set}");
+            assert_eq!(set["time"]["correlate"]["packet"], CORRELATION_PACKET);
+            let packets = set["packets"].as_array().unwrap();
+            assert!(
+                packets.iter().any(|p| p["name"] == CORRELATION_PACKET),
+                "{name}: {set}"
+            );
+            for message in &case.messages {
+                match (message.packet == CORRELATION_PACKET, message.booted) {
+                    (true, Some(_)) => taught += 1,
+                    (true, None) => nothing += 1,
+                    (false, booted) => assert_eq!(booted, None, "{name}: {}", message.packet),
+                }
+            }
+        }
+        assert!(
+            taught >= 20 && nothing >= 20,
+            "{name}: {taught} taught, {nothing} not"
+        );
+    }
+}

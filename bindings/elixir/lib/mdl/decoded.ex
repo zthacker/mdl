@@ -13,6 +13,10 @@ defmodule MDL.Decoded do
     `{:since_boot, count, unit}` with `unit` one of `:s`, `:ms`, `:us` and
     `:ns`, which isn't an instant until correlated. Instants are integer
     nanoseconds since 1970-01-01T00:00:00Z.
+  * `:booted`: when the asset booted, an instant, if the message is its
+    set's correlation packet and teaches it (decoding.md section 8.2);
+    `nil` otherwise. A consumer keeps, per family and asset, the latest it
+    has seen.
   * `:samples`: `MDL.Sample` structs, in the record's order.
   * `:record`: each entry's raw value, by name: a map with string keys.
   * `:engineering`: `{path, value, quality}` for each field and scalar
@@ -29,6 +33,7 @@ defmodule MDL.Decoded do
     :def_version,
     :packet,
     :event_time,
+    :booted,
     :samples,
     :record,
     :engineering
@@ -43,6 +48,7 @@ defmodule MDL.Decoded do
           def_version: String.t(),
           packet: String.t(),
           event_time: MDL.event_time(),
+          booted: integer() | nil,
           samples: [MDL.Sample.t()],
           record: %{optional(String.t()) => MDL.value()},
           engineering: [{String.t(), MDL.value(), MDL.quality()}]

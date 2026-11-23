@@ -14,6 +14,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "kind",
@@ -313,6 +314,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "f0",
@@ -469,6 +471,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "f0",
@@ -636,6 +639,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "f0",
@@ -789,6 +793,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "t",

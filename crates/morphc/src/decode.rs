@@ -791,6 +791,10 @@ fn telemetry_text(t: &Telemetry) -> String {
         "set {}  packet {}  {asset}\n  def_version {}\n  {time}\n",
         t.decoded.set, t.decoded.packet, t.decoded.def_version
     );
+    // A correlation packet that teaches when its asset booted.
+    if !json["booted"].is_null() {
+        text.push_str(&format!("  booted {}\n", plain(&json["booted"])));
+    }
     let samples = json["samples"].as_array().map_or(&[][..], Vec::as_slice);
     if samples.is_empty() {
         text.push_str("  no catalog samples\n");

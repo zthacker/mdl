@@ -269,6 +269,7 @@
         "set": "conv_v1",
         "packet": "LIN",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.temp", "value": 12.300000000000004, "unit": null, "path": "raw", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -293,6 +294,7 @@
         "set": "conv_v1",
         "packet": "POLY",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.poly", "value": 7.299999999999998, "unit": null, "path": "x", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -317,6 +319,7 @@
         "set": "conv_v1",
         "packet": "STATES",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.mode", "value": "ON", "unit": null, "path": "mode", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -342,6 +345,7 @@
         "set": "conv_v1",
         "packet": "STATES",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.mode", "value": 7, "unit": null, "path": "mode", "index": null, "time_offset_ns": null, "quality": "unknown_state" }
         ],
@@ -367,6 +371,7 @@
         "set": "conv_v1",
         "packet": "TABLE",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.level", "value": 125.0, "unit": null, "path": "t_lin", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -396,6 +401,7 @@
         "set": "conv_v1",
         "packet": "SPLINE",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.curve", "value": 1.5573708920187794, "unit": null, "path": "s_in", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -423,6 +429,7 @@
         "set": "conv_v1",
         "packet": "QUALITY",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.count", "value": 255, "unit": null, "path": "q_int", "index": null, "time_offset_ns": null, "quality": "invalid" },
           { "param": "c.on", "value": true, "unit": null, "path": "flag", "index": null, "time_offset_ns": null, "quality": "good" }
@@ -461,6 +468,7 @@
         "set": "conv_v1",
         "packet": "UNITS",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.volts", "value": 1.5, "unit": "V", "path": "mv", "index": null, "time_offset_ns": null, "quality": "good" },
           { "param": "c.kelvin", "value": 298.15, "unit": "K", "path": "cel", "index": null, "time_offset_ns": null, "quality": "good" },
@@ -489,6 +497,7 @@
         "set": "conv_v1",
         "packet": "SERIES",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.series", "value": 10.0, "unit": null, "path": "s[0]", "index": 0, "time_offset_ns": 0, "quality": "good" },
           { "param": "c.series", "value": 20.0, "unit": null, "path": "s[1]", "index": 1, "time_offset_ns": 3, "quality": "good" },
@@ -517,6 +526,7 @@
         "set": "convj_v1",
         "packet": "BIG",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "c.big", "value": "18446744073709551615", "unit": null, "path": "n", "index": null, "time_offset_ns": null, "quality": "out_of_range" }
         ],

@@ -32,9 +32,9 @@ use super::time::{
 };
 use super::{
     Correlation, Encoding, Engineering, FieldSpec, Form, Kind, Length, Meaning, Message, Meta,
-    Placed, Raw, Sample, Sentinel, Telemetry, Text, Unusable, clock_fields, correlation_spec,
-    correlation_values, interval, meaning, meaning_json, offset_ns, param_json, raw_value,
-    sentinels, type_name,
+    Placed, Raw, Sample, Sentinel, Telemetry, Text, Unusable, booted, clock_fields,
+    correlation_spec, correlation_values, interval, meaning, meaning_json, offset_ns, param_json,
+    raw_value, sentinels, type_name,
 };
 pub(in crate::layout) use doc::Doc;
 use doc::Spell;
@@ -57,28 +57,40 @@ const TEXT: Kind = Kind::Text {
 /// Any JSON telemetry layout validation accepts, of the kinds this module
 /// builds, with one to three messages for each packet.
 pub fn json_telemetry() -> BoxedStrategy<Telemetry> {
-    case(message)
+    case(set(), message)
 }
 
 /// Layouts as [`json_telemetry`] makes them, with messages damaged as
 /// `layout/json/faults.rs` plants faults in them: each fails with its
 /// [`Damage::failure`](super::Damage::failure).
 pub fn json_damaged() -> BoxedStrategy<Telemetry> {
-    case(faults::damaged_message)
+    case(set(), faults::damaged_message)
 }
 
-/// A JSON family and its set, with one to three messages from `message`
-/// for each packet.
-fn case(message: fn(JsonSet, usize) -> BoxedStrategy<Message>) -> BoxedStrategy<Telemetry> {
-    set()
-        .prop_flat_map(move |set| {
-            let messages: Vec<BoxedStrategy<Vec<Message>>> = (0..set.packets.len())
-                .map(|index| vec(message(set.clone(), index), 1..=3).boxed())
-                .collect();
-            (Just(set), messages)
-        })
-        .prop_map(|(set, messages)| assemble(&set, messages.into_iter().flatten().collect()))
-        .boxed()
+/// Layouts as [`json_telemetry`] makes them, but always with boot time, so
+/// each has a correlation packet, whose clocks teach when its asset booted
+/// (§8.2).
+pub fn json_boot_telemetry() -> BoxedStrategy<Telemetry> {
+    case(
+        set_with(boot_source().prop_map(JsonTime::Fields).boxed()),
+        message,
+    )
+}
+
+/// A JSON family and its set, drawn by `set`, with one to three messages
+/// from `message` for each packet.
+fn case(
+    set: BoxedStrategy<JsonSet>,
+    message: fn(JsonSet, usize) -> BoxedStrategy<Message>,
+) -> BoxedStrategy<Telemetry> {
+    set.prop_flat_map(move |set| {
+        let messages: Vec<BoxedStrategy<Vec<Message>>> = (0..set.packets.len())
+            .map(|index| vec(message(set.clone(), index), 1..=3).boxed())
+            .collect();
+        (Just(set), messages)
+    })
+    .prop_map(|(set, messages)| assemble(&set, messages.into_iter().flatten().collect()))
+    .boxed()
 }
 
 // ---- What a set is ----------------------------------------------------------
@@ -310,11 +322,16 @@ struct PacketSpec {
 }
 
 fn set() -> BoxedStrategy<JsonSet> {
+    set_with(json_time())
+}
+
+/// A family's one set, as [`set`] draws it, its time source from `time`.
+fn set_with(time: BoxedStrategy<JsonTime>) -> BoxedStrategy<JsonSet> {
     set_of(
         alias(),
         String::new(),
         proptest::bool::weighted(0.3).boxed(),
-        json_time(),
+        time,
     )
 }
 
@@ -1548,10 +1565,21 @@ fn pack_routed(
         engineering: engineering_values(set, packet, draft),
         received: draft.received,
         event_time: event_time_of(set, packet, draft),
+        booted: booted_of(set, packet, draft),
         encoding: Encoding::Json,
         // Its own sequence, so the document's spellings don't depend on it.
         metadata: metadata_of(set, packet, &mut Spell::new(draft.seed.rotate_left(17))),
         damage: None,
+    }
+}
+
+/// The instant a correlation packet's clocks say its asset booted (§8.2).
+fn booted_of(set: &JsonSet, packet: &JsonPacket, draft: &JsonDraft) -> Option<i128> {
+    match (&set.time, &packet.correlation, draft.clocks) {
+        (JsonTime::Fields(source), Some(correlation), Some((clock, boot))) => {
+            booted(source, correlation, clock, boot)
+        }
+        _ => None,
     }
 }
 

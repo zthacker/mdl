@@ -41,6 +41,20 @@ proptest! {
     fn a_damaged_json_message_fails_where_the_spec_says(case in layout::json_damaged()) {
         damaged(&case, true)?;
     }
+
+    /// Layouts with boot time and a correlation packet, whose messages
+    /// teach the boot instant the testkit worked out, or nothing.
+    #[test]
+    fn a_boot_layout_decodes_and_teaches_what_was_packed_for_it(case in layout::boot_telemetry()) {
+        valid(&case, false)?;
+    }
+
+    #[test]
+    fn a_boot_json_layout_decodes_and_teaches_what_was_written_for_it(
+        case in layout::json_boot_telemetry()
+    ) {
+        valid(&case, true)?;
+    }
 }
 
 /// Every message of a valid case decodes to what the testkit worked out,

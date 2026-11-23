@@ -14,6 +14,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "id",
@@ -154,6 +155,7 @@
     {
       "decoded": {
         "asset": "ASSET",
+        "booted": null,
         "engineering": [
           {
             "path": "id",

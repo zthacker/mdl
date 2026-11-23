@@ -129,6 +129,7 @@
         "set": "be_v1",
         "packet": "BITS",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "probe.count", "value": 2718, "unit": null, "path": "b", "index": null, "time_offset_ns": null, "quality": "good" },
           { "param": "probe.offset", "value": -7, "unit": null, "path": "c", "index": null, "time_offset_ns": null, "quality": "good" },
@@ -162,6 +163,7 @@
         "set": "be_v1",
         "packet": "WIDE",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "probe.total", "value": "18446744073709551614", "unit": null, "path": "big", "index": null, "time_offset_ns": null, "quality": "good" }
         ],
@@ -197,6 +199,7 @@
         "set": "be_v1",
         "packet": "SIGNED",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 3, "sm": -5, "oc": -5, "sm_zero": 0, "oc_zero": 0, "tc": -5 },
         "engineering": [
@@ -227,6 +230,7 @@
         "set": "be_v1",
         "packet": "FLOATS",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "probe.angle", "value": 3.1415927410125732, "unit": null, "path": "single", "index": null, "time_offset_ns": null, "quality": "good" },
           { "param": "probe.temp", "value": { "non_finite": "NaN" }, "unit": null, "path": "nan", "index": null, "time_offset_ns": null, "quality": "non_finite" }
@@ -267,6 +271,7 @@
         "set": "be_v1",
         "packet": "TEXT",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "probe.name", "value": "héllo", "unit": null, "path": "name", "index": null, "time_offset_ns": null, "quality": "good" },
           { "param": "probe.blob", "value": "c0ffee", "unit": null, "path": "blob", "index": null, "time_offset_ns": null, "quality": "good" }
@@ -296,6 +301,7 @@
         "set": "le_v1",
         "packet": "LE",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [
           { "param": "probe.count", "value": 4660, "unit": null, "path": "word", "index": null, "time_offset_ns": null, "quality": "good" },
           { "param": "probe.offset", "value": -2, "unit": null, "path": "long", "index": null, "time_offset_ns": null, "quality": "good" }

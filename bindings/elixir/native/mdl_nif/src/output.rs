@@ -45,6 +45,7 @@ pub(crate) mod atoms {
         def_version,
         packet,
         event_time,
+        booted,
         samples,
         record,
         engineering,
@@ -163,6 +164,13 @@ pub(crate) fn decoded<'a>(env: Env<'a>, decoded: &DecodedMessage) -> NifResult<T
             (
                 atoms::event_time(),
                 event_time(env, &decoded.event_time, decoded.ground_time)?,
+            ),
+            (
+                atoms::booted(),
+                match decoded.booted {
+                    Some(at) => Value::unix_nanos(at).encode(env),
+                    None => atoms::nil().encode(env),
+                },
             ),
             (atoms::samples(), samples.encode(env)),
             (atoms::record(), value(env, &decoded.record)?),

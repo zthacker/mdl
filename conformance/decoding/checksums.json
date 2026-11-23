@@ -138,6 +138,7 @@
         "set": "chk_v1",
         "packet": "CRC16",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 1, "data": "123456789", "crc": 10673 },
         "engineering": [
@@ -176,6 +177,7 @@
         "set": "chk_v1",
         "packet": "RIELLO",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 2, "data": "123456789", "crc": 25552 },
         "engineering": [
@@ -198,6 +200,7 @@
         "set": "chk_v1",
         "packet": "ISO",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 3, "data": "abcdef01", "check": 40184 },
         "engineering": [
@@ -220,6 +223,7 @@
         "set": "chk_v1",
         "packet": "ISO_ZERO",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 4, "data": "0000", "check": 65535 },
         "engineering": [
@@ -242,6 +246,7 @@
         "set": "chk_v1",
         "packet": "ISO_ZERO",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 4, "data": "0000", "check": 0 },
         "engineering": [
@@ -272,6 +277,7 @@
         "set": "chk_v1",
         "packet": "SUM8",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 5, "data": "ffffff", "check": 253 },
         "engineering": [
@@ -294,6 +300,7 @@
         "set": "chk_v1",
         "packet": "XOR",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 6, "data": "0ff0aa", "check": 83 },
         "engineering": [
@@ -332,6 +339,7 @@
         "set": "chk_le_v1",
         "packet": "SUM16",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 1, "data": "ffffff", "check": 765 },
         "engineering": [
@@ -354,6 +362,7 @@
         "set": "chk_le_v1",
         "packet": "ISO",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 2, "data": "abcdef01", "check": 40184 },
         "engineering": [

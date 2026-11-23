@@ -101,6 +101,17 @@ defmodule MDLTest do
       assert is_integer(count) and unit in [:s, :ms, :us, :ns]
     end
 
+    # legacy_v1's TIME is its correlation packet: 1700000000000000 us since
+    # 1970 is 2023-11-14T22:13:20Z, read 5000 ms after boot.
+    test "a correlation packet gives when its asset booted", context do
+      {:ok, decoded} = decode(context.kitchen, context.messages, "legacy-time-v1")
+      assert decoded.event_time == {:since_boot, 5000, :ms}
+      assert decoded.booted == 1_699_999_995_000_000_000
+
+      {:ok, other} = decode(context.kitchen, context.messages, "sink-mixed")
+      assert other.booted == nil
+    end
+
     test "frames are atoms, and vectors structs", context do
       {:ok, decoded} = decode(context.kitchen, context.messages, "sink-mixed")
       frames = for %{value: %MDL.Vec3{frame: frame}} <- decoded.samples, do: frame

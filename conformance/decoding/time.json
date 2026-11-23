@@ -1,5 +1,5 @@
 {
-  "about": "Event time: CUC, GPS, elapsed counts, ISO 8601 text and time since boot, the UTC, TAI, GPS and TT scales with their leap seconds, and when a message has only its ground time or none it can read.",
+  "about": "Event time: CUC, GPS, elapsed counts, ISO 8601 text, time since boot and the boot instants correlation packets teach, the UTC, TAI, GPS and TT scales with their leap seconds, and when a message has only its ground time or none it can read.",
   "definitions": {
     "mdl_version": "2.0",
     "catalog": {},
@@ -9,6 +9,12 @@
         "encoding": "binary",
         "byte_order": "big",
         "alias": { "kind": "fixed", "value": "boot-1" }
+      },
+      {
+        "name": "tboot2",
+        "encoding": "binary",
+        "byte_order": "big",
+        "alias": { "kind": "fixed", "value": "boot-2" }
       },
       {
         "name": "tcuc",
@@ -42,6 +48,34 @@
     ],
     "sets": [
       {
+        "name": "tboot2_v1",
+        "family": "tboot2",
+        "time": {
+          "kind": "boot",
+          "unit": "s",
+          "correlate": {
+            "packet": "TIME",
+            "clock_field": "tai_s",
+            "clock_unit": "s",
+            "epoch": "1958-01-01T00:00:00Z",
+            "scale": "tai",
+            "boot_field": "boot_s"
+          }
+        },
+        "packets": [
+          {
+            "name": "TIME",
+            "identify": { "id": 1 },
+            "time_field": "boot_s",
+            "entries": [
+              { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
+              { "kind": "field", "name": "tai_s", "type": "uint", "size_bits": 64 },
+              { "kind": "field", "name": "boot_s", "type": "uint", "size_bits": 64 }
+            ]
+          }
+        ]
+      },
+      {
         "name": "tboot_v1",
         "family": "tboot",
         "time": {
@@ -63,8 +97,8 @@
             "time_field": "boot_ms",
             "entries": [
               { "kind": "field", "name": "id", "type": "uint", "size_bits": 8 },
-              { "kind": "field", "name": "unix_us", "type": "uint", "size_bits": 64 },
-              { "kind": "field", "name": "boot_ms", "type": "uint", "size_bits": 32 }
+              { "kind": "field", "name": "unix_us", "type": "uint", "size_bits": 64, "invalid": [0] },
+              { "kind": "field", "name": "boot_ms", "type": "uint", "size_bits": 32, "invalid": [4294967295] }
             ]
           },
           {
@@ -184,6 +218,7 @@
         "set": "tcuc_v1",
         "packet": "T",
         "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.000015258Z" },
+        "booted": null,
         "samples": [],
         "record": { "head": 128 },
         "engineering": [
@@ -205,6 +240,7 @@
         "set": "tcuc_v1",
         "packet": "T",
         "event_time": { "kind": "at", "time": "2016-12-31T23:59:59.999999999Z" },
+        "booted": null,
         "samples": [],
         "record": { "head": 110 },
         "engineering": [
@@ -226,6 +262,7 @@
         "set": "tcuc_v1",
         "packet": "T",
         "event_time": { "kind": "at", "time": "2017-01-01T00:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "head": 110 },
         "engineering": [
@@ -255,6 +292,7 @@
         "set": "tgps_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.25Z" },
+        "booted": null,
         "samples": [],
         "record": { "week": 373, "tow": 129618250 },
         "engineering": [
@@ -277,6 +315,7 @@
         "set": "tgps_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2019-03-30T23:59:42Z" },
+        "booted": null,
         "samples": [],
         "record": { "week": 1023, "tow": 0 },
         "engineering": [
@@ -299,6 +338,7 @@
         "set": "tgps_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2026-06-06T23:59:42Z" },
+        "booted": null,
         "samples": [],
         "record": { "week": 374, "tow": 0 },
         "engineering": [
@@ -321,6 +361,7 @@
         "set": "tel_v1",
         "packet": "INT",
         "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.123Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 1, "t": 1780315200123 },
         "engineering": [
@@ -343,6 +384,7 @@
         "set": "tel_v1",
         "packet": "FLT",
         "event_time": { "kind": "at", "time": "1970-01-01T00:00:00.004099999Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 2, "t": 4.1 },
         "engineering": [
@@ -365,6 +407,7 @@
         "set": "tel_v1",
         "packet": "SENT",
         "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": { "id": 3, "t": 4294967295 },
         "engineering": [
@@ -387,6 +430,7 @@
         "set": "ttt_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2000-01-01T11:58:55.816Z" },
+        "booted": null,
         "samples": [],
         "record": { "t": 0 },
         "engineering": [
@@ -408,6 +452,7 @@
         "set": "tiso_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2026-06-01T12:00:00.123456789Z" },
+        "booted": null,
         "samples": [],
         "record": {},
         "engineering": []
@@ -427,6 +472,7 @@
         "set": "tiso_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": {},
         "engineering": []
@@ -446,6 +492,7 @@
         "set": "tiso_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": {},
         "engineering": []
@@ -465,6 +512,7 @@
         "set": "tiso_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "2016-12-31T23:59:59.999999999Z" },
+        "booted": null,
         "samples": [],
         "record": {},
         "engineering": []
@@ -484,6 +532,7 @@
         "set": "tiso_v1",
         "packet": "P",
         "event_time": { "kind": "at", "time": "0001-01-01T01:00:00Z" },
+        "booted": null,
         "samples": [],
         "record": {},
         "engineering": []
@@ -519,11 +568,180 @@
         "set": "tboot_v1",
         "packet": "HK",
         "event_time": { "kind": "since_boot", "value": 12345, "unit": "ms" },
+        "booted": null,
         "samples": [],
         "record": { "id": 2, "up": 12345 },
         "engineering": [
           { "path": "id", "value": 2, "quality": "good" },
           { "path": "up", "value": 12345, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-correlation-teaches-the-boot-instant",
+      "spec": ["decoding.md §8.2", "api.md §3.1"],
+      "note": "TIME is tboot_v1's correlation packet. unix_us 00 06 53 2f ef 15 90 00 = 1780315200000000 us since 1970 on utc is 2026-06-01T12:00:00Z, and boot_ms 00 00 13 88 = 5000 ms after boot, read at one moment: the asset booted 5 s before, 2026-06-01T11:59:55Z. Its own event time is its boot time, 5000 ms.",
+      "family": "tboot",
+      "message": { "hex": "01 00 06 53 2f ef 15 90 00 00 00 13 88", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot",
+        "native_id": "boot-1",
+        "asset": "boot-1",
+        "stand_in": true,
+        "set": "tboot_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "since_boot", "value": 5000, "unit": "ms" },
+        "booted": "2026-06-01T11:59:55Z",
+        "samples": [],
+        "record": { "id": 1, "unix_us": 1780315200000000, "boot_ms": 5000 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "unix_us", "value": 1780315200000000, "quality": "good" },
+          { "path": "boot_ms", "value": 5000, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-correlation-whose-clock-holds-its-sentinel",
+      "spec": ["decoding.md §8.2", "decoding.md §7.5"],
+      "note": "unix_us holds its sentinel, 0, so its engineering quality is invalid and the packet teaches nothing: booted is absent, where taking 0 as a reading would give 5 s before 1970. boot_ms, 5000, is still its event time.",
+      "family": "tboot",
+      "message": { "hex": "01 00 00 00 00 00 00 00 00 00 00 13 88", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot",
+        "native_id": "boot-1",
+        "asset": "boot-1",
+        "stand_in": true,
+        "set": "tboot_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "since_boot", "value": 5000, "unit": "ms" },
+        "booted": null,
+        "samples": [],
+        "record": { "id": 1, "unix_us": 0, "boot_ms": 5000 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "unix_us", "value": 0, "quality": "invalid" },
+          { "path": "boot_ms", "value": 5000, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-correlation-whose-boot-clock-holds-its-sentinel",
+      "spec": ["decoding.md §8", "decoding.md §8.2"],
+      "note": "boot_ms holds its sentinel, 2^32 - 1. It's the packet's time field too, so the packet has ground time only, and with a clock that doesn't read good it teaches nothing: booted is absent.",
+      "family": "tboot",
+      "message": { "hex": "01 00 06 53 2f ef 15 90 00 ff ff ff ff", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot",
+        "native_id": "boot-1",
+        "asset": "boot-1",
+        "stand_in": true,
+        "set": "tboot_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "ground", "time": "2026-06-01T12:00:00Z" },
+        "booted": null,
+        "samples": [],
+        "record": { "id": 1, "unix_us": 1780315200000000, "boot_ms": 4294967295 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "unix_us", "value": 1780315200000000, "quality": "good" },
+          { "path": "boot_ms", "value": 4294967295, "quality": "invalid" }
+        ]
+      }
+    },
+    {
+      "name": "a-correlation-on-tai-after-a-leap-second",
+      "spec": ["decoding.md §8.1", "decoding.md §8.2"],
+      "note": "tai_s 00 00 00 00 6e fa a5 25 = 1861920037 s after 1958-01-01 on tai, 21550 days and 37 s: the label 2017-01-01T00:00:37 TAI. TAI - UTC is 37 s from 2017-01-01, so the instant is 2017-01-01T00:00:00Z. boot_s is 100: the asset booted at 2016-12-31T23:58:20Z, instants having no leap seconds.",
+      "family": "tboot2",
+      "message": { "hex": "01 00 00 00 00 6e fa a5 25 00 00 00 00 00 00 00 64", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot2",
+        "native_id": "boot-2",
+        "asset": "boot-2",
+        "stand_in": true,
+        "set": "tboot2_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "since_boot", "value": 100, "unit": "s" },
+        "booted": "2016-12-31T23:58:20Z",
+        "samples": [],
+        "record": { "id": 1, "tai_s": 1861920037, "boot_s": 100 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "tai_s", "value": 1861920037, "quality": "good" },
+          { "path": "boot_s", "value": 100, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-correlation-inside-a-leap-second",
+      "spec": ["decoding.md §8.1", "decoding.md §8.2"],
+      "note": "tai_s is 1861920036, the label 2017-01-01T00:00:36 TAI: at or after the 2017 entry's start plus the previous offset, 36 s, and before its start plus its own, 37 s, so inside its leap second, 2016-12-31T23:59:60 UTC, which is the instant before the entry starts, 2016-12-31T23:59:59.999999999Z. 100 s before it is 2016-12-31T23:58:19.999999999Z.",
+      "family": "tboot2",
+      "message": { "hex": "01 00 00 00 00 6e fa a5 24 00 00 00 00 00 00 00 64", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot2",
+        "native_id": "boot-2",
+        "asset": "boot-2",
+        "stand_in": true,
+        "set": "tboot2_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "since_boot", "value": 100, "unit": "s" },
+        "booted": "2016-12-31T23:58:19.999999999Z",
+        "samples": [],
+        "record": { "id": 1, "tai_s": 1861920036, "boot_s": 100 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "tai_s", "value": 1861920036, "quality": "good" },
+          { "path": "boot_s", "value": 100, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-clock-past-year-9999",
+      "spec": ["decoding.md §8.2"],
+      "note": "tai_s 00 00 00 49 c8 68 5f a5 = 316894896037 s after 1958 on tai is the label 12000-01-01T00:00:37 TAI, the instant 12000-01-01T00:00:00Z by the last TAI - UTC, 37 s: past year 9999, which is no fault in itself. boot_s 00 00 00 49 48 80 48 00 = 314748979200 s, the days from 2026-01-01 to 12000-01-01, brings the boot instant back to 2026-01-01T00:00:00Z, counted exactly.",
+      "family": "tboot2",
+      "message": { "hex": "01 00 00 00 49 c8 68 5f a5 00 00 00 49 48 80 48 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot2",
+        "native_id": "boot-2",
+        "asset": "boot-2",
+        "stand_in": true,
+        "set": "tboot2_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "since_boot", "value": 314748979200, "unit": "s" },
+        "booted": "2026-01-01T00:00:00Z",
+        "samples": [],
+        "record": { "id": 1, "tai_s": 316894896037, "boot_s": 314748979200 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "tai_s", "value": 316894896037, "quality": "good" },
+          { "path": "boot_s", "value": 314748979200, "quality": "good" }
+        ]
+      }
+    },
+    {
+      "name": "a-boot-instant-before-year-0001",
+      "spec": ["decoding.md §8.2"],
+      "note": "tai_s 0 is the correlation's epoch, 1958, and boot_s 00 00 00 17 48 76 e8 00 = 100000000000 s is some 3169 years: the boot instant falls before year 0001, so it's no instant and the packet teaches nothing.",
+      "family": "tboot2",
+      "message": { "hex": "01 00 00 00 00 00 00 00 00 00 00 00 17 48 76 e8 00", "metadata": {}, "ground_time": "2026-06-01T12:00:00Z" },
+      "decoded": {
+        "family": "tboot2",
+        "native_id": "boot-2",
+        "asset": "boot-2",
+        "stand_in": true,
+        "set": "tboot2_v1",
+        "packet": "TIME",
+        "event_time": { "kind": "since_boot", "value": 100000000000, "unit": "s" },
+        "booted": null,
+        "samples": [],
+        "record": { "id": 1, "tai_s": 0, "boot_s": 100000000000 },
+        "engineering": [
+          { "path": "id", "value": 1, "quality": "good" },
+          { "path": "tai_s", "value": 0, "quality": "good" },
+          { "path": "boot_s", "value": 100000000000, "quality": "good" }
         ]
       }
     }

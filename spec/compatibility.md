@@ -68,7 +68,8 @@ The results the runtime API returns ([api](api.md)) have a format version,
 - Removing or renaming a key, changing a value's spelling, or changing
   what a key means is a new format version.
 - `morphc`'s JSON reports carry their own version (`"report"`), which
-  changes when the results inside them do.
+  changes when the results inside them do, by the same rule: a new key is
+  additive and keeps the version.
 
 ## 5. Diagnostic and error codes
 
