@@ -19,6 +19,7 @@ inputs and its language's values as well as the runtime beneath it.
 | `conformance/decoding/` | decoding messages through the runtime API | §2 |
 | `conformance/encoding/` | encoding commands through the runtime API | §3 |
 | `conformance/decoding_commands/` | decoding command payloads through the runtime API | §4 |
+| `conformance/instants/` | the instant an event time is, through the runtime API | §5 |
 
 ## 2. Decoding cases
 
@@ -234,7 +235,37 @@ each request's payload with what decoding it gives back, and each
 payload with a fault planted in it with the error it gives. What §2.3
 says of generated cases holds for these.
 
-## 5. Runners
+## 5. Instant cases
+
+Each file in `conformance/instants/`, or in a directory under it, is a
+JSON object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `about` | text: what the file covers, for people |
+| `cases` | a list of cases |
+
+A case is an object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `name` | text, unique in its file |
+| `spec` | a list of the sections its expected result follows from, as in §2 (`"api.md §2.8"`) |
+| `note` | text: how the expected result follows from them, for people |
+| `event_time` | an event time, in api.md §3.1's JSON form |
+| `booted` | an instant, as api.md §1 spells it, or `null` for none |
+| `instant` | the instant the event time is, or `null` when it's absent |
+
+Every key is required. A file or case with a key this section doesn't
+list, or without one it requires, is malformed. A ground event time's
+`time` is any instant: `instant` doesn't read it.
+
+A runner gives each case's event time and boot instant to `instant`
+(api.md §2.8), in its own forms, and compares the result with the case's
+`instant` as §2.2 does. The cases have no definitions, as `instant` needs
+no store, and every expected result is worked out by hand.
+
+## 6. Runners
 
 This repository runs every suite in two places: the runtime's runner,
 `crates/mdl/tests/conformance.rs`, which also checks that each section a

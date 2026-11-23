@@ -1,7 +1,7 @@
 //! The runtime API every binding calls (`spec/api.md`): open a store,
 //! decode messages, encode commands and decode them back, describe the
-//! build and look up its bindings, with results whose shape and values the
-//! spec fixes.
+//! build and look up its bindings, and turn an event time into an instant
+//! ([`instant`]), with results whose shape and values the spec fixes.
 //!
 //! A [`Runtime`] is an opened store, with bindings or without; it's
 //! immutable, cheap to clone and safe to share across threads. Its results
@@ -33,6 +33,8 @@ use crate::route::{FamilySets, RouteError};
 use crate::store::{self, StoreError, Stored};
 use crate::time::Timestamp;
 use crate::validate::{Validated, validate_stored};
+
+pub use crate::decode::instant;
 
 /// The version of the result format (`spec/api.md`), which
 /// `spec/compatibility.md` §4 says what changes.

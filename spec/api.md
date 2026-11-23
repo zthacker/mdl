@@ -5,20 +5,20 @@ MAY are to be interpreted as described in RFC 2119.
 
 Every binding of MDL to another language calls one runtime, this
 repository's, through one coarse API: open a store, decode messages,
-encode commands and decode them back, describe the build, and look up
-which asset a native id is. A binding converts its language's inputs for the runtime
-and the runtime's results into its language's values, and does nothing
-else. No MDL semantics live in a binding, so a feature reaches every
-language when the runtime gains it, and no second implementation has to
-be kept equal to this one.
+encode commands and decode them back, describe the build, look up which
+asset a native id is, and turn an event time into an instant. A binding
+converts its language's inputs for the runtime and the runtime's results
+into its language's values, and does nothing else. No MDL semantics live
+in a binding, so a feature reaches every language when the runtime gains
+it, and no second implementation has to be kept equal to this one.
 
 This document specifies the operations, their inputs, and their results,
 in JSON and as the values a binding returns. The `mdl` crate's `runtime`
 module implements it; `morphc decode` and `morphc encode` write the same
 results in their JSON reports. The result format's version is 1
 ([compatibility](compatibility.md) §4 says what changes it). A binding
-MUST pass the decoding, encoding and command decoding cases of
-[conformance](conformance.md) §2 to §4 through its own API.
+MUST pass the decoding, encoding, command decoding and instant cases of
+[conformance](conformance.md) §2 to §5 through its own API.
 
 ## 1. Values
 
@@ -219,6 +219,30 @@ catalog command and arguments, by `encoding.md` §7. The set is the
 caller's to name, as for encode. The result is a decoded command (§3.5),
 or an error (§4).
 
+### 2.8 instant
+
+Inputs: an event time, in §3.1's form, and a boot instant or none. It
+takes no handle: it needs nothing from a store.
+
+The result is the instant the event time is, or absent:
+
+- `at`: its `time`;
+- `since_boot`, with a boot instant: the boot instant plus `value`, a
+  count from 0 to 2^64 − 1, in `unit` (`s`, `ms`, `us` or `ns`), counted
+  exactly, if that's within years 0001 to 9999; absent when it isn't, and
+  when there's no boot instant;
+- `ground`: absent. The message carries no time of its own; its ground
+  time says when it was received, which the caller already has.
+
+Correlating is the caller's (§3.1): the boot instant is the latest
+`booted` it has seen for the message's family and asset, the message's
+own included. `instant` is pure, so the same inputs always give the same
+result, and it has no errors: an input that isn't an event time or an
+instant is the binding's to refuse, in its own way (Elixir:
+`ArgumentError`). A count is exact however large: `value` may be up to
+2^64 − 1, whose instant in seconds is past what 64 bits of nanoseconds
+hold.
+
 ## 3. Results
 
 ### 3.1 A decoded message
@@ -245,16 +269,16 @@ An object with these keys:
 - `ground`: the set's time source gives no time for the packet; `time` is
   the message's ground time, an instant;
 - `at`: `time` is the instant the time source gives;
-- `since_boot`: `value`, an integer, in `unit` (`s`, `ms`, `us` or `ns`):
-  time since the asset booted, which isn't an instant until correlated
-  (`decoding.md` §8.2).
+- `since_boot`: `value`, an integer from 0 to 2^64 − 1, in `unit` (`s`,
+  `ms`, `us` or `ns`): time since the asset booted, which isn't an instant
+  until correlated (`decoding.md` §8.2).
 
 Correlating takes state across messages, which the runtime doesn't keep:
 `booted` is what one message teaches, and a consumer keeps, per family
 and asset, the latest `booted` it has seen, a message's own included, in
 the order messages arrive. A `since_boot` event time's instant is then
 that boot instant plus its `value` in its `unit`, when that's within
-years 0001 to 9999.
+years 0001 to 9999, as `instant` gives it (§2.8).
 
 **Sample** (`decoding.md` §7.3): an object with
 

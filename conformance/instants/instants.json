@@ -1,0 +1,141 @@
+{
+  "about": "Instants: the instant an at, ground or since_boot event time is, with a boot instant and without, in each unit, at the ends of years 0001 to 9999, and for counts past 2^53 and past what 64 bits of nanoseconds hold.",
+  "cases": [
+    {
+      "name": "at-is-its-own-instant",
+      "spec": ["api.md §2.8"],
+      "note": "An at event time is the instant its time source gave: 2026-06-01T12:00:00Z.",
+      "event_time": {"kind": "at", "time": "2026-06-01T12:00:00Z"},
+      "booted": null,
+      "instant": "2026-06-01T12:00:00Z"
+    },
+    {
+      "name": "at-ignores-a-boot-instant",
+      "spec": ["api.md §2.8"],
+      "note": "A boot instant changes nothing for an at event time.",
+      "event_time": {"kind": "at", "time": "2026-06-01T12:00:00Z"},
+      "booted": "2000-01-01T00:00:00Z",
+      "instant": "2026-06-01T12:00:00Z"
+    },
+    {
+      "name": "ground-has-no-instant",
+      "spec": ["api.md §2.8", "decoding.md §8"],
+      "note": "A ground event time is the message's ground time only: the values carry no time of their own, so there's no instant.",
+      "event_time": {"kind": "ground", "time": "2026-06-01T12:00:00Z"},
+      "booted": null,
+      "instant": null
+    },
+    {
+      "name": "ground-with-a-boot-instant",
+      "spec": ["api.md §2.8"],
+      "note": "A boot instant gives a ground event time none either.",
+      "event_time": {"kind": "ground", "time": "2026-06-01T12:00:00Z"},
+      "booted": "2026-06-01T11:00:00Z",
+      "instant": null
+    },
+    {
+      "name": "since-boot-without-a-boot-instant",
+      "spec": ["api.md §2.8", "decoding.md §8.2"],
+      "note": "Time since boot isn't an instant until correlated: with no boot instant there's none, as for a message before its asset's first correlation.",
+      "event_time": {"kind": "since_boot", "value": 5000, "unit": "ms"},
+      "booted": null,
+      "instant": null
+    },
+    {
+      "name": "seconds-after-boot",
+      "spec": ["api.md §2.8"],
+      "note": "90 s after 2026-06-01T11:59:55Z is 2026-06-01T12:01:25Z.",
+      "event_time": {"kind": "since_boot", "value": 90, "unit": "s"},
+      "booted": "2026-06-01T11:59:55Z",
+      "instant": "2026-06-01T12:01:25Z"
+    },
+    {
+      "name": "milliseconds-after-boot",
+      "spec": ["api.md §2.8"],
+      "note": "5000 ms after 2026-06-01T11:59:55Z is 2026-06-01T12:00:00Z.",
+      "event_time": {"kind": "since_boot", "value": 5000, "unit": "ms"},
+      "booted": "2026-06-01T11:59:55Z",
+      "instant": "2026-06-01T12:00:00Z"
+    },
+    {
+      "name": "microseconds-after-boot",
+      "spec": ["api.md §2.8"],
+      "note": "1500001 us after 2026-06-01T12:00:00Z is 1.500001 s later.",
+      "event_time": {"kind": "since_boot", "value": 1500001, "unit": "us"},
+      "booted": "2026-06-01T12:00:00Z",
+      "instant": "2026-06-01T12:00:01.500001Z"
+    },
+    {
+      "name": "nanoseconds-after-boot",
+      "spec": ["api.md §2.8"],
+      "note": "1 ns after 2026-06-01T12:00:00Z.",
+      "event_time": {"kind": "since_boot", "value": 1, "unit": "ns"},
+      "booted": "2026-06-01T12:00:00Z",
+      "instant": "2026-06-01T12:00:00.000000001Z"
+    },
+    {
+      "name": "a-boot-instant-before-1970",
+      "spec": ["api.md §2.8"],
+      "note": "500 ms after 1969-12-31T23:59:59.5Z is 1970-01-01T00:00:00Z: instants before 1970 count the same way.",
+      "event_time": {"kind": "since_boot", "value": 500, "unit": "ms"},
+      "booted": "1969-12-31T23:59:59.5Z",
+      "instant": "1970-01-01T00:00:00Z"
+    },
+    {
+      "name": "the-first-instant",
+      "spec": ["api.md §2.8"],
+      "note": "0 s after 0001-01-01T00:00:00Z, the first instant years 0001 to 9999 hold, is that instant.",
+      "event_time": {"kind": "since_boot", "value": 0, "unit": "s"},
+      "booted": "0001-01-01T00:00:00Z",
+      "instant": "0001-01-01T00:00:00Z"
+    },
+    {
+      "name": "the-last-instant",
+      "spec": ["api.md §2.8"],
+      "note": "999999999 ns after 9999-12-31T23:59:59Z is 9999-12-31T23:59:59.999999999Z, the last instant in the range.",
+      "event_time": {"kind": "since_boot", "value": 999999999, "unit": "ns"},
+      "booted": "9999-12-31T23:59:59Z",
+      "instant": "9999-12-31T23:59:59.999999999Z"
+    },
+    {
+      "name": "one-nanosecond-past-the-last",
+      "spec": ["api.md §2.8"],
+      "note": "1000000000 ns after 9999-12-31T23:59:59Z is 10000-01-01T00:00:00Z, past year 9999: no instant.",
+      "event_time": {"kind": "since_boot", "value": 1000000000, "unit": "ns"},
+      "booted": "9999-12-31T23:59:59Z",
+      "instant": null
+    },
+    {
+      "name": "the-largest-count-in-nanoseconds",
+      "spec": ["api.md §2.8"],
+      "note": "2^64 - 1 ns after 1970-01-01T00:00:00Z is 18446744073.709551615 s later: 2554-07-21T23:34:33.709551615Z, past what 64 bits of signed nanoseconds hold, counted exactly.",
+      "event_time": {"kind": "since_boot", "value": "18446744073709551615", "unit": "ns"},
+      "booted": "1970-01-01T00:00:00Z",
+      "instant": "2554-07-21T23:34:33.709551615Z"
+    },
+    {
+      "name": "the-largest-count-in-seconds",
+      "spec": ["api.md §2.8"],
+      "note": "2^64 - 1 s, some 5.8 x 10^11 years, after 2026-01-01T00:00:00Z is far past year 9999: no instant. The count is about 1.8 x 10^28 ns, which wraps in 64 bits.",
+      "event_time": {"kind": "since_boot", "value": "18446744073709551615", "unit": "s"},
+      "booted": "2026-01-01T00:00:00Z",
+      "instant": null
+    },
+    {
+      "name": "a-count-past-2-to-the-53",
+      "spec": ["api.md §2.8", "api.md §1"],
+      "note": "2^53 + 1 = 9007199254740993 ns, written as text as api.md §1 writes integers past 2^53 - 1, is 9007199.254740993 s: 104 days, 5 h 59 min 59.254740993 s after 2000-01-01T00:00:00Z. A double holds 2^53 + 1 only as 2^53, 1 ns short.",
+      "event_time": {"kind": "since_boot", "value": "9007199254740993", "unit": "ns"},
+      "booted": "2000-01-01T00:00:00Z",
+      "instant": "2000-04-14T05:59:59.254740993Z"
+    },
+    {
+      "name": "past-2262",
+      "spec": ["api.md §2.8"],
+      "note": "10^13 ms after 2026-01-01T00:00:00Z is 10^10 s later, 115740 days 17 h 46 min 40 s: an instant past 2262, which 64 bits of signed nanoseconds don't reach.",
+      "event_time": {"kind": "since_boot", "value": 10000000000000, "unit": "ms"},
+      "booted": "2026-01-01T00:00:00Z",
+      "instant": "2342-11-21T17:46:40Z"
+    }
+  ]
+}

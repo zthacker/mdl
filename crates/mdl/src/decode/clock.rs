@@ -57,7 +57,7 @@ pub(super) fn event_time(
                 return Err("a CUC time code needs a binary payload".to_string());
             };
             let since = cuc(bytes, u64::from(*offset_bits), *coarse_bytes, *fine_bytes)?;
-            instant(*scale, epoch_label(epoch)? + since)
+            labelled(*scale, epoch_label(epoch)? + since)
         }
         Some(Time::Elapsed { unit, epoch, scale }) => {
             let Some(field) = &packet.time_field else {
@@ -67,7 +67,7 @@ pub(super) fn event_time(
                 return Ok(EventTime::Ground);
             }
             let since = count_nanos(record.get(field), *unit, field)?;
-            instant(*scale, epoch_label(epoch)? + since)
+            labelled(*scale, epoch_label(epoch)? + since)
         }
         Some(Time::Gps {
             unit,
@@ -88,7 +88,7 @@ pub(super) fn event_time(
                 None => i128::from(*week),
             };
             let of_week = count_nanos(record.get(field), *unit, field)?;
-            instant(TimeScale::Gps, GPS_EPOCH + week * WEEK + of_week)
+            labelled(TimeScale::Gps, GPS_EPOCH + week * WEEK + of_week)
         }
         Some(Time::Iso8601 { pointer }) => {
             let text = json
@@ -129,7 +129,7 @@ fn no_reading(packet: &Packet, record: &Record<'_>, name: &str) -> bool {
 }
 
 /// A label on `scale` as an event time.
-fn instant(scale: TimeScale, label: i128) -> Result<EventTime, String> {
+fn labelled(scale: TimeScale, label: i128) -> Result<EventTime, String> {
     Timestamp::from_unix_nanos_wide(leap::to_utc(scale, label))
         .map(EventTime::At)
         .ok_or_else(|| "the time is outside the years 0001 to 9999".to_string())
@@ -256,17 +256,8 @@ impl Correlator {
     /// or `None` for ground time only, an asset not yet correlated, or a
     /// boot time that would end past year 9999.
     pub fn absolute(&self, decoded: &Decoded<'_>) -> Option<Timestamp> {
-        match decoded.event_time {
-            EventTime::At(instant) => Some(instant),
-            EventTime::Ground => None,
-            EventTime::SinceBoot { value, unit } => {
-                let booted =
-                    self.boot_time(&decoded.route.set.family, &decoded.route.binding.asset)?;
-                Timestamp::from_unix_nanos_wide(
-                    booted.unix_nanos_wide() + i128::from(value) * unit_nanos(unit),
-                )
-            }
-        }
+        let booted = self.boot_time(&decoded.route.set.family, &decoded.route.binding.asset);
+        instant(decoded.event_time, booted)
     }
 
     /// When an asset of a family last booted, as far as this correlator
@@ -306,6 +297,23 @@ pub fn boot_instant(decoded: &Decoded<'_>) -> Option<Timestamp> {
     let label = epoch + i128::from(clock) * unit_nanos(correlate.clock_unit);
     let booted = leap::to_utc(correlate.scale, label) - i128::from(boot) * unit_nanos(*unit);
     Timestamp::from_unix_nanos_wide(booted)
+}
+
+/// The instant an event time is (`spec/api.md` §2.8): an `At` time's own;
+/// a time since boot after `booted`, the asset's boot instant, counted
+/// exactly, when that's within years 0001 to 9999; `None` for ground time
+/// only, for time since boot without a boot instant, and past that range.
+///
+/// It's stateless: `booted` is the latest boot instant the caller has seen
+/// for the message's family and asset ([`boot_instant`]).
+pub fn instant(event_time: EventTime, booted: Option<Timestamp>) -> Option<Timestamp> {
+    match event_time {
+        EventTime::At(at) => Some(at),
+        EventTime::Ground => None,
+        EventTime::SinceBoot { value, unit } => Timestamp::from_unix_nanos_wide(
+            booted?.unix_nanos_wide() + i128::from(value) * unit_nanos(unit),
+        ),
+    }
 }
 
 /// The two clocks of a correlation packet, if both have a good reading.

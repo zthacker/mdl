@@ -11,10 +11,14 @@ use std::path::{Path, PathBuf};
 
 use mdl::artifact::build;
 use mdl::bindings::NativeId;
+use mdl::decode::EventTime;
 use mdl::encode::{ArgumentValue, CommandRequest};
+use mdl::ir::TimeUnit;
 use mdl::message::{Message, MetaValue};
 use mdl::read::read_bundle_value;
-use mdl::runtime::{ApiError, DecodedCommand, DecodedMessage, EncodedCommand, Runtime, Value};
+use mdl::runtime::{
+    ApiError, DecodedCommand, DecodedMessage, EncodedCommand, Runtime, Value, instant,
+};
 use mdl::store;
 use mdl::time::Timestamp;
 use mdl::validate::validate;
@@ -127,6 +131,30 @@ fn every_command_decoding_case_gives_the_result_the_spec_does() {
             .into_owned();
         let mut file = Failures::new(&name);
         ran += run_command_file(path, &name, &mut sections, &mut file);
+        failures.extend(file.list);
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    assert!(ran > 0, "no cases in {dir:?}");
+}
+
+#[test]
+fn every_instant_case_gives_the_result_the_spec_does() {
+    let dir = repository().join("conformance/instants");
+    let mut paths = Vec::new();
+    case_files(&dir, &mut paths);
+    paths.sort();
+    assert!(!paths.is_empty(), "no case files in {dir:?}");
+    let mut sections = Sections::default();
+    let mut failures = Vec::new();
+    let mut ran = 0;
+    for path in &paths {
+        let name = path
+            .strip_prefix(&dir)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned();
+        let mut file = Failures::new(&name);
+        ran += run_instant_file(path, &mut sections, &mut file);
         failures.extend(file.list);
     }
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
@@ -1192,4 +1220,147 @@ fn read_command_case(case: &Json) -> Result<CommandCase, String> {
         spec,
         expected,
     })
+}
+
+/// An instant case (`spec/conformance.md` §5).
+struct InstantCase {
+    name: String,
+    spec: Vec<String>,
+    event_time: EventTime,
+    booted: Option<Timestamp>,
+    expected: Json,
+}
+
+/// Runs one file of instant cases and returns how many it ran.
+fn run_instant_file(path: &Path, sections: &mut Sections, failures: &mut Failures) -> usize {
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{path:?}: {e}"));
+    let file: Json = match serde_json::from_str(&text) {
+        Ok(file) => file,
+        Err(error) => {
+            failures.add("", format!("not JSON: {error}"));
+            return 0;
+        }
+    };
+    let cases = match read_instant_file(&file) {
+        Ok(cases) => cases,
+        Err(problem) => {
+            failures.add("", problem);
+            return 0;
+        }
+    };
+    let mut names = BTreeSet::new();
+    for case in &cases {
+        if !names.insert(case.name.as_str()) {
+            failures.add(&case.name, "a second case of this name");
+        }
+        for citation in &case.spec {
+            if let Err(problem) = sections.check(citation) {
+                failures.add(&case.name, problem);
+            }
+        }
+        let actual = match instant(case.event_time, case.booted) {
+            Some(at) => serde_json::to_value(Value::Instant(at)).unwrap_or(Json::Null),
+            None => Json::Null,
+        };
+        if let Some(problem) = difference(&case.expected, &actual, "") {
+            failures.add(&case.name, problem);
+        }
+    }
+    cases.len()
+}
+
+fn read_instant_file(file: &Json) -> Result<Vec<InstantCase>, String> {
+    let file = object(file, "the file")?;
+    keys(file, "the file", &["about", "cases"], &[])?;
+    text(&file["about"], "about")?;
+    file["cases"]
+        .as_array()
+        .ok_or("cases isn't a list")?
+        .iter()
+        .map(read_instant_case)
+        .collect()
+}
+
+fn read_instant_case(case: &Json) -> Result<InstantCase, String> {
+    let fields = object(case, "a case")?;
+    keys(
+        fields,
+        "a case",
+        &["name", "spec", "note", "event_time", "booted", "instant"],
+        &[],
+    )?;
+    let name = text(&fields["name"], "name")?;
+    let labelled = |problem: String| format!("case {name}: {problem}");
+    let spec = fields["spec"]
+        .as_array()
+        .ok_or_else(|| labelled("spec isn't a list".to_string()))?
+        .iter()
+        .map(|citation| text(citation, "a citation"))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(labelled)?;
+    text(&fields["note"], "note").map_err(labelled)?;
+    let event_time = read_event_time(&fields["event_time"]).map_err(labelled)?;
+    let booted = match &fields["booted"] {
+        Json::Null => None,
+        value => Some(read_instant(value, "booted").map_err(labelled)?),
+    };
+    let expected = match &fields["instant"] {
+        Json::Null => Json::Null,
+        value => {
+            read_instant(value, "instant").map_err(labelled)?;
+            value.clone()
+        }
+    };
+    Ok(InstantCase {
+        name,
+        spec,
+        event_time,
+        booted,
+        expected,
+    })
+}
+
+/// An event time in `spec/api.md` §3.1's JSON form.
+fn read_event_time(value: &Json) -> Result<EventTime, String> {
+    let fields = object(value, "event_time")?;
+    match fields.get("kind").and_then(Json::as_str) {
+        Some("ground") => {
+            keys(fields, "event_time", &["kind", "time"], &[])?;
+            read_instant(&fields["time"], "event_time's time")?;
+            Ok(EventTime::Ground)
+        }
+        Some("at") => {
+            keys(fields, "event_time", &["kind", "time"], &[])?;
+            Ok(EventTime::At(read_instant(
+                &fields["time"],
+                "event_time's time",
+            )?))
+        }
+        Some("since_boot") => {
+            keys(fields, "event_time", &["kind", "value", "unit"], &[])?;
+            let value = u64::try_from(integer(&fields["value"])?)
+                .map_err(|_| "event_time's value isn't an unsigned 64-bit count".to_string())?;
+            let unit = match fields["unit"].as_str() {
+                Some("s") => TimeUnit::S,
+                Some("ms") => TimeUnit::Ms,
+                Some("us") => TimeUnit::Us,
+                Some("ns") => TimeUnit::Ns,
+                _ => {
+                    return Err(format!(
+                        "event_time's unit {} isn't s, ms, us or ns",
+                        fields["unit"]
+                    ));
+                }
+            };
+            Ok(EventTime::SinceBoot { value, unit })
+        }
+        _ => Err(format!(
+            "event_time's kind isn't ground, at or since_boot: {value}"
+        )),
+    }
+}
+
+fn read_instant(value: &Json, what: &str) -> Result<Timestamp, String> {
+    let text = text(value, what)?;
+    Timestamp::from_rfc3339(&text).map_err(|e| format!("{what} {text:?} isn't an instant: {e}"))
 }
