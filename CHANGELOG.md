@@ -8,6 +8,16 @@ them too.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-22
+
+For the Elixir binding's users, command payloads decode through the
+runtime API, and boot time turns into instants. Conformance suites give
+any binding the spec's results to check itself against, and XTCE imports
+gain 1.3, container checks and sizes, and composites. It reads and
+writes MDL IR 2.3 (and reads 2.0 to 2.2), store format 1 and result
+format 1, so a store an earlier release built still opens; morphc's JSON
+report is version 3. It builds on Rust 1.88 or later.
+
 ### Definitions
 
 - An XTCE aggregate or array parameter can be a composite, one vector
@@ -396,6 +406,7 @@ result format 1, and builds on Rust 1.88 or later.
   platform, with a checksum and an attestation. A Hex package that
   downloads them, so that installing needs no Rust, is planned.
 
-[Unreleased]: https://github.com/zthacker/mdl/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/zthacker/mdl/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/zthacker/mdl/releases/tag/v0.3.0
 [0.2.0]: https://github.com/zthacker/mdl/releases/tag/v0.2.0
 [0.1.0]: https://github.com/zthacker/mdl/releases/tag/v0.1.0

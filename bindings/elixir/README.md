@@ -16,7 +16,7 @@ Elixir 1.18 or later:
 ```elixir
 def deps do
   [
-    {:mdl, "~> 0.2.0"}
+    {:mdl, "~> 0.3.0"}
   ]
 end
 ```
@@ -42,7 +42,7 @@ build the native library from source:
 ```elixir
 def deps do
   [
-    {:mdl, github: "zthacker/mdl", subdir: "bindings/elixir", tag: "v0.2.0"},
+    {:mdl, github: "zthacker/mdl", subdir: "bindings/elixir", tag: "v0.3.0"},
     {:rustler, "~> 0.38", runtime: false}
   ]
 end

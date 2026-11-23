@@ -3,7 +3,7 @@ defmodule MDL.MixProject do
 
   # The runtime release this binding bundles, whose version it shares
   # (spec/compatibility.md section 6).
-  @version "0.2.0"
+  @version "0.3.0"
 
   def project do
     [

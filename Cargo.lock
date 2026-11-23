@@ -450,7 +450,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "mdl-fuzz"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mdl-testkit",
  "morpheus-mdl",
@@ -462,7 +462,7 @@ dependencies = [
 
 [[package]]
 name = "mdl-testkit"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "proptest",
  "serde_json",
@@ -476,7 +476,7 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "morpheus-mdl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "mdl-testkit",
@@ -492,7 +492,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-mdl-toml"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "mdl-testkit",
  "morpheus-mdl",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-mdl-xtce"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "morpheus-mdl",
  "proptest",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "morpheus-morphc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",

@@ -22,7 +22,7 @@ Exit codes: 0 done, 1 the definitions have problems (or a message didn't
 decode, a command didn't encode), 2 morphc couldn't run.
 
 `morphc --version` prints the release and what it reads and writes, as
-in `morphc 0.2.0 (MDL IR 2.3, store format 1, result format 1)`
+in `morphc 0.3.0 (MDL IR 2.3, store format 1, result format 1)`
 ([compatibility](../../spec/compatibility.md) §6); `-V`, the release alone.
 
 ## Inputs
