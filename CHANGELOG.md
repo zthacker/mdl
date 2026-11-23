@@ -182,6 +182,20 @@ them too.
   leap second, past year 9999 and before year 0001, and with a clock that
   holds its sentinel; the generated cases gain binary and JSON layouts
   that always have boot time.
+- A new runtime operation, `instant`, turns an event time into an
+  instant, from the boot instant the caller keeps for its asset: an `at`
+  time's own, a `since_boot` time's after the boot instant, counted
+  exactly, within years 0001 to 9999, and absent for a ground time, for
+  time since boot without a boot instant, and past that range
+  ([spec/api.md](spec/api.md) §2.8). It's pure and takes no handle. In
+  Rust it's `mdl::runtime::instant`, which the `Correlator` now uses; in
+  Elixir, `MDL.instant/2`, which takes any instant MDL gives, as an
+  integer of any size. Instant cases, in `conformance/instants/`, give
+  event times and boot instants with the instant the spec gives, worked
+  out by hand, for each kind and unit, the ends of the range, and counts
+  past 2^53 and past what 64 bits of nanoseconds hold
+  ([spec/conformance.md](spec/conformance.md) §5); a binding must pass
+  them too.
 - The specification now says what the runtime has always given for a
   composite sample that isn't `good`: each member is its raw value as a
   float, unconverted, so a composite's value is always its frame and
