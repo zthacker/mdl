@@ -10,20 +10,23 @@ them too.
 
 ### Definitions
 
-- An XTCE aggregate parameter can be a composite, one vector sample
-  rather than one sample per member ([spec/xtce.md](spec/xtce.md) §4.1).
-  Ancillary data in the MDL namespace says so, which Yamcs leaves out:
+- An XTCE aggregate or array parameter can be a composite, one vector
+  sample rather than one sample per member or element
+  ([spec/xtce.md](spec/xtce.md) §4.1). Ancillary data in the MDL
+  namespace says so, which Yamcs leaves out:
   - `MDL.frame`, on the parameter or its type, makes three numeric
-    members a vec3 and four a quat in that frame;
+    members a vec3 and four a quat in that frame, an array's with a
+    fixed count;
   - `MDL.members` names the members in MDL's order, for a quaternion sent
-    scalar last.
+    scalar last: an aggregate's by name, an array's by the indices XTCE
+    numbers its elements with.
 
   An import that owns its catalog defines the vec3 or quat param, in the
   composite's frame and its members' unit; a GEODETIC composite, or one
   whose members are in different units, needs a referring import whose
   catalog defines it. A marked parameter in a repeated entry, an
-  embedded container or an array is unsupported. Unmarked aggregates
-  import as before.
+  embedded container or an array's elements is unsupported. Unmarked
+  aggregates and arrays import as before.
 
 - XTCE 1.3 documents (`http://www.omg.org/spec/XTCE/20250214`) are read,
   and the spellings of its namespace documents written for Yamcs use,
