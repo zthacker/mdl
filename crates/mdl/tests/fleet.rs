@@ -31,6 +31,7 @@ proptest! {
         let bindings = Bindings::from_toml(&case.bindings).map_err(|error| {
             TestCaseError::fail(format!("bindings: {error}\n{}", case.bindings))
         })?;
+        let no_bindings = Bindings::new(Vec::new()).unwrap();
         let mut correlator = Correlator::new();
         let half = case.messages.len() / 2;
         for (index, sent) in case.messages.iter().enumerate() {
@@ -65,6 +66,13 @@ proptest! {
             };
             let input = Message::new(payload, received).with_metadata(&metadata);
             let result = families[sent.family.as_str()].decode(&input, &bindings);
+            // Empty text is no native id (spec/api.md §1), refused before any
+            // binding is looked up: an empty registry gives the same error,
+            // unreadable_locator, or invalid_json for a payload that isn't JSON.
+            if sent.empty_alias {
+                let unbound = families[sent.family.as_str()].decode(&input, &no_bindings);
+                prop_assert_eq!(unbound.err().map(|error| error.code()), sent.error, "{:?}", sent);
+            }
             if let Some(code) = sent.error {
                 prop_assert_eq!(result.err().map(|error| error.code()), Some(code), "{:?}", sent);
                 continue;

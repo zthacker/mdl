@@ -71,6 +71,10 @@ pub struct Sent {
     /// comes before and after (§3.3).
     pub spoiled: bool,
     pub unspoiled_error: Option<&'static str>,
+    /// Whether its alias reads empty text, which is no native id
+    /// (`spec/api.md` §1): `unreadable_locator` before any binding is
+    /// looked up, so with bindings or without.
+    pub empty_alias: bool,
 }
 
 /// Where a family's messages say which asset sent them.
@@ -177,6 +181,9 @@ enum Fault {
     /// A JSON family's path locator, the alias's or the version's, finds
     /// what it can't read (§3.1).
     Unreadable,
+    /// A metadata or path alias reads empty text, which is no native id
+    /// (§3.1).
+    EmptyAlias,
 }
 
 /// How a family with a version locator writes versions.
@@ -570,6 +577,9 @@ fn fault(alias: Alias, version: Version, faults: bool) -> BoxedStrategy<Option<F
     if alias == Alias::Path || version == Version::Path {
         kinds.push(Fault::Unreadable);
     }
+    if alias == Alias::Metadata || alias == Alias::Path {
+        kinds.push(Fault::EmptyAlias);
+    }
     proptest::option::weighted(0.25, select(kinds)).boxed()
 }
 
@@ -848,9 +858,11 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
             let short = message.fault == Some(Fault::Short);
             let twice = message.fault == Some(Fault::Twice);
             let unreadable = message.fault == Some(Fault::Unreadable);
+            let empty = message.fault == Some(Fault::EmptyAlias);
             let alias_unreadable = (short && plan.alias == Alias::Bits)
                 || (twice && plan.alias == Alias::Metadata)
-                || (unreadable && paths.0 && !unreadable_version);
+                || (unreadable && paths.0 && !unreadable_version)
+                || empty;
             let version_unreadable = (short && plan.version == Version::Bits)
                 || (twice && plan.alias != Alias::Metadata && plan.version == Version::Metadata)
                 || (unreadable && unreadable_version);
@@ -895,7 +907,9 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
             let mut members = Vec::new();
             if plan.json {
                 if plan.alias == Alias::Path {
-                    let value = if alias_unreadable {
+                    let value = if empty {
+                        Some(Doc::Str(String::new()))
+                    } else if alias_unreadable {
                         unusable.value()
                     } else {
                         Some(id.doc())
@@ -950,7 +964,12 @@ fn route(plan: &Plan, layouts: &[Vec<PacketLayout>], rows: &[Row]) -> Vec<Routed
             }
             let mut metadata = Vec::new();
             if plan.alias == Alias::Metadata {
-                metadata.push(("node".to_string(), id.meta()));
+                let node = if empty {
+                    Meta::Text(String::new())
+                } else {
+                    id.meta()
+                };
+                metadata.push(("node".to_string(), node));
                 if twice {
                     metadata.push(("node".to_string(), id.meta()));
                 }
@@ -1118,6 +1137,7 @@ fn assemble(
             absolute,
             spoiled: routed.spoiled,
             unspoiled_error,
+            empty_alias: routed.fault == Some(Fault::EmptyAlias),
         });
     }
     Fleet {
@@ -1406,7 +1426,17 @@ mod tests {
                 }
                 let document: Option<Value> = serde_json::from_slice(&sent.message.payload).ok();
                 let member = |name: &str| document.as_ref().and_then(|doc| doc.get(name));
-                if json && sent.error == Some("unreadable_locator") && !sent.spoiled {
+                if sent.empty_alias && sent.error == Some("unreadable_locator") {
+                    seen.insert(format!(
+                        "empty alias:{}",
+                        family["alias"]["kind"].as_str().unwrap_or("")
+                    ));
+                }
+                if json
+                    && sent.error == Some("unreadable_locator")
+                    && !sent.spoiled
+                    && !sent.empty_alias
+                {
                     if family["alias"]["kind"] == "path" && !readable(member("sat")) {
                         seen.insert("unreadable:alias at a pointer".to_string());
                     } else if path_version && !readable(member("v")) {
@@ -1574,6 +1604,8 @@ mod tests {
             "path version:spelled as a double",
             "unreadable:alias at a pointer",
             "unreadable:version at a pointer",
+            "empty alias:metadata",
+            "empty alias:path",
             "exact:text for an integer version",
             "exact:integer for a text version",
             "exact:a leading zero",
