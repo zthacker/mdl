@@ -148,4 +148,5 @@ lost `encoding`, its payload hex for a JSON family too. Version 3 took
 the decoded command's: it gained `family` and `record`, its `arguments`
 became an object of each argument's value, by name, with `defaulted`
 listing those the set doesn't encode, and an integer `target` is
-written as integers are, where it was always text.
+written as integers are, where it was always text. A new key keeps the
+version, as a decoded message's `booted` did.

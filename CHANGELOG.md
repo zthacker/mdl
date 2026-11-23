@@ -101,6 +101,9 @@ them too.
   ([spec/compatibility.md](spec/compatibility.md) §7). Rebuilding a set
   with one fails at the checksum, located in its source file: give it a
   `from_bits` before its earliest start, or put an entry before it.
+- A new key in a morphc JSON report keeps the report's version, as a new
+  key keeps the result format's
+  ([spec/compatibility.md](spec/compatibility.md) §4).
 - The empty native id rule above refuses at runtime what 0.2.0 accepted:
   a command to an empty target, which encoded, and, without bindings, a
   message whose alias reads empty text, which decoded as a stand-in, and
@@ -115,9 +118,11 @@ them too.
   them, each worked out by hand and citing the sections it follows, for
   values, layouts, checksums, routing, bindings, JSON payloads,
   conversions and qualities, composites and event time, with the warnings
-  opening with the bindings gives; and 268 more, in
+  opening with the bindings gives; and 377 more, in
   `conformance/decoding/oracle/`, generated from random binary and JSON
-  layouts by the testkit's oracle, damaged messages among them, each with
+  layouts by the testkit's oracle, damaged messages among them and
+  layouts with boot time whose correlation packets teach a boot instant
+  or nothing, each with
   the result or error the oracle works out from the spec, in code
   separate from MDL's decoder ([spec/conformance.md](spec/conformance.md)
   §2.3 says what that does and doesn't check; `just conformance` writes
@@ -159,6 +164,24 @@ them too.
   integers are, where it was always text. The other commands' results are
   unchanged, so a consumer of them need only accept version 3. What
   morphc prints for people is unchanged.
+- A decoded message gains `booted`: the instant its asset booted, which
+  the message teaches as its set's correlation packet, when both clocks
+  read good and the instant is within years 0001 to 9999, and absent
+  otherwise ([spec/api.md](spec/api.md) §3.1). Correlating boot time
+  takes state across messages, which the runtime doesn't keep: a
+  consumer keeps the latest `booted` per family and asset, a message's
+  own included, in the order messages arrive, and a `since_boot` event
+  time's instant is that plus its `value` in its `unit`
+  ([spec/decoding.md](spec/decoding.md) §8.2). The result
+  format is still 1: the key is new. In Elixir, `%MDL.Decoded{}` gains
+  `:booted`. morphc's JSON report gains it too and stays version 3, and
+  morphc prints the boot instant a correlation packet teaches. In Rust,
+  `mdl::decode::boot_instant` gives it for a decoded message, and the
+  `Correlator` keeps it. Every decoding case's result has the key, and
+  new hand-written cases correlate on the UTC and TAI scales, across a
+  leap second, past year 9999 and before year 0001, and with a clock that
+  holds its sentinel; the generated cases gain binary and JSON layouts
+  that always have boot time.
 - The specification now says what the runtime has always given for a
   composite sample that isn't `good`: each member is its raw value as a
   float, unconverted, so a composite's value is always its frame and
