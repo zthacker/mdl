@@ -582,13 +582,15 @@ fn enum_encoder() -> BoxedStrategy<Encoder> {
     prop_oneof![through_states, as_text].boxed()
 }
 
-/// How many of an enum's `states` the packet doesn't accept: none half the
-/// time, else from one to all but one.
+/// How many of an enum's `states` the packet doesn't accept: none a quarter
+/// of the time, else from one to all but one. A packet narrowing states is
+/// what a state it doesn't accept needs, which refusals and garbled
+/// payloads plant, in lists and arrays too.
 fn unaccepted_count(states: usize) -> BoxedStrategy<usize> {
     if states < 2 {
         return Just(0).boxed();
     }
-    prop_oneof![Just(0), 1..states].boxed()
+    prop_oneof![1 => Just(0), 3 => 1..states].boxed()
 }
 
 /// An enum encoder whose catalog lists `catalog`'s states in that order,

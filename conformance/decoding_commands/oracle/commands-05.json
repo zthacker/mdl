@@ -4,23 +4,17 @@
     {
       "decoded": {
         "arguments": {
-          "a0": 0,
+          "a0": 137438953471,
           "a1": -834581.7021091633,
-          "a2": "S0",
+          "a2": "S1",
           "a3": [
-            "S2",
-            "S2",
-            "S2",
-            "S2"
-          ],
-          "a4": [
-            "a99a2e2b3aed",
-            "79b9",
-            "c62face795a4faa05d09",
-            "e0",
-            "9fb0dffee646369738dc",
-            "a33932fdc9",
-            "bec6a4"
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865
           ]
         },
         "command": "cmd.c0",
@@ -28,36 +22,29 @@
         "family": "fam",
         "packet": "C0",
         "record": {
-          "f0": [
-            "a99a2e2b3aed",
-            "79b9",
-            "c62face795a4faa05d09",
-            "e0",
-            "9fb0dffee646369738dc",
-            "a33932fdc9",
-            "bec6a4"
+          "c0": 26221,
+          "c1": 74971153292940,
+          "f0": -1276,
+          "f1": [
+            -355336,
+            -651832,
+            -349688,
+            -435585,
+            -364857,
+            -614670,
+            -651832
           ],
-          "f0_n": 2,
-          "f1": -10443291,
-          "f2": false,
-          "f3": 11369254345,
-          "f4": [
-            63,
-            63,
-            63,
-            63
-          ],
-          "f5": -1276,
-          "f6": 0,
-          "f7": 253604776445,
-          "op": "jibaf"
+          "f1_n": 2,
+          "f2": 31505801897,
+          "f3": 137438953471,
+          "op": 0
         },
         "set": "fam_v1",
-        "target": -10443291
+        "target": null
       },
       "family": "fam",
       "message": {
-        "hex": "6a6962616620a99a2e2b3aed3e79b93ec62face795a4faa05d093ee03e9fb0dffee646369738dc3ea33932fdc93ebec6a43eb052f280c90da9a5027efdfbff6080000000003b0c05c9fd",
+        "hex": "3d8210f893fac80df608aafa7f5af9c76efaf29ef6c80df6666deabc8c553fffffffff442f94f5de8c",
         "metadata": {}
       },
       "name": "request-00-cmd.c0",
@@ -76,88 +63,50 @@
     {
       "decoded": {
         "arguments": {
-          "a0": "$[=0\u0001fghij",
-          "a1": [
-            true,
-            false,
-            false,
-            false,
-            false,
-            true,
-            true,
-            true,
-            false,
-            true,
-            true
-          ],
-          "a2": [
-            -487.79596462404635,
-            -487.79596462404635,
-            -487.79596462404635,
-            -487.79596462404635
-          ],
+          "a0": 56692743686,
+          "a1": -834581.7021091633,
+          "a2": "S1",
           "a3": [
-            false
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865,
+            845.4422745174865
           ]
         },
-        "command": "cmd.c1",
-        "defaulted": [
-          "a3"
-        ],
+        "command": "cmd.c0",
+        "defaulted": [],
         "family": "fam",
-        "packet": "C1",
+        "packet": "C0",
         "record": {
-          "c0": 106,
-          "f0": "-58",
-          "f0_len": 1,
+          "c0": 64834,
+          "c1": 75104295975626,
+          "f0": -1276,
           "f1": [
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -413
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -413
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -419
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -413
-            }
+            -651832,
+            -522818,
+            -501189,
+            -607041,
+            -622252,
+            -444488,
+            -349688
           ],
-          "f2": [
-            1,
-            0,
-            0,
-            0,
-            0,
-            1,
-            1,
-            1,
-            0,
-            1,
-            1
-          ],
-          "f2_n": 4,
-          "f3": "$[=0\u0001fghij",
-          "op": "hcbgd"
+          "f1_n": 2,
+          "f2": 31505801897,
+          "f3": 56692743686,
+          "op": 0
         },
         "set": "fam_v1",
-        "target": -58
+        "target": null
       },
       "family": "fam",
       "message": {
-        "hex": "68636267646a00802d353817ce6317ce6317ce5d17ce632001000000000000000000000000000000000000000000000000010000000001000000000100000000000000000001000000000100000000245b3d3001666768696a",
+        "hex": "3d8210c80df6be05f83b5af8bfbcf65481f6b837f908aafafd42eabc8c552d33269e06444e94e1faca",
         "metadata": {}
       },
-      "name": "request-01-cmd.c1",
+      "name": "request-01-cmd.c0",
       "note": "Generated by the testkit's oracle: commands seed 5, the payload request 1 encodes to.",
       "set": "fam_v1",
       "spec": [
@@ -173,88 +122,38 @@
     {
       "decoded": {
         "arguments": {
-          "a0": "ibcdefghij",
-          "a1": [
-            true,
-            true,
-            true,
-            false,
-            false,
-            true,
-            true,
-            false,
-            true,
-            false,
-            true
-          ],
-          "a2": [
-            -487.79596462404635,
-            -487.79596462404635,
-            -487.79596462404635,
-            -487.79596462404635
-          ],
+          "a0": 0,
+          "a1": -834581.7021091633,
+          "a2": "S1",
           "a3": [
-            false
+            845.4422745174865
           ]
         },
-        "command": "cmd.c1",
-        "defaulted": [
-          "a3"
-        ],
+        "command": "cmd.c0",
+        "defaulted": [],
         "family": "fam",
-        "packet": "C1",
+        "packet": "C0",
         "record": {
-          "c0": 106,
-          "f0": "962122408464935",
-          "f0_len": 4,
+          "c0": 31640,
+          "c1": 82206809790291,
+          "f0": -1276,
           "f1": [
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -417
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -418
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -423
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -424
-            }
+            -591557
           ],
-          "f2": [
-            1,
-            1,
-            1,
-            0,
-            0,
-            1,
-            1,
-            0,
-            1,
-            0,
-            1
-          ],
-          "f2_n": 4,
-          "f3": "ibcdefghij",
-          "op": "hcbgd"
+          "f1_n": 0,
+          "f2": 31505801897,
+          "f3": 0,
+          "op": 0
         },
         "set": "fam_v1",
-        "target": 962122408464935
+        "target": null
       },
       "family": "fam",
       "message": {
-        "hex": "68636267646a020039363231323234303834363439333517ce5f17ce5e17ce5917ce5820010000000001000000000100000000000000000000000000000100000000010000000000000000000100000000000000000001000000006962636465666768696a",
+        "hex": "3d82003bf9f67b98eabc8c5520000000004ac443b21753",
         "metadata": {}
       },
-      "name": "request-02-cmd.c1",
+      "name": "request-02-cmd.c0",
       "note": "Generated by the testkit's oracle: commands seed 5, the payload request 2 encodes to.",
       "set": "fam_v1",
       "spec": [
@@ -270,79 +169,34 @@
     {
       "decoded": {
         "arguments": {
-          "a0": "$bcdefghij",
-          "a1": [
-            false,
-            false,
-            true,
-            true,
-            true,
-            false,
-            false,
-            false
-          ],
-          "a2": [
-            -487.79596462404635,
-            -487.79596462404635,
-            -487.79596462404635,
-            -487.79596462404635
-          ],
-          "a3": [
-            false
-          ]
+          "a0": -3983.215428733715,
+          "a1": "S2",
+          "a2": -24222735402,
+          "a3": 553,
+          "a4": 0.5014476746072677
         },
         "command": "cmd.c1",
-        "defaulted": [
-          "a3"
-        ],
+        "defaulted": [],
         "family": "fam",
         "packet": "C1",
         "record": {
-          "c0": 106,
-          "f0": "-p\\defg",
-          "f0_len": 2,
-          "f1": [
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -413
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -415
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -420
-            },
-            {
-              "r0": 47,
-              "r1": -4,
-              "r2": -424
-            }
-          ],
-          "f2": [
-            0,
-            0,
-            1,
-            1,
-            1,
-            0,
-            0,
-            0
-          ],
-          "f2_n": 3,
-          "f3": "$bcdefghij",
-          "op": "hcbgd"
+          "c0": 192,
+          "c1": 987,
+          "f0": -24222735402,
+          "f1": "-39",
+          "f1_len": 5,
+          "f2": 553,
+          "f3": -3983,
+          "f4": -223226.46874223067,
+          "f5": 3872279913,
+          "op": -1
         },
         "set": "fam_v1",
-        "target": "-p\\defg"
+        "target": -39
       },
       "family": "fam",
       "message": {
-        "hex": "68636267646a01002d705c6465666717ce6317ce6117ce5c17ce5818000000000000000000000100000000010000000001000000000000000000000000000000000000002462636465666768696a",
+        "hex": "c0c0a5c3663d50000000000003db282d33390000000000008a4071f0c10b3fd3bffbed38694dcee6",
         "metadata": {}
       },
       "name": "request-03-cmd.c1",
@@ -359,14 +213,60 @@
       ]
     },
     {
-      "error": "unsupported_state",
+      "decoded": {
+        "arguments": {
+          "a0": -3983.215428733715,
+          "a1": "S2",
+          "a2": -34359738367,
+          "a3": "110865930105507915",
+          "a4": 0.5014476746072677
+        },
+        "command": "cmd.c1",
+        "defaulted": [],
+        "family": "fam",
+        "packet": "C1",
+        "record": {
+          "c0": 192,
+          "c1": 512,
+          "f0": -34359738367,
+          "f1": "-1773",
+          "f1_len": 7,
+          "f2": "110865930105507915",
+          "f3": -3983,
+          "f4": -232176.73817697837,
+          "f5": 3872279913,
+          "op": -1
+        },
+        "set": "fam_v1",
+        "target": -1773
+      },
       "family": "fam",
       "message": {
-        "hex": "6a6962616630614f28443e4fd6a77e3e2a882d813e3ecd3f459e3e03893e80cd2b3efe23c0d518e1cda8423e68f66d75593eb8cdca3e03c07580c90da9a5027efdfe5f608ca54afed03b0c05c9fd",
+        "hex": "c0c0800000000000000000000200382d313737336277fe77687412c071f0c10c5785e7c954e6694dcee6",
         "metadata": {}
       },
-      "name": "garbled-00-unsupported_state",
-      "note": "Generated by the testkit's oracle: commands seed 5, garbled payload 0. Planted: raw 0x65 in f4[3].",
+      "name": "request-04-cmd.c1",
+      "note": "Generated by the testkit's oracle: commands seed 5, the payload request 4 encodes to.",
+      "set": "fam_v1",
+      "spec": [
+        "encoding.md §7",
+        "encoding.md §2",
+        "decoding.md §2",
+        "decoding.md §5",
+        "decoding.md §7.1",
+        "units.md §4",
+        "api.md §3.5"
+      ]
+    },
+    {
+      "error": "bad_checksum",
+      "family": "fam",
+      "message": {
+        "hex": "3d82081e13f6c80df6c80df6111df7dd73eabc8c553fffffffff3d3295ed97f8",
+        "metadata": {}
+      },
+      "name": "garbled-00-bad_checksum",
+      "note": "Generated by the testkit's oracle: commands seed 5, garbled payload 0. Planted: checksum 5.",
       "set": "fam_v1",
       "spec": [
         "encoding.md §7",
@@ -381,30 +281,11 @@
       "error": "past_end",
       "family": "fam",
       "message": {
-        "hex": "6a6962616620aeee3e552267574e2f3e6a215e861871d53e59892e5911d741e23e285d306717196a35003ef81ef5153e277269f08f4d3bccf0ac3eb1a50480c90da9a5027e",
+        "hex": "c0c08000000000000000000002003037373432fffffffffffff800",
         "metadata": {}
       },
-      "name": "garbled-01-past_end",
-      "note": "Generated by the testkit's oracle: commands seed 5, garbled payload 1. Planted: cut to 69 bytes, inside f4.",
-      "set": "fam_v1",
-      "spec": [
-        "encoding.md §7",
-        "encoding.md §8",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §9",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "bad_checksum",
-      "family": "fam",
-      "message": {
-        "hex": "68636267646b008035373617ce5817ce5817ce6317ce5920000000000000000000000100000000010000000001000000000000000000000000000001000000000100000000010000000000000000002f3c2339057a6426094b",
-        "metadata": {}
-      },
-      "name": "garbled-02-bad_checksum",
-      "note": "Generated by the testkit's oracle: commands seed 5, garbled payload 2. Planted: checksum 1.",
+      "name": "garbled-02-past_end",
+      "note": "Generated by the testkit's oracle: commands seed 5, garbled payload 2. Planted: cut to 27 bytes.",
       "set": "fam_v1",
       "spec": [
         "encoding.md §7",
@@ -424,16 +305,16 @@
             {
               "name": "a0",
               "range": {
-                "max": 137438953471
+                "max": 137438953472
               },
               "type": "u64"
             },
             {
-              "default": -834582.7021091633,
+              "default": -834581.7021091633,
               "name": "a1",
               "range": {
-                "max": -834580.7021091633,
-                "min": -834582.7021091633
+                "max": -834581.7021091633,
+                "min": -834581.7021091633
               },
               "type": "f64"
             },
@@ -446,72 +327,74 @@
               "type": "enum"
             },
             {
+              "default": [
+                453.65006038901936,
+                845.4422745174865,
+                453.65006038901936,
+                814.9575820314201,
+                453.65006038901936,
+                453.65006038901936,
+                592.0296854885655
+              ],
               "list": {
-                "max": 4,
-                "min": 4
+                "max": 7,
+                "min": 1
               },
               "name": "a3",
-              "states": [
-                "S1",
-                "S0",
-                "S2"
-              ],
-              "type": "enum"
-            },
-            {
-              "list": {
-                "max": 10,
-                "min": 7
+              "range": {
+                "max": 845.4422745174865,
+                "min": 453.65006038901936
               },
-              "name": "a4",
-              "type": "bytes"
+              "type": "f64",
+              "unit": "km"
             }
           ]
         },
         "cmd.c1": {
           "arguments": [
             {
-              "default": "E g|\u000b!=$\u0003\u0002",
               "name": "a0",
-              "type": "str"
-            },
-            {
-              "list": {
-                "max": 11,
-                "min": 5
-              },
-              "name": "a1",
-              "type": "bool"
-            },
-            {
-              "default": [
-                -618.598032777616,
-                -629.8034068251168,
-                -487.79596462404635,
-                -558.5821387851722
-              ],
-              "list": {
-                "max": 4,
-                "min": 4
-              },
-              "name": "a2",
               "range": {
-                "max": -487.79596462404635,
-                "min": -629.8034068251168
+                "max": -3983.215428733715,
+                "min": -3983.215428733715
               },
               "type": "f64",
-              "unit": "mrad"
+              "unit": "m"
             },
             {
-              "default": [
-                false
+              "name": "a1",
+              "states": [
+                "S0",
+                "S1",
+                "S2"
               ],
-              "list": {
-                "max": 3,
-                "min": 1
+              "type": "enum"
+            },
+            {
+              "name": "a2",
+              "range": {
+                "max": -600,
+                "min": -34359738368
               },
+              "type": "i64"
+            },
+            {
               "name": "a3",
-              "type": "bool"
+              "range": {
+                "max": "288230376151711743",
+                "min": 553
+              },
+              "type": "i64"
+            },
+            {
+              "default": 0.5014476746072677,
+              "name": "a4",
+              "range": {
+                "max": 0.5014476746072677,
+                "min": 0.4254854882024297
+              },
+              "type": "f64",
+              "unit": "kV"
             }
           ]
         }
@@ -535,91 +418,105 @@
           {
             "arguments": {
               "a0": {
-                "required": true
-              },
-              "a1": {
-                "default": -834581.7021091633,
                 "range": {
-                  "max": -834581.7021091633,
-                  "min": -834581.7021091633
+                  "max": 137438953471
                 }
               },
+              "a1": {
+                "required": true
+              },
               "a2": {
-                "required": true
-              },
-              "a3": {
-                "required": true,
                 "states": [
-                  "S2"
+                  "S1"
                 ]
-              },
-              "a4": {
-                "required": true
               }
             },
             "canonical": "cmd.c0",
             "entries": [
               {
                 "kind": "field",
-                "length": {
-                  "bytes": 5,
-                  "kind": "fixed"
-                },
                 "name": "op",
-                "text": "ascii",
-                "type": "string",
-                "value": "jibaf"
+                "size_bits": 2,
+                "type": "int",
+                "value": 0
+              },
+              {
+                "argument": "a1",
+                "conversion": {
+                  "kind": "linear",
+                  "offset": 610.0667290976819,
+                  "scale": 654.7408936152183
+                },
+                "kind": "field",
+                "name": "f0",
+                "size_bits": 15,
+                "type": "int"
               },
               {
                 "kind": "field",
-                "name": "f0_n",
+                "name": "f1_n",
                 "size_bits": 4,
                 "type": "uint"
               },
               {
                 "kind": "padding",
-                "size_bits": 4
+                "size_bits": 3
               },
               {
-                "argument": "a4",
+                "argument": "a3",
                 "count": {
                   "add": 1,
-                  "field": "f0_n",
+                  "field": "f1_n",
                   "kind": "field",
                   "multiply": 3
                 },
                 "element": {
-                  "kind": "scalar",
-                  "length": {
-                    "byte": 62,
-                    "kind": "terminator"
+                  "byte_order": "little",
+                  "conversion": {
+                    "extrapolate": true,
+                    "interpolation": "step",
+                    "kind": "table",
+                    "points": [
+                      {
+                        "raw": -554079.0,
+                        "value": 111088.81504340793
+                      },
+                      {
+                        "raw": -470425.0,
+                        "value": 107110.91063346849
+                      },
+                      {
+                        "raw": -414427.0,
+                        "value": 349627.5111273775
+                      },
+                      {
+                        "raw": -351697.0,
+                        "value": 384499.3317100373
+                      }
+                    ]
                   },
-                  "type": "bytes"
+                  "inverse": {
+                    "kind": "linear",
+                    "offset": 158.8110896329624,
+                    "scale": -771.1825942921997
+                  },
+                  "kind": "scalar",
+                  "size_bits": 24,
+                  "type": "int",
+                  "unit": "km"
                 },
                 "kind": "array",
-                "name": "f0"
+                "name": "f1"
               },
               {
-                "kind": "field",
-                "name": "f1",
-                "size_bits": 25,
-                "target": true,
-                "type": "int"
-              },
-              {
-                "kind": "field",
-                "name": "f2",
-                "size_bits": 1,
-                "type": "bool",
-                "value": 0
-              },
-              {
-                "kind": "padding",
-                "size_bits": 6
+                "algorithm": {
+                  "kind": "iso8473"
+                },
+                "kind": "checksum",
+                "name": "c0"
               },
               {
                 "argument": "a2",
-                "byte_order": "little",
                 "conversion": {
                   "kind": "states",
                   "states": [
@@ -634,91 +531,55 @@
                   ]
                 },
                 "kind": "field",
-                "name": "f3",
-                "size_bits": 40,
+                "name": "f2",
+                "size_bits": 35,
                 "type": "uint"
-              },
-              {
-                "argument": "a3",
-                "count": {
-                  "count": 4,
-                  "kind": "fixed"
-                },
-                "element": {
-                  "conversion": {
-                    "kind": "states",
-                    "states": [
-                      {
-                        "name": "S1",
-                        "raw": -27
-                      },
-                      {
-                        "name": "S0",
-                        "raw": 30
-                      },
-                      {
-                        "name": "S2",
-                        "raw": 63
-                      }
-                    ]
-                  },
-                  "kind": "scalar",
-                  "size_bits": 7,
-                  "type": "int"
-                },
-                "kind": "array",
-                "name": "f4"
-              },
-              {
-                "argument": "a1",
-                "conversion": {
-                  "kind": "linear",
-                  "offset": 610.0667290976819,
-                  "scale": 654.7408936152183
-                },
-                "kind": "field",
-                "name": "f5",
-                "size_bits": 15,
-                "type": "int"
               },
               {
                 "argument": "a0",
                 "kind": "field",
-                "name": "f6",
+                "name": "f3",
                 "size_bits": 37,
                 "type": "uint"
               },
               {
-                "kind": "field",
-                "name": "f7",
-                "size_bits": 40,
-                "type": "int",
-                "value": 253604776445
+                "algorithm": {
+                  "init": 34320529062710,
+                  "kind": "crc",
+                  "poly": 84562524293790,
+                  "reflect_in": false,
+                  "reflect_out": true,
+                  "width": 48,
+                  "xor_out": 18280779346347
+                },
+                "from_bits": 24,
+                "kind": "checksum",
+                "name": "c1"
               }
             ],
             "name": "C0"
           },
           {
             "arguments": {
-              "a0": {
-                "required": true
-              },
               "a2": {
-                "required": true
+                "range": {
+                  "max": -601,
+                  "min": -34359738367
+                }
               }
             },
             "canonical": "cmd.c1",
             "entries": [
               {
                 "kind": "field",
-                "length": {
-                  "bytes": 5,
-                  "kind": "fixed"
-                },
                 "name": "op",
-                "text": "ascii",
-                "type": "string",
-                "value": "hcbgd"
+                "size_bits": 2,
+                "type": "int",
+                "value": -1
+              },
+              {
+                "kind": "padding",
+                "size_bits": 6
               },
               {
                 "algorithm": {
@@ -728,43 +589,28 @@
                 "name": "c0"
               },
               {
+                "argument": "a2",
                 "kind": "field",
-                "name": "f0_len",
-                "size_bits": 9,
-                "type": "uint"
+                "name": "f0",
+                "signed": "ones_complement",
+                "size_bits": 36,
+                "type": "int"
               },
               {
                 "kind": "padding",
-                "size_bits": 7
+                "size_bits": 4
+              },
+              {
+                "algorithm": {
+                  "kind": "sum",
+                  "width": 56
+                },
+                "kind": "checksum",
+                "name": "c1"
               },
               {
                 "kind": "field",
-                "length": {
-                  "add": -1,
-                  "field": "f0_len",
-                  "kind": "field",
-                  "multiply": 4
-                },
-                "name": "f0",
-                "target": true,
-                "text": "ascii",
-                "type": "string"
-              },
-              {
-                "count": {
-                  "count": 4,
-                  "kind": "fixed"
-                },
-                "element": {
-                  "kind": "struct",
-                  "name": "t1_1"
-                },
-                "kind": "array",
-                "name": "f1"
-              },
-              {
-                "kind": "field",
-                "name": "f2_n",
+                "name": "f1_len",
                 "size_bits": 5,
                 "type": "uint"
               },
@@ -773,86 +619,110 @@
                 "size_bits": 3
               },
               {
-                "argument": "a1",
-                "count": {
-                  "add": -1,
-                  "field": "f2_n",
-                  "kind": "field",
-                  "multiply": 3
+                "kind": "field",
+                "length": {
+                  "add": -2,
+                  "field": "f1_len",
+                  "kind": "field"
                 },
-                "element": {
-                  "byte_order": "little",
-                  "kind": "scalar",
-                  "size_bits": 40,
-                  "type": "int"
-                },
-                "kind": "array",
-                "name": "f2"
+                "name": "f1",
+                "target": true,
+                "text": "latin1",
+                "type": "string"
+              },
+              {
+                "argument": "a3",
+                "kind": "field",
+                "name": "f2",
+                "size_bits": 58,
+                "type": "uint"
+              },
+              {
+                "kind": "padding",
+                "size_bits": 6
               },
               {
                 "argument": "a0",
+                "byte_order": "little",
                 "kind": "field",
-                "length": {
-                  "bytes": 10,
-                  "kind": "fixed"
-                },
                 "name": "f3",
-                "text": "ascii",
-                "type": "string"
+                "size_bits": 16,
+                "type": "int",
+                "unit": "m"
+              },
+              {
+                "argument": "a4",
+                "conversion": {
+                  "coefficients": [
+                    -0.7924958370407241,
+                    -9.056160287715661,
+                    2.885935121524045,
+                    -1.4386092219181545
+                  ],
+                  "kind": "poly"
+                },
+                "inverse": {
+                  "kind": "table",
+                  "points": [
+                    {
+                      "raw": -33.75,
+                      "value": -713472.0
+                    },
+                    {
+                      "raw": 369.0,
+                      "value": -651788.0
+                    },
+                    {
+                      "raw": 565.25,
+                      "value": -16781.0
+                    },
+                    {
+                      "raw": 623.0,
+                      "value": 312043.0
+                    },
+                    {
+                      "raw": 940.0,
+                      "value": 859137.0
+                    }
+                  ]
+                },
+                "kind": "field",
+                "name": "f4",
+                "size_bits": 64,
+                "type": "float",
+                "unit": "V"
+              },
+              {
+                "argument": "a1",
+                "byte_order": "little",
+                "conversion": {
+                  "kind": "states",
+                  "states": [
+                    {
+                      "name": "S0",
+                      "raw": 996321731
+                    },
+                    {
+                      "name": "S1",
+                      "raw": 3051403782
+                    },
+                    {
+                      "name": "S2",
+                      "raw": 3872279913
+                    }
+                  ]
+                },
+                "kind": "field",
+                "name": "f5",
+                "size_bits": 32,
+                "type": "uint"
               }
             ],
             "name": "C1"
           }
         ],
         "family": "fam",
-        "name": "fam_v1",
-        "types": {
-          "t1_1": {
-            "entries": [
-              {
-                "kind": "field",
-                "name": "r0",
-                "size_bits": 9,
-                "type": "uint",
-                "value": 47
-              },
-              {
-                "kind": "field",
-                "name": "r1",
-                "size_bits": 3,
-                "type": "int",
-                "value": -4
-              },
-              {
-                "argument": "a2",
-                "conversion": {
-                  "extrapolate": true,
-                  "kind": "spline",
-                  "points": [
-                    {
-                      "raw": -425.0,
-                      "value": -2552.2687655791133
-                    },
-                    {
-                      "raw": -424.0,
-                      "value": 63838.22662201186
-                    }
-                  ]
-                },
-                "inverse": {
-                  "kind": "linear",
-                  "offset": -375.26473068827846,
-                  "scale": 77.69696431818026
-                },
-                "kind": "field",
-                "name": "r2",
-                "size_bits": 12,
-                "type": "int",
-                "unit": "rad"
-              }
-            ]
-          }
-        }
+        "name": "fam_v1"
       }
     ]
   }

@@ -1258,10 +1258,11 @@ fn json_faults_reach_every_code() {
     let strategy = json_commands();
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
-    // A state the packet doesn't accept, in a list, is refused in about
-    // one case in two hundred, as in faults_reach_every_code: enough cases
-    // that it's planted well over five times.
-    for _ in 0..3000 {
+    // Enough cases that every required fault is planted at least ten
+    // times, so no small change to the generators leaves one under five:
+    // the rarest, a state the packet doesn't accept in an array element and
+    // a non-finite float past an open range end, about 13 times in 1500.
+    for _ in 0..1500 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         for refused in &case.refused {
             note_refusal(&case, refused, &mut note);
@@ -1431,10 +1432,11 @@ fn faults_reach_every_code() {
     let strategy = commands();
     let mut found: BTreeMap<Reached, usize> = BTreeMap::new();
     let mut note = |reached: Reached| *found.entry(reached).or_default() += 1;
-    // A state the packet doesn't accept, in a list or an array element, is
-    // planted in about one case in two hundred: enough cases that it's
-    // planted well over five times.
-    for _ in 0..3000 {
+    // Enough cases that every required fault is planted at least ten
+    // times, so no small change to the generators leaves one under five:
+    // the rarest, a state the packet doesn't accept in a list, about 14
+    // times in 2000.
+    for _ in 0..2000 {
         let case = strategy.new_tree(&mut runner).unwrap().current();
         let framed = case.bundle["families"][0].get("metadata").is_some();
         for refused in &case.refused {

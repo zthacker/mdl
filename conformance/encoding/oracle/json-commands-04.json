@@ -5,26 +5,17 @@
       "encoded": {
         "command": "cmd.c0",
         "defaulted": [
-          "a2",
           "a3"
         ],
         "deprecated": null,
         "family": "fam",
         "metadata": {},
         "packet": "C0",
-        "payload": "7b2230223a7b22f09f98806634223a2d323234393637343833343439313234383235387d2c223031223a7b226631223a5b2d35305d7d2c2265cc816f70223a22e280a8d1a8f4878192222c226630223a5b7b22223a7b22c3a97230223a2d3234352e343534373933303030383833317d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a2d3234352e343534373933303030383833317d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a3436372e373838393436323434343339397d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a2d3234352e343534373933303030383833317d2c227e7231223a3339353931373333343836307d5d2c226632223a3136393437312e34343633303038383135342c227e223a7b22efbd9e6633223a747275657d7d",
+        "payload": "7b2230223a7b22f09f98806634223a333533343239323433343236373235303131397d2c223031223a7b226631223a5b2d35305d7d2c226630223a5b7b22223a7b22c3a97230223a2d39322e30383935313633383534333334367d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a2d3234352e343534373933303030383833317d2c227e7231223a3339353931373333343836307d5d2c226632223a2d33313431302e3939333837363935383036322c227e223a7b22efbd9e6633223a747275657d2c22f09f98806f70223a323638353332383836343039393436343038337d",
         "record": {
           "f0": [
             {
-              "r0": -245.4547930008831,
-              "r1": 395917334860
-            },
-            {
-              "r0": -245.4547930008831,
-              "r1": 395917334860
-            },
-            {
-              "r0": 467.7889462444399,
+              "r0": -92.08951638543346,
               "r1": 395917334860
             },
             {
@@ -35,10 +26,10 @@
           "f1": [
             -50
           ],
-          "f2": 169471.44630088154,
+          "f2": -31410.993876958062,
           "f3": true,
-          "f4": "-2249674834491248258",
-          "op": " Ѩ􇁒"
+          "f4": "3534292434267250119",
+          "op": "2685328864099464083"
         },
         "set": "fam_v1"
       },
@@ -48,27 +39,31 @@
       "request": {
         "arguments": {
           "a0": {
-            "float": 169471.44630088154
+            "float": -31410.993876958062
           },
           "a1": {
             "list": [
               {
-                "float": -105895.63867171138
-              },
-              {
-                "float": -105895.63867171138
-              },
-              {
-                "float": 251112.49655582945
+                "float": 35494.90689900856
               },
               {
                 "float": -105895.63867171138
               }
             ]
+          },
+          "a2": {
+            "list": [
+              {
+                "text": "S2"
+              },
+              {
+                "text": "S2"
+              }
+            ]
           }
         },
         "command": "cmd.c0",
-        "native_id": "-2249674834491248258",
+        "native_id": "3534292434267250119",
         "set": "fam_v1"
       },
       "spec": [
@@ -94,15 +89,11 @@
         "family": "fam",
         "metadata": {},
         "packet": "C0",
-        "payload": "7b2230223a7b22f09f98806634223a313939333136343437333931383239363037317d2c223031223a7b226631223a5b2d35302c2d35305d7d2c2265cc816f70223a22e280a8d1a8f4878192222c226630223a5b7b22223a7b22c3a97230223a38342e39393638313330393732383738337d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a3436372e373838393436323434343339397d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a2d3133302e35393035373837363537353536357d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a39332e37383539313930373933393335327d2c227e7231223a3339353931373333343836307d5d2c226632223a302c227e223a7b22efbd9e6633223a747275657d7d",
+        "payload": "7b2230223a7b22f09f98806634223a2d353435313331313230313035383330363630337d2c223031223a7b226631223a5b5d7d2c226630223a5b7b22223a7b22c3a97230223a2d3233312e353631353337363237313232357d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a2d3133302e35393035373837363537353536357d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a2d3233392e393733363038303139313330347d2c227e7231223a3339353931373333343836307d2c7b22223a7b22c3a97230223a3436372e373838393436323434343339397d2c227e7231223a3339353931373333343836307d5d2c226632223a2d3939303336392e323338343637313637322c227e223a7b22efbd9e6633223a747275657d2c22f09f98806f70223a323638353332383836343039393436343038337d",
         "record": {
           "f0": [
             {
-              "r0": 84.99681309728783,
-              "r1": 395917334860
-            },
-            {
-              "r0": 467.7889462444399,
+              "r0": -231.5615376271225,
               "r1": 395917334860
             },
             {
@@ -110,18 +101,19 @@
               "r1": 395917334860
             },
             {
-              "r0": 93.78591907939352,
+              "r0": -239.9736080191304,
+              "r1": 395917334860
+            },
+            {
+              "r0": 467.7889462444399,
               "r1": 395917334860
             }
           ],
-          "f1": [
-            -50,
-            -50
-          ],
-          "f2": 0.0,
+          "f1": [],
+          "f2": -990369.2384671672,
           "f3": true,
-          "f4": "1993164473918296071",
-          "op": " Ѩ􇁒"
+          "f4": "-5451311201058306603",
+          "op": "2685328864099464083"
         },
         "set": "fam_v1"
       },
@@ -131,37 +123,30 @@
       "request": {
         "arguments": {
           "a0": {
-            "integer": 0
+            "float": -990369.2384671672
           },
           "a1": {
             "list": [
               {
-                "float": 104288.8130180506
-              },
-              {
-                "float": 251112.49655582945
+                "float": -93087.16598219349
               },
               {
                 "integer": 0
               },
               {
-                "float": 107619.92592972712
+                "float": -100842.42354996473
+              },
+              {
+                "float": 251112.49655582945
               }
             ]
           },
           "a3": {
-            "list": [
-              {
-                "float": 49971.992597114186
-              },
-              {
-                "float": 49971.992597114186
-              }
-            ]
+            "list": []
           }
         },
         "command": "cmd.c0",
-        "native_id": "1993164473918296071",
+        "native_id": "-5451311201058306603",
         "set": "fam_v1"
       },
       "spec": [
@@ -180,26 +165,25 @@
     {
       "encoded": {
         "command": "cmd.c1",
-        "defaulted": [
-          "a3"
-        ],
+        "defaulted": [],
         "deprecated": null,
         "family": "fam",
         "metadata": {},
         "packet": "C1",
-        "payload": "7b225c75303030316631223a226a222c2265cc816f70223a225c75303031664b63646566676869222c226636223a36382c227e223a7b22f09f98806633223a3437383230392e393038373834303434317d2c22c3a96632223a373733383139343237383836303435373730372c22efbd9e223a7b22686472223a7b226635223a747275657d7d2c22efbd9e6630223a5b2d352e343739373830393837323837323036352c2d352e343739373830393837323837323036355d2c22efbd9e6634223a747275657d",
+        "payload": "7b225c75303030316631223a2264222c226636223a3235352c227e223a7b22f09f98806633223a2d37373137312e34363035323734353135337d2c22c3a96632223a31323231383137393131373137353033343437322c22f09f98806f70223a31363037313131333133323637333238313639312c22efbd9e223a7b22686472223a7b226635223a747275657d7d2c22efbd9e6630223a5b2d352e343739373830393837323837323036352c2d3431342e31343236353438373537313636332c2d3338312e363938353732343939313935375d2c22efbd9e6634223a747275657d",
         "record": {
           "f0": [
             -5.4797809872872065,
-            -5.4797809872872065
+            -414.14265487571663,
+            -381.6985724991957
           ],
-          "f1": "j",
-          "f2": "7738194278860457707",
-          "f3": 478209.9087840441,
+          "f1": "d",
+          "f2": "12218179117175034472",
+          "f3": -77171.46052745153,
           "f4": true,
           "f5": true,
-          "f6": 68,
-          "op": "\u001fKcdefghi"
+          "f6": 255,
+          "op": "16071113132673281691"
         },
         "set": "fam_v1"
       },
@@ -209,17 +193,30 @@
       "request": {
         "arguments": {
           "a0": {
-            "float": 478209.9087840441
+            "float": -77171.46052745153
           },
           "a1": {
-            "text": "j"
+            "text": "d"
           },
           "a2": {
-            "float": 68.0
+            "integer": 255
+          },
+          "a3": {
+            "list": [
+              {
+                "integer": 0
+              },
+              {
+                "float": 69732.54264940492
+              },
+              {
+                "float": 64196.41861514966
+              }
+            ]
           }
         },
         "command": "cmd.c1",
-        "native_id": "7738194278860457707",
+        "native_id": "12218179117175034472",
         "set": "fam_v1"
       },
       "spec": [
@@ -243,21 +240,20 @@
         "family": "fam",
         "metadata": {},
         "packet": "C1",
-        "payload": "7b225c75303030316631223a226368626861696a65686869222c2265cc816f70223a225c75303031664b63646566676869222c226636223a3235352c227e223a7b22f09f98806633223a2d3430363234382e303132373732353237367d2c22c3a96632223a31363937323138343737313935333536363230312c22efbd9e223a7b22686472223a7b226635223a747275657d7d2c22efbd9e6630223a5b2d313330312e303239363233303737343133382c2d352e343739373830393837323837323036352c2d352e343739373830393837323837323036352c2d352e343739373830393837323837323036355d2c22efbd9e6634223a747275657d",
+        "payload": "7b225c75303030316631223a226a222c226636223a3235352c227e223a7b22f09f98806633223a3730303631322e303732353332373630337d2c22c3a96632223a343636343934363137333336343135333430372c22f09f98806f70223a31363037313131333133323637333238313639312c22efbd9e223a7b22686472223a7b226635223a747275657d7d2c22efbd9e6630223a5b313637312e383939393938313639323834332c2d352e343739373830393837323837323036352c323732312e3236363232313532373832335d2c22efbd9e6634223a747275657d",
         "record": {
           "f0": [
-            -1301.0296230774138,
+            1671.8999981692843,
             -5.4797809872872065,
-            -5.4797809872872065,
-            -5.4797809872872065
+            2721.266221527823
           ],
-          "f1": "chbhaijehhi",
-          "f2": "16972184771953566201",
-          "f3": -406248.0127725276,
+          "f1": "j",
+          "f2": "4664946173364153407",
+          "f3": 700612.0725327603,
           "f4": true,
           "f5": true,
           "f6": 255,
-          "op": "\u001fKcdefghi"
+          "op": "16071113132673281691"
         },
         "set": "fam_v1"
       },
@@ -267,150 +263,30 @@
       "request": {
         "arguments": {
           "a0": {
-            "float": -406248.0127725276
+            "float": 700612.0725327603
           },
           "a1": {
-            "text": "chbhaijehhi"
+            "text": "j"
           },
           "a2": {
-            "float": 255.0
+            "integer": 255
           },
           "a3": {
             "list": [
               {
-                "float": 221067.26690970256
-              },
-              {
-                "integer": 0
-              },
-              {
-                "integer": 0
+                "float": -286221.1481956614
               },
               {
                 "float": -0.0
+              },
+              {
+                "float": -465280.660573025
               }
             ]
           }
         },
         "command": "cmd.c1",
-        "native_id": "16972184771953566201",
-        "set": "fam_v1"
-      },
-      "spec": [
-        "encoding.md §2",
-        "encoding.md §3",
-        "encoding.md §4",
-        "encoding.md §5",
-        "encoding.md §6",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §7.1",
-        "units.md §4",
-        "api.md §3.2"
-      ]
-    },
-    {
-      "encoded": {
-        "command": "cmd.c1",
-        "defaulted": [
-          "a2",
-          "a3"
-        ],
-        "deprecated": null,
-        "family": "fam",
-        "metadata": {},
-        "packet": "C1",
-        "payload": "7b225c75303030316631223a226368626861696a65686869222c2265cc816f70223a225c75303031664b63646566676869222c226636223a3231352c227e223a7b22f09f98806633223a3239333632302e36363638333839363038347d2c22c3a96632223a393238353430363334383331393239383439362c22efbd9e223a7b22686472223a7b226635223a747275657d7d2c22efbd9e6630223a5b2d352e343739373830393837323837323036352c2d352e343739373830393837323837323036355d2c22efbd9e6634223a747275657d",
-        "record": {
-          "f0": [
-            -5.4797809872872065,
-            -5.4797809872872065
-          ],
-          "f1": "chbhaijehhi",
-          "f2": "9285406348319298496",
-          "f3": 293620.66683896084,
-          "f4": true,
-          "f5": true,
-          "f6": 215,
-          "op": "\u001fKcdefghi"
-        },
-        "set": "fam_v1"
-      },
-      "family": "fam",
-      "name": "request-04-cmd.c1",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, request 4.",
-      "request": {
-        "arguments": {
-          "a0": {
-            "float": 293620.66683896084
-          },
-          "a1": {
-            "text": "chbhaijehhi"
-          }
-        },
-        "command": "cmd.c1",
-        "native_id": "9285406348319298496",
-        "set": "fam_v1"
-      },
-      "spec": [
-        "encoding.md §2",
-        "encoding.md §3",
-        "encoding.md §4",
-        "encoding.md §5",
-        "encoding.md §6",
-        "decoding.md §2",
-        "decoding.md §5",
-        "decoding.md §7.1",
-        "units.md §4",
-        "api.md §3.2"
-      ]
-    },
-    {
-      "encoded": {
-        "command": "cmd.c2",
-        "defaulted": [
-          "a0"
-        ],
-        "deprecated": null,
-        "family": "fam",
-        "metadata": {},
-        "packet": "C2",
-        "payload": "7b222f6634223a383735383439333832313238333434343233352c2230223a7b22612f62223a7b226632223a2d322e32323530373338353835303732303134652d3330387d7d2c22612f62223a7b226630223a2d3634317d2c2265cc816f70223a2261626364222c227f6633223a31383434363734343037333730393535313631352c22f09f98806631223a5b3435363332353737393036362c2d3537323037313931363232382c3435363332353737393036365d7d",
-        "record": {
-          "f0": -641,
-          "f1": [
-            456325779066,
-            -572071916228,
-            456325779066
-          ],
-          "f2": -2.2250738585072014e-308,
-          "f3": "18446744073709551615",
-          "f4": "8758493821283444235",
-          "op": "abcd"
-        },
-        "set": "fam_v1"
-      },
-      "family": "fam",
-      "name": "request-05-cmd.c2",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, request 5.",
-      "request": {
-        "arguments": {
-          "a1": {
-            "list": [
-              {
-                "text": "S0"
-              },
-              {
-                "text": "S2"
-              },
-              {
-                "text": "S0"
-              }
-            ]
-          }
-        },
-        "command": "cmd.c2",
-        "native_id": "8758493821283444235",
+        "native_id": "4664946173364153407",
         "set": "fam_v1"
       },
       "spec": [
@@ -434,29 +310,28 @@
         "family": "fam",
         "metadata": {},
         "packet": "C2",
-        "payload": "7b222f6634223a333538333935333339393537383639383331362c2230223a7b22612f62223a7b226632223a2d312e333532333435333635333730323739652d3133367d7d2c22612f62223a7b226630223a2d3634317d2c2265cc816f70223a2261626364222c227f6633223a31383434363734343037333730393535313631352c22f09f98806631223a5b3435363332353737393036362c3831313331323836333038342c3435363332353737393036362c3831313331323836333038345d7d",
+        "payload": "7b2230223a7b22f09f9880223a7b227e316630223a5b3435363332353737393036362c3831313331323836333038342c3435363332353737393036365d7d7d2c226632223a302c226634223a31383434363734343037333730393535313631352c22f09f98806633223a2d3634312c22f09f98806f70223a32322c22efbd9e6631223a31313731343030363630383839353639363137347d",
         "record": {
-          "f0": -641,
-          "f1": [
+          "f0": [
             456325779066,
             811312863084,
-            456325779066,
-            811312863084
+            456325779066
           ],
-          "f2": -1.352345365370279e-136,
-          "f3": "18446744073709551615",
-          "f4": "3583953399578698316",
-          "op": "abcd"
+          "f1": "11714006608895696174",
+          "f2": 0.0,
+          "f3": -641,
+          "f4": "18446744073709551615",
+          "op": 22
         },
         "set": "fam_v1"
       },
       "family": "fam",
-      "name": "request-06-cmd.c2",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, request 6.",
+      "name": "request-04-cmd.c2",
+      "note": "Generated by the testkit's oracle: json-commands seed 4, request 4.",
       "request": {
         "arguments": {
           "a0": {
-            "float": -1.352345365370279e-136
+            "float": -0.0
           },
           "a1": {
             "list": [
@@ -468,15 +343,15 @@
               },
               {
                 "text": "S0"
-              },
-              {
-                "text": "S1"
               }
             ]
+          },
+          "a2": {
+            "text": "abcdefghij"
           }
         },
         "command": "cmd.c2",
-        "native_id": "3583953399578698316",
+        "native_id": "11714006608895696174",
         "set": "fam_v1"
       },
       "spec": [
@@ -493,28 +368,41 @@
       ]
     },
     {
-      "error": "out_of_range",
+      "error": "bad_count",
       "family": "fam",
-      "name": "refused-00-out_of_range",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 0. Planted: ListValue (out_of_range), Target (target_type); the first that encoding reaches is the error.",
+      "name": "refused-00-bad_count",
+      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 0. Planted: Records (bad_count), Target (raw_range); the first that encoding reaches is the error.",
       "request": {
         "arguments": {
           "a0": {
-            "float": 935479.1493597206
+            "float": -33158.19933030535
           },
           "a1": {
             "list": [
               {
-                "integer": 0
-              },
-              {
-                "float": -105895.63867171138
-              },
-              {
-                "float": -105895.63867171138
-              },
-              {
                 "float": 251112.49655582945
+              },
+              {
+                "float": -82767.923642972
+              },
+              {
+                "float": -105895.63867171138
+              },
+              {
+                "float": -105895.63867171138
+              }
+            ]
+          },
+          "a2": {
+            "list": [
+              {
+                "text": "S2"
+              },
+              {
+                "text": "S2"
+              },
+              {
+                "text": "S2"
               }
             ]
           },
@@ -522,18 +410,12 @@
             "list": [
               {
                 "float": 49971.992597114186
-              },
-              {
-                "float": 49971.992597114186
-              },
-              {
-                "float": 49971.99259711418
               }
             ]
           }
         },
         "command": "cmd.c0",
-        "native_id": "SN-x",
+        "native_id": "9223372036854775808",
         "set": "fam_v1"
       },
       "spec": [
@@ -549,21 +431,54 @@
       "error": "wrong_type",
       "family": "fam",
       "name": "refused-01-wrong_type",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 1. Planted: ListValue (wrong_type), Target (raw_range); the first that encoding reaches is the error.",
+      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 1. Planted: ListValue (wrong_type); the first that encoding reaches is the error.",
       "request": {
         "arguments": {
           "a0": {
-            "float": -308802.2761186852
+            "float": -83280.90794289512
+          },
+          "a1": {
+            "text": "chbhaijehhi"
+          },
+          "a2": {
+            "float": 255.0
+          },
+          "a3": {
+            "integer": 0
+          }
+        },
+        "command": "cmd.c1",
+        "native_id": "15358203559968705949",
+        "set": "fam_v1"
+      },
+      "spec": [
+        "encoding.md §1",
+        "encoding.md §2",
+        "encoding.md §3",
+        "encoding.md §8",
+        "decoding.md §2",
+        "units.md §4"
+      ]
+    },
+    {
+      "error": "list_length",
+      "family": "fam",
+      "name": "refused-02-list_length",
+      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 2. Planted: ListValue (list_length); the first that encoding reaches is the error.",
+      "request": {
+        "arguments": {
+          "a0": {
+            "integer": 0
           },
           "a1": {
             "text": "chbhaijehhi"
           },
           "a3": {
-            "float": -0.0
+            "list": []
           }
         },
         "command": "cmd.c1",
-        "native_id": -1,
+        "native_id": "16175973742907286353",
         "set": "fam_v1"
       },
       "spec": [
@@ -576,113 +491,21 @@
       ]
     },
     {
-      "error": "non_finite",
+      "error": "missing_argument",
       "family": "fam",
-      "name": "refused-02-non_finite",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 2. Planted: Value (non_finite); the first that encoding reaches is the error.",
+      "name": "refused-03-missing_argument",
+      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 3. Planted: Missing (missing_argument); the first that encoding reaches is the error.",
       "request": {
         "arguments": {
           "a0": {
-            "float": {
-              "non_finite": "inf"
-            }
+            "float": -0.0
           },
-          "a1": {
-            "list": [
-              {
-                "text": "S1"
-              },
-              {
-                "text": "S0"
-              },
-              {
-                "text": "S1"
-              }
-            ]
+          "a2": {
+            "text": "abcdefghij"
           }
         },
         "command": "cmd.c2",
-        "native_id": "18018384744260905689",
-        "set": "fam_v1"
-      },
-      "spec": [
-        "encoding.md §1",
-        "encoding.md §2",
-        "encoding.md §3",
-        "encoding.md §8",
-        "decoding.md §2",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "wrong_type",
-      "family": "fam",
-      "name": "refused-03-wrong_type",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 3. Planted: Target (raw_range), Value (wrong_type); the first that encoding reaches is the error.",
-      "request": {
-        "arguments": {
-          "a0": {
-            "text": "1"
-          },
-          "a1": {
-            "list": [
-              {
-                "text": "S0"
-              },
-              {
-                "text": "S1"
-              },
-              {
-                "text": "S1"
-              }
-            ]
-          }
-        },
-        "command": "cmd.c2",
-        "native_id": -1,
-        "set": "fam_v1"
-      },
-      "spec": [
-        "encoding.md §1",
-        "encoding.md §2",
-        "encoding.md §3",
-        "encoding.md §8",
-        "decoding.md §2",
-        "units.md §4"
-      ]
-    },
-    {
-      "error": "wrong_type",
-      "family": "fam",
-      "name": "refused-04-wrong_type",
-      "note": "Generated by the testkit's oracle: json-commands seed 4, refused request 4. Planted: Value (wrong_type); the first that encoding reaches is the error.",
-      "request": {
-        "arguments": {
-          "a0": {
-            "text": "1"
-          },
-          "a1": {
-            "list": [
-              {
-                "text": "S0"
-              },
-              {
-                "text": "S1"
-              },
-              {
-                "text": "S0"
-              },
-              {
-                "text": "S0"
-              },
-              {
-                "text": "S0"
-              }
-            ]
-          }
-        },
-        "command": "cmd.c2",
-        "native_id": "16722605510417572929",
+        "native_id": "13865930199732018806",
         "set": "fam_v1"
       },
       "spec": [
@@ -798,10 +621,6 @@
               "type": "f64"
             },
             {
-              "default": [
-                "S0",
-                "S0"
-              ],
               "list": {
                 "min": 2
               },
@@ -812,6 +631,11 @@
                 "S2"
               ],
               "type": "enum"
+            },
+            {
+              "default": "abcdefghij",
+              "name": "a2",
+              "type": "str"
             }
           ]
         }
@@ -847,9 +671,9 @@
               {
                 "kind": "field",
                 "name": "op",
-                "pointer": "/éop",
-                "type": "string",
-                "value": " Ѩ􇁒"
+                "pointer": "/😀op",
+                "type": "uint",
+                "value": "2685328864099464083"
               },
               {
                 "element": {
@@ -911,9 +735,9 @@
               {
                 "kind": "field",
                 "name": "op",
-                "pointer": "/éop",
-                "type": "string",
-                "value": "\u001fKcdefghi"
+                "pointer": "/😀op",
+                "type": "uint",
+                "value": "16071113132673281691"
               },
               {
                 "argument": "a3",
@@ -980,7 +804,11 @@
           {
             "arguments": {
               "a1": {
-                "required": true
+                "required": true,
+                "states": [
+                  "S0",
+                  "S1"
+                ]
               }
             },
             "canonical": "cmd.c2",
@@ -988,16 +816,9 @@
               {
                 "kind": "field",
                 "name": "op",
-                "pointer": "/éop",
-                "type": "string",
-                "value": "abcd"
-              },
-              {
-                "kind": "field",
-                "name": "f0",
-                "pointer": "/a~1b/f0",
-                "type": "int",
-                "value": -641
+                "pointer": "/😀op",
+                "type": "uint",
+                "value": 22
               },
               {
                 "argument": "a1",
@@ -1023,29 +844,36 @@
                   "type": "int"
                 },
                 "kind": "array",
+                "name": "f0",
+                "pointer": "/0/😀/~01f0"
+              },
+              {
+                "kind": "field",
                 "name": "f1",
-                "pointer": "/😀f1"
+                "pointer": "/～f1",
+                "target": true,
+                "type": "uint"
               },
               {
                 "argument": "a0",
                 "kind": "field",
                 "name": "f2",
-                "pointer": "/0/a~1b/f2",
+                "pointer": "/f2",
                 "type": "float"
               },
               {
                 "kind": "field",
                 "name": "f3",
-                "pointer": "/f3",
-                "type": "uint",
-                "value": "18446744073709551615"
+                "pointer": "/😀f3",
+                "type": "int",
+                "value": -641
               },
               {
                 "kind": "field",
                 "name": "f4",
-                "pointer": "/~1f4",
-                "target": true,
-                "type": "uint"
+                "pointer": "/f4",
+                "type": "uint",
+                "value": "18446744073709551615"
               }
             ],
             "name": "C2"

@@ -476,6 +476,15 @@
       "error": "no_packet"
     },
     {
+      "name": "a-payload-that-isnt-json",
+      "spec": ["encoding.md §7.1", "encoding.md §7.5", "decoding.md §2.3"],
+      "note": "A JSON family's payload must be JSON: this one stops before its closing brace, so it's invalid_json, before any packet is identified.",
+      "family": "cmdj",
+      "set": "cmdj_v1",
+      "message": { "json": "{\"op\": \"list\", \"values\": [1], \"name\": \"x\"", "metadata": {} },
+      "error": "invalid_json"
+    },
+    {
       "name": "entries-are-read-before-constants-are-checked",
       "spec": ["encoding.md §7.5", "encoding.md §7.3", "decoding.md §5.2"],
       "note": "The packet is PING by its opcode. Its constant end holds ab where its value is aa, but node, 2 bytes, has only 02 left. Every entry is read before any constant is checked, so the error is the read's: past_end.",
