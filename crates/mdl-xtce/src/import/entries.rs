@@ -6,16 +6,17 @@ use mdl::validate::MAX_NESTING;
 use serde_json::{Value, json};
 
 use super::{
-    ArrayField, CONTAINER, Earlier, Element, Entry, Field, Fields, Import, Known, ParamKey,
-    StructField, StructType, TypeId, id,
+    ArrayField, CONTAINER, Composite, Earlier, Element, Entry, Field, Fields, Import, Known,
+    ParamKey, StructField, StructType, TypeId, id,
 };
 use crate::Code;
+use crate::ancillary::{Mark, NO_MARK};
 use crate::names::identifier;
 use crate::out::Object;
 use crate::space::Kind;
 use crate::types::{
-    ArrayShape, Count, Dynamic, IntegerValue, Length, Order, Raw, Scalar, Shape, dimensions,
-    integer_value,
+    ArrayShape, Count, Dynamic, IntegerValue, Length, Member, Order, Raw, Scalar, Shape,
+    dimensions, integer_value,
 };
 use crate::xml::{self, El, Expect};
 
@@ -53,11 +54,15 @@ struct Place {
 }
 
 /// What the entries of one XTCE entry are built from: the parameter's
-/// element, where they go, and how their fields are named.
+/// element, where they go, how their fields are named, the parameter's own
+/// MDL ancillary data (§4.1), and whether they're a composite's members,
+/// which map to no param of their own.
 struct Source<'p, 'd> {
     el: El<'d>,
     place: &'p Place,
     naming: Naming,
+    mark: &'p Mark,
+    unmapped: bool,
 }
 
 impl Place {
@@ -199,6 +204,7 @@ impl<'d> Import<'d, '_> {
             return None;
         }
         let mut shape = self.parameter_shape(found.space, found.el)?;
+        let mark = self.parameter_mark(found.el);
         if array_ref {
             shape = self.array_reference(space, entry, shape)?;
         }
@@ -207,6 +213,37 @@ impl<'d> Import<'d, '_> {
         let mut out = Vec::new();
         out.extend(place.padding());
         if let Some(repeat) = entry.child("RepeatEntry") {
+            // A composite's members are fields of the packet, one of each.
+            let type_frame = match &shape {
+                Shape::Aggregate(_, type_mark) => type_mark.frame,
+                _ => None,
+            };
+            if let Some((_, span)) = mark.frame.or(type_frame) {
+                self.report.error(
+                    Code::Unsupported,
+                    span,
+                    format!(
+                        "parameter {name} is a composite in a repeated entry, which isn't \
+                         supported: a composite's members are one of each in the packet"
+                    ),
+                );
+                return None;
+            }
+            // The elements are built without the parameter's own mark, so
+            // its MDL.members without a frame is refused here, as it is on
+            // an entry that isn't repeated.
+            if let Some((_, span)) = &mark.members {
+                self.report.error(
+                    Code::Invalid,
+                    *span,
+                    format!(
+                        "MDL.members orders a composite's members, and {} is no composite: \
+                         MDL.frame makes it one",
+                        self.describe(&key)
+                    ),
+                );
+                return None;
+            }
             let (count, offset) = self.repeat(space, repeat, known)?;
             let element = self.element(&key, found.el, &shape, offset)?;
             let array = self.array_field(&key, found.el, element, count, &place)?;
@@ -218,6 +255,8 @@ impl<'d> Import<'d, '_> {
             el: found.el,
             place: &place,
             naming: Naming::Parameter,
+            mark: &mark,
+            unmapped: false,
         };
         out.extend(self.build(&key, &shape, None, &source, known, &mut fields)?);
         Some((out, fields))
@@ -357,8 +396,23 @@ impl<'d> Import<'d, '_> {
             return None;
         }
         self.embedding.push(element);
-        let entries = self.struct_body(space, el);
+        let start = self.composites.len();
+        let mut entries = self.struct_body(space, el);
         self.embedding.pop();
+        // A composite's members are fields of the packet (decoding.md
+        // §7.4), so one in an embedded container isn't supported.
+        for composite in self.composites.split_off(start) {
+            self.report.error(
+                Code::Unsupported,
+                composite.frame.1,
+                format!(
+                    "composite {} is in embedded container {name}, which isn't supported: a \
+                     composite's members are fields of the packet",
+                    composite.canonical.0
+                ),
+            );
+            entries = None;
+        }
         let Some(entries) = entries else {
             self.broken.insert(element);
             return None;
@@ -498,6 +552,108 @@ impl<'d> Import<'d, '_> {
     /// The entries a shape becomes, reading the parameter (or member)
     /// `key`, with `known` the fields decoded before them in the same
     /// container; their fields are added to `fields`.
+    /// A marked aggregate's members in MDL's order, x, y, z or w, x, y, z,
+    /// and its param's type (§4.1): three numbers make a vec3, four a quat.
+    /// `MDL.members` names them in that order; without it, it's theirs.
+    fn composite_members<'m>(
+        &mut self,
+        key: &ParamKey<'d>,
+        members: &'m [Member<'d>],
+        mark: &Mark,
+        frame_span: Span,
+        naming: Naming,
+    ) -> Option<(&'static str, Vec<&'m Member<'d>>)> {
+        let described = self.describe(key);
+        if let Naming::Members(_) = naming {
+            self.report.error(
+                Code::Unsupported,
+                frame_span,
+                format!(
+                    "{described} is a composite in an array's elements, which isn't supported: \
+                     a composite's members are one of each in the packet"
+                ),
+            );
+            return None;
+        }
+        let ordered: Vec<&Member<'d>> = match &mark.members {
+            None => members.iter().collect(),
+            Some((names, span)) => {
+                let mut ordered: Vec<&Member<'d>> = Vec::new();
+                for name in names {
+                    let Some(member) = members.iter().find(|member| member.name == name) else {
+                        self.report.error(
+                            Code::Invalid,
+                            *span,
+                            format!("MDL.members names {name}, which {described} has no member of"),
+                        );
+                        return None;
+                    };
+                    if ordered.iter().any(|seen| seen.name == member.name) {
+                        self.report.error(
+                            Code::Invalid,
+                            *span,
+                            format!("MDL.members names {name} twice"),
+                        );
+                        return None;
+                    }
+                    ordered.push(member);
+                }
+                let missing: Vec<&str> = members
+                    .iter()
+                    .filter(|member| !ordered.iter().any(|seen| seen.name == member.name))
+                    .map(|member| member.name)
+                    .collect();
+                if !missing.is_empty() {
+                    self.report.error(
+                        Code::Invalid,
+                        *span,
+                        format!(
+                            "MDL.members names each of {described}'s members once, and leaves \
+                             out {}",
+                            missing.join(", ")
+                        ),
+                    );
+                    return None;
+                }
+                ordered
+            }
+        };
+        let ty = match ordered.len() {
+            3 => "vec3",
+            4 => "quat",
+            n => {
+                self.report.error(
+                    Code::Invalid,
+                    frame_span,
+                    format!(
+                        "MDL.frame makes {described} a composite, a vec3 of 3 members or a quat \
+                         of 4, and it has {n}"
+                    ),
+                );
+                return None;
+            }
+        };
+        for member in &ordered {
+            let numeric = matches!(
+                &member.shape,
+                Shape::Scalar(scalar) if matches!(scalar.param, "f64" | "i64" | "u64")
+            );
+            if !numeric {
+                self.report.error(
+                    Code::Invalid,
+                    frame_span,
+                    format!(
+                        "member {} of {described} isn't a number, so it can't be part of a \
+                         composite",
+                        member.name
+                    ),
+                );
+                return None;
+            }
+        }
+        Some((ty, ordered))
+    }
+
     fn build(
         &mut self,
         key: &ParamKey<'d>,
@@ -507,13 +663,23 @@ impl<'d> Import<'d, '_> {
         known: &Earlier<'d>,
         fields: &mut Fields<'d>,
     ) -> Option<Vec<Entry<'d>>> {
-        let Source { el, place, naming } = *source;
+        let Source {
+            el,
+            place,
+            naming,
+            unmapped,
+            ..
+        } = *source;
         let mut out = Vec::new();
         let first = |out: &Vec<Entry<'d>>| out.iter().all(|e| e.span() != Some(place.span));
         match shape {
             Shape::Scalar(scalar) => {
                 let name = self.name_of(key, el, naming);
-                let canonical = self.register(key, el, scalar, description)?;
+                let canonical = if unmapped {
+                    None
+                } else {
+                    self.register(key, el, scalar, description)?
+                };
                 let offset = place.offset().filter(|_| first(&out));
                 let seen = known.with(fields);
                 let length = match &scalar.length {
@@ -562,7 +728,41 @@ impl<'d> Import<'d, '_> {
                     when: place.when.clone(),
                 })));
             }
-            Shape::Aggregate(members) => {
+            Shape::Aggregate(members, type_mark) => {
+                // A parameter's own mark speaks for its aggregate, over its
+                // type's; a member aggregate's type speaks for it (§4.1).
+                let mark = if key.2.is_empty() {
+                    source.mark.or(type_mark)
+                } else {
+                    type_mark.clone()
+                };
+                let composite = match (mark.frame, &mark.members) {
+                    (Some(frame), _) => {
+                        let (ty, order) =
+                            self.composite_members(key, members, &mark, frame.1, naming)?;
+                        Some((ty, order, frame))
+                    }
+                    (None, Some((_, span))) => {
+                        self.report.error(
+                            Code::Invalid,
+                            *span,
+                            format!(
+                                "MDL.members orders a composite's members, and {} is no \
+                                 composite: MDL.frame makes it one",
+                                self.describe(key)
+                            ),
+                        );
+                        return None;
+                    }
+                    (None, None) => None,
+                };
+                let member_source = Source {
+                    mark: &NO_MARK,
+                    unmapped: unmapped || composite.is_some(),
+                    ..*source
+                };
+                // Each member's field, by member name, for the composite.
+                let mut member_fields: Vec<(&'d str, String)> = Vec::new();
                 for member in members {
                     let mut member_key = key.clone();
                     member_key.2.push(member.name);
@@ -572,10 +772,20 @@ impl<'d> Import<'d, '_> {
                         &member_key,
                         &member.shape,
                         member.description.clone(),
-                        source,
+                        &member_source,
                         &seen,
                         &mut added,
                     )?;
+                    if composite.is_some()
+                        && let Some(field) = built.iter().find_map(|entry| match entry {
+                            Entry::Field(field) if field.key.as_ref() == Some(&member_key) => {
+                                Some(field.name.clone())
+                            }
+                            _ => None,
+                        })
+                    {
+                        member_fields.push((member.name, field));
+                    }
                     // Only the first entry of the XTCE entry takes its
                     // offset.
                     let placed = !first(&out);
@@ -586,6 +796,31 @@ impl<'d> Import<'d, '_> {
                         entry
                     }));
                     fields.extend(added);
+                }
+                if let Some((ty, order, frame)) = composite {
+                    let units: Vec<Option<(String, Span)>> = order
+                        .iter()
+                        .map(|member| match &member.shape {
+                            Shape::Scalar(scalar) => scalar.unit.clone(),
+                            _ => None,
+                        })
+                        .collect();
+                    let canonical =
+                        self.register_composite(key, el, ty, frame, &units, description)?;
+                    let members = order
+                        .iter()
+                        .filter_map(|member| {
+                            member_fields
+                                .iter()
+                                .find(|(name, _)| *name == member.name)
+                                .map(|(_, field)| (field.clone(), place.span))
+                        })
+                        .collect();
+                    self.composites.push(Composite {
+                        canonical,
+                        frame,
+                        members,
+                    });
                 }
             }
             Shape::Array(array) => {
@@ -676,6 +911,8 @@ impl<'d> Import<'d, '_> {
             el,
             place: &place,
             naming: Naming::Members(key.2.len()),
+            mark: &NO_MARK,
+            unmapped: false,
         };
         let mut entries =
             self.build(key, shape, None, &source, &Earlier::default(), &mut fields)?;

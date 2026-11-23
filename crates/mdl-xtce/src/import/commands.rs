@@ -1131,7 +1131,7 @@ impl<'d> Import<'d, '_> {
             );
             return None;
         };
-        let aggregate = matches!(shape, Shape::Aggregate(_));
+        let aggregate = matches!(shape, Shape::Aggregate(..));
         // An assigned aggregate is a JSON object of its members.
         let assigned = match (written.assigned, aggregate) {
             (Some((text, span, _)), true) => {
@@ -2002,7 +2002,7 @@ impl<'d> Import<'d, '_> {
             };
             let made = match shape {
                 Shape::Scalar(scalar) => self.scalar_argument(argument, name, scalar),
-                Shape::Aggregate(_) => self.member_arguments(argument, &name, shape),
+                Shape::Aggregate(..) => self.member_arguments(argument, &name, shape),
                 Shape::Array(array) => self.list_arguments(argument, &name, array),
             };
             let Some(made) = made else {
@@ -2145,7 +2145,7 @@ impl<'d> Import<'d, '_> {
             },
             None => None,
         };
-        let record = matches!(array.element, Shape::Aggregate(_));
+        let record = matches!(array.element, Shape::Aggregate(..));
         if record {
             self.check_member_initials(argument.xtce, &leaves)?;
         }
@@ -2497,7 +2497,7 @@ fn flatten<'d>(
             out.push((key, (**scalar).clone()));
             true
         }
-        Shape::Aggregate(members) => members.iter().all(|member| {
+        Shape::Aggregate(members, _) => members.iter().all(|member| {
             let mut member_key = key.clone();
             member_key.2.push(member.name);
             flatten(member_key, &member.shape, out)

@@ -66,6 +66,7 @@ use mdl::ir::{Catalog, Family, Locator, Scalar};
 use mdl::read::read_bundle_value;
 use mdl::source::{Parsed, SourceDiagnostic, SourceFile};
 
+mod ancillary;
 mod calibration;
 mod import;
 mod names;

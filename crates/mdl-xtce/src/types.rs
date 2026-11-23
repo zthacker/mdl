@@ -9,6 +9,7 @@ use mdl::validate::MAX_NESTING;
 use serde_json::{Value, json};
 
 use crate::Code;
+use crate::ancillary::{self, Mark};
 use crate::calibration::{
     Empty, Holds, SAFE, ToRaw, argument_calibration, engineering_range, worked_out,
 };
@@ -46,12 +47,13 @@ impl Role {
     }
 }
 
-/// What a parameter of a type is: one value, an aggregate's members, or
-/// an array of elements.
+/// What a parameter of a type is: one value, an aggregate's members (with
+/// what a parameter type's MDL ancillary data says of them, §4.1), or an
+/// array of elements.
 #[derive(Clone)]
 pub(crate) enum Shape<'d> {
     Scalar(Box<Scalar<'d>>),
-    Aggregate(Vec<Member<'d>>),
+    Aggregate(Vec<Member<'d>>, Mark),
     Array(Box<ArrayShape<'d>>),
 }
 
@@ -657,20 +659,32 @@ impl<'d> Types<'d> {
     ) -> Option<Shape<'d>> {
         let role = Role::of(&el);
         let mut attrs = vec!["name"];
+        let mut children = vec!["MemberList"];
         let mut ignored = DESCRIBED.to_vec();
+        // A parameter type's MDL ancillary data can make it a composite
+        // (§4.1); an argument type's is left out, as commands have no
+        // vectors.
         match role {
-            Role::Parameter => ignored.push("initialValue"),
+            Role::Parameter => {
+                ignored.retain(|name| *name != "AncillaryDataSet");
+                children.push("AncillaryDataSet");
+                ignored.push("initialValue");
+            }
             Role::Argument => attrs.push("initialValue"),
         }
         el.check(
             &Expect {
                 attrs: &attrs,
-                children: &["MemberList"],
+                children: &children,
                 ignored: &ignored,
                 text: false,
             },
             report,
         );
+        let mark = match role {
+            Role::Parameter => ancillary::mark(el, report),
+            Role::Argument => ancillary::NO_MARK,
+        };
         // XTCE 1.3 gives an aggregate argument type an initial value, a
         // JSON object of its members; before it, Yamcs reads none, so MDL
         // doesn't either.
@@ -784,7 +798,7 @@ impl<'d> Types<'d> {
             );
             return None;
         }
-        complete.then_some(Shape::Aggregate(members))
+        complete.then_some(Shape::Aggregate(members, mark))
     }
 }
 

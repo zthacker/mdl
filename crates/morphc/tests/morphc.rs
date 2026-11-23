@@ -3420,3 +3420,59 @@ fn a_store_with_a_spelling_builds_now_refuse_still_reads() {
         stdout(&refused)
     );
 }
+
+/// An XTCE aggregate parameter marked with `MDL.frame` (xtce.md §4.1)
+/// builds into one composite and decodes to one vector sample.
+#[test]
+fn an_xtce_aggregate_marked_with_a_frame_decodes_to_one_vector() {
+    let dir = scratch("xtce_composite");
+    fs::write(
+        dir.join("sat.xml"),
+        r#"<SpaceSystem name="Sat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <FloatParameterType name="Rate"><UnitSet><Unit>rad/s</Unit></UnitSet><FloatDataEncoding sizeInBits="32"/></FloatParameterType>
+      <AggregateParameterType name="Vec"><MemberList>
+        <Member name="x" typeRef="Rate"/><Member name="y" typeRef="Rate"/><Member name="z" typeRef="Rate"/>
+      </MemberList></AggregateParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Rate" parameterTypeRef="Vec">
+        <AncillaryDataSet><AncillaryData name="MDL.frame">BODY</AncillaryData></AncillaryDataSet>
+      </Parameter>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer name="ADCS"><EntryList><ParameterRefEntry parameterRef="Rate"/></EntryList></SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>"#,
+    )
+    .unwrap();
+    // x 1.0, y 2.0, z -0.5, big-endian binary32.
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            "sat.xml",
+            "--hex",
+            "3f80000040000000bf000000",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(
+        report["decode"]["messages"][0]["telemetry"]["samples"],
+        serde_json::json!([{
+            "param": "sat.rate",
+            "value": { "frame": "BODY", "x": 1.0, "y": 2.0, "z": -0.5 },
+            "unit": "rad/s",
+            "path": "Rate_x,Rate_y,Rate_z",
+            "index": null,
+            "time_offset_ns": null,
+            "quality": "good"
+        }])
+    );
+}

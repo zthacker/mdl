@@ -110,7 +110,8 @@ another input's:
   (§5), and a command packet for each concrete meta-command, in document
   order (§6).
 - **Catalog.** Each parameter a packet holds is a param; an aggregate
-  parameter is one param per member. A param's name is the parameter's
+  parameter is one param per member, or one vector param when it's a
+  composite (§4.1). A param's name is the parameter's
   alias in the `MDL` namespace (`<Alias nameSpace="MDL"
   alias="eps.bus_voltage"/>`), taken as it is, or else its SpaceSystem
   path and name, each part lowercased with `_` for each run of other
@@ -268,6 +269,55 @@ Sizes:
 
 Aggregates and arrays nest at most 32 deep, MDL's bound on struct
 nesting.
+
+### 4.1 Composites
+
+XTCE has no vectors, so a vector or a quaternion is an aggregate of
+numbers. Ancillary data in the MDL namespace makes one a composite
+(`decoding.md` §7.4): one `vec3` or `quat` sample from its members,
+rather than a sample of each. Yamcs leaves that data out, so a document
+reads the same there.
+
+- **`MDL.frame`**, `<AncillaryData name="MDL.frame">ECI_J2000</AncillaryData>`,
+  on an aggregate parameter or its parameter type, makes it a composite in
+  that frame: `ECEF`, `ECI_J2000`, `BODY`, `NED`, `ENU` or `GEODETIC`
+  (anything else is `xtce.invalid`). A parameter's says it for that
+  parameter, over its type's, so one type can serve vectors in different
+  frames. A member whose type is marked is a composite of its own, so an
+  aggregate of a position and a velocity gives two.
+- **`MDL.members`** names the members in MDL's order, x, y, z for a vec3
+  and w, x, y, z for a quat, separated by spaces: `q4 q1 q2 q3` for a
+  quaternion sent scalar last. Without it, the order is the members'. It
+  MUST name each member once [`xtce.invalid`], and comes with `MDL.frame`,
+  from the parameter or its type, each on its own [`xtce.invalid`
+  otherwise].
+- A composite has three members (a vec3) or four (a quat), each a number:
+  an integer or a float, not an enumeration, a boolean, a string or an
+  aggregate [`xtce.invalid`].
+- Each name is given once in an `AncillaryDataSet`, and the MDL namespace
+  has only these two; a scalar parameter, one of a single value, takes
+  neither [`xtce.invalid`].
+
+Its members are fields, as any aggregate's are (`Rate_x`), in the
+document's order, mapped to no param of their own; the packet lists the
+composite with its param's name and its members' fields in MDL's order.
+The param's name is the parameter's (§3), a marked member's adding its
+part (`sat.state.pos`). An import that owns its catalog defines the param:
+a vec3 or quat in the composite's frame and its members' unit. It can't
+define one for `GEODETIC` positions, whose param is in `ECEF` or
+`ECI_J2000`, nor for members in different units, which a param doesn't
+have [`xtce.unsupported`]: such a composite is imported referring to a
+catalog that defines its param. A referring import maps the composite onto
+the catalog's param named by the parameter's MDL alias [`xtce.invalid`
+without one], and validation checks its frame and its members' units
+against it, as for any composite.
+
+A composite's members are fields of the packet, one of each, so a marked
+parameter in a repeated entry, in an embedded container or in an array's
+elements, and a marked array, are unsupported. Commands have no vectors:
+in a command container, a marked parameter's members are fields as any
+aggregate's are. Other ancillary data, and ancillary data anywhere else,
+is left out [`xtce.ignored`].
 
 ## 5. Containers
 
@@ -745,7 +795,8 @@ is [`xtce.ignored`]:
 
 - descriptions of anything but parameters, aggregate members,
   meta-commands and arguments;
-- aliases outside the `MDL` namespace, and ancillary data;
+- aliases outside the `MDL` namespace, and ancillary data other than the
+  MDL namespace's on a parameter or an aggregate parameter type (§4.1);
 - parameters' initial values, change thresholds, what alarms say beyond
   MDL's limits (§4), parameter types' valid ranges, display formats
   (`ToString`), a string type's `characterWidth` of 8 (wider characters

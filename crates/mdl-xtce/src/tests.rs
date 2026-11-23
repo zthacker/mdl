@@ -5699,3 +5699,418 @@ fn a_check_over_no_bytes_is_refused_where_its_start_is_given() {
     assert_eq!(&text[span.start..span.end], "72");
     assert!(text[..span.start].ends_with(r#"<CRC width="16" bitsFromReference=""#));
 }
+
+// ---- Composites (§4.1) ----
+
+const RATE: &str = r#"<FloatParameterType name="Rate"><UnitSet><Unit>rad/s</Unit></UnitSet><FloatDataEncoding sizeInBits="32"/></FloatParameterType>"#;
+
+/// An AncillaryDataSet of (name, text).
+fn ancillary(items: &[(&str, &str)]) -> String {
+    let data: String = items
+        .iter()
+        .map(|(name, text)| format!(r#"<AncillaryData name="{name}">{text}</AncillaryData>"#))
+        .collect();
+    format!("<AncillaryDataSet>{data}</AncillaryDataSet>")
+}
+
+/// An aggregate parameter type of (member, type), with `extra` children
+/// (its ancillary data) before its members.
+fn aggregate(name: &str, members: &[(&str, &str)], extra: &str) -> String {
+    let members: String = members
+        .iter()
+        .map(|(member, ty)| format!(r#"<Member name="{member}" typeRef="{ty}"/>"#))
+        .collect();
+    format!(
+        r#"<AggregateParameterType name="{name}">{extra}<MemberList>{members}</MemberList></AggregateParameterType>"#
+    )
+}
+
+/// A parameter of `ty` with `children` (an alias, ancillary data).
+fn param_with(name: &str, ty: &str, children: &str) -> String {
+    format!(r#"<Parameter name="{name}" parameterTypeRef="{ty}">{children}</Parameter>"#)
+}
+
+/// A document whose one packet, ADCS, holds parameter `Rate` of the
+/// three-member rate vector `Vec`, given `children`.
+fn rate_vector(children: &str) -> String {
+    let types =
+        RATE.to_string() + &aggregate("Vec", &[("x", "Rate"), ("y", "Rate"), ("z", "Rate")], "");
+    let params = param_with("Rate", "Vec", children);
+    doc(&telemetry(
+        &types,
+        &params,
+        &container("ADCS", &entry("Rate")),
+    ))
+}
+
+#[test]
+fn an_aggregate_marked_with_a_frame_is_one_composite_sample() {
+    let text = rate_vector(&ancillary(&[("MDL.frame", "BODY")]));
+    let (packets, _) = valid(&text);
+    let packet = &packets[0];
+    // The members are fields in document order, each mapped to no param of
+    // its own: the composite is the one sample.
+    let entries = packet["entries"].as_array().unwrap();
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Rate_x", "Rate_y", "Rate_z"]);
+    assert!(
+        entries.iter().all(|e| e.get("canonical").is_none()),
+        "{packet:#}"
+    );
+    assert_eq!(
+        packet["composites"],
+        json!([{ "canonical": "sat.rate", "frame": "BODY",
+                 "members": ["Rate_x", "Rate_y", "Rate_z"] }])
+    );
+    // An import that owns its catalog defines the param, in the source's
+    // frame and the members' unit, and none for the members.
+    assert_eq!(
+        bundle(&text)["catalog"]["params"],
+        json!({ "sat.rate": { "type": "vec3", "unit": "rad/s", "frame": "BODY" } })
+    );
+}
+
+#[test]
+fn mdl_members_orders_a_scalar_last_quaternion() {
+    // The type orders its members as MDL's quaternion is, scalar first;
+    // the parameter gives the frame, over the type's none.
+    let q =
+        r#"<FloatParameterType name="Q"><FloatDataEncoding sizeInBits="32"/></FloatParameterType>"#;
+    let quat = aggregate(
+        "Quat",
+        &[("q1", "Q"), ("q2", "Q"), ("q3", "Q"), ("q4", "Q")],
+        &ancillary(&[("MDL.members", "q4 q1 q2 q3")]),
+    );
+    let params = param_with("Att", "Quat", &ancillary(&[("MDL.frame", "ECI_J2000")]));
+    let text = doc(&telemetry(
+        &(q.to_string() + &quat),
+        &params,
+        &container("ADCS", &entry("Att")),
+    ));
+    let (packets, _) = valid(&text);
+    let names: Vec<&str> = packets[0]["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Att_q1", "Att_q2", "Att_q3", "Att_q4"]);
+    assert_eq!(
+        packets[0]["composites"],
+        json!([{ "canonical": "sat.att", "frame": "ECI_J2000",
+                 "members": ["Att_q4", "Att_q1", "Att_q2", "Att_q3"] }])
+    );
+    assert_eq!(
+        bundle(&text)["catalog"]["params"],
+        json!({ "sat.att": { "type": "quat", "frame": "ECI_J2000" } })
+    );
+}
+
+#[test]
+fn a_member_aggregate_whose_type_is_marked_is_a_composite_of_its_own() {
+    let floats = |name: &str, unit: &str| {
+        format!(
+            r#"<FloatParameterType name="{name}"><UnitSet><Unit>{unit}</Unit></UnitSet><FloatDataEncoding sizeInBits="32"/></FloatParameterType>"#
+        )
+    };
+    let ecef = ancillary(&[("MDL.frame", "ECEF")]);
+    let types = floats("Pos", "m")
+        + &floats("Speed", "m/s")
+        + &aggregate("PosVec", &[("x", "Pos"), ("y", "Pos"), ("z", "Pos")], &ecef)
+        + &aggregate(
+            "VelVec",
+            &[("x", "Speed"), ("y", "Speed"), ("z", "Speed")],
+            &ecef,
+        )
+        + &aggregate("State", &[("pos", "PosVec"), ("vel", "VelVec")], "");
+    let text = doc(&telemetry(
+        &types,
+        &param("State", "State"),
+        &container("NAV", &entry("State")),
+    ));
+    let (packets, _) = valid(&text);
+    assert_eq!(
+        packets[0]["composites"],
+        json!([
+            { "canonical": "sat.state.pos", "frame": "ECEF",
+              "members": ["State_pos_x", "State_pos_y", "State_pos_z"] },
+            { "canonical": "sat.state.vel", "frame": "ECEF",
+              "members": ["State_vel_x", "State_vel_y", "State_vel_z"] }
+        ])
+    );
+    assert_eq!(
+        bundle(&text)["catalog"]["params"],
+        json!({
+            "sat.state.pos": { "type": "vec3", "unit": "m", "frame": "ECEF" },
+            "sat.state.vel": { "type": "vec3", "unit": "m/s", "frame": "ECEF" }
+        })
+    );
+}
+
+#[test]
+fn a_referring_import_maps_a_composite_onto_the_catalogs_vector_by_its_alias() {
+    // GEODETIC positions, latitude and longitude in degrees and altitude in
+    // metres, into the owner's ECI_J2000 position.
+    let floats = |name: &str, unit: &str| {
+        format!(
+            r#"<FloatParameterType name="{name}"><UnitSet><Unit>{unit}</Unit></UnitSet><FloatDataEncoding sizeInBits="64"/></FloatParameterType>"#
+        )
+    };
+    let types = floats("Angle", "deg")
+        + &floats("Height", "m")
+        + &aggregate(
+            "Geo",
+            &[("lat", "Angle"), ("lon", "Angle"), ("alt", "Height")],
+            "",
+        );
+    let children = format!(
+        r#"<AliasSet><Alias nameSpace="MDL" alias="nav.position"/></AliasSet>{}"#,
+        ancillary(&[("MDL.frame", "GEODETIC")])
+    );
+    let text = doc(&telemetry(
+        &types,
+        &param_with("Where", "Geo", &children),
+        &container("NAV", &entry("Where")),
+    ));
+    let mut sources = Sources::new();
+    sources.add("sat.xml", text.as_str());
+    let owners = catalog_of(json!({
+        "params": { "nav.position": { "type": "vec3", "unit": "m", "frame": "ECI_J2000" } }
+    }));
+    let parsed = read_with(
+        sources.iter(),
+        &Options::new().with_catalog(CatalogRole::Refer),
+        Context::new().with_catalog(&owners),
+    )
+    .unwrap_or_else(|e| panic!("{:#?}", shown(&sources, &e)));
+    let mut bundle = parsed.bundle;
+    let json = serde_json::to_value(&bundle).unwrap();
+    assert_eq!(json["catalog"], json!({}));
+    assert_eq!(
+        json["sets"][0]["packets"][0]["composites"],
+        json!([{ "canonical": "nav.position", "frame": "GEODETIC",
+                 "members": ["Where_lat", "Where_lon", "Where_alt"] }])
+    );
+    bundle.catalog = owners;
+    if let Err(diagnostics) = validate(bundle) {
+        panic!(
+            "{:#?}",
+            shown(&sources, &parsed.map.locate_all(&diagnostics))
+        );
+    }
+}
+
+#[test]
+fn a_composite_is_refused_where_it_cant_be_one() {
+    let frame = |name: &str| ancillary(&[("MDL.frame", name)]);
+    let cases: Vec<(String, &str, &str)> = vec![
+        (
+            rate_vector(&ancillary(&[("MDL.frame", "SIDEWAYS")])),
+            "xtce.invalid",
+            "MDL.frame \"SIDEWAYS\" isn't a frame",
+        ),
+        (
+            rate_vector(&ancillary(&[("MDL.members", "x y z")])),
+            "xtce.invalid",
+            "MDL.members orders a composite's members, and /Sat/Rate is no composite",
+        ),
+        (
+            rate_vector(&ancillary(&[
+                ("MDL.frame", "BODY"),
+                ("MDL.members", "x y w"),
+            ])),
+            "xtce.invalid",
+            "MDL.members names w, which /Sat/Rate has no member of",
+        ),
+        (
+            rate_vector(&ancillary(&[
+                ("MDL.frame", "BODY"),
+                ("MDL.members", "x x y"),
+            ])),
+            "xtce.invalid",
+            "MDL.members names x twice",
+        ),
+        (
+            rate_vector(&ancillary(&[("MDL.frame", "BODY"), ("MDL.members", "z y")])),
+            "xtce.invalid",
+            "MDL.members names each of /Sat/Rate's members once, and leaves out x",
+        ),
+        (
+            rate_vector(&ancillary(&[("MDL.frame", "BODY"), ("MDL.frame", "ECEF")])),
+            "xtce.invalid",
+            "gives MDL.frame once",
+        ),
+        (
+            rate_vector(&ancillary(&[("MDL.Frame", "BODY")])),
+            "xtce.invalid",
+            "MDL.Frame isn't MDL ancillary data, which is MDL.frame or MDL.members",
+        ),
+        (
+            rate_vector(&frame("GEODETIC")),
+            "xtce.unsupported",
+            "/Sat/Rate is a composite of GEODETIC positions, whose param is in ECEF or \
+             ECI_J2000, so an import that owns its catalog can't define its param",
+        ),
+    ];
+    for (text, code, message) in cases {
+        let (got_code, got) = one_error(&text);
+        assert_eq!(got_code, code, "{got}");
+        assert!(got.contains(message), "{got}");
+    }
+
+    // Two members, a member that isn't a number, members in two units.
+    let two = doc(&telemetry(
+        &(RATE.to_string() + &aggregate("Pair", &[("x", "Rate"), ("y", "Rate")], "")),
+        &param_with("P", "Pair", &frame("BODY")),
+        &container("C", &entry("P")),
+    ));
+    let (code, message) = one_error(&two);
+    assert_eq!(code, "xtce.invalid");
+    assert!(
+        message.contains("a vec3 of 3 members or a quat of 4, and it has 2"),
+        "{message}"
+    );
+    let flag = r#"<BooleanParameterType name="Flag"><IntegerDataEncoding sizeInBits="8"/></BooleanParameterType>"#;
+    let mixed_kinds = doc(&telemetry(
+        &(RATE.to_string()
+            + flag
+            + &aggregate("V", &[("x", "Rate"), ("y", "Rate"), ("ok", "Flag")], "")),
+        &param_with("P", "V", &frame("BODY")),
+        &container("C", &entry("P")),
+    ));
+    let (code, message) = one_error(&mixed_kinds);
+    assert_eq!(code, "xtce.invalid");
+    assert!(
+        message.contains("member ok of /Sat/P isn't a number"),
+        "{message}"
+    );
+    let metres = r#"<FloatParameterType name="Len"><UnitSet><Unit>m</Unit></UnitSet><FloatDataEncoding sizeInBits="32"/></FloatParameterType>"#;
+    let mixed_units = doc(&telemetry(
+        &(RATE.to_string()
+            + metres
+            + &aggregate("V", &[("x", "Rate"), ("y", "Rate"), ("z", "Len")], "")),
+        &param_with("P", "V", &frame("BODY")),
+        &container("C", &entry("P")),
+    ));
+    let (code, message) = one_error(&mixed_units);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.contains("members are in different units (rad/s, rad/s, m)"),
+        "{message}"
+    );
+
+    // A scalar parameter, and an array parameter, marked.
+    let scalar = doc(&telemetry(
+        RATE,
+        &param_with("R", "Rate", &frame("BODY")),
+        &container("C", &entry("R")),
+    ));
+    let (code, message) = one_error(&scalar);
+    assert_eq!(code, "xtce.invalid");
+    assert!(message.contains("isn't an aggregate"), "{message}");
+    let array = doc(&telemetry(
+        &(RATE.to_string() + &array_type("Rates", "Rate", "<FixedValue>2</FixedValue>")),
+        &param_with("R", "Rates", &frame("BODY")),
+        &container("C", &entry("R")),
+    ));
+    let (code, message) = one_error(&array);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.contains("is an array, which can't be a composite yet"),
+        "{message}"
+    );
+
+    // A referring import's composite needs its alias.
+    let mut sources = Sources::new();
+    let referred = rate_vector(&frame("BODY"));
+    sources.add("sat.xml", referred.as_str());
+    let owners = catalog_of(json!({
+        "params": { "sat.rate": { "type": "vec3", "unit": "rad/s", "frame": "BODY" } }
+    }));
+    let errors = read_with(
+        sources.iter(),
+        &Options::new().with_catalog(CatalogRole::Refer),
+        Context::new().with_catalog(&owners),
+    )
+    .map(|_| ())
+    .unwrap_err();
+    let shown = shown(&sources, &errors);
+    assert_eq!(shown.len(), 1, "{shown:#?}");
+    assert_eq!(shown[0].1, "xtce.invalid");
+    assert!(
+        shown[0].3.contains("give parameter Rate one"),
+        "{}",
+        shown[0].3
+    );
+}
+
+#[test]
+fn a_composite_in_a_repeat_or_an_embedded_container_isnt_supported() {
+    let marked = param_with("Rate", "Vec", &ancillary(&[("MDL.frame", "BODY")]));
+    let types =
+        RATE.to_string() + &aggregate("Vec", &[("x", "Rate"), ("y", "Rate"), ("z", "Rate")], "");
+    let repeated = doc(&telemetry(
+        &types,
+        &marked,
+        &container(
+            "C",
+            r#"<ParameterRefEntry parameterRef="Rate"><RepeatEntry><Count><FixedValue>2</FixedValue></Count></RepeatEntry></ParameterRefEntry>"#,
+        ),
+    ));
+    let (code, message) = one_error(&repeated);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.contains("is a composite in a repeated entry"),
+        "{message}"
+    );
+    let embedded = doc(&telemetry(
+        &types,
+        &marked,
+        &(container("Inner", &entry("Rate"))
+            + &container("Outer", r#"<ContainerRefEntry containerRef="Inner"/>"#)),
+    ));
+    let (code, message) = one_error(&embedded);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.contains("is in embedded container Inner"),
+        "{message}"
+    );
+    // MDL.members without a frame is refused on a repeated entry too.
+    let ordered = doc(&telemetry(
+        &types,
+        &param_with("Rate", "Vec", &ancillary(&[("MDL.members", "z y x")])),
+        &container(
+            "C",
+            r#"<ParameterRefEntry parameterRef="Rate"><RepeatEntry><Count><FixedValue>2</FixedValue></Count></RepeatEntry></ParameterRefEntry>"#,
+        ),
+    ));
+    let (code, message) = one_error(&ordered);
+    assert_eq!(code, "xtce.invalid");
+    assert!(
+        message.contains("MDL.members orders a composite's members, and /Sat/Rate is no composite"),
+        "{message}"
+    );
+}
+
+#[test]
+fn ancillary_data_outside_the_mdl_namespace_is_left_out_with_a_warning() {
+    let text = rate_vector(&ancillary(&[
+        ("MDL.frame", "BODY"),
+        ("Vendor.colour", "red"),
+    ]));
+    let (json, warnings) = warned(&text);
+    assert_eq!(
+        warnings,
+        [(
+            "xtce.ignored".to_string(),
+            "Parameter Rate's ancillary data outside the MDL namespace isn't imported".to_string()
+        )]
+    );
+    assert_eq!(
+        json["sets"][0]["packets"][0]["composites"][0]["canonical"],
+        "sat.rate"
+    );
+}

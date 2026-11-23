@@ -8,7 +8,7 @@ use mdl::source::{SourceMap, Span};
 use serde_json::Value;
 
 use super::commands::{Argument, Command};
-use super::{Element, Entry, Packet, Param, StructType, TypeId};
+use super::{Element, Entry, Packet, Param, ParamKind, StructType, TypeId};
 use crate::out::{List, Object, integer_json};
 use crate::types::{ArgumentRange, Order, Scalar};
 
@@ -125,8 +125,26 @@ pub(super) fn bundle(parts: Bundle<'_, '_>) -> (Value, SourceMap) {
 }
 
 fn param_object(param: &Param<'_>) -> Object {
-    let scalar = &param.scalar;
     let mut object = Object::at(param.el.span());
+    match &param.kind {
+        ParamKind::Scalar(scalar) => scalar_param(&mut object, scalar),
+        // A composite's param (§4.1), in its source's frame.
+        ParamKind::Vector { ty, frame, unit } => {
+            object.put("type", *ty, Some(frame.1));
+            if let Some((unit, span)) = unit {
+                object.put("unit", unit.as_str(), Some(*span));
+            }
+            object.put("frame", frame.0.as_str(), Some(frame.1));
+        }
+    }
+    if let Some((text, span)) = &param.description {
+        object.put("description", text.as_str(), Some(*span));
+    }
+    object
+}
+
+/// A scalar param's type, unit, states and limits.
+fn scalar_param(object: &mut Object, scalar: &Scalar<'_>) {
     object.put("type", scalar.param, Some(scalar.el.span()));
     if let Some((unit, span)) = &scalar.unit {
         object.put("unit", unit.as_str(), Some(*span));
@@ -152,10 +170,6 @@ fn param_object(param: &Param<'_>) -> Object {
         }
         object.put_object("limits", object_limits);
     }
-    if let Some((text, span)) = &param.description {
-        object.put("description", text.as_str(), Some(*span));
-    }
-    object
 }
 
 fn command_object(command: &Command<'_>) -> Object {
@@ -299,6 +313,23 @@ impl Writer<'_, '_> {
             object.put_object("identify", identify);
         }
         object.put_list("entries", self.entries(&packet.entries));
+        if !packet.composites.is_empty() {
+            let mut composites = List::default();
+            for composite in &packet.composites {
+                let (frame, frame_span) = composite.frame;
+                let mut written = Object::at(frame_span);
+                let (canonical, canonical_span) = &composite.canonical;
+                written.put("canonical", canonical.as_str(), Some(*canonical_span));
+                written.put("frame", frame.as_str(), Some(frame_span));
+                let mut members = List::default();
+                for (member, span) in &composite.members {
+                    members.push(member.as_str(), Some(*span));
+                }
+                written.put_list("members", members);
+                composites.push_object(written);
+            }
+            object.put_list("composites", composites);
+        }
         object
     }
 

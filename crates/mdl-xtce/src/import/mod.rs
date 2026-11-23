@@ -22,11 +22,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use mdl::ir::{ByteOrder, Encoding, Family, Locator};
+use mdl::ir::{ByteOrder, Encoding, Family, Frame, Locator};
 use mdl::source::{SourceDiagnostic, SourceId, SourceMap, Span};
 use mdl::validate::closest;
 use serde_json::Value;
 
+use crate::ancillary::{self, Mark};
 use crate::names::{catalog_part, identifier, qualified, token};
 use crate::out::Object;
 use crate::report::Report;
@@ -94,8 +95,29 @@ fn id(el: &El<'_>) -> ElId {
 struct Param<'d> {
     key: ParamKey<'d>,
     el: El<'d>,
-    scalar: Scalar<'d>,
+    kind: ParamKind<'d>,
     description: Option<(String, Span)>,
+}
+
+/// What a catalog param is: a scalar's, or a composite's vector (§4.1).
+enum ParamKind<'d> {
+    Scalar(Box<Scalar<'d>>),
+    /// `vec3` or `quat`, in its source's frame and its members' unit.
+    Vector {
+        ty: &'static str,
+        frame: (Frame, Span),
+        unit: Option<(String, Span)>,
+    },
+}
+
+/// A composite (§4.1): one vec3 or quat sample from a marked aggregate's
+/// member fields.
+#[derive(Clone)]
+struct Composite {
+    canonical: (String, Span),
+    frame: (Frame, Span),
+    /// The member fields, in MDL's order: x, y, z or w, x, y, z.
+    members: Vec<(String, Span)>,
 }
 
 /// A field, as conditions, identify keys, counts and lengths see it.
@@ -264,6 +286,8 @@ struct Part<'d> {
     /// Its BinaryEncoding: its size, from the start of the packet, and the
     /// checks over the packets built on it.
     encoding: encoding::ContainerEncoding<'d>,
+    /// The composites of its marked aggregates.
+    composites: Vec<Composite>,
 }
 
 struct Packet<'d> {
@@ -273,6 +297,7 @@ struct Packet<'d> {
     el: El<'d>,
     entries: Vec<Entry<'d>>,
     identify: BTreeMap<String, (i64, Span)>,
+    composites: Vec<Composite>,
 }
 
 const CONTAINER: Expect<'static> = Expect {
@@ -322,6 +347,11 @@ pub(crate) struct Import<'d, 'r> {
     /// Each parameter's field name, before members, and whether another
     /// parameter shares its name.
     field_names: BTreeMap<(usize, &'d str), (String, bool)>,
+    /// Each parameter's own MDL ancillary data (§4.1).
+    marks: BTreeMap<ElId, Mark>,
+    /// The composites of the container being converted, which its part
+    /// takes; an embedded container's are refused.
+    composites: Vec<Composite>,
 }
 
 impl<'d, 'r> Import<'d, 'r> {
@@ -348,6 +378,8 @@ impl<'d, 'r> Import<'d, 'r> {
             broken: BTreeSet::new(),
             embedding: Vec::new(),
             field_names: field_names(tree, options.naming),
+            marks: BTreeMap::new(),
+            composites: Vec::new(),
         }
     }
 
@@ -611,6 +643,7 @@ impl<'d, 'r> Import<'d, 'r> {
         let mut above = Earlier::default();
         let mut identify: BTreeMap<String, (i64, Span)> = BTreeMap::new();
         let mut checks = Vec::new();
+        let mut composites = Vec::new();
         let mut complete = true;
         for (container_space, container) in chain {
             // After a failure, the rest are still converted for their own
@@ -640,6 +673,7 @@ impl<'d, 'r> Import<'d, 'r> {
             }
             entries.extend(part.entries);
             above.fields.extend(part.fields);
+            composites.extend(part.composites);
             // A container's size counts from the start of the packet, as
             // its entries' locations do; where the entries above are
             // missing, it can't be worked out.
@@ -665,6 +699,7 @@ impl<'d, 'r> Import<'d, 'r> {
             el,
             entries,
             identify,
+            composites,
         })
     }
 
@@ -749,12 +784,18 @@ impl<'d, 'r> Import<'d, 'r> {
             );
             return None;
         };
-        let (entries, fields) = self.entries(space, list, above.clone())?;
+        // The composites its entries add are its own, whether or not they
+        // all convert.
+        let start = self.composites.len();
+        let converted = self.entries(space, list, above.clone());
+        let composites = self.composites.split_off(start);
+        let (entries, fields) = converted?;
         Some(Part {
             entries,
             fields,
             identify,
             encoding,
+            composites,
         })
     }
 
@@ -882,12 +923,18 @@ impl<'d, 'r> Import<'d, 'r> {
         el.check(
             &Expect {
                 attrs: &["name", "parameterTypeRef", "shortDescription"],
-                children: &["AliasSet", "LongDescription", "ParameterProperties"],
-                ignored: &["initialValue", "AncillaryDataSet"],
+                children: &[
+                    "AliasSet",
+                    "LongDescription",
+                    "ParameterProperties",
+                    "AncillaryDataSet",
+                ],
+                ignored: &["initialValue"],
                 text: false,
             },
             self.report,
         );
+        let mark = ancillary::mark(el, self.report);
         if let Some(properties) = el.child("ParameterProperties") {
             properties.check(
                 &Expect {
@@ -926,8 +973,40 @@ impl<'d, 'r> Import<'d, 'r> {
             },
             None => None,
         };
+        // MDL.frame makes an aggregate a composite (§4.1); MDL.members
+        // orders a composite's members.
+        let marked = (mark.frame.map(|(_, span)| span))
+            .or_else(|| mark.members.as_ref().map(|(_, span)| *span));
+        if let Some(span) = marked {
+            match &shape {
+                Some(Shape::Scalar(_)) => self.report.error(
+                    Code::Invalid,
+                    span,
+                    format!(
+                        "{} isn't an aggregate, so its MDL ancillary data can't make it a \
+                         composite",
+                        el.describe()
+                    ),
+                ),
+                Some(Shape::Array(_)) => self.report.error(
+                    Code::Unsupported,
+                    span,
+                    format!(
+                        "{} is an array, which can't be a composite yet",
+                        el.describe()
+                    ),
+                ),
+                Some(Shape::Aggregate(..)) | None => {}
+            }
+        }
+        self.marks.insert(id(&el), mark);
         self.shapes.insert(id(&el), shape.clone());
         shape
+    }
+
+    /// A parameter's own MDL ancillary data, read with its shape.
+    fn parameter_mark(&self, el: El<'d>) -> Mark {
+        self.marks.get(&id(&el)).cloned().unwrap_or_default()
     }
 
     /// The field name for a parameter or member: the parameter's, members
@@ -1050,12 +1129,129 @@ impl<'d, 'r> Import<'d, 'r> {
             Param {
                 key: key.clone(),
                 el,
-                scalar: scalar.clone(),
+                kind: ParamKind::Scalar(Box::new(scalar.clone())),
                 description,
             },
         );
         self.names.insert(key.clone(), Some((name.clone(), span)));
         Some(Some((name, span)))
+    }
+
+    /// The catalog name of a composite (§4.1): a referring import's alias,
+    /// or the parameter's name, members adding their parts as `register`
+    /// adds them. An import that owns its catalog registers the composite's
+    /// `vec3` or `quat` param the first time, in its source `frame` and
+    /// its members' one unit (`units`, one per member).
+    fn register_composite(
+        &mut self,
+        key: &ParamKey<'d>,
+        el: El<'d>,
+        ty: &'static str,
+        frame: (Frame, Span),
+        units: &[Option<(String, Span)>],
+        member_description: Option<(String, Span)>,
+    ) -> Option<(String, Span)> {
+        if let Some(name) = self.names.get(key) {
+            return name.clone();
+        }
+        let refer = self.catalog == CatalogRole::Refer;
+        let base = if refer {
+            self.mdl_alias(el)?
+        } else {
+            Some(self.base_name(key.0, el)?)
+        };
+        let Some((mut name, span)) = base else {
+            self.report.error(
+                Code::Invalid,
+                frame.1,
+                format!(
+                    "{} is a composite, which a referring import maps onto the catalog's vec3 \
+                     or quat param by its parameter's alias in the MDL namespace: give \
+                     parameter {} one",
+                    self.describe(key),
+                    key.1
+                ),
+            );
+            return None;
+        };
+        for member in &key.2 {
+            let Some(part) = catalog_part(member) else {
+                self.report.error(
+                    Code::Name,
+                    el.span(),
+                    format!("member {member} has no letters or digits for a catalog name"),
+                );
+                return None;
+            };
+            name.push('.');
+            name.push_str(&part);
+        }
+        if refer {
+            self.names.insert(key.clone(), Some((name.clone(), span)));
+            return Some((name, span));
+        }
+        // An import that owns its catalog gives the param the source's
+        // frame and the members' unit, which it can only when they say it.
+        let described = self.describe(key);
+        let refused = |why: &str| {
+            format!(
+                "{described} {why}, so an import that owns its catalog can't define its \
+                 param: import it referring to a catalog that defines it (§3)"
+            )
+        };
+        if frame.0 == Frame::Geodetic {
+            let message = refused(
+                "is a composite of GEODETIC positions, whose param is in ECEF or ECI_J2000",
+            );
+            self.report.error(Code::Unsupported, frame.1, message);
+            return None;
+        }
+        let unit_of = |unit: &Option<(String, Span)>| unit.as_ref().map(|(text, _)| text.clone());
+        let first = units.first().and_then(unit_of);
+        if units.iter().any(|unit| unit_of(unit) != first) {
+            let shown: Vec<String> = units
+                .iter()
+                .map(|unit| unit_of(unit).unwrap_or_else(|| "no unit".to_string()))
+                .collect();
+            let message = refused(&format!(
+                "is a composite whose members are in different units ({})",
+                shown.join(", ")
+            ));
+            self.report.error(Code::Unsupported, frame.1, message);
+            return None;
+        }
+        if let Some(first) = self.params.get(&name) {
+            let first_span = first.el.span();
+            let other = self.describe(&first.key);
+            let this = self.describe(key);
+            self.report.duplicate(
+                Code::Name,
+                el.span(),
+                first_span,
+                format!("{this} and {other} both have catalog name {name}"),
+            );
+            return None;
+        }
+        let description = if key.2.is_empty() {
+            description(el)
+        } else {
+            member_description
+        };
+        self.params.insert(
+            name.clone(),
+            Param {
+                key: key.clone(),
+                el,
+                kind: ParamKind::Vector {
+                    ty,
+                    frame,
+                    unit: units.first().cloned().flatten(),
+                },
+                description,
+            },
+        );
+        self.names.insert(key.clone(), Some((name.clone(), span)));
+        Some((name, span))
     }
 
     /// A parameter's or meta-command's catalog name: its alias in the MDL

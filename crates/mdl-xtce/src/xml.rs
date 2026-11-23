@@ -463,7 +463,9 @@ fn ignored(owner: &str, name: &str) -> String {
             "MDL keeps descriptions of catalog params, commands and arguments only"
         }
         "AliasSet" => "MDL reads only aliases in the MDL namespace",
-        "AncillaryDataSet" => "MDL has no ancillary data",
+        "AncillaryDataSet" => {
+            "MDL reads ancillary data only on a parameter and an aggregate parameter type"
+        }
         "initialValue" => "MDL has no initial values",
         "changeThreshold" => "MDL has no change thresholds",
         "DefaultAlarm" | "ContextAlarmList" | "BinaryContextAlarmList" => "alarms aren't imported",

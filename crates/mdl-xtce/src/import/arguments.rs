@@ -58,7 +58,7 @@ pub(super) fn leaves<'d>(shape: &Shape<'d>) -> Option<Vec<Leaf<'d>>> {
             from_types: Vec::new(),
             description: None,
         }]),
-        Shape::Aggregate(members) => {
+        Shape::Aggregate(members, _) => {
             let mut out = Vec::new();
             for member in members {
                 for mut leaf in leaves(&member.shape)? {
@@ -85,7 +85,7 @@ pub(super) fn size_references<'s, 'd>(shape: &'s Shape<'d>) -> Vec<(&'s Dynamic<
                 out.push((dynamic, Measure::Length));
             }
         }
-        Shape::Aggregate(members) => {
+        Shape::Aggregate(members, _) => {
             for member in members {
                 out.extend(size_references(&member.shape));
             }
