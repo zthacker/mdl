@@ -3476,3 +3476,63 @@ fn an_xtce_aggregate_marked_with_a_frame_decodes_to_one_vector() {
         }])
     );
 }
+
+/// A marked XTCE array numbered 1 to 4, scalar last, reordered by
+/// `MDL.members` (xtce.md §4.1), decodes to one quaternion sample.
+#[test]
+fn an_xtce_array_marked_with_a_frame_decodes_to_one_quaternion() {
+    let dir = scratch("xtce_array_composite");
+    fs::write(
+        dir.join("sat.xml"),
+        r#"<SpaceSystem name="Sat" xmlns="http://www.omg.org/spec/XTCE/20180204">
+  <TelemetryMetaData>
+    <ParameterTypeSet>
+      <FloatParameterType name="Q"><FloatDataEncoding sizeInBits="32"/></FloatParameterType>
+      <ArrayParameterType name="Quat" arrayTypeRef="Q">
+        <AncillaryDataSet><AncillaryData name="MDL.frame">ECI_J2000</AncillaryData></AncillaryDataSet>
+        <DimensionList><Dimension>
+          <StartingIndex><FixedValue>1</FixedValue></StartingIndex>
+          <EndingIndex><FixedValue>4</FixedValue></EndingIndex>
+        </Dimension></DimensionList>
+      </ArrayParameterType>
+    </ParameterTypeSet>
+    <ParameterSet>
+      <Parameter name="Att" parameterTypeRef="Quat">
+        <AncillaryDataSet><AncillaryData name="MDL.members">4 1 2 3</AncillaryData></AncillaryDataSet>
+      </Parameter>
+    </ParameterSet>
+    <ContainerSet>
+      <SequenceContainer name="ADCS"><EntryList><ParameterRefEntry parameterRef="Att"/></EntryList></SequenceContainer>
+    </ContainerSet>
+  </TelemetryMetaData>
+</SpaceSystem>"#,
+    )
+    .unwrap();
+    // q1 0.5, q2 -0.5, q3 0.25, q4 0.75 (the scalar), big-endian binary32.
+    let out = morphc_in(
+        &dir,
+        &[
+            "decode",
+            "sat.xml",
+            "--hex",
+            "3f000000bf0000003e8000003f400000",
+            "--format",
+            "json",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(
+        report["decode"]["messages"][0]["telemetry"]["samples"],
+        serde_json::json!([{
+            "param": "sat.att",
+            "value": { "frame": "ECI_J2000", "w": 0.75, "x": 0.5, "y": -0.5, "z": 0.25 },
+            "unit": null,
+            "path": "Att[3],Att[0],Att[1],Att[2]",
+            "index": null,
+            "time_offset_ns": null,
+            "quality": "good"
+        }])
+    );
+}

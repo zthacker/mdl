@@ -216,7 +216,8 @@ impl<'d> Import<'d, '_> {
             // A composite's members are fields of the packet, one of each.
             let type_frame = match &shape {
                 Shape::Aggregate(_, type_mark) => type_mark.frame,
-                _ => None,
+                Shape::Array(array) => array.mark.frame,
+                Shape::Scalar(_) => None,
             };
             if let Some((_, span)) = mark.frame.or(type_frame) {
                 self.report.error(
@@ -246,7 +247,7 @@ impl<'d> Import<'d, '_> {
             }
             let (count, offset) = self.repeat(space, repeat, known)?;
             let element = self.element(&key, found.el, &shape, offset)?;
-            let array = self.array_field(&key, found.el, element, count, &place)?;
+            let array = self.array_field(&key, found.el, element, count, &place, false)?;
             out.push(array);
             return Some((out, Vec::new()));
         }
@@ -654,6 +655,119 @@ impl<'d> Import<'d, '_> {
         Some((ty, ordered))
     }
 
+    /// A marked array's elements in MDL's order, as positions from 0, and
+    /// its param's type (§4.1): a fixed three numbers make a vec3, four a
+    /// quat. `MDL.members` names them by the indices XTCE numbers them
+    /// with, from the array's starting index.
+    fn array_composite(
+        &mut self,
+        key: &ParamKey<'d>,
+        array: &ArrayShape<'d>,
+        mark: &Mark,
+        frame_span: Span,
+        naming: Naming,
+    ) -> Option<(&'static str, Vec<u32>)> {
+        let described = self.describe(key);
+        if let Naming::Members(_) = naming {
+            self.report.error(
+                Code::Unsupported,
+                frame_span,
+                format!(
+                    "{described} is a composite in an array's elements, which isn't supported: \
+                     a composite's members are one of each in the packet"
+                ),
+            );
+            return None;
+        }
+        let Some(Count::Fixed { count, start, .. }) = array.count else {
+            self.report.error(
+                Code::Invalid,
+                frame_span,
+                format!(
+                    "MDL.frame makes {described} a composite, an array of a fixed 3 or 4 \
+                     elements, and its count isn't fixed"
+                ),
+            );
+            return None;
+        };
+        let ty = match count {
+            3 => "vec3",
+            4 => "quat",
+            n => {
+                self.report.error(
+                    Code::Invalid,
+                    frame_span,
+                    format!(
+                        "MDL.frame makes {described} a composite, a vec3 of 3 elements or a \
+                         quat of 4, and it has {n}"
+                    ),
+                );
+                return None;
+            }
+        };
+        let numeric = matches!(
+            &array.element,
+            Shape::Scalar(scalar) if matches!(scalar.param, "f64" | "i64" | "u64")
+        );
+        if !numeric {
+            self.report.error(
+                Code::Invalid,
+                frame_span,
+                format!("{described}'s elements aren't numbers, so it can't be a composite"),
+            );
+            return None;
+        }
+        let Some((names, span)) = &mark.members else {
+            return Some((ty, (0..count).collect()));
+        };
+        // The document's EndingIndex, which may be i64::MAX: adding the
+        // count first would overflow.
+        let end = start + (i64::from(count) - 1);
+        let mut order: Vec<u32> = Vec::new();
+        for name in names {
+            let index = name
+                .parse::<i64>()
+                .ok()
+                .filter(|index| (start..=end).contains(index));
+            let Some(position) = index.and_then(|index| u32::try_from(index - start).ok()) else {
+                self.report.error(
+                    Code::Invalid,
+                    *span,
+                    format!(
+                        "MDL.members names {name}, which isn't an index of {described}: its \
+                         indices are {start} to {end}"
+                    ),
+                );
+                return None;
+            };
+            if order.contains(&position) {
+                self.report.error(
+                    Code::Invalid,
+                    *span,
+                    format!("MDL.members names {name} twice"),
+                );
+                return None;
+            }
+            order.push(position);
+        }
+        if order.len() != count as usize {
+            let missing: Vec<String> = (0..count)
+                .filter(|position| !order.contains(position))
+                .map(|position| (start + i64::from(position)).to_string())
+                .collect();
+            self.report.error(
+                Code::Invalid,
+                *span,
+                format!(
+                    "MDL.members names each of {described}'s indices once, and leaves out {}",
+                    missing.join(", ")
+                ),
+            );
+            return None;
+        }
+        Some((ty, order))
+    }
+
     fn build(
         &mut self,
         key: &ParamKey<'d>,
@@ -824,15 +938,69 @@ impl<'d> Import<'d, '_> {
                 }
             }
             Shape::Array(array) => {
+                // As for an aggregate: the parameter's own mark over its
+                // type's, and a member array's type's for it (§4.1).
+                let mark = if key.2.is_empty() {
+                    source.mark.or(&array.mark)
+                } else {
+                    array.mark.clone()
+                };
+                // Its count first: an XTCE 1.1 array without a size is
+                // reported as any is.
                 let seen = known.with(fields);
                 let count = self.array_count(array, key, &seen)?;
+                let composite = match (mark.frame, &mark.members) {
+                    (Some(frame), _) => {
+                        let (ty, order) =
+                            self.array_composite(key, array, &mark, frame.1, naming)?;
+                        Some((ty, order, frame))
+                    }
+                    (None, Some((_, span))) => {
+                        self.report.error(
+                            Code::Invalid,
+                            *span,
+                            format!(
+                                "MDL.members orders a composite's members, and {} is no \
+                                 composite: MDL.frame makes it one",
+                                self.describe(key)
+                            ),
+                        );
+                        return None;
+                    }
+                    (None, None) => None,
+                };
                 let element = self.element(key, el, &array.element, 0)?;
-                let mut entry = self.array_field(key, el, element, count, place)?;
+                let mut entry = self.array_field(
+                    key,
+                    el,
+                    element,
+                    count,
+                    place,
+                    unmapped || composite.is_some(),
+                )?;
                 if !first(&out) {
                     clear_offset(&mut entry);
                 }
                 if let (Entry::Array(field), Naming::Members(_)) = (&mut entry, naming) {
                     field.name = self.name_of(key, el, naming);
+                }
+                if let (Some((ty, order, frame)), Entry::Array(field)) = (composite, &entry) {
+                    let unit = match &array.element {
+                        Shape::Scalar(scalar) => scalar.unit.clone(),
+                        _ => None,
+                    };
+                    let units = vec![unit; order.len()];
+                    let canonical =
+                        self.register_composite(key, el, ty, frame, &units, description)?;
+                    let members = order
+                        .iter()
+                        .map(|position| (format!("{}[{position}]", field.name), place.span))
+                        .collect();
+                    self.composites.push(Composite {
+                        canonical,
+                        frame,
+                        members,
+                    });
                 }
                 out.push(entry);
             }
@@ -841,6 +1009,8 @@ impl<'d> Import<'d, '_> {
     }
 
     /// An array of `element`s reading `key`.
+    /// An array entry. Its scalar elements map to the parameter's param,
+    /// unless they're a composite's members (`unmapped`), which map to none.
     fn array_field(
         &mut self,
         key: &ParamKey<'d>,
@@ -848,8 +1018,10 @@ impl<'d> Import<'d, '_> {
         element: Element<'d>,
         count: (Value, Span),
         place: &Place,
+        unmapped: bool,
     ) -> Option<Entry<'d>> {
         let canonical = match &element {
+            Element::Scalar(_) if unmapped => None,
             Element::Scalar(scalar) => self.register(key, el, scalar, None)?,
             Element::Struct(_) => None,
         };
@@ -953,7 +1125,9 @@ impl<'d> Import<'d, '_> {
         known: &Earlier<'d>,
     ) -> Option<(Value, Span)> {
         match &array.count {
-            Some(Count::Fixed(n, span)) => Some((json!({ "kind": "fixed", "count": n }), *span)),
+            Some(Count::Fixed { count, span, .. }) => {
+                Some((json!({ "kind": "fixed", "count": count }), *span))
+            }
             Some(Count::Counted { dynamic, start }) => {
                 let linear = dynamic.count(*start);
                 self.read_from(dynamic, linear, known)
@@ -963,8 +1137,8 @@ impl<'d> Import<'d, '_> {
                     Code::Invalid,
                     array.el.span(),
                     format!(
-                        "array {} has no DimensionList, and a ParameterRefEntry gives it no \
-                         size; use an ArrayParameterRefEntry with one",
+                        "array {} has no DimensionList, and its entry gives it no size; use \
+                         an ArrayParameterRefEntry with one",
                         self.describe(key)
                     ),
                 );
@@ -1200,7 +1374,7 @@ fn linear_count((slope, intercept): (i64, i64)) -> Result<(u32, i64), String> {
 /// Two counts that are the same: fixed and equal, or the same reference.
 fn same_count(a: &Count<'_>, b: &Count<'_>) -> bool {
     match (a, b) {
-        (Count::Fixed(x, _), Count::Fixed(y, _)) => x == y,
+        (Count::Fixed { count: x, .. }, Count::Fixed { count: y, .. }) => x == y,
         (
             Count::Counted {
                 dynamic: x,

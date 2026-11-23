@@ -1344,7 +1344,7 @@ impl<'d> Import<'d, '_> {
             Some(((json!({ "kind": "fixed", "count": n }), span), bounds))
         };
         match &array.count {
-            Some(Count::Fixed(n, span)) => fixed(*n, *span),
+            Some(Count::Fixed { count, span, .. }) => fixed(*count, *span),
             Some(Count::Counted { dynamic, start }) => {
                 let (multiply, add) = match dynamic.count(*start) {
                     Ok(linear) => linear,

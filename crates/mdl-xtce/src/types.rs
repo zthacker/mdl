@@ -64,17 +64,18 @@ pub(crate) struct ArrayShape<'d> {
     pub(crate) element: Shape<'d>,
     /// `None` for an XTCE 1.1 array, whose container entry gives its size.
     pub(crate) count: Option<Count<'d>>,
+    /// What a parameter type's MDL ancillary data says of it (§4.1).
+    pub(crate) mark: Mark,
 }
 
 /// How many elements an array has.
 #[derive(Clone)]
 pub(crate) enum Count<'d> {
-    Fixed(u32, Span),
+    /// A fixed count, and the index XTCE numbers its first element with,
+    /// which `MDL.members` names elements by (§4.1).
+    Fixed { count: u32, start: i64, span: Span },
     /// From a dimension whose ending index another parameter gives.
-    Counted {
-        dynamic: Dynamic<'d>,
-        start: i64,
-    },
+    Counted { dynamic: Dynamic<'d>, start: i64 },
 }
 
 /// A value's length, before the fields around it are known.
@@ -598,20 +599,31 @@ impl<'d> Types<'d> {
     ) -> Option<Shape<'d>> {
         let role = Role::of(&el);
         let mut attrs = vec!["name", "arrayTypeRef", "numberOfDimensions"];
+        let mut children = vec!["DimensionList"];
         let mut ignored = DESCRIBED.to_vec();
+        // A parameter type's MDL ancillary data can make it a composite
+        // (§4.1); an argument type's is left out.
         match role {
-            Role::Parameter => ignored.push("initialValue"),
+            Role::Parameter => {
+                ignored.retain(|name| *name != "AncillaryDataSet");
+                children.push("AncillaryDataSet");
+                ignored.push("initialValue");
+            }
             Role::Argument => attrs.push("initialValue"),
         }
         el.check(
             &Expect {
                 attrs: &attrs,
-                children: &["DimensionList"],
+                children: &children,
                 ignored: &ignored,
                 text: false,
             },
             report,
         );
+        let mark = match role {
+            Role::Parameter => ancillary::mark(el, report),
+            Role::Argument => ancillary::NO_MARK,
+        };
         let type_ref = el.required("arrayTypeRef", report)?;
         let element = match tree.resolve(space, type_ref.value, role.kind()) {
             Ok(found) => self.shape(tree, found.space, found.el, report)?,
@@ -647,7 +659,12 @@ impl<'d> Types<'d> {
                 None
             }
         };
-        Some(Shape::Array(Box::new(ArrayShape { el, element, count })))
+        Some(Shape::Array(Box::new(ArrayShape {
+            el,
+            element,
+            count,
+            mark,
+        })))
     }
 
     fn aggregate(
@@ -2228,7 +2245,7 @@ pub(crate) fn dimensions<'d>(list: El<'d>, space: usize, report: &mut Report) ->
                 .and_then(|n| n.checked_add(1))
                 .map(u32::try_from)
             {
-                Some(Ok(count)) => Some(Count::Fixed(count, span)),
+                Some(Ok(count)) => Some(Count::Fixed { count, start, span }),
                 _ => {
                     report.error(
                         Code::Invalid,

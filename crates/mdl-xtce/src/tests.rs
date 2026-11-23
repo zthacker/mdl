@@ -6011,15 +6011,15 @@ fn a_composite_is_refused_where_it_cant_be_one() {
     let (code, message) = one_error(&scalar);
     assert_eq!(code, "xtce.invalid");
     assert!(message.contains("isn't an aggregate"), "{message}");
-    let array = doc(&telemetry(
-        &(RATE.to_string() + &array_type("Rates", "Rate", "<FixedValue>2</FixedValue>")),
+    let pair = doc(&telemetry(
+        &(RATE.to_string() + &array_type("Rates", "Rate", "<FixedValue>1</FixedValue>")),
         &param_with("R", "Rates", &frame("BODY")),
         &container("C", &entry("R")),
     ));
-    let (code, message) = one_error(&array);
-    assert_eq!(code, "xtce.unsupported");
+    let (code, message) = one_error(&pair);
+    assert_eq!(code, "xtce.invalid");
     assert!(
-        message.contains("is an array, which can't be a composite yet"),
+        message.contains("a vec3 of 3 elements or a quat of 4, and it has 2"),
         "{message}"
     );
 
@@ -6112,5 +6112,173 @@ fn ancillary_data_outside_the_mdl_namespace_is_left_out_with_a_warning() {
     assert_eq!(
         json["sets"][0]["packets"][0]["composites"][0]["canonical"],
         "sat.rate"
+    );
+}
+
+/// A float type `Q` and an array type `Quat` of four of them numbered
+/// `start` to `start + 3`, with `extra` children (its ancillary data).
+fn quaternion_array(start: i64, extra: &str) -> String {
+    let end = start + 3;
+    format!(
+        r#"<FloatParameterType name="Q"><FloatDataEncoding sizeInBits="32"/></FloatParameterType><ArrayParameterType name="Quat" arrayTypeRef="Q">{extra}<DimensionList><Dimension><StartingIndex><FixedValue>{start}</FixedValue></StartingIndex><EndingIndex><FixedValue>{end}</FixedValue></EndingIndex></Dimension></DimensionList></ArrayParameterType>"#
+    )
+}
+
+#[test]
+fn a_marked_array_is_a_composite_of_its_elements() {
+    // Numbered 1 to 4, scalar last: MDL.members names XTCE's own indices.
+    let types = quaternion_array(1, &ancillary(&[("MDL.frame", "ECI_J2000")]));
+    let params = param_with("Att", "Quat", &ancillary(&[("MDL.members", "4 1 2 3")]));
+    let text = doc(&telemetry(
+        &types,
+        &params,
+        &container("ADCS", &entry("Att")),
+    ));
+    let (packets, _) = valid(&text);
+    let packet = &packets[0];
+    // One array entry, its elements mapped to no param of their own.
+    let entries = packet["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 1, "{packet:#}");
+    assert_eq!(entries[0]["name"], "Att");
+    assert_eq!(entries[0].get("canonical"), None, "{packet:#}");
+    assert_eq!(
+        packet["composites"],
+        json!([{ "canonical": "sat.att", "frame": "ECI_J2000",
+                 "members": ["Att[3]", "Att[0]", "Att[1]", "Att[2]"] }])
+    );
+    assert_eq!(
+        bundle(&text)["catalog"]["params"],
+        json!({ "sat.att": { "type": "quat", "frame": "ECI_J2000" } })
+    );
+}
+
+#[test]
+fn an_xtce_1_1_array_sized_by_its_entry_and_a_member_array_are_composites() {
+    // XTCE 1.1: no DimensionList on the type; the entry sizes it.
+    let types = RATE.to_string()
+        + r#"<ArrayParameterType name="Rates" arrayTypeRef="Rate" numberOfDimensions="1"/>"#;
+    let params = param_with("R", "Rates", &ancillary(&[("MDL.frame", "BODY")]));
+    let sized = r#"<ArrayParameterRefEntry parameterRef="R"><DimensionList><Dimension><StartingIndex><FixedValue>0</FixedValue></StartingIndex><EndingIndex><FixedValue>2</FixedValue></EndingIndex></Dimension></DimensionList></ArrayParameterRefEntry>"#;
+    let text = doc(&telemetry(&types, &params, &container("C", sized)));
+    let (packets, _) = valid(&text);
+    assert_eq!(
+        packets[0]["composites"],
+        json!([{ "canonical": "sat.r", "frame": "BODY", "members": ["R[0]", "R[1]", "R[2]"] }])
+    );
+
+    // A member whose type is a marked array is a composite of its own.
+    let types = quaternion_array(0, &ancillary(&[("MDL.frame", "BODY")]))
+        + U8
+        + &aggregate("Nav", &[("mode", "U8"), ("att", "Quat")], "");
+    let text = doc(&telemetry(
+        &types,
+        &param("Nav", "Nav"),
+        &container("C", &entry("Nav")),
+    ));
+    let (packets, _) = valid(&text);
+    assert_eq!(
+        packets[0]["composites"],
+        json!([{ "canonical": "sat.nav.att", "frame": "BODY",
+                 "members": ["Nav_att[0]", "Nav_att[1]", "Nav_att[2]", "Nav_att[3]"] }])
+    );
+    // The scalar member keeps its own param.
+    let entries = packets[0]["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["canonical"], "sat.nav.mode");
+}
+
+#[test]
+fn a_marked_array_is_refused_where_it_cant_be_a_composite() {
+    let members = |names: &str| {
+        let types = quaternion_array(1, &ancillary(&[("MDL.frame", "BODY")]));
+        let params = param_with("Att", "Quat", &ancillary(&[("MDL.members", names)]));
+        doc(&telemetry(&types, &params, &container("C", &entry("Att"))))
+    };
+    for (names, message) in [
+        (
+            "4 1 2 0",
+            "MDL.members names 0, which isn't an index of /Sat/Att: its indices are 1 to 4",
+        ),
+        ("4 1 2 x", "MDL.members names x, which isn't an index"),
+        ("4 4 2 3", "MDL.members names 4 twice"),
+        (
+            "4 1 2",
+            "MDL.members names each of /Sat/Att's indices once, and leaves out 3",
+        ),
+    ] {
+        let (code, got) = one_error(&members(names));
+        assert_eq!(code, "xtce.invalid", "{got}");
+        assert!(got.contains(message), "{got}");
+    }
+
+    // A count another parameter gives, and elements that aren't numbers.
+    let counted = doc(&telemetry(
+        &(RATE.to_string() + U8 + &array_type("Rates", "Rate", BY_N)),
+        &(N.to_string() + &param_with("R", "Rates", &ancillary(&[("MDL.frame", "BODY")]))),
+        &container("C", &(entry("N") + &entry("R"))),
+    ));
+    let (code, message) = one_error(&counted);
+    assert_eq!(code, "xtce.invalid");
+    assert!(message.contains("its count isn't fixed"), "{message}");
+    let flag = r#"<BooleanParameterType name="Flag"><IntegerDataEncoding sizeInBits="8"/></BooleanParameterType>"#;
+    let flags = doc(&telemetry(
+        &(flag.to_string() + &array_type("Flags", "Flag", "<FixedValue>2</FixedValue>")),
+        &param_with("F", "Flags", &ancillary(&[("MDL.frame", "BODY")])),
+        &container("C", &entry("F")),
+    ));
+    let (code, message) = one_error(&flags);
+    assert_eq!(code, "xtce.invalid");
+    assert!(message.contains("elements aren't numbers"), "{message}");
+
+    // On a repeated entry.
+    let repeated = doc(&telemetry(
+        &quaternion_array(0, &ancillary(&[("MDL.frame", "BODY")])),
+        &param("Att", "Quat"),
+        &container(
+            "C",
+            r#"<ParameterRefEntry parameterRef="Att"><RepeatEntry><Count><FixedValue>2</FixedValue></Count></RepeatEntry></ParameterRefEntry>"#,
+        ),
+    ));
+    let (code, message) = one_error(&repeated);
+    assert_eq!(code, "xtce.unsupported");
+    assert!(
+        message.contains("is a composite in a repeated entry"),
+        "{message}"
+    );
+
+    // An XTCE 1.1 array its entry gives no size: the missing size is the
+    // problem, as for any array.
+    let unsized_array = doc(&telemetry(
+        &(RATE.to_string()
+            + r#"<ArrayParameterType name="Rates" arrayTypeRef="Rate" numberOfDimensions="1"/>"#),
+        &param_with("R", "Rates", &ancillary(&[("MDL.frame", "BODY")])),
+        &container("C", &entry("R")),
+    ));
+    let (code, message) = one_error(&unsized_array);
+    assert_eq!(code, "xtce.invalid");
+    assert!(
+        message.contains("has no DimensionList, and its entry gives it no size"),
+        "{message}"
+    );
+}
+
+#[test]
+fn an_array_ending_at_the_largest_index_maps_its_members() {
+    // Indices i64::MAX - 2 to i64::MAX: the last index is the document's,
+    // worked out without overflowing.
+    let max = i64::MAX;
+    let types = format!(
+        r#"{RATE}<ArrayParameterType name="Rates" arrayTypeRef="Rate"><AncillaryDataSet><AncillaryData name="MDL.frame">BODY</AncillaryData></AncillaryDataSet><DimensionList><Dimension><StartingIndex><FixedValue>{}</FixedValue></StartingIndex><EndingIndex><FixedValue>{max}</FixedValue></EndingIndex></Dimension></DimensionList></ArrayParameterType>"#,
+        max - 2
+    );
+    let params = param_with(
+        "R",
+        "Rates",
+        &ancillary(&[("MDL.members", &format!("{max} {} {}", max - 2, max - 1))]),
+    );
+    let text = doc(&telemetry(&types, &params, &container("C", &entry("R"))));
+    let (packets, _) = valid(&text);
+    assert_eq!(
+        packets[0]["composites"][0]["members"],
+        json!(["R[2]", "R[0]", "R[1]"])
     );
 }

@@ -988,15 +988,7 @@ impl<'d, 'r> Import<'d, 'r> {
                         el.describe()
                     ),
                 ),
-                Some(Shape::Array(_)) => self.report.error(
-                    Code::Unsupported,
-                    span,
-                    format!(
-                        "{} is an array, which can't be a composite yet",
-                        el.describe()
-                    ),
-                ),
-                Some(Shape::Aggregate(..)) | None => {}
+                Some(Shape::Aggregate(..) | Shape::Array(_)) | None => {}
             }
         }
         self.marks.insert(id(&el), mark);
