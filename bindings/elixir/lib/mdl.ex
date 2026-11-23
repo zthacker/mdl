@@ -1,9 +1,9 @@
 defmodule MDL do
   @moduledoc """
   MDL's runtime for Elixir: open an artifact store `morphc` built, decode
-  telemetry, encode commands and decode them back, describe the build, and
-  look up which asset
-  a native id is. It calls the runtime every binding calls (spec/api.md),
+  telemetry, encode commands and decode them back, describe the build,
+  look up which asset a native id is, and turn an event time into an
+  instant. It calls the runtime every binding calls (spec/api.md),
   through a native library, and holds no MDL semantics of its own.
 
       {:ok, mdl} = MDL.open("store", bindings: File.read!("bindings.toml"))
@@ -248,6 +248,26 @@ defmodule MDL do
   def decode_command(handle, family, message) when is_binary(family) and is_map(message) do
     MDL.Native.decode_command(handle, family, message)
   end
+
+  @doc """
+  The instant an event time is (spec/api.md section 2.8), or `nil`:
+  `{:at, ns}` gives `ns`; `{:since_boot, count, unit}` gives `booted` plus
+  `count` in `unit`, when there's a boot instant and the sum is within
+  years 0001 to 9999; `{:ground, ns}` gives `nil`, as the message carries
+  no time of its own.
+
+  `booted` is the latest boot instant the caller has seen for the
+  message's family and asset, its own `:booted` included (`MDL.Decoded`),
+  or `nil`. It needs no handle. Instants are integer nanoseconds since
+  1970-01-01T00:00:00Z, of any size MDL gives; an argument that isn't an
+  event time or an instant raises `ArgumentError`.
+
+      key = {decoded.family, decoded.asset}
+      boots = if decoded.booted, do: Map.put(boots, key, decoded.booted), else: boots
+      MDL.instant(decoded.event_time, Map.get(boots, key))
+  """
+  @spec instant(event_time(), instant() | nil) :: instant() | nil
+  def instant(event_time, booted), do: MDL.Native.instant(event_time, booted)
 
   @doc """
   Describes the build (spec/api.md section 3.3): the catalog, each family

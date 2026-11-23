@@ -112,6 +112,22 @@ defmodule MDLTest do
       assert other.booted == nil
     end
 
+    # A correlation packet's own boot instant gives its own instant: its
+    # clock's, 2023-11-14T22:13:20Z.
+    test "an event time and a boot instant give an instant", context do
+      {:ok, decoded} = decode(context.kitchen, context.messages, "legacy-time-v1")
+      assert MDL.instant(decoded.event_time, decoded.booted) == 1_700_000_000_000_000_000
+      assert MDL.instant(decoded.event_time, nil) == nil
+
+      assert MDL.instant({:at, 5}, nil) == 5
+      assert MDL.instant({:ground, 5}, 7) == nil
+
+      # Past 2262, nanoseconds beyond 64 bits, both in and out.
+      year_2600 = 19_880_899_200_000_000_000
+      assert MDL.instant({:at, year_2600}, nil) == year_2600
+      assert MDL.instant({:since_boot, 1, :ns}, year_2600) == year_2600 + 1
+    end
+
     test "frames are atoms, and vectors structs", context do
       {:ok, decoded} = decode(context.kitchen, context.messages, "sink-mixed")
       frames = for %{value: %MDL.Vec3{frame: frame}} <- decoded.samples, do: frame
@@ -459,6 +475,26 @@ defmodule MDLTest do
         assert_raise ArgumentError, expected, fn ->
           MDL.decode_command(kitchen, "sink", message)
         end
+      end
+    end
+
+    # Instants span years 0001 to 9999: -62135596800 s to just before
+    # 253402300800 s since 1970.
+    test "an event time and a boot instant" do
+      for {event_time, booted, expected} <- [
+            {:now, nil, ~r/an event time is/},
+            {{:later, 1}, nil, ~r/an event time is/},
+            {{:at, 1, 2}, nil, ~r/an event time is/},
+            {{:at, 1.5}, nil, ~r/integer nanoseconds/},
+            {{:at, 253_402_300_800_000_000_000}, nil, ~r/within years 0001 to 9999/},
+            {{:ground, "noon"}, nil, ~r/integer nanoseconds/},
+            {{:since_boot, -1, :s}, nil, ~r/from 0 to 2\^64 - 1/},
+            {{:since_boot, 0x10000000000000000, :s}, nil, ~r/from 0 to 2\^64 - 1/},
+            {{:since_boot, 1, :min}, nil, ~r/an event time is/},
+            {{:at, 1}, "x", ~r/a boot instant is/},
+            {{:since_boot, 1, :s}, -62_135_596_800_000_000_001, ~r/within years 0001/}
+          ] do
+        assert_raise ArgumentError, expected, fn -> MDL.instant(event_time, booted) end
       end
     end
 

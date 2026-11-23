@@ -2,7 +2,8 @@
 
 MDL's runtime as an Elixir library: open an artifact store `morphc`
 built, decode telemetry, encode commands and decode them back, describe
-the build, and look up which asset a native id is. It calls the runtime every binding calls
+the build, look up which asset a native id is, and turn an event time
+into an instant. It calls the runtime every binding calls
 ([spec/api.md](../../spec/api.md)) through a native library built with
 [Rustler](https://github.com/rusterlium/rustler), and holds no MDL
 semantics of its own, so it decodes and encodes exactly as `morphc` does.
@@ -87,6 +88,7 @@ end
 | `MDL.decode/3`, `MDL.decode_many/3` | Decode one message, or many, each to an `MDL.Decoded` or an error |
 | `MDL.encode/3` | Encode a catalog command as a set's command packet, an `MDL.Encoded` |
 | `MDL.decode_command/3` | Decode a command payload back into its catalog command and arguments, an `MDL.DecodedCommand` |
+| `MDL.instant/2` | The instant an event time is, from the boot instant the caller keeps for its asset, or `nil` |
 | `MDL.describe/1` | The catalog, families and sets as the IR has them, and each binary set's layout |
 | `MDL.binding/4`, `MDL.asset/4` | What a native id is at an instant, and which native id an asset is |
 
@@ -151,7 +153,8 @@ system, and runs these tests on it as a Hex install would load it, with
 test stores from the repository's definitions, and checks the binding's
 results against `morphc`'s for the same messages and commands
 ([test/fixtures](test/fixtures/README.md)), and against the decoding,
-encoding and command decoding cases in `conformance/`, whose results are
-worked out from the spec ([spec/conformance.md](../../spec/conformance.md)). `mix format`
+encoding, command decoding and instant cases in `conformance/`, whose
+results are worked out from the spec
+([spec/conformance.md](../../spec/conformance.md)). `mix format`
 formats the Elixir; the native library is in `native/mdl_nif`, its own
 Cargo workspace (`cargo clippy` and `cargo fmt` there).

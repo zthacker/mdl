@@ -181,6 +181,19 @@ fn decode_command<'a>(
     output::result(env, decoded, output::decoded_command)
 }
 
+/// The instant an event time is, after the boot instant the caller keeps
+/// for its asset (`spec/api.md` §2.8). It needs no handle, and is a few
+/// integer operations, so it runs on a normal scheduler.
+#[rustler::nif]
+fn instant<'a>(env: Env<'a>, event_time: Term<'a>, booted: Term<'a>) -> NifResult<Term<'a>> {
+    let event_time = input::event_time(event_time)?;
+    let booted = input::booted(booted)?;
+    Ok(output::instant(
+        env,
+        mdl::runtime::instant(event_time, booted),
+    ))
+}
+
 /// The build, described (`spec/api.md` §2.5).
 #[rustler::nif(schedule = "DirtyCpu")]
 fn describe<'a>(env: Env<'a>, handle: ResourceArc<Handle>) -> NifResult<Term<'a>> {

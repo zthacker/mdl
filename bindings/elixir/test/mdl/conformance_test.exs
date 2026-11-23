@@ -16,11 +16,14 @@ defmodule MDL.ConformanceTest do
   @encoding_files @encoding_dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
   @commands_dir Path.expand("../../../../conformance/decoding_commands", __DIR__)
   @command_files @commands_dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
+  @instants_dir Path.expand("../../../../conformance/instants", __DIR__)
+  @instant_files @instants_dir |> Path.join("**/*.json") |> Path.wildcard() |> Enum.sort()
 
-  test "there are decoding, encoding and command decoding cases to run" do
+  test "there are decoding, encoding, command decoding and instant cases to run" do
     assert @files != [], "no case files in #{@dir}"
     assert @encoding_files != [], "no case files in #{@encoding_dir}"
     assert @command_files != [], "no case files in #{@commands_dir}"
+    assert @instant_files != [], "no case files in #{@instants_dir}"
   end
 
   for path <- @files do
@@ -44,6 +47,14 @@ defmodule MDL.ConformanceTest do
 
     test "the command decoding cases of #{Path.relative_to(path, @commands_dir)}" do
       run_command_decoding(unquote(path))
+    end
+  end
+
+  for path <- @instant_files do
+    @external_resource path
+
+    test "the instant cases of #{Path.relative_to(path, @instants_dir)}" do
+      run_instants(unquote(path))
     end
   end
 
@@ -291,6 +302,40 @@ defmodule MDL.ConformanceTest do
       {%{"decoded" => _}, _} ->
         "#{kase["name"]}: expected a decoded command, got #{inspect(actual)}"
     end
+  end
+
+  # An instant file (spec/conformance.md section 5): each case's event time
+  # and boot instant, in the binding's forms, given to MDL.instant/2.
+  defp run_instants(path) do
+    file = path |> File.read!() |> JSON.decode!()
+
+    failures =
+      file["cases"]
+      |> Enum.map(fn kase ->
+        event_time = instant_event_time(kase["event_time"])
+        booted = kase["booted"] && Fixtures.nanos(kase["booted"])
+        expected = kase["instant"] && Fixtures.nanos(kase["instant"])
+        actual = MDL.instant(event_time, booted)
+
+        if actual === expected,
+          do: nil,
+          else: "#{kase["name"]}: expected #{inspect(expected)}, got #{inspect(actual)}"
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    assert failures == [], Enum.join(failures, "\n\n")
+  end
+
+  # An event time from api.md section 3.1's JSON form, as MDL.Decoded holds
+  # it: a count past 2^53 - 1 is a decimal string in the JSON.
+  defp instant_event_time(%{"kind" => kind, "time" => time}) when kind in ["ground", "at"],
+    do: {String.to_existing_atom(kind), Fixtures.nanos(time)}
+
+  defp instant_event_time(%{"kind" => "since_boot", "value" => value, "unit" => unit})
+       when unit in ["s", "ms", "us", "ns"] do
+    count = Expected.integer_or_text(value)
+    true = is_integer(count)
+    {:since_boot, count, String.to_existing_atom(unit)}
   end
 
   defp group_in_order(cases) do

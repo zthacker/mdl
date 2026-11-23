@@ -2,7 +2,9 @@
 //! the wrong shape raises `ArgumentError`, naming what was expected.
 
 use mdl::bindings::NativeId;
+use mdl::decode::EventTime;
 use mdl::encode::{ArgumentValue, CommandRequest};
+use mdl::ir::TimeUnit;
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::time::Timestamp;
 use rustler::types::MapIterator;
@@ -332,6 +334,73 @@ pub(crate) fn instant(term: Term<'_>, what: &str) -> NifResult<Timestamp> {
                  (years 1677 to 2262)"
             ))
         })
+}
+
+/// An event time as `%MDL.Decoded{}` holds it (`spec/api.md` §3.1):
+/// `{:ground, ns}`, `{:at, ns}` or `{:since_boot, count, unit}`, its
+/// instants any MDL gives and its count from 0 to 2^64 - 1.
+pub(crate) fn event_time(term: Term<'_>) -> NifResult<EventTime> {
+    const SHAPE: &str = "an event time is {:ground, ns}, {:at, ns} or {:since_boot, count, unit}, \
+                         with unit one of :s, :ms, :us and :ns";
+    let items = get_tuple(term).map_err(|_| bad(SHAPE))?;
+    let kind = items
+        .first()
+        .and_then(|kind| kind.decode::<Atom>().ok())
+        .ok_or_else(|| bad(SHAPE))?;
+    match items.as_slice() {
+        [_, time] if kind == atoms::ground() => {
+            wide_instant(*time, "a ground event time's time")?;
+            Ok(EventTime::Ground)
+        }
+        [_, time] if kind == atoms::at() => Ok(EventTime::At(wide_instant(
+            *time,
+            "an at event time's time",
+        )?)),
+        [_, count, unit] if kind == atoms::since_boot() => {
+            let value = match count.get_type() {
+                TermType::Integer => count.decode::<u64>().ok(),
+                _ => None,
+            }
+            .ok_or_else(|| {
+                bad("a since_boot event time's count is an integer from 0 to 2^64 - 1")
+            })?;
+            let unit = match unit.atom_to_string().ok().as_deref() {
+                Some("s") => TimeUnit::S,
+                Some("ms") => TimeUnit::Ms,
+                Some("us") => TimeUnit::Us,
+                Some("ns") => TimeUnit::Ns,
+                _ => return Err(bad(SHAPE)),
+            };
+            Ok(EventTime::SinceBoot { value, unit })
+        }
+        _ => Err(bad(SHAPE)),
+    }
+}
+
+/// A boot instant, or `nil` for none.
+pub(crate) fn booted(term: Term<'_>) -> NifResult<Option<Timestamp>> {
+    if term.decode::<Atom>().is_ok_and(|atom| atom == atoms::nil()) {
+        return Ok(None);
+    }
+    wide_instant(term, "a boot instant").map(Some)
+}
+
+/// An instant MDL can give: integer nanoseconds since
+/// 1970-01-01T00:00:00Z of any size, within years 0001 to 9999.
+fn wide_instant(term: Term<'_>, what: &str) -> NifResult<Timestamp> {
+    const NANOS: i128 = 1_000_000_000;
+    let refuse = || {
+        bad(format!(
+            "{what} is integer nanoseconds since 1970-01-01T00:00:00Z, within years 0001 to 9999"
+        ))
+    };
+    if term.get_type() != TermType::Integer {
+        return Err(refuse());
+    }
+    let nanos = term.decode::<i128>().map_err(|_| refuse())?;
+    let seconds = i64::try_from(nanos.div_euclid(NANOS)).map_err(|_| refuse())?;
+    let fraction = u32::try_from(nanos.rem_euclid(NANOS)).map_err(|_| refuse())?;
+    Timestamp::new(seconds, fraction).ok_or_else(refuse)
 }
 
 /// A map's entries, each key an atom.

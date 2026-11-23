@@ -51,6 +51,7 @@ defmodule MDL.Native do
   def decode_many(_handle, _family, _messages), do: :erlang.nif_error(:nif_not_loaded)
   def encode(_handle, _family, _request), do: :erlang.nif_error(:nif_not_loaded)
   def decode_command(_handle, _family, _message), do: :erlang.nif_error(:nif_not_loaded)
+  def instant(_event_time, _booted), do: :erlang.nif_error(:nif_not_loaded)
   def describe(_handle), do: :erlang.nif_error(:nif_not_loaded)
   def binding(_handle, _family, _native_id, _at), do: :erlang.nif_error(:nif_not_loaded)
   def asset(_handle, _family, _asset, _at), do: :erlang.nif_error(:nif_not_loaded)

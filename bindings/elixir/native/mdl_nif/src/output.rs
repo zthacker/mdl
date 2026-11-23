@@ -179,6 +179,14 @@ pub(crate) fn decoded<'a>(env: Env<'a>, decoded: &DecodedMessage) -> NifResult<T
     )
 }
 
+/// An instant as integer nanoseconds, or `nil` when there's none.
+pub(crate) fn instant<'a>(env: Env<'a>, instant: Option<Timestamp>) -> Term<'a> {
+    match instant {
+        Some(at) => Value::unix_nanos(at).encode(env),
+        None => atoms::nil().encode(env),
+    }
+}
+
 /// `%MDL.Sample{}`.
 fn sample<'a>(env: Env<'a>, sample: &Sample) -> NifResult<Term<'a>> {
     structure(
