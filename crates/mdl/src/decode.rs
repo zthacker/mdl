@@ -83,7 +83,7 @@ use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Ta
 use identify::Index;
 use meaning::{CompiledComposite, sample_value, visit};
 
-pub use clock::{Correlator, EventTime};
+pub use clock::{Correlator, EventTime, boot_instant};
 pub use meaning::{Engineering, Quality, Sample, SampleValue};
 
 /// A decoded message.

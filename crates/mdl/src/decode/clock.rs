@@ -236,31 +236,18 @@ impl Correlator {
         Correlator::default()
     }
 
-    /// Learn from a decoded message if it's its set's correlation packet,
-    /// both clocks have a good reading (a sentinel on either doesn't
-    /// count), and the boot instant they give, counted exactly, is within
-    /// years 0001 to 9999. Returns whether it learned; when it doesn't,
-    /// the asset keeps the boot instant it had.
+    /// Learn from a decoded message if it teaches its asset's boot instant
+    /// ([`boot_instant`]). Returns whether it learned; when it doesn't, the
+    /// asset keeps the boot instant it had.
     pub fn observe(&mut self, decoded: &Decoded<'_>) -> bool {
-        let set = decoded.route.set;
-        let Some(Time::Boot { unit, correlate }) = &set.time else {
+        let Some(booted) = boot_instant(decoded) else {
             return false;
         };
-        if decoded.packet.name != correlate.packet {
-            return false;
-        }
-        let Some((clock, boot)) = clocks(decoded, correlate) else {
-            return false;
-        };
-        let Ok(epoch) = epoch_label(&correlate.epoch) else {
-            return false;
-        };
-        let label = epoch + i128::from(clock) * unit_nanos(correlate.clock_unit);
-        let booted = leap::to_utc(correlate.scale, label) - i128::from(boot) * unit_nanos(*unit);
-        let Some(booted) = Timestamp::from_unix_nanos_wide(booted) else {
-            return false;
-        };
-        self.set_boot_time(&set.family, &decoded.route.binding.asset, booted);
+        self.set_boot_time(
+            &decoded.route.set.family,
+            &decoded.route.binding.asset,
+            booted,
+        );
         true
     }
 
@@ -296,6 +283,29 @@ impl Correlator {
             .or_default()
             .insert(asset.to_string(), booted);
     }
+}
+
+/// The instant an asset booted, which a decoded message teaches when it's
+/// its set's correlation packet (`spec/decoding.md` §8.2): the absolute
+/// clock's instant less the boot clock, both read at one moment and
+/// counted exactly, when both have a good reading (a sentinel on either
+/// doesn't count) and the result is within years 0001 to 9999. `None` for
+/// any other message, and for a correlation packet that teaches nothing.
+///
+/// It's stateless: a consumer keeps, per family and asset, the latest boot
+/// instant it has seen, as a [`Correlator`] does.
+pub fn boot_instant(decoded: &Decoded<'_>) -> Option<Timestamp> {
+    let Some(Time::Boot { unit, correlate }) = &decoded.route.set.time else {
+        return None;
+    };
+    if decoded.packet.name != correlate.packet {
+        return None;
+    }
+    let (clock, boot) = clocks(decoded, correlate)?;
+    let epoch = epoch_label(&correlate.epoch).ok()?;
+    let label = epoch + i128::from(clock) * unit_nanos(correlate.clock_unit);
+    let booted = leap::to_utc(correlate.scale, label) - i128::from(boot) * unit_nanos(*unit);
+    Timestamp::from_unix_nanos_wide(booted)
 }
 
 /// The two clocks of a correlation packet, if both have a good reading.
