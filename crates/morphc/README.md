@@ -123,6 +123,26 @@ with, the `def_version` to record, and the arguments that took their
 defaults. A command that can't be encoded is reported with the library's
 code; a deprecated one encodes with a warning.
 
+`--packet NAME` encodes one of a set's telemetry packets instead, as an
+asset sends it ([spec](../../spec/encoding.md) §9): `--from` gives the
+sending asset's native id (a fixed alias's value when left out), `--value
+PARAM=VALUE` a param's value, read as `--arg` reads an argument (a vec3 or
+quat as a JSON object such as `{"frame": "BODY", "x": 1, "y": 0, "z": 0}`,
+and a param the packet holds several times as a JSON array of its values
+in order), and `--raw ENTRY=VALUE` a top-level entry's raw value (an
+array's as a JSON array, a struct's as a JSON object by entry name). The
+identify keys, the family's locators, counts, lengths and checksums are
+worked out from the definitions. The output is the payload, the metadata
+its link frames it with, and the `def_version` decoding it stamps:
+
+```console
+$ morphc encode store --packet SYS_STATUS --from 1 --value eps.bus_voltage=15.2 --value eps.batt_remaining=76
+set drone_v1  packet SYS_STATUS  from native id 1
+  def_version 9cdb54d367681f74df4f0223c2b3cbbb8cbdd5909ca64839dc2dcfc8d7458617
+  payload 0000000000000000000000000000603b00000000000000000000000000004c
+  metadata msgid = 1, sysid = 1
+```
+
 ## JSON output
 
 `--format json` prints one document on stdout, whatever the outcome, except

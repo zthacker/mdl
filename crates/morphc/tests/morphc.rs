@@ -1927,6 +1927,85 @@ fn encode_gives_the_metadata_and_decodes_back() {
     );
 }
 
+/// A telemetry packet encodes from its params' values, with its identify
+/// key and its family's alias framed as metadata: the drone's SYS_STATUS
+/// is the first message of the walkthrough's capture, byte for byte
+/// (`examples/fleet/drone.jsonl`).
+#[test]
+fn encode_packet_writes_what_the_capture_holds() {
+    let dir = examples("");
+    let base = [
+        "encode",
+        "toml/mission",
+        "xtce/demosat.xml",
+        "--packet",
+        "SYS_STATUS",
+        "--from",
+        "1",
+        "--value",
+        "eps.bus_voltage=15.2",
+    ];
+    let mut args = base.to_vec();
+    args.extend(["--value", "eps.batt_remaining=76"]);
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert!(
+        stdout(&out).ends_with(
+            "set drone_v1  packet SYS_STATUS  from native id 1\n  def_version \
+             9cdb54d367681f74df4f0223c2b3cbbb8cbdd5909ca64839dc2dcfc8d7458617\n  payload \
+             0000000000000000000000000000603b00000000000000000000000000004c\n  metadata msgid = \
+             1, sysid = 1\n"
+        ),
+        "{}",
+        stdout(&out)
+    );
+    args.extend(["--format", "json"]);
+    let out = morphc_in(&dir, &args, None);
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(report["report"], 3);
+    let telemetry = &report["encode"]["telemetry"];
+    assert_eq!(telemetry["native_id"], 1);
+    assert_eq!(
+        telemetry["metadata"],
+        serde_json::json!({ "msgid": 1, "sysid": 1 })
+    );
+    assert_eq!(
+        telemetry["record"],
+        serde_json::json!({ "voltage_battery": 15200, "battery_remaining": 76 })
+    );
+
+    // A value left out is the library's error, naming the entry.
+    let out = morphc_in(&dir, &base, None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stdout(&out).contains(
+            "error[missing_value]: packet SYS_STATUS, battery_remaining: the message holds it, \
+             and no value is given for it, raw or by param\n"
+        ),
+        "{}",
+        stdout(&out)
+    );
+    // A raw value takes the place of a param's.
+    let mut raw = base.to_vec();
+    raw.extend(["--raw", "battery_remaining=76"]);
+    let out = morphc_in(&dir, &raw, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    // --value is for --packet.
+    let out = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "toml/mission",
+            "--command",
+            "eps.set_mode",
+            "--value",
+            "eps.mode=SAFE",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+}
+
 #[test]
 fn encode_says_what_it_needs() {
     let dir = scratch("encode_needs");
