@@ -1062,6 +1062,63 @@ fn a_set_needs_the_version_of_its_newest_feature() {
     }
 }
 
+/// An inverse needs IR 2.4 in telemetry, which encodes through it from
+/// that version on, and nothing in a command packet or a struct type a
+/// command array holds, which have taken one since 2.0.
+#[test]
+fn a_telemetry_inverse_needs_2_4() {
+    let inverse = Conversion::Linear {
+        scale: 2.0,
+        offset: 0.0,
+    };
+    let mut field = Field::new("v", ScalarType::Uint);
+    field.inverse = Some(inverse.clone());
+    let mut element = ScalarElement::new(ScalarType::Uint);
+    element.inverse = Some(inverse);
+    let array = Entry::Array(ArrayEntry::new("a", Element::Scalar(element)));
+    let records = Entry::Array(ArrayEntry::new("rs", Element::struct_type("record")));
+
+    let mut set = Set::new("s", "f");
+    set.types
+        .insert("record".to_string(), StructType::new(vec![array.clone()]));
+    set.commands.push(CommandPacket::new(
+        "C",
+        "c",
+        vec![Entry::Field(field.clone()), records],
+    ));
+    assert_eq!(set.needs(), []);
+
+    set.types.insert(
+        "reading".to_string(),
+        StructType::new(vec![Entry::Field(field.clone())]),
+    );
+    let mut packet = Packet::new("P");
+    packet.entries = vec![Entry::Field(field), array];
+    set.packets.push(packet);
+    let needs: Vec<(String, &str, IrVersion)> = set
+        .needs()
+        .into_iter()
+        .map(|need| (need.pointer, need.feature, need.version))
+        .collect();
+    let v2_4 = IrVersion::new(2, 4);
+    assert_eq!(
+        needs,
+        [
+            (
+                "/types/reading/entries/0/inverse".to_string(),
+                "inverse",
+                v2_4
+            ),
+            ("/packets/0/entries/0/inverse".to_string(), "inverse", v2_4),
+            (
+                "/packets/0/entries/1/element/inverse".to_string(),
+                "inverse",
+                v2_4
+            ),
+        ]
+    );
+}
+
 mod narrowing {
     use super::*;
     use proptest::option;

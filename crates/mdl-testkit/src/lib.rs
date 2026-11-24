@@ -27,13 +27,16 @@ pub mod coverage;
 pub mod layout;
 pub mod shape;
 
+use std::collections::BTreeSet;
+
 use serde_json::Value;
 
 /// The IR version a bundle's sets need, which it states as a document
-/// does: 2.3 if a command packet's argument lists the states it accepts
-/// or says whether it's required, 2.2 if a command packet has `arguments`
-/// of its own (a map, where a catalog command's are a list), 2.1 if a
-/// `signed` key is anywhere in them, else 2.0.
+/// does: 2.4 if a telemetry entry has an `inverse`, 2.3 if a command
+/// packet's argument lists the states it accepts or says whether it's
+/// required, 2.2 if a command packet has `arguments` of its own (a map,
+/// where a catalog command's are a list), 2.1 if a `signed` key is
+/// anywhere in them, else 2.0.
 pub(crate) fn version_for(sets: &Value) -> &'static str {
     fn uses(value: &Value, key: &str, holds: fn(&Value) -> bool) -> bool {
         match value {
@@ -53,7 +56,12 @@ pub(crate) fn version_for(sets: &Value) -> &'static str {
                 .any(|limits| limits.get("states").is_some() || limits.get("required").is_some())
         })
     };
-    if uses(sets, "arguments", uses_2_3) {
+    let telemetry_inverse = sets
+        .as_array()
+        .is_some_and(|sets| sets.iter().any(telemetry_inverse));
+    if telemetry_inverse {
+        "2.4"
+    } else if uses(sets, "arguments", uses_2_3) {
         "2.3"
     } else if uses(sets, "arguments", Value::is_object) {
         "2.2"
@@ -62,4 +70,33 @@ pub(crate) fn version_for(sets: &Value) -> &'static str {
     } else {
         "2.0"
     }
+}
+
+/// Whether one of a set's telemetry entries spells `inverse` (IR 2.4): a
+/// packet's, or a struct type's that no command array holds records of, as
+/// the IR's own `Set::needs` reads it.
+fn telemetry_inverse(set: &Value) -> bool {
+    let entries = |container: &Value| -> Vec<Value> {
+        container["entries"].as_array().cloned().unwrap_or_default()
+    };
+    let records: BTreeSet<String> = set["commands"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(entries)
+        .filter(|entry| entry["kind"] == "array" && entry["element"]["kind"] == "struct")
+        .filter_map(|entry| entry["element"]["name"].as_str().map(str::to_string))
+        .collect();
+    let inverse = |container: &Value| {
+        entries(container).iter().any(|entry| {
+            entry.get("inverse").is_some() || entry["element"].get("inverse").is_some()
+        })
+    };
+    let packets = set["packets"].as_array().into_iter().flatten().any(inverse);
+    let types = set["types"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .any(|(name, ty)| !records.contains(name) && inverse(ty));
+    packets || types
 }

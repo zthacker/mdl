@@ -114,7 +114,7 @@ fn check_layout(
     // A type's size is known before anything that uses it is checked.
     let mut order: Vec<(&String, &StructType)> = set.types.iter().collect();
     order.sort_by_key(|(name, _)| heights.get(name.as_str()).copied().unwrap_or(0));
-    let records = command::record_types(set);
+    let records = set.record_types();
     for (name, struct_type) in order {
         let type_place = place.map_item("types", name, "type");
         let shape = layout.check_container(

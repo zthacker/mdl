@@ -22,7 +22,7 @@ use crate::encode::{
 use crate::ir::{
     Argument, ArgumentRange, ArrayEntry, ByteLength, Catalog, Command, CommandPacket, Conversion,
     Count, Element, Encoding, Entry, Family, Field, Literal, NarrowError, PacketArgument,
-    ParamType, RangeEnds, Scalar, ScalarElement, ScalarType, Set, StructType,
+    ParamType, RangeEnds, Scalar, ScalarType, Set, StructType,
 };
 use crate::text;
 use crate::units::convert_between;
@@ -2405,7 +2405,10 @@ fn requirement(ty: ParamType) -> &'static str {
 }
 
 /// Telemetry fields don't take command-only keys: a field in a packet or
-/// struct type has no constant value, argument, inverse or target.
+/// struct type has no constant value, argument or target. An inverse (IR
+/// 2.4) is for encoding telemetry, as a command field's is for encoding an
+/// argument: on a field or scalar element that maps a param through a
+/// conversion that doesn't invert exactly.
 pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &mut Report) {
     let command_only = |key: &str, at: &Place, report: &mut Report| {
         report.error(
@@ -2423,15 +2426,14 @@ pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &
             if array.argument.is_some() {
                 command_only("argument", &array_place.key("argument"), report);
             }
-            if let Element::Scalar(ScalarElement {
-                inverse: Some(_), ..
-            }) = &array.element
+            if let Element::Scalar(element) = &array.element
+                && element.inverse.is_some()
             {
-                command_only(
-                    "inverse",
-                    &array_place.key("element").key("inverse"),
-                    report,
-                );
+                let element_place = array_place.key("element");
+                check_inverse_keys(&element.as_field(&array.name), &element_place, report);
+                if array.canonical.is_none() {
+                    maps_no_param(&element_place, report);
+                }
             }
         }
         let Entry::Field(field) = entry else {
@@ -2441,35 +2443,35 @@ pub(super) fn check_telemetry_fields(entries: &[Entry], place: &Place, report: &
         for (present, key) in [
             (field.value.is_some(), "value"),
             (field.argument.is_some(), "argument"),
-            (field.inverse.is_some(), "inverse"),
             (field.target.is_some(), "target"),
         ] {
             if present {
                 command_only(key, &field_place.key(key), report);
             }
         }
+        if field.inverse.is_some() {
+            check_inverse_keys(field, &field_place, report);
+            if field.canonical.is_none() {
+                maps_no_param(&field_place, report);
+            }
+        }
     }
 }
 
-/// The struct types command arrays hold records of.
-pub(super) fn record_types(set: &Set) -> BTreeSet<&str> {
-    set.commands
-        .iter()
-        .flat_map(|packet| &packet.entries)
-        .filter_map(|entry| match entry {
-            Entry::Array(ArrayEntry {
-                element: Element::Struct { name },
-                ..
-            }) => Some(name.as_str()),
-            _ => None,
-        })
-        .collect()
+/// An inverse on telemetry that maps no param: encoding takes such an
+/// entry's raw value, so nothing would go through it.
+fn maps_no_param(place: &Place, report: &mut Report) {
+    report.error(
+        Code::ConversionType,
+        &place.key("inverse"),
+        "an inverse converts a param's value for encoding telemetry, and this entry maps none",
+    );
 }
 
 /// A struct type holds command records or telemetry, not both: a record's
 /// fields take arguments and constants, which telemetry can't.
 pub(super) fn check_record_uses(set: &Set, place: &Place, report: &mut Report) {
-    let records = record_types(set);
+    let records = set.record_types();
     let packets = set
         .packets
         .iter()

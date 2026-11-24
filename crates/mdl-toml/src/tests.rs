@@ -366,6 +366,43 @@ fn a_feature_needs_the_version_that_has_it() {
     assert_eq!(parsed.bundle.mdl_version.to_string(), "2.1");
 }
 
+/// A telemetry field's inverse (2.4), for encoding telemetry, needs the
+/// version that has it, where it's given.
+#[test]
+fn a_telemetry_inverse_needs_2_4() {
+    let poly = set("vendor_x_v1", "V").replace(
+        "conversion = { kind = \"linear\", scale = 0.001, offset = 0 }\n",
+        "conversion = { kind = \"poly\", coefficients = [0, 0.001, 1e-9] }\n\
+         inverse = { kind = \"linear\", scale = 1000, offset = 0 }\n",
+    );
+    let found = errors(&[
+        ("catalog.toml", CATALOG),
+        ("family.toml", FAMILY),
+        ("set.toml", &poly),
+    ]);
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(
+        found[0].0.message,
+        "inverse needs MDL IR 2.4, and this document states 2.0; state mdl_version \"2.4\" to \
+         use it"
+    );
+    assert_eq!(
+        found[0].1,
+        Some((
+            "set.toml".to_string(),
+            location(&poly, "{ kind = \"linear\", scale = 1000")
+        ))
+    );
+    let stated = poly.replace("mdl_version = \"2.0\"", "mdl_version = \"2.4\"");
+    let sources = sources(&[
+        ("catalog.toml", CATALOG),
+        ("family.toml", FAMILY),
+        ("set.toml", &stated),
+    ]);
+    let parsed = read(sources.iter()).unwrap();
+    assert_eq!(parsed.bundle.mdl_version.to_string(), "2.4");
+}
+
 /// The states a command packet accepts of an enum argument (2.3) need
 /// the version that has them, where they're given.
 #[test]

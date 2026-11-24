@@ -68,7 +68,7 @@
 //! ```
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -89,7 +89,7 @@ pub struct IrVersion {
 
 impl IrVersion {
     /// The newest version this build reads and writes.
-    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 3 };
+    pub const CURRENT: IrVersion = IrVersion { major: 2, minor: 4 };
 
     /// IR 2.0, which has every feature but those a [`Need`] names.
     pub const V2_0: IrVersion = IrVersion { major: 2, minor: 0 };
@@ -1344,15 +1344,28 @@ impl Set {
     /// Every use of a feature newer than IR 2.0 in the set: in its struct
     /// types, by name, then its packets, then its command packets (each
     /// one's `arguments`, then the features of each of them by name, before
-    /// its entries), each in entry order.
+    /// its entries), each in entry order, an entry's `signed` before its
+    /// `inverse`.
     pub fn needs(&self) -> Vec<Need> {
         let mut needs = Vec::new();
+        let records = self.record_types();
         for (name, ty) in &self.types {
+            let telemetry = !records.contains(name.as_str());
             let name = crate::diagnostics::escape_pointer_token(name);
-            signed_needs(&format!("/types/{name}"), &ty.entries, &mut needs);
+            entry_needs(
+                &format!("/types/{name}"),
+                &ty.entries,
+                telemetry,
+                &mut needs,
+            );
         }
         for (index, packet) in self.packets.iter().enumerate() {
-            signed_needs(&format!("/packets/{index}"), &packet.entries, &mut needs);
+            entry_needs(
+                &format!("/packets/{index}"),
+                &packet.entries,
+                true,
+                &mut needs,
+            );
         }
         for (index, packet) in self.commands.iter().enumerate() {
             if !packet.arguments.is_empty() {
@@ -1378,29 +1391,66 @@ impl Set {
                     }
                 }
             }
-            signed_needs(&format!("/commands/{index}"), &packet.entries, &mut needs);
+            entry_needs(
+                &format!("/commands/{index}"),
+                &packet.entries,
+                false,
+                &mut needs,
+            );
         }
         needs
     }
+
+    /// The struct types whose records the set's command arrays hold. Every
+    /// other struct type holds telemetry: a type holds one or the other,
+    /// never both, which validation checks.
+    pub(crate) fn record_types(&self) -> BTreeSet<&str> {
+        self.commands
+            .iter()
+            .flat_map(|packet| &packet.entries)
+            .filter_map(|entry| match entry {
+                Entry::Array(ArrayEntry {
+                    element: Element::Struct { name },
+                    ..
+                }) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
-/// Each entry of `container` that spells `signed` (IR 2.1).
-fn signed_needs(container: &str, entries: &[Entry], needs: &mut Vec<Need>) {
+/// Each entry of `container` that spells `signed` (IR 2.1) and, in
+/// telemetry, `inverse` (IR 2.4): a command packet's fields have taken an
+/// inverse since 2.0.
+fn entry_needs(container: &str, entries: &[Entry], telemetry: bool, needs: &mut Vec<Need>) {
     for (index, entry) in entries.iter().enumerate() {
         let at = format!("{container}/entries/{index}");
-        let pointer = match entry {
-            Entry::Field(field) => field.signed.map(|_| format!("{at}/signed")),
+        let (signed, inverse, keys) = match entry {
+            Entry::Field(field) => (field.signed.is_some(), field.inverse.is_some(), at),
             Entry::Array(ArrayEntry {
                 element: Element::Scalar(element),
                 ..
-            }) => element.signed.map(|_| format!("{at}/element/signed")),
-            _ => None,
+            }) => (
+                element.signed.is_some(),
+                element.inverse.is_some(),
+                format!("{at}/element"),
+            ),
+            _ => continue,
         };
-        needs.extend(pointer.map(|pointer| Need {
-            pointer,
-            feature: "signed",
-            version: IrVersion::new(2, 1),
-        }));
+        if signed {
+            needs.push(Need {
+                pointer: format!("{keys}/signed"),
+                feature: "signed",
+                version: IrVersion::new(2, 1),
+            });
+        }
+        if inverse && telemetry {
+            needs.push(Need {
+                pointer: format!("{keys}/inverse"),
+                feature: "inverse",
+                version: IrVersion::new(2, 4),
+            });
+        }
     }
 }
 
@@ -1410,8 +1460,9 @@ fn signed_needs(container: &str, entries: &[Entry], needs: &mut Vec<Need>) {
 pub struct Need {
     /// A JSON Pointer to it within the set.
     pub pointer: String,
-    /// Its key: `signed` (2.1), `arguments` (2.2), or a packet argument's
-    /// `states` or `required` (2.3).
+    /// Its key: `signed` (2.1), `arguments` (2.2), a packet argument's
+    /// `states` or `required` (2.3), or a telemetry field's or element's
+    /// `inverse` (2.4).
     pub feature: &'static str,
     /// The lowest version that has it.
     pub version: IrVersion,
@@ -1890,9 +1941,11 @@ pub struct Field {
     /// the inverse of `conversion`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub argument: Option<String>,
-    /// Command packets: engineering value to raw value, for an argument
-    /// whose `conversion` is a polynomial (linear and states conversions
-    /// invert exactly).
+    /// Engineering value to raw value, for a `conversion` that doesn't
+    /// invert exactly (a polynomial, say; linear and states conversions
+    /// do): in a command packet, a field that encodes an argument; in
+    /// telemetry (IR 2.4), a field that maps a param, for encoding
+    /// telemetry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse: Option<Conversion>,
     /// Command packets: `Some(true)` writes the native id of the asset the
@@ -2183,8 +2236,9 @@ pub struct ScalarElement {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub invalid: Vec<Scalar>,
-    /// Command packets: as a field's `inverse`, for elements that encode a
-    /// list argument through a conversion that doesn't invert exactly.
+    /// As a field's `inverse`, for elements whose conversion doesn't
+    /// invert exactly: in a command packet, elements that encode a list
+    /// argument; in telemetry (IR 2.4), elements that map a param.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inverse: Option<Conversion>,
 }

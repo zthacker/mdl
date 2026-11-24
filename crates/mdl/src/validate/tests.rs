@@ -5223,14 +5223,57 @@ fn telemetry_arrays_take_no_command_keys() {
         array["argument"] = json!("mode");
         set_x(v)["types"]["levels"] = json!({ "entries": [array] });
     });
+}
+
+/// A telemetry field or scalar element that maps a param through a
+/// conversion that doesn't invert exactly takes an inverse, for encoding
+/// telemetry (IR 2.4); no other telemetry entry does.
+#[test]
+fn telemetry_takes_an_inverse_where_encoding_needs_one() {
+    let linear = json!({ "kind": "linear", "scale": 2.0, "offset": 0.0 });
+    let poly = json!({ "kind": "poly", "coefficients": [0.5, 2] });
+    // HK's samples map eps.bus_current through a polynomial.
+    assert_eq!(
+        problems(|v| hk(v)["entries"][5]["element"]["inverse"] = linear.clone()),
+        []
+    );
+    // And bus_counts maps eps.bus_voltage, through one here.
+    assert_eq!(
+        problems(|v| {
+            hk(v)["entries"][0]["conversion"] = poly.clone();
+            hk(v)["entries"][0]["inverse"] = linear.clone();
+        }),
+        []
+    );
+    // Its linear conversion inverts exactly, and needs none.
     assert_one(
-        Code::CommandOnly,
-        &format!("{levels}/element/inverse"),
+        Code::ConversionType,
+        "/sets/0/packets/0/entries/0/inverse",
+        |v| hk(v)["entries"][0]["inverse"] = linear.clone(),
+    );
+    // flags maps no param, so encoding takes its raw value.
+    assert_one(
+        Code::ConversionType,
+        "/sets/0/packets/0/entries/3/inverse",
         |v| {
-            let mut array = array.clone();
-            array["element"]["inverse"] = json!({ "kind": "linear", "scale": 2.0, "offset": 0.0 });
-            set_x(v)["types"]["levels"] = json!({ "entries": [array] });
+            hk(v)["entries"][3]["conversion"] = poly.clone();
+            hk(v)["entries"][3]["inverse"] = linear.clone();
         },
+    );
+    // An unconverted element that maps no param, in a struct type: both.
+    let levels = "/sets/0/types/levels/entries/0/element/inverse";
+    assert_eq!(
+        problems(|v| {
+            let array = json!({ "kind": "array", "name": "levels",
+                "count": { "kind": "fixed", "count": 2 },
+                "element": { "kind": "scalar", "type": "uint", "size_bits": 8,
+                             "inverse": linear.clone() } });
+            set_x(v)["types"]["levels"] = json!({ "entries": [array] });
+        }),
+        [
+            (Code::ConversionType, levels.to_string()),
+            (Code::ConversionType, levels.to_string()),
+        ]
     );
 }
 
