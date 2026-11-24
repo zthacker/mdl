@@ -577,8 +577,8 @@ the catalog lists first, wherever the packet writes it.
 | `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length`, `bad_count` | a field or array (§3); the error names it, and an array's element by its index |
 | `no_packet`, `wrong_constant`, and the routing and entry codes of `decoding.md` | decoding a command (§7) |
 | `unknown_packet`, `native_id`, `unknown_param` | encoding telemetry, the request (§9.1) |
-| `missing_value`, `absent_entry`, `unknown_entry`, `duplicate_value`, `wrong_type`, `non_finite`, `unknown_state`, `no_inverse`, `out_of_range`, `invalid_raw`, `raw_range`, `bad_length`, `bad_count`, `invalid_text`, `contains_terminator`, `wrong_constant` | encoding telemetry, an entry or a param's values (§9.2 to §9.4); the error names the entry by its record path (`decoding.md` §7), or the param |
-| `decodes_otherwise` | encoding telemetry, the check (§9.5) |
+| `missing_value`, `absent_entry`, `unknown_entry`, `duplicate_value`, `wrong_type`, `non_finite`, `unknown_state`, `no_inverse`, `out_of_range`, `invalid_raw`, `raw_range`, `bad_length`, `bad_count`, `invalid_text`, `contains_terminator`, `wrong_constant` | encoding telemetry, an entry or a param's values (§9.2 to §9.5); the error names the entry by its record path (`decoding.md` §7), or the param |
+| `invalid_time`, `decodes_otherwise` | encoding telemetry, the check (§9.6); `invalid_time` names the clock |
 | `invalid_layout` | a definition that didn't pass validation; never for one a build accepts, though a store an earlier release built can give it for a checksum that starts before its `from_bits` (`decoding.md` §5.6) |
 
 ## 9. Encoding telemetry
@@ -609,7 +609,11 @@ whole request on any failure, with the codes of §8.
   - raw values by entry name, as decoding's record holds them: a field's
     a raw value; an array's a list, a JSON array's `null` element no
     reading; a struct's, or a record element's, an object of its entries'
-    raw values by name.
+    raw values by name;
+  - optionally, the event time, an instant: when the values were taken,
+    which the packet's clocks read (§9.4);
+  - optionally, the instant the asset booted, which clocks that count
+    time since boot read with the event time.
 
 ### 9.2 Values
 
@@ -701,7 +705,8 @@ Entries are worked out in the order decoding reads them (`decoding.md`
   condition, refuses the request as a value given for it does: a raw
   value [`absent_entry`], or a param's values, which are left over
   [`bad_count`].
-- A checksum is worked out over the payload, last (§9.4).
+- A checksum is worked out over the payload, last (§9.5).
+- The packet's clocks read the event time (§9.4).
 
 A top-level field takes the value where it holds what a locator reads
 (the same bits read the same way, or the same pointer) or what an
@@ -712,37 +717,108 @@ decoding the fixed raw value gives (a `bool` param reads any integer but
 differently refuse the request: [`native_id`] when one is the alias,
 [`wrong_constant`] otherwise.
 
-A set whose time source reads the packet's time where no entry holds it
-(a CUC time code, or an ISO 8601 pointer that no top-level field has)
-can't be encoded from these inputs [`missing_value`].
+### 9.4 Event time
 
-### 9.4 The payload
+A packet's clocks (`decoding.md` §8) read the request's event time, and
+the asset's boot instant, which fix them as the definitions fix values
+(§9.3): a value given for a clock field must be its reading, and a
+param's value what decoding the reading gives [`wrong_constant`]. A clock
+holds its latest reading at or before the event time, as a clock that
+ticks does. Readings start from the event time's *label* on the clock's
+scale (`decoding.md` §8.1, going the other way):
+
+- **`cuc`:** the label less the epoch's: its whole seconds in the
+  `coarse_bytes`, from 0 to 2^(8 × `coarse_bytes`) − 1 [`raw_range`], and
+  in the `fine_bytes` the largest fraction that decoding reads as at most
+  its `n` nanoseconds into the second, `floor(((n + 1) × 2^(8 ×
+  fine_bytes) − 1) / 10^9)`. Both are written over the payload at
+  `offset_bits`, big-endian, and a top-level field that holds exactly the
+  coarse or the fine bytes, as decoding reads them (an unsigned integer
+  of that size at that position, read big-endian, or one whole byte),
+  takes that part.
+- **`elapsed`:** the time field holds the label less the epoch's, in
+  `unit`s, rounded down.
+- **`gps`:** the week field holds the event time's GPS week, the label on
+  the `gps` scale less 1980-01-06T00:00:00 in whole weeks, and the time
+  field the time into that week, from 0 up to a week, in `unit`s, rounded
+  down. With `week_bits`, the week field holds the week modulo
+  2^`week_bits`, which decoding takes back to the week as received at the
+  event time. A time before the first week is refused [`raw_range`].
+- **`iso8601`:** the event time in MDL's one spelling of an instant
+  (`bindings.md` §2), at the pointer: the top-level field there holds it,
+  or where none does it's written into the document (§9.5).
+- **`boot`:** the time field holds the event time less the boot instant,
+  in `unit`s, rounded down; the request gives both. The correlation
+  packet's `boot_field` holds the same, and its `clock_field` the label on
+  the correlation's scale less its epoch's, in `clock_unit`s, rounded
+  down.
+
+An integer count is the whole number of units, rounded down. A float
+count is the least value of the field's format (binary32 for a 32-bit
+field of a binary payload, binary64 otherwise) that decoding reads
+(`decoding.md` §8: times the unit in binary64, rounded down to whole
+nanoseconds) as the latest count of nanoseconds it can at or before the
+event time's; a GPS time of week counts from the start of the event
+time's week. A count the
+field can't hold is refused [`raw_range`], as is one before the clock's
+start (before the epoch, or the boot instant) in an unsigned field. A
+reading the field lists as `invalid` is refused [`invalid_raw`]: decoding
+would read no reading, and give ground time only.
+
+Decoding the readings gives the event time back where the clocks hold its
+label exactly, and otherwise the instant of the latest label before it
+they hold, within one tick of a clock. So the last nanosecond before a
+leap second, which decoding also gives for every label inside the leap
+second, reads on a clock coarser than a nanosecond as the latest label it
+holds before the leap second.
+
+A packet with no clock (a set with no time source, or a packet with no
+time field that isn't a boot set's correlation packet) ignores the
+instants, and has ground time only. A clock the request's instants don't
+set (any, without the event time; a boot clock, without the boot
+instant) takes a value given like any field, and given none is refused
+[`missing_value`]. A CUC time
+code, or an ISO 8601 pointer that no top-level field has, takes no other
+value, so it needs the event time [`missing_value`].
+
+### 9.5 The payload
 
 - **Binary:** each entry at the position decoding finds it
   (`decoding.md` §5.2), with the size decoding measures; bits no entry
   covers are 0. The payload ends at the furthest entry's end, extended to
   the packet's length, which an `exact` length's entries can't pass
-  [`bad_length`], and to the locators' bits, which are written there. An
+  [`bad_length`], and to the bits of the locators and a CUC time code,
+  which are written there. An
   entry that runs to the packet's end (a `remaining` count or length)
   must end where the payload does [`bad_length`]. Checksums are written
   last, in order of position, as §4 says.
 - **JSON:** each entry at its pointer in its container's object, objects
   created along the way, written as §5 writes JSON, so -0 is 0. Then the
-  values locators and identify keys read where no field holds them are
-  put at their pointers, where another entry's value can't be
-  [`wrong_constant`].
+  values locators, identify keys and an ISO 8601 time read where no field
+  holds them are put at their pointers, where another entry's value
+  can't be [`wrong_constant`].
 
-### 9.5 The check
+### 9.6 The check
 
-The payload, framed with its metadata, is decoded as from the native id.
-Unless decoding gives this set, this packet, the native id and every raw
-value worked out, the request is refused [`decodes_otherwise`]: decoding
+The payload, framed with its metadata, is decoded as from the native id,
+received at the event time (without one, at 1970-01-01T00:00:00Z), so a
+GPS week of fewer bits than the week is the event time's. A clock whose
+value decoding can't read as a time is refused [`invalid_time`], naming
+the time field, the field or pointer an ISO 8601 time reads, or `time`
+for a CUC time code. Unless decoding gives this set, this packet, the
+native id and every raw value worked out, and, given an event time, an
+instant at or before it (a time since boot counted from the boot
+instant), the request is refused [`decodes_otherwise`]: decoding
 identifies another packet whose identify keys these values match too, or
-a locator's bits are written over a field's.
+the bits of a locator or a CUC time code are written over a field's.
 
-### 9.6 The result
+### 9.7 The result
 
 - the payload, and the metadata the link frames it with, by name;
 - the set's digest, which decoding the payload stamps;
 - the raw value of each entry in the message, as decoding the payload
-  gives them.
+  gives them;
+- the event time decoding the payload gives, as received at the event
+  time (without one, at 1970-01-01T00:00:00Z, so a GPS week of fewer bits
+  than the week, given raw, is one of the first cycle), and for the set's
+  correlation packet the boot instant it teaches (`decoding.md` §8.2).

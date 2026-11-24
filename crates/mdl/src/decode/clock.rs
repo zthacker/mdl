@@ -14,9 +14,9 @@ use crate::time::{Timestamp, leap};
 const NANOS: i128 = 1_000_000_000;
 
 /// 1980-01-06T00:00:00 on the gps scale, as a label (nanoseconds).
-const GPS_EPOCH: i128 = 315_964_800 * NANOS;
+pub(crate) const GPS_EPOCH: i128 = 315_964_800 * NANOS;
 
-const WEEK: i128 = 604_800 * NANOS;
+pub(crate) const WEEK: i128 = 604_800 * NANOS;
 
 /// When a message's values were taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +137,7 @@ fn labelled(scale: TimeScale, label: i128) -> Result<EventTime, String> {
 
 /// An epoch as a label on its scale: its date and time counted in 86,400 s
 /// days from 1970-01-01T00:00:00.
-fn epoch_label(epoch: &str) -> Result<i128, String> {
+pub(crate) fn epoch_label(epoch: &str) -> Result<i128, String> {
     epoch
         .parse::<Timestamp>()
         .map(Timestamp::unix_nanos_wide)
@@ -147,7 +147,11 @@ fn epoch_label(epoch: &str) -> Result<i128, String> {
 /// A clock field's count of `unit`s as nanoseconds: an integer exactly, a
 /// float multiplied by the unit in binary64 and rounded down to whole
 /// nanoseconds.
-fn count_nanos(value: Option<&Value<'_>>, unit: TimeUnit, field: &str) -> Result<i128, String> {
+pub(crate) fn count_nanos(
+    value: Option<&Value<'_>>,
+    unit: TimeUnit,
+    field: &str,
+) -> Result<i128, String> {
     match value {
         Some(Value::Uint(n)) => Ok(i128::from(*n) * unit_nanos(unit)),
         Some(Value::Int(n)) => Ok(i128::from(*n) * unit_nanos(unit)),
@@ -202,7 +206,7 @@ fn cuc(payload: &[u8], offset_bits: u64, coarse_bytes: u8, fine_bytes: u8) -> Re
     Ok(i128::from(coarse) * NANOS + fine_nanos)
 }
 
-fn unit_nanos(unit: TimeUnit) -> i128 {
+pub(crate) fn unit_nanos(unit: TimeUnit) -> i128 {
     match unit {
         TimeUnit::S => 1_000_000_000,
         TimeUnit::Ms => 1_000_000,

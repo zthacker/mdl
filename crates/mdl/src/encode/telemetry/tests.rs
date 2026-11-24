@@ -2,7 +2,7 @@ use serde_json::{Value as Json, json};
 
 use super::*;
 use crate::artifact::{Artifacts, Written, build};
-use crate::ir::Artifact;
+use crate::ir::{Artifact, TimeUnit};
 use crate::read::{Loaded, read_artifact, read_bundle};
 use crate::validate::validate;
 
@@ -611,4 +611,478 @@ fn a_linear_conversion_of_scale_0_has_no_inverse() {
     bundle["sets"][0]["packets"][0]["entries"][2]["conversion"]["scale"] = json!(0);
     let sets = sets_of(&bundle, "sat");
     assert_eq!(code(sets.encode_telemetry(&hk())), "no_inverse");
+}
+
+// ---- Event time -----------------------------------------------------------------
+
+/// A family for each time source, the alias the payload's first byte (or
+/// `/sat`), its set's packets told apart by `tag` (or `/kind`). The CUC
+/// family is little-endian, so a field holds the code's coarse bytes only
+/// when it's read big-endian, as the code is, and its one fine byte reads
+/// alike either way.
+fn clocks_bundle() -> Json {
+    let binary = |name: &str| {
+        json!({ "name": name, "encoding": "binary", "byte_order": "big",
+                "alias": { "kind": "bits", "offset_bits": 0, "size_bits": 8 } })
+    };
+    let mut little = binary("cucsat");
+    little["byte_order"] = json!("little");
+    let field = |name: &str, ty: &str, size_bits: u32| json!({ "kind": "field", "name": name, "type": ty, "size_bits": size_bits });
+    let id = field("id", "uint", 8);
+    let tag = field("tag", "uint", 8);
+    let with_invalid = |mut field: Json, invalid: Json| {
+        field["invalid"] = invalid;
+        field
+    };
+    let mut big_coarse = field("coarse", "uint", 32);
+    big_coarse["byte_order"] = json!("big");
+    let mut uptime = field("up", "uint", 32);
+    uptime["unit"] = json!("ms");
+    uptime["canonical"] = json!("sys.uptime");
+    json!({
+        "mdl_version": "2.4",
+        "catalog": { "params": { "sys.uptime": { "type": "f64", "unit": "ms" } } },
+        "families": [
+            little, binary("elsat"), binary("gpssat"), binary("bootsat"), binary("secsat"),
+            { "name": "isoprobe", "encoding": "json",
+              "alias": { "kind": "path", "pointer": "/sat" } }
+        ],
+        "sets": [
+            { "name": "cuc_v1", "family": "cucsat",
+              "time": { "kind": "cuc", "offset_bits": 8, "coarse_bytes": 4, "fine_bytes": 1,
+                        "epoch": "1958-01-01T00:00:00Z", "scale": "tai" },
+              "packets": [
+                { "name": "T", "identify": { "tag": 1 },
+                  "entries": [id, big_coarse, field("fine", "uint", 8), tag] },
+                { "name": "LITTLE", "identify": { "tag": 3 },
+                  "entries": [id, field("coarse", "uint", 32), field("fine", "uint", 8), tag] },
+                { "name": "BARE", "identify": { "tag": 2 },
+                  "entries": [id, { "kind": "padding", "size_bits": 40 }, tag] }
+              ] },
+            { "name": "el_v1", "family": "elsat",
+              "time": { "kind": "elapsed", "unit": "ns",
+                        "epoch": "1958-01-01T00:00:00Z", "scale": "tai" },
+              "packets": [
+                { "name": "EI", "identify": { "tag": 1 }, "time_field": "t",
+                  "entries": [id, tag, field("t", "uint", 64)] },
+                { "name": "EF", "identify": { "tag": 2 }, "time_field": "t",
+                  "entries": [id, tag, field("t", "float", 64)] },
+                { "name": "ES", "identify": { "tag": 3 }, "time_field": "t",
+                  "entries": [id, tag, field("t", "float", 32)] },
+                { "name": "ESENT", "identify": { "tag": 4 }, "time_field": "t",
+                  "entries": [id, tag, with_invalid(field("t", "uint", 64),
+                                                    json!([86_410_000_000_000_u64]))] },
+                { "name": "NONE", "identify": { "tag": 5 }, "entries": [id, tag] }
+              ] },
+            { "name": "sec_v1", "family": "secsat",
+              "time": { "kind": "elapsed", "unit": "s",
+                        "epoch": "2000-01-01T00:00:00Z", "scale": "utc" },
+              "packets": [
+                { "name": "S", "time_field": "t", "entries": [id, field("t", "int", 32)] }
+              ] },
+            { "name": "gps_v1", "family": "gpssat",
+              "time": { "kind": "gps", "unit": "ms", "week_field": "wk", "week_bits": 10 },
+              "packets": [
+                { "name": "G", "time_field": "tow",
+                  "entries": [id, field("wk", "uint", 16), field("tow", "uint", 32)] }
+              ] },
+            { "name": "boot_v1", "family": "bootsat",
+              "time": { "kind": "boot", "unit": "ms",
+                        "correlate": { "packet": "CORR", "clock_field": "clk", "clock_unit": "s",
+                                       "boot_field": "up", "epoch": "1970-01-01T00:00:00Z",
+                                       "scale": "utc" } },
+              "packets": [
+                { "name": "HK", "identify": { "tag": 1 }, "time_field": "up",
+                  "entries": [id, tag, uptime] },
+                { "name": "CORR", "identify": { "tag": 2 }, "time_field": "up",
+                  "entries": [id, tag, field("clk", "uint", 32), field("up", "uint", 32)] }
+              ] },
+            { "name": "iso_v1", "family": "isoprobe",
+              "time": { "kind": "iso8601", "pointer": "/t" },
+              "packets": [
+                { "name": "WITH", "identify": { "/kind": "a" },
+                  "entries": [
+                    { "kind": "field", "name": "t", "type": "string", "pointer": "/t" },
+                    { "kind": "field", "name": "v", "type": "float", "pointer": "/v" }
+                  ] },
+                { "name": "BARE", "identify": { "/kind": "b" },
+                  "entries": [
+                    { "kind": "field", "name": "v", "type": "float", "pointer": "/v" }
+                  ] }
+              ] }
+        ]
+    })
+}
+
+fn instant(text: &str) -> Timestamp {
+    text.parse().unwrap()
+}
+
+/// 2026-06-01T12:00:00.123456789Z: Unix second 1,780,315,200, when TAI
+/// is 37 s ahead of UTC and GPS 18 s.
+fn noon() -> Timestamp {
+    instant("2026-06-01T12:00:00.123456789Z")
+}
+
+fn at(time: Timestamp) -> EventTime {
+    EventTime::At(time)
+}
+
+/// The expected readings below are worked out apart from MDL, from the
+/// calendar and the leap-second table. On TAI from 1958, noon is
+/// 2,159,006,437 s (0x80afd2e5) and 123,456,789 ns, 1958 being 4,383 days
+/// before 1970. An 8-bit fraction can be at most 31 (0x1f), since
+/// `(123456789 + 1) * 256 - 1` over 10^9 rounds down to it, and it reads
+/// back as 121,093,750 ns. Its ticks are 3,906,250 ns apart.
+#[test]
+fn a_cuc_time_code_is_written_from_the_event_time() {
+    let sets = sets_of(&clocks_bundle(), "cucsat");
+    let request = TelemetryRequest::new("cuc_v1", "T", 7_u64).with_at(noon());
+    let encoded = sets.encode_telemetry(&request).unwrap();
+    assert_eq!(encoded.payload, [0x07, 0x80, 0xaf, 0xd2, 0xe5, 0x1f, 0x01]);
+    assert_eq!(
+        encoded.record.get("coarse"),
+        Some(&Value::Uint(0x80af_d2e5))
+    );
+    assert_eq!(encoded.record.get("fine"), Some(&Value::Uint(0x1f)));
+    assert_eq!(
+        encoded.event_time,
+        at(instant("2026-06-01T12:00:00.12109375Z"))
+    );
+    // Where no field holds it, it's written over the padding, big-endian
+    // in a little-endian family.
+    let bare = TelemetryRequest::new("cuc_v1", "BARE", 7_u64).with_at(noon());
+    assert_eq!(
+        sets.encode_telemetry(&bare).unwrap().payload,
+        [0x07, 0x80, 0xaf, 0xd2, 0xe5, 0x1f, 0x02]
+    );
+    // A field read little-endian doesn't hold the coarse bytes as the code
+    // reads them, so it takes a value like any field.
+    let little = TelemetryRequest::new("cuc_v1", "LITTLE", 7_u64).with_at(noon());
+    assert_eq!(code(sets.encode_telemetry(&little)), "missing_value");
+    // A nanosecond before a tick reads as the tick before; on it, it reads.
+    for (time, fine, back) in [
+        ("2026-06-01T12:00:00.003906249Z", 0, "2026-06-01T12:00:00Z"),
+        (
+            "2026-06-01T12:00:00.00390625Z",
+            1,
+            "2026-06-01T12:00:00.00390625Z",
+        ),
+    ] {
+        let request = TelemetryRequest::new("cuc_v1", "T", 7_u64).with_at(instant(time));
+        let encoded = sets.encode_telemetry(&request).unwrap();
+        assert_eq!(
+            encoded.record.get("fine"),
+            Some(&Value::Uint(fine)),
+            "{time}"
+        );
+        assert_eq!(encoded.event_time, at(instant(back)));
+    }
+    // Without the event time nothing can give it.
+    let timeless = TelemetryRequest::new("cuc_v1", "BARE", 7_u64);
+    let error = sets.encode_telemetry(&timeless).unwrap_err();
+    assert_eq!(error.code(), "missing_value");
+    assert!(error.to_string().contains("packet BARE, time:"), "{error}");
+    // A field that holds part of it may be given that part, and nothing else.
+    let agreeing = request
+        .clone()
+        .with_raw("coarse", RawValue::Integer(0x80af_d2e5));
+    assert_eq!(code(sets.encode_telemetry(&agreeing)), "ok");
+    let disagreeing = request.with_raw("fine", RawValue::Integer(0));
+    assert_eq!(code(sets.encode_telemetry(&disagreeing)), "wrong_constant");
+    // Before the epoch, or 2^32 s after it, the code can't hold it.
+    let early =
+        TelemetryRequest::new("cuc_v1", "BARE", 7_u64).with_at(instant("1957-12-31T23:59:00Z"));
+    assert_eq!(code(sets.encode_telemetry(&early)), "raw_range");
+    let late =
+        TelemetryRequest::new("cuc_v1", "BARE", 7_u64).with_at(instant("2094-02-07T06:28:00Z"));
+    assert_eq!(code(sets.encode_telemetry(&late)), "raw_range");
+}
+
+/// In nanoseconds on TAI from 1958, noon is 2,159,006,437,123,456,789: a
+/// 64-bit integer holds it exactly. Binary64 values there are 256 apart,
+/// so the latest at or before it is 21 ns earlier; binary32 values are
+/// 2^37 apart, so the latest is 44,703,317,781 ns earlier.
+#[test]
+fn an_elapsed_count_is_its_latest_reading_at_or_before_the_event_time() {
+    let sets = sets_of(&clocks_bundle(), "elsat");
+    let encode = |packet: &str| {
+        sets.encode_telemetry(&TelemetryRequest::new("el_v1", packet, 7_u64).with_at(noon()))
+    };
+    let exact = encode("EI").unwrap();
+    assert_eq!(
+        exact.record.get("t"),
+        Some(&Value::Uint(2_159_006_437_123_456_789))
+    );
+    assert_eq!(exact.event_time, at(noon()));
+    let double = encode("EF").unwrap();
+    assert_eq!(
+        double.record.get("t"),
+        Some(&Value::Float(2_159_006_437_123_456_768.0))
+    );
+    assert_eq!(
+        double.event_time,
+        at(instant("2026-06-01T12:00:00.123456768Z"))
+    );
+    let single = encode("ES").unwrap();
+    assert_eq!(
+        single.record.get("t"),
+        Some(&Value::Float(2_159_006_392_420_139_008.0))
+    );
+    assert_eq!(
+        single.event_time,
+        at(instant("2026-06-01T11:59:15.420139008Z"))
+    );
+    // 30 s later the count is past half way to the next binary32, which
+    // is after the event time, so it still reads the one before.
+    let later = TelemetryRequest::new("el_v1", "ES", 7_u64)
+        .with_at(instant("2026-06-01T12:00:30.123456789Z"));
+    let later = sets.encode_telemetry(&later).unwrap();
+    assert_eq!(later.payload, single.payload);
+    assert_eq!(later.event_time, single.event_time);
+    // A reading the field lists as no reading would leave ground time only:
+    // a day after the epoch is 86,410 s on TAI, as 10 s applies before 1972.
+    let sentinel =
+        TelemetryRequest::new("el_v1", "ESENT", 7_u64).with_at(instant("1958-01-02T00:00:00Z"));
+    assert_eq!(code(sets.encode_telemetry(&sentinel)), "invalid_raw");
+    assert_eq!(code(encode("ESENT")), "ok");
+    // A value given for the clock must be its reading.
+    let given = TelemetryRequest::new("el_v1", "EI", 7_u64)
+        .with_at(noon())
+        .with_raw("t", RawValue::Integer(2_159_006_437_123_456_788));
+    assert_eq!(code(sets.encode_telemetry(&given)), "wrong_constant");
+    // Without the event time, the clock takes a value like any field.
+    let raw = TelemetryRequest::new("el_v1", "EI", 7_u64)
+        .with_raw("t", RawValue::Integer(2_159_006_437_123_456_789));
+    assert_eq!(sets.encode_telemetry(&raw).unwrap().payload, exact.payload);
+    let missing = TelemetryRequest::new("el_v1", "EI", 7_u64);
+    let error = sets.encode_telemetry(&missing).unwrap_err();
+    assert_eq!(error.code(), "missing_value");
+    assert!(error.to_string().contains("give the event time"), "{error}");
+}
+
+/// A whole-second count rounds down before its epoch too: half a second
+/// before 2000 is -1, and half a second after is 0.
+#[test]
+fn a_count_rounds_down_on_either_side_of_its_epoch() {
+    let sets = sets_of(&clocks_bundle(), "secsat");
+    for (time, count, back) in [
+        ("1999-12-31T23:59:59.5Z", -1, "1999-12-31T23:59:59Z"),
+        ("2000-01-01T00:00:00.5Z", 0, "2000-01-01T00:00:00Z"),
+    ] {
+        let request = TelemetryRequest::new("sec_v1", "S", 7_u64).with_at(instant(time));
+        let encoded = sets.encode_telemetry(&request).unwrap();
+        assert_eq!(encoded.record.get("t"), Some(&Value::Int(count)), "{time}");
+        assert_eq!(encoded.event_time, at(instant(back)));
+    }
+}
+
+/// TAI counts the leap second at the end of 2016, so the last nanosecond
+/// of 2016 and the first of 2017 are 1,000,000,001 ns apart on it:
+/// 1,861,920,035,999,999,999 and 1,861,920,037,000,000,000 from 1958.
+#[test]
+fn a_tai_clock_counts_the_leap_second() {
+    let sets = sets_of(&clocks_bundle(), "elsat");
+    for (time, count) in [
+        (
+            "2016-12-31T23:59:59.999999999Z",
+            1_861_920_035_999_999_999_u64,
+        ),
+        ("2017-01-01T00:00:00Z", 1_861_920_037_000_000_000),
+    ] {
+        let request = TelemetryRequest::new("el_v1", "EI", 7_u64).with_at(instant(time));
+        let encoded = sets.encode_telemetry(&request).unwrap();
+        assert_eq!(encoded.record.get("t"), Some(&Value::Uint(count)), "{time}");
+        assert_eq!(encoded.event_time, at(instant(time)));
+    }
+}
+
+/// On GPS time, 18 s ahead of UTC from 1980-01-06, noon is week 2,421 and
+/// 129,618,123 ms into it. Ten bits hold week 373, which decoding takes
+/// back to week 2,421, the one nearest the time it's received.
+#[test]
+fn a_gps_week_of_fewer_bits_is_the_event_times_week_in_them() {
+    let sets = sets_of(&clocks_bundle(), "gpssat");
+    let request = TelemetryRequest::new("gps_v1", "G", 7_u64).with_at(noon());
+    let encoded = sets.encode_telemetry(&request).unwrap();
+    assert_eq!(encoded.record.get("wk"), Some(&Value::Uint(373)));
+    assert_eq!(encoded.record.get("tow"), Some(&Value::Uint(129_618_123)));
+    assert_eq!(encoded.event_time, at(instant("2026-06-01T12:00:00.123Z")));
+    // Before the first week, no week counts it.
+    let early =
+        TelemetryRequest::new("gps_v1", "G", 7_u64).with_at(instant("1980-01-05T00:00:00Z"));
+    assert_eq!(code(sets.encode_telemetry(&early)), "raw_range");
+    let missing = TelemetryRequest::new("gps_v1", "G", 7_u64);
+    assert_eq!(code(sets.encode_telemetry(&missing)), "missing_value");
+}
+
+/// An hour, 123 ms and 456,789 ns after booting at 11:00:00, the uptime
+/// clock reads 3,600,123 ms. The correlation packet's seconds clock reads
+/// 1,780,315,200, so it teaches a boot instant 3,600.123 s before that:
+/// 10:59:59.877.
+#[test]
+fn boot_clocks_count_from_the_boot_instant() {
+    let sets = sets_of(&clocks_bundle(), "bootsat");
+    let booted = instant("2026-06-01T11:00:00Z");
+    let hk = TelemetryRequest::new("boot_v1", "HK", 7_u64)
+        .with_at(noon())
+        .with_booted(booted);
+    let encoded = sets.encode_telemetry(&hk).unwrap();
+    assert_eq!(encoded.record.get("up"), Some(&Value::Uint(3_600_123)));
+    assert_eq!(
+        encoded.event_time,
+        EventTime::SinceBoot {
+            value: 3_600_123,
+            unit: TimeUnit::Ms
+        }
+    );
+    assert_eq!(encoded.booted, None);
+    let corr = TelemetryRequest::new("boot_v1", "CORR", 7_u64)
+        .with_at(noon())
+        .with_booted(booted);
+    let encoded = sets.encode_telemetry(&corr).unwrap();
+    assert_eq!(encoded.record.get("clk"), Some(&Value::Uint(1_780_315_200)));
+    assert_eq!(encoded.record.get("up"), Some(&Value::Uint(3_600_123)));
+    assert_eq!(encoded.booted, Some(instant("2026-06-01T10:59:59.877Z")));
+    // The uptime needs both instants.
+    let unbooted = TelemetryRequest::new("boot_v1", "HK", 7_u64).with_at(noon());
+    let error = sets.encode_telemetry(&unbooted).unwrap_err();
+    assert_eq!(error.code(), "missing_value");
+    assert!(
+        error.to_string().contains("give the boot instant"),
+        "{error}"
+    );
+    let before = TelemetryRequest::new("boot_v1", "HK", 7_u64)
+        .with_at(booted)
+        .with_booted(noon());
+    assert_eq!(code(sets.encode_telemetry(&before)), "raw_range");
+    // A param the clock maps must be what decoding its reading gives.
+    let agreeing = hk
+        .clone()
+        .with_param("sys.uptime", SampleValue::F64(3_600_123.0));
+    assert_eq!(code(sets.encode_telemetry(&agreeing)), "ok");
+    let disagreeing = hk.with_param("sys.uptime", SampleValue::F64(3_600_000.0));
+    assert_eq!(code(sets.encode_telemetry(&disagreeing)), "wrong_constant");
+}
+
+#[test]
+fn an_iso_8601_time_is_written_in_mdls_spelling() {
+    let sets = sets_of(&clocks_bundle(), "isoprobe");
+    let with = TelemetryRequest::new("iso_v1", "WITH", 7_u64)
+        .with_at(noon())
+        .with_raw("v", RawValue::Float(1.5));
+    let encoded = sets.encode_telemetry(&with).unwrap();
+    assert_eq!(
+        String::from_utf8(encoded.payload).unwrap(),
+        r#"{"kind":"a","sat":7,"t":"2026-06-01T12:00:00.123456789Z","v":1.5}"#
+    );
+    assert_eq!(encoded.event_time, at(noon()));
+    let bare = TelemetryRequest::new("iso_v1", "BARE", 7_u64)
+        .with_at(noon())
+        .with_raw("v", RawValue::Float(1.5));
+    assert_eq!(
+        String::from_utf8(sets.encode_telemetry(&bare).unwrap().payload).unwrap(),
+        r#"{"kind":"b","sat":7,"t":"2026-06-01T12:00:00.123456789Z","v":1.5}"#
+    );
+    let timeless =
+        TelemetryRequest::new("iso_v1", "BARE", 7_u64).with_raw("v", RawValue::Float(1.5));
+    let error = sets.encode_telemetry(&timeless).unwrap_err();
+    assert_eq!(error.code(), "missing_value");
+    assert!(error.to_string().contains("packet BARE, /t:"), "{error}");
+    // Text that isn't an RFC 3339 instant gives no event time.
+    let unreadable = TelemetryRequest::new("iso_v1", "WITH", 7_u64)
+        .with_raw("t", RawValue::Text("noon".to_string()))
+        .with_raw("v", RawValue::Float(1.5));
+    let error = sets.encode_telemetry(&unreadable).unwrap_err();
+    assert_eq!(error.code(), "invalid_time");
+    assert!(error.to_string().contains("packet WITH, t:"), "{error}");
+    // Any RFC 3339 spelling reads, but the event time is MDL's.
+    let spelled = with.with_raw(
+        "t",
+        RawValue::Text("2026-06-01T14:00:00.123456789+02:00".to_string()),
+    );
+    assert_eq!(code(sets.encode_telemetry(&spelled)), "wrong_constant");
+}
+
+/// A packet with no clock takes the event time and has ground time only.
+#[test]
+fn a_packet_without_a_clock_has_ground_time_whatever_the_request_gives() {
+    let sets = sets_of(&bundle(), "sat");
+    let plain = sets.encode_telemetry(&hk()).unwrap();
+    let stamped = sets
+        .encode_telemetry(&hk().with_at(noon()).with_booted(noon()))
+        .unwrap();
+    assert_eq!(stamped.payload, plain.payload);
+    assert_eq!(stamped.event_time, EventTime::Ground);
+    let sets = sets_of(&clocks_bundle(), "elsat");
+    let none = TelemetryRequest::new("el_v1", "NONE", 7_u64).with_at(noon());
+    assert_eq!(
+        sets.encode_telemetry(&none).unwrap().event_time,
+        EventTime::Ground
+    );
+}
+
+#[test]
+fn float_keys_bound_the_finite_values() {
+    assert_eq!(clock::SINGLE_TOP, i64::from(f32::MAX.to_bits()));
+    assert_eq!(
+        clock::DOUBLE_TOP,
+        i64::try_from(f64::MAX.to_bits()).unwrap()
+    );
+}
+
+/// What decoding reads a float clock as (`decoding.md` §8): the count times
+/// the unit in binary64, rounded down to whole nanoseconds.
+fn float_decodes(x: f64, unit_nanos: i128) -> i128 {
+    (x * unit_nanos as f64).floor() as i128
+}
+
+proptest::proptest! {
+    /// A float clock's reading decodes to at most the time, is the least
+    /// value that decodes to as much, and nothing decodes later without
+    /// passing the time: where its values are finer than a nanosecond, one
+    /// decodes to the time exactly; otherwise the first value up that
+    /// decodes to more passes it. (Coarser values can still decode alike in
+    /// twos or threes, as the product rounds to binary64 too.)
+    #[test]
+    fn a_float_clock_reads_its_latest_value_at_or_before(
+        nanos in -(1_i128 << 70)..(1_i128 << 70),
+        unit in proptest::sample::select(vec![TimeUnit::S, TimeUnit::Ms, TimeUnit::Us, TimeUnit::Ns]),
+        single in proptest::bool::ANY,
+    ) {
+        let unit_nanos = crate::decode::unit_nanos(unit);
+        let x = clock::float_count(nanos, unit, single).unwrap();
+        let step = |x: f64, up: bool| {
+            if single {
+                let y = x as f32;
+                f64::from(if up { y.next_up() } else { y.next_down() })
+            } else if up {
+                x.next_up()
+            } else {
+                x.next_down()
+            }
+        };
+        if single {
+            proptest::prop_assert_eq!(f64::from(x as f32), x);
+        }
+        let read = float_decodes(x, unit_nanos);
+        proptest::prop_assert!(read <= nanos, "{x} reads {read}, past {nanos}");
+        let below = step(x, false);
+        proptest::prop_assert!(float_decodes(below, unit_nanos) < read, "{below} reads as {x} does");
+        if (step(x, true) - x) * (unit_nanos as f64) < 1.0 {
+            proptest::prop_assert_eq!(read, nanos);
+        } else {
+            let mut above = step(x, true);
+            for _ in 0..8 {
+                if float_decodes(above, unit_nanos) != read {
+                    break;
+                }
+                above = step(above, true);
+            }
+            proptest::prop_assert!(
+                float_decodes(above, unit_nanos) > nanos,
+                "{above} reads {}, not past {nanos}", float_decodes(above, unit_nanos)
+            );
+        }
+    }
 }

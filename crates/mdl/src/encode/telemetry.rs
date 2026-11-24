@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use self::clock::{EVENT_TIME, Reading};
 use super::write::{Lookup, Node, json_text, write_field};
 use super::{FieldProblem, Raw, float_raw, integer_raw, rounded, run_bytes, show_double};
 use crate::bindings::{Binding, NativeId, Resolver};
@@ -25,7 +26,10 @@ use crate::bits::{IntForm, write_bits};
 use crate::canonical::write_string;
 use crate::checksum::Algorithm;
 use crate::convert::{Converted, inverse};
-use crate::decode::{Problem, Record, SampleValue, Value, good_value, holds, is_sentinel, when};
+use crate::decode::{
+    DecodeError, EventTime, Problem, Record, SampleValue, Value, boot_instant, good_value, holds,
+    instant, is_sentinel, when,
+};
 use crate::ir::{
     ArrayEntry, ByteLength, ByteOrder, Catalog, Conversion, Count, Digest, Element, Encoding,
     Entry, Family, Field, Frame, FromField, Length, Locator, Packet, Param, ParamType, Scalar,
@@ -57,8 +61,8 @@ pub enum RawValue {
 }
 
 /// One of a set's packets to encode: the set and the packet, the native
-/// id of the asset that sends it, its params' values, and raw values for
-/// its entries.
+/// id of the asset that sends it, its params' values, raw values for its
+/// entries, and when its values were taken.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct TelemetryRequest {
@@ -71,6 +75,11 @@ pub struct TelemetryRequest {
     /// Raw values by entry name: a struct's or record's as a record, an
     /// array's as a list.
     pub raw: Vec<(String, RawValue)>,
+    /// The event time: when the values were taken, which the packet's
+    /// clocks read.
+    pub at: Option<Timestamp>,
+    /// When the asset booted, for clocks that count time since boot.
+    pub booted: Option<Timestamp>,
 }
 
 impl TelemetryRequest {
@@ -85,6 +94,8 @@ impl TelemetryRequest {
             native_id: native_id.into(),
             params: Vec::new(),
             raw: Vec::new(),
+            at: None,
+            booted: None,
         }
     }
 
@@ -102,6 +113,19 @@ impl TelemetryRequest {
 
     pub fn with_raw(mut self, name: impl Into<String>, value: RawValue) -> Self {
         self.raw.push((name.into(), value));
+        self
+    }
+
+    /// When the values were taken, which the packet's clocks read.
+    pub fn with_at(mut self, at: Timestamp) -> Self {
+        self.at = Some(at);
+        self
+    }
+
+    /// When the asset booted, which clocks that count time since boot
+    /// read with the event time.
+    pub fn with_booted(mut self, booted: Timestamp) -> Self {
+        self.booted = Some(booted);
         self
     }
 }
@@ -184,6 +208,12 @@ pub struct EncodedTelemetry<'a> {
     pub metadata: Vec<(String, MetadataValue)>,
     /// Every entry's raw value, as decoding the payload gives them.
     pub record: Record<'a>,
+    /// The event time decoding the payload gives: at or before the
+    /// request's, by less than one tick of the packet's clock.
+    pub event_time: EventTime,
+    /// When the asset booted, as decoding the payload teaches it, for the
+    /// set's correlation packet.
+    pub booted: Option<Timestamp>,
 }
 
 /// Why a packet can't be encoded.
@@ -333,10 +363,21 @@ pub enum EntryProblem {
     )]
     Uncounted { param: String },
     #[error(
-        "the set's time source reads the packet's time where no entry holds it, so encoding \
-         needs the event time"
+        "the set's time source reads the packet's time where no entry holds it, so it needs the \
+         event time"
     )]
     NoEventTime,
+    /// A clock the request's instants don't set, given no value.
+    #[error(
+        "it's one of the packet's clocks, and it's given no value: give {give}, or a value for it"
+    )]
+    UnsetClock { give: &'static str },
+    /// The event time as a reading the clock doesn't hold.
+    #[error("the event time makes it {raw}, and it holds {holds}")]
+    EventTimeRange { raw: String, holds: String },
+    /// A clock's value that decoding can't read as a time.
+    #[error("decoding can't read an event time from it: {reason}")]
+    InvalidTime { reason: String },
 }
 
 impl EntryProblem {
@@ -354,7 +395,10 @@ impl EntryProblem {
             EntryProblem::Outside { .. } => "out_of_range",
             EntryProblem::InvalidRaw { .. } => "invalid_raw",
             EntryProblem::WrongConstant { .. } | EntryProblem::Conflict { .. } => "wrong_constant",
+            EntryProblem::EventTimeRange { .. } => "raw_range",
+            EntryProblem::InvalidTime { .. } => "invalid_time",
             EntryProblem::NoEventTime
+            | EntryProblem::UnsetClock { .. }
             | EntryProblem::Uncounted { .. }
             | EntryProblem::EmptyRecords => "missing_value",
         }
@@ -392,7 +436,7 @@ impl FamilySets {
         let family = self.family();
         let order = self.byte_order();
         let type_sizes = loaded.program.type_sizes();
-        let fixed = Fixed::of(family, set, packet, &request.native_id, &type_sizes)?;
+        let fixed = Fixed::of(family, set, packet, request, &type_sizes)?;
         let mut planner = Planner::new(set, packet, &loaded.catalog, order.is_some(), request)?;
         let planned = planner.container(&packet.entries, "", &request.raw, Some(&fixed))?;
         planner.finish()?;
@@ -441,15 +485,8 @@ impl FamilySets {
             .into_iter()
             .map(|(name, (value, _))| (name, value))
             .collect();
-        check_round_trip(
-            self,
-            set,
-            packet,
-            &request.native_id,
-            &payload,
-            &metadata,
-            &record,
-        )?;
+        let (event_time, booted) =
+            check_round_trip(self, set, packet, request, &payload, &metadata, &record)?;
         Ok(EncodedTelemetry {
             set,
             def_version: &loaded.def_version,
@@ -457,6 +494,8 @@ impl FamilySets {
             payload,
             metadata,
             record,
+            event_time,
+            booted,
         })
     }
 }
@@ -468,6 +507,8 @@ impl FamilySets {
 #[derive(Debug, Clone, PartialEq)]
 enum Fix {
     Int(i128),
+    /// A float clock's reading.
+    Float(f64),
     Text(String),
 }
 
@@ -490,6 +531,7 @@ impl Fix {
     fn json(&self) -> String {
         match self {
             Fix::Int(n) => n.to_string(),
+            Fix::Float(x) => show_double(*x),
             Fix::Text(text) => {
                 let mut out = String::new();
                 write_string(&mut out, text);
@@ -501,15 +543,16 @@ impl Fix {
     fn show(&self) -> String {
         match self {
             Fix::Int(n) => n.to_string(),
+            Fix::Float(x) => show_double(*x),
             Fix::Text(text) => format!("{text:?}"),
         }
     }
 }
 
-/// What the definitions fix before any value is given: the metadata the
-/// link frames the packet with, raw values of top-level fields that the
-/// locators and identify keys read, and what's written over the laid-out
-/// payload where no field holds it.
+/// What the definitions and the request's instants fix before any value
+/// is given: the metadata the link frames the packet with, raw values of
+/// top-level fields that the locators, identify keys and clocks read, and
+/// what's written over the laid-out payload where no field holds it.
 #[derive(Debug, Default)]
 struct Fixed {
     /// By name: the value, and what fixes it.
@@ -518,11 +561,25 @@ struct Fixed {
     fields: BTreeMap<String, (Fix, String)>,
     /// What fixes a value from the native id, for a conflict's code.
     alias: String,
-    /// A binary payload's locator bits: offset, size, value, what.
-    bits: Vec<(u64, u32, u64, String)>,
+    /// A binary payload's bits that locators and a CUC time code read.
+    bits: Vec<BitRun>,
     /// A JSON payload's values at pointers no field holds: the pointer's
     /// tokens, the value, what.
     pointers: Vec<(String, Fix, String)>,
+    /// Clock fields the request's instants don't set, by name: what would.
+    unset: BTreeMap<String, &'static str>,
+}
+
+/// Bits written over a laid-out binary payload.
+#[derive(Debug)]
+struct BitRun {
+    offset: u64,
+    size: u32,
+    value: u64,
+    /// The byte order they're read in: `None` for the family's.
+    order: Option<ByteOrder>,
+    /// What fixes them.
+    what: String,
 }
 
 impl Fixed {
@@ -530,9 +587,10 @@ impl Fixed {
         family: &Family,
         set: &Set,
         packet: &Packet,
-        native_id: &NativeId,
+        request: &TelemetryRequest,
         type_sizes: &BTreeMap<&str, u64>,
     ) -> Result<Fixed, TelemetryError> {
+        let native_id = &request.native_id;
         let refuse = |reason: String| TelemetryError::NativeId {
             native_id: native_id.to_string(),
             reason,
@@ -563,7 +621,7 @@ impl Fixed {
                             bits_max(*size_bits)
                         ))
                     })?;
-                let holder = bits_holder(packet, &offsets, order, *offset_bits, *size_bits);
+                let holder = bits_holder(packet, &offsets, order, order, *offset_bits, *size_bits);
                 fixed.locator_bits(
                     packet,
                     holder,
@@ -607,7 +665,8 @@ impl Fixed {
                     let value = integer_value(version)
                         .and_then(|n| fits_bits(n, *size_bits))
                         .ok_or_else(|| layout_error(packet, "a version its locator's bits hold"))?;
-                    let holder = bits_holder(packet, &offsets, order, *offset_bits, *size_bits);
+                    let holder =
+                        bits_holder(packet, &offsets, order, order, *offset_bits, *size_bits);
                     fixed.locator_bits(
                         packet,
                         holder,
@@ -655,20 +714,56 @@ impl Fixed {
                 )?;
             }
         }
-        let timeless = match &set.time {
-            Some(Time::Cuc { .. }) => Some("time"),
-            Some(Time::Iso8601 { pointer }) if top_level_at(packet, pointer).is_none() => {
-                Some(pointer.as_str())
-            }
-            _ => None,
-        };
-        if let Some(path) = timeless {
-            return Err(TelemetryError::Entry {
+        let binary = family.encoding == Encoding::Binary;
+        let clocks = clock::clocks(set, packet, request.at, request.booted, binary).map_err(
+            |(path, problem)| TelemetryError::Entry {
                 packet: packet.name.clone(),
-                path: path.to_string(),
-                problem: EntryProblem::NoEventTime,
-            });
+                path,
+                problem,
+            },
+        )?;
+        for reading in clocks.readings {
+            match reading {
+                Reading::Field { name, value, why } => {
+                    fixed.field(packet, &name, value, why, native_id)?;
+                }
+                Reading::Text { pointer, text } => {
+                    fixed.locator_path(packet, &pointer, Fix::Text(text), EVENT_TIME, native_id)?;
+                }
+                Reading::Code {
+                    offset_bits,
+                    coarse_bytes,
+                    coarse,
+                    fine_bytes,
+                    fine,
+                } => {
+                    let coarse_size = u32::from(coarse_bytes) * 8;
+                    let fine_size = u32::from(fine_bytes) * 8;
+                    let fine_at = offset_bits + coarse_size;
+                    let big = Some(ByteOrder::Big);
+                    let parts = [
+                        (offset_bits, coarse_size, coarse),
+                        (fine_at, fine_size, fine),
+                    ];
+                    for (at, size, part) in parts.into_iter().filter(|(_, size, _)| *size > 0) {
+                        // A field that holds exactly the part, as decoding
+                        // reads it, takes it.
+                        if let Some(name) = bits_holder(packet, &offsets, order, big, at, size) {
+                            let value = Fix::Int(i128::from(part));
+                            fixed.field(packet, &name, value, EVENT_TIME, native_id)?;
+                        }
+                    }
+                    fixed.bits.push(BitRun {
+                        offset: u64::from(offset_bits),
+                        size: coarse_size + fine_size,
+                        value: (coarse << fine_size) | fine,
+                        order: big,
+                        what: EVENT_TIME.to_string(),
+                    });
+                }
+            }
         }
+        fixed.unset = clocks.unset.into_iter().collect();
         Ok(fixed)
     }
 
@@ -687,8 +782,13 @@ impl Fixed {
         if let Some(name) = holder {
             self.field(packet, &name, value, what, native_id)?;
         }
-        self.bits
-            .push((u64::from(offset), size, bits, what.to_string()));
+        self.bits.push(BitRun {
+            offset: u64::from(offset),
+            size,
+            value: bits,
+            order: None,
+            what: what.to_string(),
+        });
         Ok(())
     }
 
@@ -784,16 +884,20 @@ impl Fixed {
     }
 }
 
-/// The top-level field that holds exactly the bits a locator reads, as it
-/// reads them: an unsigned integer of that size at that static position,
-/// in the family's byte order, always present.
+/// The top-level field that holds exactly the bits a locator or a CUC
+/// time code reads, as it reads them in byte order `reads`: an unsigned
+/// integer of that size at that static position, read in that order (in
+/// its own or the family's, `order`), always present. A whole byte reads
+/// alike in either order.
 fn bits_holder(
     packet: &Packet,
     offsets: &[Option<u64>],
     order: Option<ByteOrder>,
+    reads: Option<ByteOrder>,
     offset: u32,
     size: u32,
 ) -> Option<String> {
+    let whole_byte = size == 8 && offset.is_multiple_of(8);
     packet
         .entries
         .iter()
@@ -804,7 +908,7 @@ fn bits_holder(
                     && field.size_bits == Some(size)
                     && *at == Some(u64::from(offset))
                     && field.when.is_none()
-                    && (field.byte_order.is_none() || field.byte_order == order) =>
+                    && (whole_byte || field.byte_order.or(order) == reads) =>
             {
                 Some(field.name.clone())
             }
@@ -1258,7 +1362,21 @@ impl<'a, 'r> Planner<'a, 'r> {
                         } else {
                             None
                         };
-                        self.field(field, &path, own, fix, measured)?
+                        let unset = fixed.and_then(|fixed| fixed.unset.get(&field.name));
+                        match (self.field(field, &path, own, fix, measured), unset) {
+                            (
+                                Err(TelemetryError::Entry {
+                                    problem: EntryProblem::Missing,
+                                    ..
+                                }),
+                                Some(give),
+                            ) => {
+                                return Err(
+                                    self.entry_error(&path, EntryProblem::UnsetClock { give })
+                                );
+                            }
+                            (plan, _) => plan?,
+                        }
                     }
                 }
                 Entry::Array(array) => {
@@ -1951,6 +2069,7 @@ fn fix_value(field: &Field, fix: &Fix, binary: bool) -> Result<Value<'static>, F
                 .ok_or(FieldProblem::Layout("an integer for an integer field"))?;
             integer_raw(field, n, binary)
         }
+        (ScalarType::Float, Fix::Float(x)) => float_raw(field, *x, binary),
         (ScalarType::Bool, Fix::Int(n @ (0 | 1))) => Ok(Value::Bool(*n == 1)),
         (ScalarType::String, Fix::Int(n)) => Ok(Value::Str(n.to_string())),
         (ScalarType::String, Fix::Text(text)) => Ok(Value::Str(text.clone())),
@@ -2266,8 +2385,8 @@ impl<'t> BinaryOut<'t> {
     fn lay(&mut self, packet: &Packet, planned: &[Planned], fixed: &Fixed) -> Result<(), Failed> {
         let end = self.container(&packet.entries, planned, 0, "", true)?;
         let mut bits = end;
-        for (offset, size, _, _) in &fixed.bits {
-            bits = bits.max(offset + u64::from(*size));
+        for run in &fixed.bits {
+            bits = bits.max(run.offset + u64::from(run.size));
         }
         match &packet.length {
             Some(Length::Exact { bytes }) => {
@@ -2302,13 +2421,16 @@ impl<'t> BinaryOut<'t> {
                 ));
             }
         }
-        for (offset, size, value, what) in &fixed.bits {
-            write_bits(&mut self.payload, *offset, *size, *value, self.order).map_err(|_| {
-                (
-                    what.clone(),
-                    FieldProblem::Layout("locator bits inside the packet"),
-                )
-            })?;
+        for run in &fixed.bits {
+            let order = run.order.unwrap_or(self.order);
+            write_bits(&mut self.payload, run.offset, run.size, run.value, order).map_err(
+                |_| {
+                    (
+                        run.what.clone(),
+                        FieldProblem::Layout("locator bits inside the packet"),
+                    )
+                },
+            )?;
         }
         self.checksums.sort_unstable();
         let checksums = std::mem::take(&mut self.checksums);
@@ -2769,11 +2891,11 @@ fn check_round_trip(
     sets: &FamilySets,
     set: &Set,
     packet: &Packet,
-    native_id: &NativeId,
+    request: &TelemetryRequest,
     payload: &[u8],
     metadata: &[(String, MetadataValue)],
     record: &Record<'_>,
-) -> Result<(), TelemetryError> {
+) -> Result<(EventTime, Option<Timestamp>), TelemetryError> {
     let otherwise = |detail: String| TelemetryError::DecodesOtherwise {
         packet: packet.name.clone(),
         detail,
@@ -2782,20 +2904,27 @@ fn check_round_trip(
         .iter()
         .map(|(name, value)| (name.as_str(), value.as_meta()))
         .collect();
-    let message = Message::new(
-        Payload::of(sets.family().encoding, payload),
-        Timestamp::from_unix_nanos(0),
-    )
-    .with_metadata(&meta);
+    // Received at the event time, a GPS week of fewer bits than the week
+    // resolves to the event time's.
+    let ground_time = request.at.unwrap_or(Timestamp::UNIX_EPOCH);
+    let message = Message::new(Payload::of(sets.family().encoding, payload), ground_time)
+        .with_metadata(&meta);
     let sender = Sender {
         set: (!sets.versioned()).then(|| set.name.clone()),
     };
-    let decoded = sets.decode(&message, &sender).map_err(|error| {
-        otherwise(format!(
-            "decoding the payload fails: {error} [{}]",
-            error.code()
-        ))
-    })?;
+    let decoded = sets
+        .decode(&message, &sender)
+        .map_err(|error| match error {
+            DecodeError::Time { reason, .. } => TelemetryError::Entry {
+                packet: packet.name.clone(),
+                path: clock_path(set, packet),
+                problem: EntryProblem::InvalidTime { reason },
+            },
+            error => otherwise(format!(
+                "decoding the payload fails: {error} [{}]",
+                error.code()
+            )),
+        })?;
     if decoded.route.set.name != set.name {
         return Err(otherwise(format!(
             "decoding the payload chooses set {}",
@@ -2809,7 +2938,7 @@ fn check_round_trip(
             decoded.packet.name
         )));
     }
-    if decoded.route.native_id != *native_id {
+    if decoded.route.native_id != request.native_id {
         return Err(otherwise(format!(
             "decoding the payload reads native id {}",
             decoded.route.native_id
@@ -2821,8 +2950,32 @@ fn check_round_trip(
              over it"
         )));
     }
-    Ok(())
+    let booted = boot_instant(&decoded);
+    if let Some(at) = request.at
+        && let Some(read) = instant(decoded.event_time, request.booted)
+        && read > at
+    {
+        return Err(otherwise(format!(
+            "decoding the payload reads event time {read}, after the request's {at}"
+        )));
+    }
+    Ok((decoded.event_time, booted))
 }
 
+/// Where a packet's event time is read, for an error: its time field, the
+/// field or pointer an ISO 8601 time reads, or `time` for a CUC time code.
+fn clock_path(set: &Set, packet: &Packet) -> String {
+    match &set.time {
+        Some(Time::Iso8601 { pointer }) => {
+            top_level_at(packet, pointer).unwrap_or_else(|| pointer.clone())
+        }
+        Some(Time::Elapsed { .. } | Time::Gps { .. } | Time::Boot { .. }) => {
+            packet.time_field.clone().unwrap_or_default()
+        }
+        Some(Time::Cuc { .. }) | None => "time".to_string(),
+    }
+}
+
+mod clock;
 #[cfg(test)]
 mod tests;

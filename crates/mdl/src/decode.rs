@@ -78,6 +78,7 @@ use crate::validate::{
     KeyId, KeyValue, by_value, command_identities, decoding_facts, exact, static_offsets,
 };
 
+pub(crate) use clock::{GPS_EPOCH, WEEK, count_nanos, epoch_label, unit_nanos};
 pub use command::{CommandDecodeError, DecodedCommand};
 use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Tables};
 pub(crate) use extract::{holds, when};

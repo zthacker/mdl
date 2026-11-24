@@ -733,9 +733,10 @@ newer table. A new IERS bulletin is a new version of this table.
 | | | 2015-07-01 | 36 s |
 | | | 2017-01-01 | 37 s |
 
-Going the other way, for `gps` week resolution (§8), a UTC instant's
-label on a scale is the instant plus the TAI − UTC in effect at it (less
-19 s for `gps`, plus 32.184 s for `tt`).
+Going the other way, for `gps` week resolution (§8) and for encoding
+telemetry (`encoding.md` §9.4), a UTC instant's label on a scale is the
+instant plus the TAI − UTC in effect at it (less 19 s for `gps`, plus
+32.184 s for `tt`).
 
 ### 8.2 Correlation
 

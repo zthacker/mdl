@@ -10,6 +10,10 @@
 //! Checksums aren't given back: they covered the random bytes, where
 //! encoding writes zeros. A JSON payload writes -0 as 0, as RFC 8785 does,
 //! so a JSON record is compared with its zeros positive.
+//!
+//! A message's clocks come back from the event time the testkit reads from
+//! them by its own reading of the time spec (its leap seconds, GPS weeks
+//! and epochs), given as the request's instants.
 
 #[path = "common/artifacts.rs"]
 mod artifacts;
@@ -17,7 +21,7 @@ mod artifacts;
 use mdl::bindings::{Bindings, NativeId};
 use std::collections::BTreeSet;
 
-use mdl::decode::{Decoded, SampleValue, Value};
+use mdl::decode::{Decoded, EventTime, SampleValue, Value};
 use mdl::encode::{EntryProblem, ParamProblem, RawValue, TelemetryError, TelemetryRequest};
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::route::FamilySets;
@@ -59,6 +63,253 @@ proptest! {
     #[test]
     fn a_decoded_json_message_encodes_back_from_its_samples(case in layout::json_telemetry()) {
         from_samples(&case)?;
+    }
+
+    /// The record without its clocks, and the event time the testkit read
+    /// from them.
+    #[test]
+    fn the_event_time_writes_the_clocks(case in telemetry()) {
+        from_event_time(&case)?;
+    }
+
+    #[test]
+    fn the_event_time_writes_the_json_clocks(case in layout::json_telemetry()) {
+        from_event_time(&case)?;
+    }
+
+    #[test]
+    fn the_event_and_boot_times_write_the_boot_clocks(case in layout::boot_telemetry()) {
+        from_event_time(&case)?;
+    }
+
+    #[test]
+    fn the_event_and_boot_times_write_the_json_boot_clocks(
+        case in layout::json_boot_telemetry()
+    ) {
+        from_event_time(&case)?;
+    }
+}
+
+/// Every message whose event time the testkit reads encodes from its
+/// record without its clocks, given that event time (and for boot time, a
+/// boot instant: the one a correlation packet teaches, or any other). The
+/// encoded message decodes to the same record but its clocks, and to that
+/// event time and boot instant: exactly, as each clock holds the testkit's
+/// time, but in two cases where the testkit's reading isn't the clock's
+/// own. Decoding reads every label inside a leap second as the nanosecond
+/// before it, which a clock that can't hold reads earlier. And a float GPS
+/// time of week may be a week or more (or below 0), where floats sit
+/// further apart (or nearer) than in the week the instant is in, whose
+/// time a GPS clock reads. A packet with no clock has ground time only,
+/// whatever it's given. The event time read back encodes to the same
+/// payload.
+fn from_event_time(case: &layout::Telemetry) -> Result<(), TestCaseError> {
+    let sets = artifacts::load(&case.bundle, &case.family, &[])?;
+    let bindings = bindings(case);
+    let set = &case.bundle["sets"][0];
+    let json = case.bundle["families"][0]["encoding"] == "json";
+    let mut read = BTreeSet::new();
+    read_fields(set, &mut read);
+    // Any boot instant, for the uptime of a packet that teaches none.
+    let any_boot: Timestamp = "2001-02-03T04:05:06.789Z".parse().unwrap();
+    for message in &case.messages {
+        let metadata = metadata_of(message);
+        let Ok(decoded) = sets.decode(&message_of(message).with_metadata(&metadata), &bindings)
+        else {
+            continue;
+        };
+        let clocks = clock_fields(set, &message.packet);
+        if clocks.iter().any(|clock| read.contains(clock)) {
+            continue;
+        }
+        let checksums = checksums(case, &message.packet);
+        let raw: Vec<(String, RawValue)> = record_raw(&decoded, &checksums)?
+            .into_iter()
+            .filter(|(name, _)| !clocks.contains(name))
+            .collect();
+        let (at, booted) = match (&message.event_time, message.booted) {
+            (layout::EventTime::At(at), _) => (instant(*at)?, None),
+            (layout::EventTime::SinceBoot { value, unit }, booted) => {
+                let boot = match booted {
+                    Some(booted) => instant(booted)?,
+                    None => any_boot,
+                };
+                let boot_nanos =
+                    i128::from(boot.seconds()) * 1_000_000_000 + i128::from(boot.nanos());
+                // An uptime that ends past year 9999 has no event time.
+                let Some(at) = wide(boot_nanos + i128::from(*value) * unit_nanos(unit)) else {
+                    continue;
+                };
+                (at, Some(boot))
+            }
+            // A clock with no reading gives ground time; given a time, it'd
+            // read it.
+            (layout::EventTime::Ground, _) if !clocks.is_empty() => continue,
+            (layout::EventTime::Ground, _) => (any_boot, None),
+            (layout::EventTime::Invalid, _) => continue,
+        };
+        let mut request = TelemetryRequest::new(
+            &case.set,
+            &message.packet,
+            NativeId::from_text(case.native_id.clone()),
+        );
+        request.raw = raw;
+        request.at = Some(at);
+        request.booted = booted.or(Some(any_boot));
+        let encoded = match sets.encode_telemetry(&request) {
+            Ok(encoded) => encoded,
+            // A clock that reads earlier may read before its range or onto
+            // a reading it lists as no reading.
+            Err(error)
+                if before_leap(at) && matches!(error.code(), "raw_range" | "invalid_raw") =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Err(TestCaseError::fail(format!(
+                    "{error} [{}]: at {at}: {message:?}",
+                    error.code()
+                )));
+            }
+        };
+        match (&message.event_time, encoded.event_time) {
+            (layout::EventTime::At(_), EventTime::At(back)) => {
+                let outside_week = gps_week_overrun(set, &message.packet, &decoded);
+                prop_assert!(
+                    back == at || (back < at && (before_leap(at) || outside_week)),
+                    "event time {at} read back as {back}, payload {:02x?}",
+                    encoded.payload
+                );
+            }
+            (
+                layout::EventTime::SinceBoot { value, unit },
+                EventTime::SinceBoot {
+                    value: back,
+                    unit: back_unit,
+                },
+            ) => {
+                prop_assert_eq!((back, back_unit.as_str()), (*value, *unit));
+            }
+            (layout::EventTime::Ground, EventTime::Ground) => {}
+            (expected, back) => {
+                return Err(TestCaseError::fail(format!(
+                    "event time {expected:?} read back as {back:?}"
+                )));
+            }
+        }
+        if let Some(booted) = message.booted {
+            prop_assert_eq!(encoded.booted, Some(instant(booted)?));
+        } else {
+            prop_assert_eq!(encoded.booted, None);
+        }
+        let without = |record: &mdl::decode::Record<'_>| {
+            let text: Vec<String> = record
+                .iter()
+                .filter(|(name, _)| !clocks.iter().any(|clock| clock == name))
+                .filter(|(name, _)| !checksums.iter().any(|checksum| checksum == name))
+                .map(|(name, value)| format!("{name}: {value:?}"))
+                .collect();
+            positive(text.join(", "), json)
+        };
+        prop_assert_eq!(without(&encoded.record), without(&decoded.record));
+        // The time read back is one the clocks hold, so it encodes to the
+        // same payload.
+        if let EventTime::At(back) = encoded.event_time
+            && back != at
+        {
+            request.at = Some(back);
+            let again = sets.encode_telemetry(&request).map_err(|error| {
+                TestCaseError::fail(format!("at {back}, read back from {at}: {error}"))
+            })?;
+            prop_assert_eq!(again.payload, encoded.payload);
+        }
+    }
+    Ok(())
+}
+
+/// The names of a packet's top-level clock fields, by its set's time
+/// source: its time field, a GPS week, a correlation's two clocks, and the
+/// field an ISO 8601 time reads.
+fn clock_fields(set: &serde_json::Value, packet: &str) -> Vec<String> {
+    let time = &set["time"];
+    let Some(packet) = set["packets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate["name"] == packet)
+    else {
+        return Vec::new();
+    };
+    let mut clocks = Vec::new();
+    let mut add = |name: &serde_json::Value| {
+        if let Some(name) = name.as_str() {
+            clocks.push(name.to_string());
+        }
+    };
+    if !packet["time_field"].is_null() {
+        add(&packet["time_field"]);
+        if time["kind"] == "gps" {
+            add(&time["week_field"]);
+        }
+    }
+    if time["kind"] == "boot" && time["correlate"]["packet"] == packet["name"] {
+        add(&time["correlate"]["clock_field"]);
+        add(&time["correlate"]["boot_field"]);
+    }
+    if time["kind"] == "iso8601" {
+        for entry in packet["entries"].as_array().into_iter().flatten() {
+            if entry["pointer"] == time["pointer"] {
+                add(&entry["name"]);
+            }
+        }
+    }
+    clocks
+}
+
+/// Whether a GPS packet's float time of week is outside a week: below 0, or
+/// a week or more.
+fn gps_week_overrun(set: &serde_json::Value, packet: &str, decoded: &Decoded<'_>) -> bool {
+    let time = &set["time"];
+    if time["kind"] != "gps" {
+        return false;
+    }
+    let field = set["packets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|candidate| candidate["name"] == packet)
+        .and_then(|packet| packet["time_field"].as_str());
+    let unit = unit_nanos(time["unit"].as_str().unwrap_or("ns")) as f64;
+    match field.and_then(|field| decoded.record.get(field)) {
+        Some(Value::Float(x)) => !(0.0..604_800e9).contains(&(x * unit)),
+        _ => false,
+    }
+}
+
+/// The last nanosecond of a day a leap second could end (June 30 and
+/// December 31), which decoding gives for every label inside one.
+fn before_leap(at: Timestamp) -> bool {
+    let text = at.to_string();
+    text.ends_with("-06-30T23:59:59.999999999Z") || text.ends_with("-12-31T23:59:59.999999999Z")
+}
+
+fn instant(nanos: i128) -> Result<Timestamp, TestCaseError> {
+    wide(nanos).ok_or_else(|| TestCaseError::fail(format!("no instant at {nanos} ns")))
+}
+
+/// Nanoseconds since 1970 as an instant, if one is there.
+fn wide(nanos: i128) -> Option<Timestamp> {
+    let seconds = i64::try_from(nanos.div_euclid(1_000_000_000)).ok()?;
+    let nanos = u32::try_from(nanos.rem_euclid(1_000_000_000)).ok()?;
+    Timestamp::new(seconds, nanos)
+}
+
+fn unit_nanos(unit: &str) -> i128 {
+    match unit {
+        "s" => 1_000_000_000,
+        "ms" => 1_000_000,
+        "us" => 1_000,
+        _ => 1,
     }
 }
 
@@ -110,6 +361,7 @@ fn from_samples(case: &layout::Telemetry) -> Result<(), TestCaseError> {
             })
             .map(|sample| sample.param.to_string())
             .collect();
+        let mut at = None;
         let encoded = loop {
             // A given composite gives its members, so their own params
             // take nothing there.
@@ -157,6 +409,7 @@ fn from_samples(case: &layout::Telemetry) -> Result<(), TestCaseError> {
             );
             request.raw = raw;
             request.params = params;
+            request.at = at;
             match sets.encode_telemetry(&request) {
                 Ok(encoded) => {
                     let members: BTreeSet<String> =
@@ -177,8 +430,17 @@ fn from_samples(case: &layout::Telemetry) -> Result<(), TestCaseError> {
                 }) if !raw_params.contains(&param) => {
                     raw_params.insert(param);
                 }
-                Err(error) if timeless && error.to_string().contains("needs the event time") => {
-                    break None;
+                // A time source that reads where no entry is takes the
+                // testkit's event time.
+                Err(error)
+                    if timeless
+                        && at.is_none()
+                        && error.to_string().contains("needs the event time") =>
+                {
+                    let layout::EventTime::At(time) = message.event_time else {
+                        break None;
+                    };
+                    at = Some(instant(time)?);
                 }
                 Err(error)
                     if matches!(error.code(), "raw_range" | "out_of_range" | "invalid_raw") =>
@@ -351,7 +613,7 @@ fn pruned_value(
 }
 
 /// Every message that decodes encodes back from its record; a set whose
-/// time source reads where no entry is needs the event time instead.
+/// time source reads where no entry is takes the event time too.
 fn round_trip(case: &layout::Telemetry) -> Result<(), TestCaseError> {
     let sets = artifacts::load(&case.bundle, &case.family, &[])?;
     let bindings = bindings(case);
@@ -371,14 +633,20 @@ fn round_trip(case: &layout::Telemetry) -> Result<(), TestCaseError> {
             NativeId::from_text(case.native_id.clone()),
         );
         request.raw = raw;
-        let encoded = sets.encode_telemetry(&request);
-        // A time source that reads where no entry is needs the event time.
+        let mut encoded = sets.encode_telemetry(&request);
+        // A time source that reads where no entry is needs the event time:
+        // the testkit's. A clock that can't hold the last nanosecond before
+        // a leap second reads earlier, which no entry shows.
         if let Err(error) = &encoded
             && timeless
             && error.code() == "missing_value"
             && error.to_string().contains("needs the event time")
         {
-            continue;
+            let layout::EventTime::At(at) = message.event_time else {
+                continue;
+            };
+            request.at = Some(instant(at)?);
+            encoded = sets.encode_telemetry(&request);
         }
         let encoded = encoded.map_err(|error| {
             TestCaseError::fail(format!("{error} [{}]: {message:?}", error.code()))
