@@ -151,7 +151,7 @@ fn parse_meta(text: &str) -> Result<Meta, String> {
     })
 }
 
-fn parse_time(text: &str) -> Result<Timestamp, String> {
+pub(crate) fn parse_time(text: &str) -> Result<Timestamp, String> {
     Timestamp::from_rfc3339(text).map_err(|err| err.to_string())
 }
 

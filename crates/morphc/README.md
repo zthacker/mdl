@@ -143,6 +143,22 @@ set drone_v1  packet SYS_STATUS  from native id 1
   metadata msgid = 1, sysid = 1
 ```
 
+`--at INSTANT` gives the event time the packet's clocks read, and
+`--booted INSTANT` when the asset booted, for clocks that count time since
+boot ([spec](../../spec/encoding.md) §9.4). A clock holds its latest
+reading at or before the event time, and the output gives the event time
+decoding reads back. Here the CUC time code is 833,630,437 s on TAI from
+2000:
+
+```console
+$ morphc encode store --set ccsds_sat_v1 --packet EPS_HK --from 7 --value eps.bus_voltage=28.5 --value eps.mode=NOMINAL --raw batt_temp_counts=1000 --at 2026-06-01T12:00:00Z
+set ccsds_sat_v1  packet EPS_HK  from native id 7
+  def_version 6293e3d77620f2f6f26f359bddb24e4c71a7d87e623947aa7d644378d8f365aa
+  payload 31b030e5000000076f5403e801
+  metadata apid = 100
+  event time 2026-06-01T12:00:00Z
+```
+
 ## JSON output
 
 `--format json` prints one document on stdout, whatever the outcome, except

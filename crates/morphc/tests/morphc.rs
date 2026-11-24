@@ -2006,6 +2006,72 @@ fn encode_packet_writes_what_the_capture_holds() {
     assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
 }
 
+/// The CUC time code is written from --at: 2026-06-01T12:00:00Z is
+/// 833,630,437 s (0x31b030e5) on TAI from 2000-01-01, TAI being 37 s ahead
+/// of UTC then, worked out apart from MDL. 28.5 V is 28,500 mV (0x6f54).
+#[test]
+fn encode_packet_writes_its_clock_from_the_event_time() {
+    let dir = examples("");
+    let base = [
+        "encode",
+        "toml/mission",
+        "xtce/demosat.xml",
+        "--set",
+        "ccsds_sat_v1",
+        "--packet",
+        "EPS_HK",
+        "--from",
+        "7",
+        "--value",
+        "eps.bus_voltage=28.5",
+        "--value",
+        "eps.mode=NOMINAL",
+        "--raw",
+        "batt_temp_counts=1000",
+    ];
+    let mut args = base.to_vec();
+    args.extend(["--at", "2026-06-01T12:00:00Z"]);
+    let out = morphc_in(&dir, &args, None);
+    assert_eq!(out.status.code(), Some(0), "{}", stdout(&out));
+    let text = stdout(&out);
+    assert!(
+        text.contains(
+            "  payload 31b030e5000000076f5403e801\n  metadata apid = 100\n  event time \
+             2026-06-01T12:00:00Z\n"
+        ),
+        "{text}"
+    );
+    args.extend(["--format", "json"]);
+    let out = morphc_in(&dir, &args, None);
+    let report: Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(
+        report["encode"]["telemetry"]["event_time"],
+        serde_json::json!({ "kind": "at", "time": "2026-06-01T12:00:00Z" })
+    );
+    // Without it, nothing gives the time code.
+    let out = morphc_in(&dir, &base, None);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stdout(&out).contains("error[missing_value]: packet EPS_HK, time:"),
+        "{}",
+        stdout(&out)
+    );
+    // --at is for --packet.
+    let out = morphc_in(
+        &dir,
+        &[
+            "encode",
+            "toml/mission",
+            "--command",
+            "eps.set_mode",
+            "--at",
+            "2026-06-01T12:00:00Z",
+        ],
+        None,
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", stderr(&out));
+}
+
 #[test]
 fn encode_says_what_it_needs() {
     let dir = scratch("encode_needs");

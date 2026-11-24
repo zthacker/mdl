@@ -10,16 +10,18 @@ use std::process::ExitCode;
 use anyhow::{Context, bail};
 use clap::Args;
 use mdl::bindings::NativeId;
-use mdl::decode::SampleValue;
+use mdl::decode::{EventTime, SampleValue};
 use mdl::encode::{ArgumentValue, CommandRequest, RawValue, TelemetryRequest};
 use mdl::ir::{
     Argument, Element, Encoding, Entry, Frame, Locator, Param, ParamType, ScalarType, StructType,
 };
 use mdl::runtime::{EncodedCommand, EncodedTelemetry, Value};
 use mdl::source::SourceDiagnostic;
+use mdl::time::Timestamp;
 use serde::Serialize;
 use serde_json::Value as Json;
 
+use crate::decode::parse_time;
 use crate::report::{Outcome, Report};
 use crate::values::{Failure, hex, parse_hex};
 use crate::{Opened, Origin, ReadArgs, family_sets, open};
@@ -78,6 +80,17 @@ pub struct EncodeArgs {
     #[arg(long, value_name = "ID")]
     from: Option<String>,
 
+    /// For --packet, when its values were taken, as RFC 3339
+    /// (`2026-11-09T12:00:00Z`): the event time its clocks read. A packet
+    /// with no clock has ground time only, so it ignores it.
+    #[arg(long, value_name = "INSTANT", value_parser = parse_time)]
+    at: Option<Timestamp>,
+
+    /// For --packet, when the asset booted, as RFC 3339: with --at, what
+    /// clocks that count time since boot read.
+    #[arg(long, value_name = "INSTANT", value_parser = parse_time)]
+    booted: Option<Timestamp>,
+
     // Last, since the XTCE options' heading applies to every argument
     // after them.
     #[command(flatten)]
@@ -96,9 +109,15 @@ pub fn run(args: &EncodeArgs) -> anyhow::Result<ExitCode> {
         let encode = telemetry(args, packet, &opened)?;
         return Ok(report.finish(Some(encode)));
     }
-    if !args.values.is_empty() || !args.raw.is_empty() || args.from.is_some() {
+    if !args.values.is_empty()
+        || !args.raw.is_empty()
+        || args.from.is_some()
+        || args.at.is_some()
+        || args.booted.is_some()
+    {
         bail!(
-            "--value, --raw and --from give a telemetry packet's values; say which with --packet"
+            "--value, --raw, --from, --at and --booted give a telemetry packet's values; say \
+             which with --packet"
         );
     }
     let Some(command_name) = args.command.as_deref() else {
@@ -207,6 +226,12 @@ fn telemetry(args: &EncodeArgs, packet: &str, opened: &Opened) -> anyhow::Result
             None => RawValue::Text(text.to_string()),
         };
         request = request.with_raw(name, value);
+    }
+    if let Some(at) = args.at {
+        request = request.with_at(at);
+    }
+    if let Some(booted) = args.booted {
+        request = request.with_booted(booted);
     }
     Ok(match family_sets.encode_telemetry(&request) {
         Ok(encoded) => Encode {
@@ -656,6 +681,17 @@ impl Outcome for Encode {
             );
             if !t.metadata.is_empty() {
                 text.push_str(&metadata_line(&t.metadata));
+            }
+            match t.event_time {
+                EventTime::At(at) => text.push_str(&format!("  event time {at}\n")),
+                EventTime::SinceBoot { value, unit } => {
+                    text.push_str(&format!("  {value} {} since boot\n", unit.as_str()));
+                }
+                _ => {}
+            }
+            // A correlation packet that teaches when its asset booted.
+            if let Some(booted) = t.booted {
+                text.push_str(&format!("  booted {booted}\n"));
             }
             return text;
         }
