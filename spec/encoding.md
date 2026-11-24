@@ -4,11 +4,12 @@ Status: normative from IR v2 (`mdl_version` 2) on. The key words MUST,
 MUST NOT, SHOULD and MAY are to be interpreted as described in RFC 2119.
 
 Encoding turns a canonical command and its arguments into the payload of
-a set's command packet. Two implementations given the same artifacts and
-request MUST produce the same payload byte for byte, or the same error
-code; the encoding cases of [conformance.md](conformance.md) §3 are
-examples of this document that every implementation runs. Encoding is a
-pure function of those inputs.
+a set's command packet, and values for one of a set's telemetry packets
+into the payload an asset sends (§9). Two implementations given the same
+artifacts and request MUST produce the same payload byte for byte, or the
+same error code; the encoding cases of [conformance.md](conformance.md)
+§3 are examples of this document that every implementation runs.
+Encoding is a pure function of those inputs.
 
 A command encodes completely or not at all. Any failure in this document
 refuses the whole request with the code in brackets. An encoder never
@@ -575,4 +576,173 @@ the catalog lists first, wherever the packet writes it.
 | `unknown_argument`, `duplicate_argument`, `missing_argument`, `wrong_type`, `non_finite`, `unknown_state`, `unsupported_state`, `out_of_range`, `not_default`, `list_length` | an argument (§2, §7.4); the error names it, and a list's value by its index |
 | `raw_range`, `missing_target`, `target_type`, `invalid_text`, `contains_terminator`, `bad_length`, `bad_count` | a field or array (§3); the error names it, and an array's element by its index |
 | `no_packet`, `wrong_constant`, and the routing and entry codes of `decoding.md` | decoding a command (§7) |
+| `unknown_packet`, `native_id`, `unknown_param` | encoding telemetry, the request (§9.1) |
+| `missing_value`, `absent_entry`, `unknown_entry`, `duplicate_value`, `wrong_type`, `non_finite`, `unknown_state`, `no_inverse`, `out_of_range`, `invalid_raw`, `raw_range`, `bad_length`, `bad_count`, `invalid_text`, `contains_terminator`, `wrong_constant` | encoding telemetry, an entry or a param's values (§9.2 to §9.4); the error names the entry by its record path (`decoding.md` §7), or the param |
+| `decodes_otherwise` | encoding telemetry, the check (§9.5) |
 | `invalid_layout` | a definition that didn't pass validation; never for one a build accepts, though a store an earlier release built can give it for a checksum that starts before its `from_bits` (`decoding.md` §5.6) |
+
+## 9. Encoding telemetry
+
+Encoding telemetry turns values for one of a set's packets into the
+payload, and the metadata a link frames it with, that decoding
+(`decoding.md`) reads back as those values, sent by a given native id:
+what a simulated asset does to send telemetry. Raw values come back
+exactly; a param's value comes back as its field holds it, rounded to the
+field's resolution or through an approximate `inverse`. It refuses the
+whole request on any failure, with the codes of §8.
+
+### 9.1 Inputs
+
+- **Artifacts:** as §1 says.
+- **The request:**
+  - the set, by name [`unknown_set`], and one of its packets, by name
+    [`unknown_packet`];
+  - the native id of the asset that sends it, never empty (`api.md` §1),
+    which the family's alias locator can read (§9.3) [`native_id`];
+  - params' values by name, each a list of values in the param's unit:
+    one for each sample decoding gives the param from the message, in
+    record order (`decoding.md` §7), but at the entries §9.2 says take
+    another value. A param the packet doesn't map, through its fields,
+    arrays, structs and the records of its arrays, or as a composite, is
+    refused [`unknown_param`], as is a param given twice
+    [`duplicate_value`];
+  - raw values by entry name, as decoding's record holds them: a field's
+    a raw value; an array's a list, a JSON array's `null` element no
+    reading; a struct's, or a record element's, an object of its entries'
+    raw values by name.
+
+### 9.2 Values
+
+Entries are worked out in the order decoding reads them (`decoding.md`
+§5), each container's in entry order.
+
+- An entry's condition is evaluated over the raw values worked out before
+  it, as decoding evaluates it. An entry whose condition doesn't hold
+  isn't in the message, and a raw value given for it is refused
+  [`absent_entry`].
+- A field or scalar element takes at most one value given: its raw value;
+  as a member of a composite the request gives, the composite's
+  component; or the next value of the param it maps. A param's values go,
+  in record order, to the entries that map it and take neither of the
+  others. A raw value and a composite's member for one entry are refused
+  [`duplicate_value`], as are a param's values left over [`bad_count`]
+  and raw values for entries the container doesn't have
+  [`unknown_entry`].
+- An optional JSON entry is in the message when it takes a value: a
+  field when it's given one, an array when it's given elements, a struct
+  when it's given a raw value or a composite member in it is given, or a
+  param that something in it maps has values left. Inside an array's
+  records, a param's values don't say which records hold an optional
+  entry, so there one is in the message only when it's given a raw value
+  or a composite's member (a struct a raw object, which may be empty).
+- Any other entry in the message without a value is refused
+  [`missing_value`], but an entry the definitions fix (§9.3).
+- A raw value is checked against its field's type [`wrong_type`] and size
+  as §3 checks a field's raw value [`raw_range`, `bad_length`,
+  `invalid_text`, `contains_terminator`]. A binary float field takes any
+  value, NaN and the infinities included, a 32-bit one rounded to the
+  nearest binary32 as §3.1 rounds (a finite value that rounds past
+  binary32's range is refused [`raw_range`]); a JSON one takes a finite
+  number. A raw value may be one of the field's `invalid` values: that's
+  how a sender says it has no reading.
+- A param's value becomes a raw value by the param's type (`decoding.md`
+  §7.2):
+  - an `f64` param's number, finite [`non_finite`], goes from the
+    param's unit into the field's (`units.md` §4), through the inverse of
+    the field's conversion as §3.1 says, and is rounded and fit as §3.1
+    says [`raw_range`]. A conversion that doesn't invert exactly, on a
+    field with no `inverse` (IR 2.4), refuses it [`no_inverse`], as does
+    a `linear` conversion of scale 0, which gives every raw value its
+    offset; a number outside an inverted table, which doesn't
+    extrapolate, is refused [`out_of_range`];
+  - an `i64` or `u64` param's integer is the raw value;
+  - a `bool` param's value is a bool field's, or 1 or 0 in an integer
+    field;
+  - a `str` or `bytes` param's value is the field's;
+  - an `enum` param's state, one of the param's [`unknown_state`], is the
+    raw value its field's `states` conversion lists for it
+    [`unknown_state`], or a string field's text.
+
+  A value of another kind is refused [`wrong_type`]. A raw value it
+  becomes that the field lists as `invalid` is refused [`invalid_raw`]:
+  decoding would read no reading.
+- A composite's value is a vec3 or a quat in the composite's frame
+  [`wrong_type`]. Its components go to its members, in order, each as an
+  `f64` param's number from the param's unit (degrees for a geodetic
+  latitude and longitude).
+- An array has as many elements as its fixed count, its count field's
+  value or the raw list given says; otherwise as many as the values its
+  param has left, with the elements composite members fill, or for
+  records, as the values left of the first param a field of theirs maps.
+  Inside an array's records, a param's values don't say which are the
+  record's, so there an array's count needs a fixed count, a count
+  field's value or a raw list [`missing_value`]. A raw list of another
+  length than a count says is refused [`bad_count`]. Records of padding
+  alone take no values, nor do records of structs and fixed-count arrays
+  of such records, or of none, so they come from a raw list of empty
+  records, or a fixed count: a count field's value alone doesn't make
+  them [`missing_value`].
+
+### 9.3 What the definitions fix
+
+- The family's alias locator reads the native id (`decoding.md` §3.1):
+  `bits` hold it as an unsigned integer they fit [`native_id`];
+  `metadata` frames the packet with it; `path` puts it at its pointer, a
+  number or text; a `fixed` alias is always its value, which the native
+  id must be, compared by value [`native_id`].
+- A version locator reads the set's version, in the same ways.
+- An identify key (`decoding.md` §4) is its value: a top-level field's,
+  metadata's, or the value at a JSON Pointer.
+- A count or length field holds what it counts or measures, of the
+  entries given values: `(n - add) / multiply`, a whole number of at
+  least 0 that the field holds [`bad_count`, `bad_length`]. Given a value
+  of its own, it counts an array whose elements come from a param's
+  values. An entry it measures that then isn't in the message, by its
+  condition, refuses the request as a value given for it does: a raw
+  value [`absent_entry`], or a param's values, which are left over
+  [`bad_count`].
+- A checksum is worked out over the payload, last (§9.4).
+
+A top-level field takes the value where it holds what a locator reads
+(the same bits read the same way, or the same pointer) or what an
+identify key names. A field the definitions fix may also be given a
+value: a raw value must be the same, and a param's value must be what
+decoding the fixed raw value gives (a `bool` param reads any integer but
+0 as true) [`wrong_constant`]. Two definitions that fix one value
+differently refuse the request: [`native_id`] when one is the alias,
+[`wrong_constant`] otherwise.
+
+A set whose time source reads the packet's time where no entry holds it
+(a CUC time code, or an ISO 8601 pointer that no top-level field has)
+can't be encoded from these inputs [`missing_value`].
+
+### 9.4 The payload
+
+- **Binary:** each entry at the position decoding finds it
+  (`decoding.md` §5.2), with the size decoding measures; bits no entry
+  covers are 0. The payload ends at the furthest entry's end, extended to
+  the packet's length, which an `exact` length's entries can't pass
+  [`bad_length`], and to the locators' bits, which are written there. An
+  entry that runs to the packet's end (a `remaining` count or length)
+  must end where the payload does [`bad_length`]. Checksums are written
+  last, in order of position, as §4 says.
+- **JSON:** each entry at its pointer in its container's object, objects
+  created along the way, written as §5 writes JSON, so -0 is 0. Then the
+  values locators and identify keys read where no field holds them are
+  put at their pointers, where another entry's value can't be
+  [`wrong_constant`].
+
+### 9.5 The check
+
+The payload, framed with its metadata, is decoded as from the native id.
+Unless decoding gives this set, this packet, the native id and every raw
+value worked out, the request is refused [`decodes_otherwise`]: decoding
+identifies another packet whose identify keys these values match too, or
+a locator's bits are written over a field's.
+
+### 9.6 The result
+
+- the payload, and the metadata the link frames it with, by name;
+- the set's digest, which decoding the payload stamps;
+- the raw value of each entry in the message, as decoding the payload
+  gives them.

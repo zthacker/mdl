@@ -75,12 +75,13 @@ pub(crate) fn inverts_exactly(conversion: &Conversion) -> bool {
 
 /// An engineering value through the inverse of a field's conversion, for
 /// encoding: as it is with no conversion, `(x - offset) / scale` for a
-/// linear one, the table read backwards for a table that inverts exactly,
-/// the explicit `inverse` otherwise.
+/// linear one whose scale isn't 0, the table read backwards for a table
+/// that inverts exactly, the explicit `inverse` otherwise.
 pub(crate) fn inverse(field: &Field, x: f64) -> Converted {
     match (&field.conversion, &field.inverse) {
         (None, _) => Converted::Number(x),
-        (Some(Conversion::Linear { scale, offset }), None) => {
+        // A scale of 0 maps every raw value to the offset: no inverse.
+        (Some(Conversion::Linear { scale, offset }), None) if *scale != 0.0 => {
             Converted::Number((x - offset) / scale)
         }
         (

@@ -24,7 +24,10 @@ use crate::decode::{
     Value as Raw, boot_instant,
 };
 use crate::diagnostics::{Diagnostic, Diagnostics};
-use crate::encode::{ArgumentValue, CommandRequest, EncodeError, Encoded};
+use crate::encode::{
+    ArgumentValue, CommandRequest, EncodeError, Encoded, MetadataValue, TelemetryError,
+    TelemetryRequest,
+};
 use crate::ir::{Artifact, Bundle, Catalog, Digest, Family, Set};
 use crate::layout::{self, ContainerLayout, LayoutError, Placement, SetLayout};
 use crate::message::{Message, MetaValue, Payload};
@@ -267,6 +270,12 @@ impl From<DecodeError> for ApiError {
 
 impl From<EncodeError> for ApiError {
     fn from(error: EncodeError) -> ApiError {
+        ApiError::new(error.code(), error.to_string())
+    }
+}
+
+impl From<TelemetryError> for ApiError {
+    fn from(error: TelemetryError) -> ApiError {
         ApiError::new(error.code(), error.to_string())
     }
 }
@@ -629,6 +638,18 @@ impl Runtime {
         let sets = self.family(family)?;
         let decoded = sets.decode_command(set, message)?;
         Ok(DecodedCommand::of(&decoded, family))
+    }
+
+    /// Encodes one of a family's packets as telemetry the request's native
+    /// id sends (`spec/api.md` §2.9).
+    pub fn encode_telemetry(
+        &self,
+        family: &str,
+        request: &TelemetryRequest,
+    ) -> Result<EncodedTelemetry, ApiError> {
+        let sets = self.family(family)?;
+        let encoded = sets.encode_telemetry(request)?;
+        Ok(EncodedTelemetry::of(&encoded, family, &request.native_id))
     }
 }
 
@@ -1031,6 +1052,74 @@ impl EncodedCommand {
 }
 
 impl Serialize for EncodedCommand {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.to_value().serialize(serializer)
+    }
+}
+
+/// An encoded telemetry packet (`spec/api.md` §3.6).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct EncodedTelemetry {
+    pub family: String,
+    pub set: String,
+    pub def_version: Digest,
+    pub packet: String,
+    /// The native id that sends it.
+    pub native_id: NativeId,
+    pub payload: Vec<u8>,
+    /// The values the link frames the payload with, by name: integers or
+    /// text.
+    pub metadata: Vec<(String, Value)>,
+    /// Every entry's raw value, as an object by entry name.
+    pub record: Value,
+}
+
+impl EncodedTelemetry {
+    /// What `family`'s set encoded for `native_id`, as the API gives it.
+    pub fn of(
+        encoded: &crate::encode::EncodedTelemetry<'_>,
+        family: &str,
+        native_id: &NativeId,
+    ) -> EncodedTelemetry {
+        EncodedTelemetry {
+            family: family.to_string(),
+            set: encoded.set.name.clone(),
+            def_version: encoded.def_version.clone(),
+            packet: encoded.packet.name.clone(),
+            native_id: native_id.clone(),
+            payload: encoded.payload.clone(),
+            metadata: encoded
+                .metadata
+                .iter()
+                .map(|(name, value)| {
+                    let value = match value {
+                        MetadataValue::Uint(n) => Value::Integer(i128::from(*n)),
+                        MetadataValue::Int(n) => Value::Integer(i128::from(*n)),
+                        MetadataValue::Text(text) => Value::text(text),
+                    };
+                    (name.clone(), value)
+                })
+                .collect(),
+            record: record_value(&encoded.record),
+        }
+    }
+
+    pub fn to_value(&self) -> Value {
+        Value::object([
+            ("family", Value::text(&self.family)),
+            ("set", Value::text(&self.set)),
+            ("def_version", Value::text(self.def_version.to_string())),
+            ("packet", Value::text(&self.packet)),
+            ("native_id", native_id_value(&self.native_id)),
+            ("payload", Value::Bytes(self.payload.clone())),
+            ("metadata", Value::Object(self.metadata.clone())),
+            ("record", self.record.clone()),
+        ])
+    }
+}
+
+impl Serialize for EncodedTelemetry {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.to_value().serialize(serializer)
     }

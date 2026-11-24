@@ -5,8 +5,9 @@ MAY are to be interpreted as described in RFC 2119.
 
 Every binding of MDL to another language calls one runtime, this
 repository's, through one coarse API: open a store, decode messages,
-encode commands and decode them back, describe the build, look up which
-asset a native id is, and turn an event time into an instant. A binding
+encode commands and decode them back, encode telemetry, describe the
+build, look up which asset a native id is, and turn an event time into an
+instant. A binding
 converts its language's inputs for the runtime and the runtime's results
 into its language's values, and does nothing else. No MDL semantics live
 in a binding, so a feature reaches every language when the runtime gains
@@ -243,6 +244,20 @@ instant is the binding's to refuse, in its own way (Elixir:
 2^64 − 1, whose instant in seconds is past what 64 bits of nanoseconds
 hold.
 
+### 2.9 encode_telemetry
+
+Inputs: a handle, a family, and a telemetry request (`encoding.md` §9.1):
+the set and one of its packets, by name; the native id of the asset that
+sends it; params' values by name, each a list of values in §3.1's sample
+forms, one for each sample decoding gives the param from the message, in
+record order; and raw values by entry name, in §3.1's record form.
+
+Encoding telemetry is what a simulated asset does to send telemetry: the
+values into the payload, and the metadata a link frames it with, that
+decoding reads back as those values (`encoding.md` §9). The set is the
+caller's to name, as for encode. The result is an encoded telemetry
+packet (§3.6), or an error (§4).
+
 ## 3. Results
 
 ### 3.1 A decoded message
@@ -414,6 +429,21 @@ example) decodes, and its arguments encode again as an encoder writes
 them, unless its target field holds empty text: that names no target to
 encode them with (§1), so encoding it is `missing_target`.
 
+### 3.6 An encoded telemetry packet
+
+An object with these keys:
+
+| Key | Value |
+| --- | --- |
+| `family` | text |
+| `set` | text |
+| `def_version` | text: the set artifact's digest, which decoding the payload stamps |
+| `packet` | text |
+| `native_id` | integer or text (§1): the native id that sends it |
+| `payload` | bytes: what the link sends; a JSON family's payload is its UTF-8 text |
+| `metadata` | an object of the values the link frames the payload with, by name, each an integer or text: the family's locators and the packet's identify keys that read metadata (`encoding.md` §9.3) |
+| `record` | the raw record of the payload: each entry's raw value, as decoding it gives them |
+
 ## 4. Errors
 
 An error is an object with a `code`, which is stable and names the
@@ -436,7 +466,7 @@ decoding, encoding and decoding commands, and these:
 
 | Code | Operation | Meaning |
 | --- | --- | --- |
-| `unknown_family` | decode, encode, decode_command, binding, asset | the build has no family of that name |
+| `unknown_family` | decode, encode, decode_command, encode_telemetry, binding, asset | the build has no family of that name |
 | `ambiguous_asset` | asset | several native ids are the asset at the instant |
 | `invalid_layout` | describe | a set validated, but its layout can't be worked out: a bug in MDL |
 | `store_unreadable` | open | a file of the store can't be read, or isn't there |

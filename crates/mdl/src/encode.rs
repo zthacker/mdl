@@ -7,6 +7,7 @@
 //! value its field holds (inverse conversions, rounding, fit); then lay the
 //! packet out, as bits or as a JSON document, writing checksums last.
 
+mod telemetry;
 mod write;
 
 use std::cmp::Ordering;
@@ -14,6 +15,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use thiserror::Error;
+
+pub use telemetry::{
+    EncodedTelemetry, EntryProblem, MetadataValue, ParamProblem, RawValue, TelemetryError,
+    TelemetryRequest,
+};
 
 use crate::bindings::NativeId;
 use crate::bits::IntForm;

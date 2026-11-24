@@ -80,8 +80,10 @@ use crate::validate::{
 
 pub use command::{CommandDecodeError, DecodedCommand};
 use extract::{BinaryWalker, FieldNames, JsonWalker, PacketChecksums, Segment, Tables};
+pub(crate) use extract::{holds, when};
 use identify::Index;
 use meaning::{CompiledComposite, sample_value, visit};
+pub(crate) use meaning::{good_value, is_sentinel};
 
 pub use clock::{Correlator, EventTime, boot_instant, instant};
 pub use meaning::{Engineering, Quality, Sample, SampleValue};
@@ -471,6 +473,15 @@ enum Walked<'p> {
 }
 
 impl Program {
+    /// The exact size of each struct type that has one, as decoding and
+    /// identification measure them.
+    pub(crate) fn type_sizes(&self) -> BTreeMap<&str, u64> {
+        self.type_sizes
+            .iter()
+            .map(|(name, size)| (name.as_str(), *size))
+            .collect()
+    }
+
     /// For a validated set and its family.
     pub(crate) fn compile(set: &Set, family: &Family) -> Program {
         let (identities, type_sizes) = decoding_facts(set, family);

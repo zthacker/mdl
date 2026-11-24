@@ -106,6 +106,16 @@ pub struct Engineering {
     pub quality: Quality,
 }
 
+/// The value decoding gives `param` from `field`'s raw `value`, when it
+/// reads good: what a value given for the param must be when the field's
+/// raw value is fixed otherwise.
+pub(crate) fn good_value(param: &Param, field: &Field, value: &Value<'_>) -> Option<SampleValue> {
+    match sample_value(param, ScalarMeaning::of_field(field), value) {
+        Ok((value, Quality::Good)) => Some(value),
+        _ => None,
+    }
+}
+
 /// The parts of a field or scalar element that give a raw value meaning.
 #[derive(Clone, Copy)]
 pub(super) struct ScalarMeaning<'a> {
@@ -372,7 +382,7 @@ fn integer(value: &Value<'_>) -> Option<i128> {
 
 /// Does `value` match one of `invalid`? Integers compare by value, a float
 /// with an integer sentinel by numeric value, and strings exactly.
-pub(super) fn is_sentinel(invalid: &[Scalar], value: &Value<'_>) -> bool {
+pub(crate) fn is_sentinel(invalid: &[Scalar], value: &Value<'_>) -> bool {
     // The value's type picks the comparison: a string field's sentinel
     // "9999" is the text 9999, not a number.
     invalid.iter().any(|sentinel| match value {

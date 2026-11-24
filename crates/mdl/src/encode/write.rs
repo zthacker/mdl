@@ -314,7 +314,7 @@ fn write_array(
 }
 
 /// One field's raw value at `at`, `size` bits (as `positions` found them).
-fn write_field(
+pub(super) fn write_field(
     payload: &mut [u8],
     raw: &Raw,
     at: u64,
@@ -505,7 +505,7 @@ fn entry_label(entry: &Entry) -> Option<String> {
 }
 
 /// A JSON document being built, each value already written as text.
-enum Node {
+pub(super) enum Node {
     Leaf(String),
     Array(Vec<Node>),
     Object(BTreeMap<String, Node>),
@@ -515,7 +515,7 @@ impl Node {
     /// Puts `node` at the path, creating objects along it. The caller
     /// checked that the path isn't empty and that nothing else is on it or
     /// below it.
-    fn insert(&mut self, path: &[String], node: Node) {
+    pub(super) fn insert(&mut self, path: &[String], node: Node) {
         let Some((first, rest)) = path.split_first() else {
             *self = node;
             return;
@@ -531,9 +531,24 @@ impl Node {
         }
     }
 
+    /// What's at the path: a node, nothing with objects or nothing all the
+    /// way to it, or a value that isn't an object on the way.
+    pub(super) fn lookup(&self, path: &[String]) -> Lookup<'_> {
+        let Some((first, rest)) = path.split_first() else {
+            return Lookup::Found(self);
+        };
+        match self {
+            Node::Object(members) => match members.get(first) {
+                Some(member) => member.lookup(rest),
+                None => Lookup::Free,
+            },
+            _ => Lookup::Blocked,
+        }
+    }
+
     /// As RFC 8785 writes JSON: no whitespace, members in order of their
     /// keys' UTF-16 code units, strings escaped as it requires.
-    fn write(&self, out: &mut String) {
+    pub(super) fn write(&self, out: &mut String) {
         match self {
             Node::Leaf(text) => out.push_str(text),
             Node::Array(items) => {
@@ -562,6 +577,15 @@ impl Node {
             }
         }
     }
+}
+
+/// What [`Node::lookup`] finds at a path.
+pub(super) enum Lookup<'n> {
+    Found(&'n Node),
+    /// Nothing there, and objects or nothing on the way.
+    Free,
+    /// A value that isn't an object on the way.
+    Blocked,
 }
 
 /// A raw value as JSON text: integers in exact decimal digits whatever

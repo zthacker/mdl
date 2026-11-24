@@ -215,7 +215,7 @@ impl<'a, 'p> BinaryWalker<'a, 'p> {
                     record: &record,
                     names,
                 };
-                if !holds(condition, &scope)? {
+                if !holds(condition, &|name| scope.get(name))? {
                     cursor = at;
                     continue;
                 }
@@ -559,7 +559,7 @@ impl<'a> JsonWalker<'a> {
                     record: &record,
                     names,
                 };
-                if !holds(condition, &scope)? {
+                if !holds(condition, &|name| scope.get(name))? {
                     continue;
                 }
             }
@@ -701,7 +701,7 @@ fn offset(entry: &Entry) -> Option<u32> {
     }
 }
 
-fn when(entry: &Entry) -> Option<&Condition> {
+pub(crate) fn when(entry: &Entry) -> Option<&Condition> {
     match entry {
         Entry::Field(field) => field.when.as_ref(),
         Entry::Array(array) => array.when.as_ref(),
@@ -711,14 +711,19 @@ fn when(entry: &Entry) -> Option<&Condition> {
     }
 }
 
-/// Does `condition` hold for the fields decoded so far? Validation keeps
-/// references to earlier, unconditional fields of a type the comparison
-/// suits, and nesting within `MAX_NESTING`.
-fn holds(condition: &Condition, scope: &Scope<'_, '_>) -> Result<bool, Problem> {
+/// Does `condition` hold for the fields decoded so far, which `get` finds
+/// by name? Validation keeps references to earlier, unconditional fields
+/// of a type the comparison suits, and nesting within `MAX_NESTING`.
+/// Encoding telemetry decides which entries a message holds by the same
+/// rules.
+pub(crate) fn holds<'v, 'a: 'v>(
+    condition: &Condition,
+    get: &dyn Fn(&str) -> Result<&'v Value<'a>, Problem>,
+) -> Result<bool, Problem> {
     match condition {
-        Condition::Compare { field, op, value } => compare(scope.get(field)?, *op, value),
+        Condition::Compare { field, op, value } => compare(get(field)?, *op, value),
         Condition::In { field, values } => {
-            let field = scope.get(field)?;
+            let field = get(field)?;
             for value in values {
                 if compare(field, CompareOp::Eq, value)? {
                     return Ok(true);
@@ -728,7 +733,7 @@ fn holds(condition: &Condition, scope: &Scope<'_, '_>) -> Result<bool, Problem> 
         }
         Condition::All { conditions } => {
             for inner in conditions {
-                if !holds(inner, scope)? {
+                if !holds(inner, get)? {
                     return Ok(false);
                 }
             }
@@ -736,13 +741,13 @@ fn holds(condition: &Condition, scope: &Scope<'_, '_>) -> Result<bool, Problem> 
         }
         Condition::Any { conditions } => {
             for inner in conditions {
-                if holds(inner, scope)? {
+                if holds(inner, get)? {
                     return Ok(true);
                 }
             }
             Ok(false)
         }
-        Condition::Not { condition } => Ok(!holds(condition, scope)?),
+        Condition::Not { condition } => Ok(!holds(condition, get)?),
     }
 }
 
