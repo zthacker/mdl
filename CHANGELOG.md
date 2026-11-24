@@ -8,6 +8,58 @@ them too.
 
 ## [Unreleased]
 
+### Definitions
+
+- MDL IR 2.4: a telemetry field or scalar array element that maps a param
+  through a conversion that doesn't invert exactly (a polynomial, a
+  spline, a step table, a table whose values rise and fall) may have an
+  `inverse`, engineering value to raw, as a command packet's field has
+  since IR 2.0, for encoding telemetry
+  ([spec/frontends.md](spec/frontends.md) §7). One on any other telemetry
+  entry is refused. A set that uses one states 2.4; every other artifact
+  keeps its version and its digest.
+
+### Decoding and encoding
+
+- Telemetry encodes: values for one of a set's packets become the payload,
+  and the metadata a link frames it with, that decoding reads back as
+  those values, sent by a given native id: what a simulated asset does to
+  send telemetry ([spec/encoding.md](spec/encoding.md) §9).
+  - Params' values go through their fields' inverse conversions, units,
+    states and composites, a param the message holds several times taking
+    its values in record order; raw values give entries as decoding's
+    record holds them, and an entry without a value is refused
+    (`missing_value`).
+  - The family's locators, the packet's identify keys, counts, lengths and
+    checksums come from the definitions, and a value given for one of
+    them must agree (`wrong_constant`).
+  - The payload is decoded before it's returned, and refused if decoding
+    gives anything else, such as another packet whose identify keys its
+    values match too (`decodes_otherwise`).
+  - New codes: `unknown_packet`, `native_id`, `unknown_param`,
+    `absent_entry`, `unknown_entry`, `duplicate_value`, `no_inverse`,
+    `invalid_raw` and `decodes_otherwise`.
+
+  A set whose time source reads the packet's time where no entry holds it
+  (a CUC time code, or an ISO 8601 pointer no top-level field has) can't
+  be encoded from these inputs.
+
+### Compatibility
+
+- A set that uses a telemetry inverse states IR 2.4, which 0.3.0 doesn't
+  read (`unsupported_version`), so a store with one needs this release.
+  The result format is still 1: encoding telemetry is a new operation.
+
+### Tools and the runtime API
+
+- The runtime API gains `encode_telemetry` ([spec/api.md](spec/api.md)
+  §2.9) and its result, an encoded telemetry packet (§3.6). In Rust,
+  `FamilySets::encode_telemetry` and `Runtime::encode_telemetry`.
+- `morphc encode --packet NAME` encodes a telemetry packet, from `--value
+  PARAM=VALUE`, `--raw ENTRY=VALUE` and the sender `--from ID`, and
+  prints its payload, metadata and `def_version`. Its JSON report gives it
+  under `telemetry` and stays version 3.
+
 ## [0.3.0] - 2026-11-22
 
 For the Elixir binding's users, command payloads decode through the
