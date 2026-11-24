@@ -36,13 +36,18 @@ them too.
   - The payload is decoded before it's returned, and refused if decoding
     gives anything else, such as another packet whose identify keys its
     values match too (`decodes_otherwise`).
+  - The packet's clocks read the event time, and for time since boot the
+    asset's boot instant, given as instants (§9.4): CUC time codes,
+    elapsed counts on any scale with its leap seconds, GPS weeks (of
+    fewer bits too) and times of week, ISO 8601 text, and a boot set's
+    uptime and correlation clocks. A clock holds its latest reading at or
+    before the event time, and the result gives the event time and boot
+    instant decoding reads back. A packet with no clock takes the instants
+    and has ground time only.
   - New codes: `unknown_packet`, `native_id`, `unknown_param`,
     `absent_entry`, `unknown_entry`, `duplicate_value`, `no_inverse`,
-    `invalid_raw` and `decodes_otherwise`.
-
-  A set whose time source reads the packet's time where no entry holds it
-  (a CUC time code, or an ISO 8601 pointer no top-level field has) can't
-  be encoded from these inputs.
+    `invalid_raw` and `decodes_otherwise`; `invalid_time` names a clock
+    whose value decoding can't read as a time.
 
 ### Compatibility
 
@@ -56,9 +61,10 @@ them too.
   §2.9) and its result, an encoded telemetry packet (§3.6). In Rust,
   `FamilySets::encode_telemetry` and `Runtime::encode_telemetry`.
 - `morphc encode --packet NAME` encodes a telemetry packet, from `--value
-  PARAM=VALUE`, `--raw ENTRY=VALUE` and the sender `--from ID`, and
-  prints its payload, metadata and `def_version`. Its JSON report gives it
-  under `telemetry` and stays version 3.
+  PARAM=VALUE`, `--raw ENTRY=VALUE`, the sender `--from ID`, and the event
+  time and boot instant `--at` and `--booted`, and prints its payload,
+  metadata, `def_version` and event time. Its JSON report gives it under
+  `telemetry` and stays version 3.
 
 ## [0.3.0] - 2026-11-22
 
