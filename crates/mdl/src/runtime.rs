@@ -1073,6 +1073,10 @@ pub struct EncodedTelemetry {
     pub metadata: Vec<(String, Value)>,
     /// Every entry's raw value, as an object by entry name.
     pub record: Value,
+    /// The event time decoding the payload gives.
+    pub event_time: EventTime,
+    /// When the asset booted, as the set's correlation packet teaches it.
+    pub booted: Option<Timestamp>,
 }
 
 impl EncodedTelemetry {
@@ -1102,10 +1106,20 @@ impl EncodedTelemetry {
                 })
                 .collect(),
             record: record_value(&encoded.record),
+            event_time: encoded.event_time,
+            booted: encoded.booted,
         }
     }
 
     pub fn to_value(&self) -> Value {
+        // A packet not yet received has no ground time, so `ground`'s time
+        // is absent.
+        let event_time = match &self.event_time {
+            EventTime::Ground => {
+                Value::object([("kind", Value::text("ground")), ("time", Value::Absent)])
+            }
+            time => event_time_value(time, Timestamp::UNIX_EPOCH),
+        };
         Value::object([
             ("family", Value::text(&self.family)),
             ("set", Value::text(&self.set)),
@@ -1115,6 +1129,11 @@ impl EncodedTelemetry {
             ("payload", Value::Bytes(self.payload.clone())),
             ("metadata", Value::Object(self.metadata.clone())),
             ("record", self.record.clone()),
+            ("event_time", event_time),
+            (
+                "booted",
+                Value::or_absent(self.booted.as_ref(), |at| Value::Instant(*at)),
+            ),
         ])
     }
 }

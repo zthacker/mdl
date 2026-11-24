@@ -250,7 +250,9 @@ Inputs: a handle, a family, and a telemetry request (`encoding.md` §9.1):
 the set and one of its packets, by name; the native id of the asset that
 sends it; params' values by name, each a list of values in §3.1's sample
 forms, one for each sample decoding gives the param from the message, in
-record order; and raw values by entry name, in §3.1's record form.
+record order; raw values by entry name, in §3.1's record form; and
+optionally the event time and the instant the asset booted, which the
+packet's clocks read (`encoding.md` §9.4).
 
 Encoding telemetry is what a simulated asset does to send telemetry: the
 values into the payload, and the metadata a link frames it with, that
@@ -443,6 +445,8 @@ An object with these keys:
 | `payload` | bytes: what the link sends; a JSON family's payload is its UTF-8 text |
 | `metadata` | an object of the values the link frames the payload with, by name, each an integer or text: the family's locators and the packet's identify keys that read metadata (`encoding.md` §9.3) |
 | `record` | the raw record of the payload: each entry's raw value, as decoding it gives them |
+| `event_time` | an event time, as §3.1's, decoding the payload gives; `ground`'s `time` is absent, as the packet isn't received yet |
+| `booted` | an instant: when the asset booted, which the payload teaches as its set's correlation packet (§3.1); absent for any other |
 
 ## 4. Errors
 

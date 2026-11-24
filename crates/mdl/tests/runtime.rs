@@ -6,7 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mdl::artifact::{Artifacts, build};
-use mdl::encode::CommandRequest;
+use mdl::bindings::NativeId;
+use mdl::encode::{CommandRequest, RawValue, TelemetryRequest};
 use mdl::message::{Message, MetaValue, Payload};
 use mdl::read::read_bundle_value;
 use mdl::runtime::{ApiError, Runtime, Value};
@@ -268,6 +269,50 @@ fn a_store_decodes_and_encodes_with_the_results_the_spec_gives() {
     assert_eq!(
         json_of(&error.to_value()),
         json!({ "code": "out_of_range", "message": error.message, "problems": [] })
+    );
+}
+
+/// HK encoded from its raw values and the event time is the payload
+/// `hk()` builds by hand, its CUC time 1.5 s after 2000-01-01; a packet
+/// with no clock has ground time only, its time absent as it isn't
+/// received yet.
+#[test]
+fn a_telemetry_packet_encodes_with_the_result_the_spec_gives() {
+    let (dir, artifacts) = store_dir("encode_telemetry");
+    let runtime = Runtime::open(&dir, None).unwrap();
+    let request = TelemetryRequest::new("sat_v1", "HK", 1_u64)
+        .with_raw("volts", RawValue::Integer(25))
+        .with_raw("temp", RawValue::Float(f64::NAN))
+        .with_raw("count", RawValue::Integer(1 << 60))
+        .with_raw("tag", RawValue::Bytes(vec![0xc0, 0xff]))
+        .with_at(Timestamp::from_rfc3339("2000-01-01T00:00:01.5Z").unwrap());
+    let encoded = runtime.encode_telemetry("sat", &request).unwrap();
+    assert_eq!(encoded.payload, hk());
+    let nan = json!({ "non_finite": "NaN" });
+    let big = json!("1152921504606846976");
+    assert_eq!(
+        json_of(&encoded.to_value()),
+        json!({
+            "family": "sat",
+            "set": "sat_v1",
+            "def_version": artifacts.sets["sat_v1"].digest.to_string(),
+            "packet": "HK",
+            "native_id": 1,
+            "payload": "0000000180000100197fc000001000000000000000c0ff",
+            "metadata": {},
+            "record": { "id": 1, "volts": 25, "temp": nan, "count": big, "tag": "c0ff" },
+            "event_time": { "kind": "at", "time": "2000-01-01T00:00:01.5Z" },
+            "booted": null
+        })
+    );
+    let web = TelemetryRequest::new("web_v1", "P", 3_u64)
+        .with_raw("v", RawValue::Float(1.5))
+        .with_at(ground());
+    let encoded = runtime.encode_telemetry("web", &web).unwrap();
+    assert_eq!(encoded.payload, br#"{"id":3,"v":1.5}"#);
+    assert_eq!(
+        json_of(&encoded.to_value())["event_time"],
+        json!({ "kind": "ground", "time": null })
     );
 }
 
@@ -1078,5 +1123,22 @@ fn a_correlation_packet_gives_the_boot_instant_it_teaches() {
         Some(Timestamp::from_unix_nanos(
             1_000 - 4_294_967_295 * 1_000_000
         ))
+    );
+    // Encoded from the two instants, the correlation packet is the one that
+    // teaches them.
+    let request = TelemetryRequest::new(
+        "tboot_v1",
+        "TIME",
+        NativeId::from_text("boot-1".to_string()),
+    )
+    .with_at(Timestamp::from_rfc3339("2026-06-01T12:00:00Z").unwrap())
+    .with_booted(Timestamp::from_rfc3339("2026-06-01T11:59:55Z").unwrap());
+    let encoded = runtime.encode_telemetry("tboot", &request).unwrap();
+    assert_eq!(encoded.payload, time(1_780_315_200_000_000, 5_000));
+    let json = json_of(&encoded.to_value());
+    assert_eq!(json["booted"], json!("2026-06-01T11:59:55Z"));
+    assert_eq!(
+        json["event_time"],
+        json!({ "kind": "since_boot", "value": 5000, "unit": "ms" })
     );
 }
